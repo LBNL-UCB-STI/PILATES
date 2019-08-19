@@ -39,10 +39,10 @@ export BAUS_ITER_FREQ=${4:?ARG \#3 "BAUS_ITER_FREQ" not specified}
 export BEAM_CONFIG=${5:?ARG \#5 "Beam Config" not specified}
 export IN_YEAR_OUTPUT=${6:-off}
 
-for YEAR_COUNT in IN_YEAR..$((IN_YEAR+DURATION))..BEAM_INTERVAL
+for YEAR_COUNT in $IN_YEAR..$((IN_YEAR+DURATION))..$BEAM_INTERVAL
 
 do
-    /beam/bin/beam --config BEAM_CONFIG
+    /beam/bin/beam --config $BEAM_CONFIG
 
     #1-writing skim output to s3
     #
