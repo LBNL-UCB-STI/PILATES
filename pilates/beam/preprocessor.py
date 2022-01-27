@@ -56,6 +56,10 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
             
             original_plans = pd.read_csv(beam_plans_path)
             updated_plans = pd.read_csv(asim_plans_path)
+            if "ActivityElement" in original_plans.columns:
+                original_plans["PlanElementTyle"] = original_plans["ActivityElement"].copy()
+            if "ActivityElement" in updated_plans.columns:
+                updated_plans["PlanElementType"] = updated_plans["ActivityElement"].copy()
             unchanged_plans = original_plans.loc[~original_plans.person_id.isin(per_u), :]
             logger.info("Adding %s new plan elements after and keeping %s from previous iteration", len(updated_plans), len(unchanged_plans))
             plans_final = pd.concat([updated_plans, unchanged_plans])
