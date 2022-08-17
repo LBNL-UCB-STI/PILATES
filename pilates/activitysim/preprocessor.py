@@ -3,7 +3,6 @@ import glob
 import openmatrix as omx
 import pandas as pd
 from pandas.api.types import is_string_dtype
-from pandas.api.types import is_numeric_dtype
 import geopandas as gpd
 from shapely import wkt
 import numpy as np
@@ -11,7 +10,7 @@ import logging
 import requests
 from tqdm import tqdm
 import time
-import yaml
+from itertools import product
 import matplotlib.pyplot as plt
 from multiprocessing import Pool, cpu_count
 
@@ -223,6 +222,27 @@ def _load_raw_beam_origin_skims(settings):
     return skims
 
 
+def _skim_matrices(settings):
+    time_periods = settings['periods']
+    distance_mats = ['DIST', 'DISTBIKE', 'DISTWALK']
+
+    drive_modes = settings['hwy_paths']
+    drive_measures = settings['beam_asim_hwy_measure_map'].keys()
+
+    transit_modes = settings['transit_paths']
+    transit_measures = settings['beam_asim_transit_measure_map'].keys()
+
+    skim_template = "{0}_{1}__{2}"
+
+    drive_mats = [skim_template.format(path, measure, time) for path, measure, time in
+                  product(drive_modes, drive_measures, time_periods)]
+
+    transit_mats = [skim_template.format(path, measure, time) for path, measure, time in
+                    product(transit_modes, transit_measures, time_periods)]
+
+    return distance_mats + drive_mats + transit_mats
+
+
 def _create_skim_object(settings, overwrite=True, output_dir=None):
     """ Creates OMX file to store skim matrices
     Parameters: 
@@ -386,7 +406,8 @@ def _build_od_matrix(df, metric, order, fill_na=0.0):
     ---------
     - numpy square 0-D matrix 
     """
-    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin", columns="destination")
+    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin",
+                                                                                         columns="destination")
     if metric in df.columns:
         pivot = df[metric].unstack()
         out.loc[pivot.index, pivot.columns] = pivot.fillna(np.nan)
@@ -513,6 +534,100 @@ def _distance_skims(settings, year, auto_df, order, data_dir=None):
     skims.close()
 
 
+def _distance_skims_from_raw(settings, year, df, order, data_dir=None):
+    """
+    Generates distance matrices for drive, walk and bike modes.
+    Parameters:
+    - settings:
+    - year:
+    - auto_df: pandas.DataFrame
+        Dataframe with driving modes only.
+    - order: numpy.array
+        zone_id order to create the num_zones x num_zones skim matrix.
+    """
+    logger.info("Creating distance skims.")
+    # TO DO: Include walk and bike distances,
+    # for now walk and bike are the same as drive.
+    dist_df = df.loc[pd.IndexSlice[:, settings['beam_simulated_hwy_paths'], :, :], 'DDIST_meters'].groupby(
+        level=[2, 3]).agg('first')
+    mx_dist, useDefaults = _build_od_matrix(dist_df.to_frame(), 'DDIST_meters', order, fill_na=np.nan)
+    if useDefaults:
+        logger.warning(
+            "Filling in default skim values for measure {0} because they're not in BEAM outputs".format(dist_column))
+    # Impute missing distances
+    missing = np.isnan(mx_dist)
+    if missing.any():
+        orig, dest = np.where(missing == True)
+        logger.info("Imputing {} missing distance skims.".format(len(orig)))
+        zones = read_zone_geoms(settings, year)
+        imputed_dist = impute_distances(zones, orig, dest)
+        mx_dist[orig, dest] = imputed_dist
+    assert not np.isnan(mx_dist).any()
+    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin",
+                                                                                         columns="destination")
+    np.copyto(out.values, mx_dist)
+    return out
+
+
+def create_initial_skim_directory(settings):
+    skims_folder_name = settings['skims_folder_name']
+    beam_input_dir = settings['beam_local_input_folder']
+    region = settings['region']
+    skims_fname = settings['skims_fname']
+
+    order = zone_order(settings, settings['start_year'])
+
+    asim_skims_location = os.path.join(settings['asim_local_input_folder'], skims_folder_name)
+    input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
+
+    if not os.path.exists(asim_skims_location):
+        os.makedirs(asim_skims_location)
+
+    input_skims = read_skim(input_skims_location)
+    input_skims = _raw_beam_skims_preprocess(settings, settings['start_year'], input_skims)
+
+    distance_skims = _distance_skims_from_raw(settings, year, df, order, data_dir=None) / 1609.34
+
+    groupBy = input_skims.groupby(level=[0, 1])
+
+    col_conversion = _skim_column_conversion(settings)
+
+    beam_skims = [(group.loc[name, column], name, col_conversion[column], order, asim_skims_location) for
+                  (name, group), column in product(groupBy, input_skims.columns.drop('DEBUG_TEXT'))]
+
+    for distSkim in ['DIST', 'DISTBIKE', 'DISTWALK']:
+        fname = '{0}.parquet'.format(distSkim)
+        distance_skims.to_parquet(os.path.join(asim_skims_location, fname))
+
+    with Pool(cpu_count() - 1) as p:
+        found_skims = p.map(_build_skim_directory_from_inputs, beam_skims)
+
+    return found_skims
+
+
+def _create_drive_skims(settings, raw_skims):
+    driving_distance = raw_skims.loc[
+        pd.IndexSlice[:, settings['beam_simulated_hwy_paths'], :, :], 'DDIST_meters'].groupby(level=[2, 3]).agg(
+        'mean').unstack()
+
+
+def _build_skim_directory_from_inputs(tup):
+    df, (period, path), (measure, conversion), order, loc = tup
+
+    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin",
+                                                                                         columns="destination")
+    pivot = df.unstack() * conversion
+    out.loc[pivot.index, pivot.columns] = pivot.fillna(np.nan)
+    is_transit = "_" in path
+    if is_transit:
+        out.fillna(0.0, inplace=True)
+        if (measure != 'FAR') and (measure != 'BOARDS'):
+            out *= 100
+    fname = '{0}_{1}__{2}.parquet'.format(path, measure, period)
+    out.to_parquet(os.path.join(loc, fname))
+    return fname
+
+
 def _build_od_matrix_parallel(tup):
     df, measure_map, num_taz, order, fill_na = tup
     out = dict()
@@ -615,6 +730,20 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
     del df, df_
 
 
+def _skim_column_conversion(settings):
+    out = dict()
+    combined = settings['beam_asim_transit_measure_map']
+    combined.update(settings['beam_asim_hwy_measure_map'])
+    for asimName, beamName in combined.items():
+        if beamName:
+            if "meters" in beamName:
+                conversion = 1. / 1609.34
+            else:
+                conversion = 1.0
+            out[beamName] = (asimName, conversion)
+    return out
+
+
 def _auto_skims(settings, auto_df, order, data_dir=None):
     logger.info("Creating drive skims.")
 
@@ -627,10 +756,11 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
     beam_hwy_paths = settings['beam_simulated_hwy_paths']
     fill_na = np.nan
 
-    groupBy = auto_df.groupby(level=[0,1])
+    groupBy = auto_df.groupby(level=[0, 1])
 
-    with Pool(cpu_count()-1) as p:
-        ret_list = p.map(_build_od_matrix_parallel, [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
+    with Pool(cpu_count() - 1) as p:
+        ret_list = p.map(_build_od_matrix_parallel,
+                         [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
 
     resultsDict = dict()
 

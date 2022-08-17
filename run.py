@@ -101,7 +101,6 @@ def setup_beam_skims(settings):
     beam_geoms_fname = settings['beam_geoms_fname']
     beam_router_directory = settings['beam_router_directory']
     asim_geoms_location = os.path.join(settings['asim_local_input_folder'], beam_geoms_fname)
-
     input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
     mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
 
@@ -112,6 +111,8 @@ def setup_beam_skims(settings):
     logger.info("Copying input skims from {0} to {1}".format(
         input_skims_location,
         mutable_skims_location))
+
+    found_skims = asim_pre.create_initial_skim_directory(settings)
 
     shutil.copyfile(input_skims_location, mutable_skims_location)
 
