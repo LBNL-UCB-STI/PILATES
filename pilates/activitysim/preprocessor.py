@@ -586,7 +586,8 @@ def create_initial_skim_directory(settings):
     input_skims = read_skim(input_skims_location)
     input_skims = _raw_beam_skims_preprocess(settings, settings['start_year'], input_skims)
 
-    distance_skims = _distance_skims_from_raw(settings, year, df, order, data_dir=None) / 1609.34
+    distance_skims = _distance_skims_from_raw(settings, settings['start_year'], input_skims, order,
+                                              data_dir=None) / 1609.34
 
     groupBy = input_skims.groupby(level=[0, 1])
 
