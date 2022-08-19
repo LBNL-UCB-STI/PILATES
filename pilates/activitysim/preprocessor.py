@@ -51,6 +51,9 @@ beam_origin_skims_types = {"origin": str,
                            "observations": int
                            }
 
+ridehail_skim_defaults = {"waitTimeInMinutes": 6.0
+                          "unmatchedRequestPortion": 0.1}
+
 
 #########################
 #### Common functions ###
@@ -215,7 +218,8 @@ def _load_raw_beam_origin_skims(settings):
     --------
     - pandas DataFrame.
     """
-
+    if "ACCESSIBLE" in settings['ridehail_path_map']:
+        beam_origin_skims_types[settings['ridehail_path_map']['ACCESSIBLE']] = bool
     origin_skims_fname = settings.get('origin_skims_fname', False)
     path_to_beam_skims = os.path.join(
         settings['beam_local_output_folder'], origin_skims_fname)
@@ -318,8 +322,10 @@ def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df):
     #     test_2 = set(destination_taz).issubset(set(order))
     test_3 = len(set(order) - set(origin_taz))
     assert test_3 == 0, 'There are {} missing origin zone ids in BEAM skims'.format(test_3)
-    return origin_skims_df.loc[origin_skims_df['origin'].isin(order)].set_index(['timePeriod',
-                                                                                 'reservationType', 'origin'])
+    index_columns = ['timePeriod', 'reservationType', 'origin']
+    if "ACCESSIBLE" in settings['ridehail_path_map']:
+        index_columns.insert(3, settings['ridehail_path_map']['ACCESSIBLE'])
+    return origin_skims_df.loc[origin_skims_df['origin'].isin(order)].set_index(index_columns)
 
 
 def _create_skims_by_mode(settings, skims_df):
@@ -356,7 +362,11 @@ def _create_skims_by_mode(settings, skims_df):
 
 
 def _build_square_matrix(series, num_taz, source="origin", fill_na=0):
-    out = np.tile(series.fillna(fill_na).values, (num_taz, 1))
+    if series is None:
+        out = np.ones((num_taz, num_taz), dype='Float32') * fill_na
+        return out
+    else:
+        out = np.tile(series.fillna(fill_na).values, (num_taz, 1))
     if source == "origin":
         return out.transpose()
     elif source == "destination":
@@ -386,7 +396,8 @@ def _build_od_matrix(df, metric, order, fill_na=0.0):
     ---------
     - numpy square 0-D matrix 
     """
-    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin", columns="destination")
+    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin",
+                                                                                         columns="destination")
     if metric in df.columns:
         pivot = df[metric].unstack()
         out.loc[pivot.index, pivot.columns] = pivot.fillna(np.nan)
@@ -585,32 +596,48 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
     """ Generate transit OMX skims"""
 
     logger.info("Creating ridehail skims.")
-    ridehail_path_map = settings['ridehail_path_map']
+    ridehail_path_map = settings['ridehail_path_map'].copy()
     periods = settings['periods']
     measure_map = settings['beam_asim_ridehail_measure_map']
     skims = read_skims(settings, mode='a', data_dir=data_dir)
     num_taz = len(order)
     df = ridehail_df.copy()
 
+    accessibility_levels = {"": False}
+    if "ACCESSIBLE" in settings['ridehail_path_map']:
+        useAccessibility = True
+        accessibility_levels['_ACCESSIBLE'] = True
+        accessibility_column = ridehail_path_map.pop("ACCESSIBLE")
+    else:
+        useAccessibility = False
+
     for path, skimPath in ridehail_path_map.items():
         for period in periods:
-            df_ = df.loc[(period, skimPath), :].loc[order, :]
+            df_ = df.loc[(period, skimPath, order), :]
             for measure, skimMeasure in measure_map.items():
-                name = '{0}_{1}__{2}'.format(path, measure, period)
-                if measure == 'REJECTIONPROB':
-                    mtx = _build_square_matrix(df_[skimMeasure], num_taz, 'origin', 0.0)
-                elif measure_map[measure] in df_.columns:
-                    # activitysim estimated its models using transit skims from Cube
-                    # which store time values as scaled integers (e.g. x100), so their
-                    # models also divide transit skim values by 100. Since our skims
-                    # aren't coming out of Cube, we multiply by 100 to negate the division.
-                    # This only applies for travel times.
-                    # EDIT: I don't think this is true for wait time
-                    mtx = _build_square_matrix(df_[skimMeasure], num_taz, 'origin', 0.0)
+                for accessibility_level, index_val in accessibility_levels.items():
+                    if useAccessibility:
+                        try:
+                            series = df_.loc[pd.IndexSlice[:, :, :, index_val]][skimMeasure]
+                        except:
+                            series = None
+                    else:
+                        series = df_['skimMeasure']
+                    name = '{0}_{1}{2}__{3}'.format(path, measure, accessibility_level, period)
+                    if measure == 'REJECTIONPROB':
+                        mtx = _build_square_matrix(series, num_taz, 'origin', ridehail_skim_defaults.get(ridehail_skim_defaults, 0.0))
+                    elif measure_map[measure] in df_.columns:
+                        # activitysim estimated its models using transit skims from Cube
+                        # which store time values as scaled integers (e.g. x100), so their
+                        # models also divide transit skim values by 100. Since our skims
+                        # aren't coming out of Cube, we multiply by 100 to negate the division.
+                        # This only applies for travel times.
+                        # EDIT: I don't think this is true for wait time
+                        mtx = _build_square_matrix(df_[skimMeasure], num_taz, 'origin', ridehail_skim_defaults.get(ridehail_skim_defaults, 0.0))
 
-                else:
-                    mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
-                skims[name] = mtx
+                    else:
+                        mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
+                    skims[name] = mtx
     skims.close()
     del df, df_
 
@@ -627,10 +654,11 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
     beam_hwy_paths = settings['beam_simulated_hwy_paths']
     fill_na = np.nan
 
-    groupBy = auto_df.groupby(level=[0,1])
+    groupBy = auto_df.groupby(level=[0, 1])
 
-    with Pool(cpu_count()-1) as p:
-        ret_list = p.map(_build_od_matrix_parallel, [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
+    with Pool(cpu_count() - 1) as p:
+        ret_list = p.map(_build_od_matrix_parallel,
+                         [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
 
     resultsDict = dict()
 

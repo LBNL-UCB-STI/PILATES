@@ -105,7 +105,11 @@ def aggregateInTimePeriod(df):
                           "completedRequests": 0})
 
 
-def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir):
+def merge_current_origin_skims(settings, previous_skims_path):
+    beam_output_dir = settings['beam_local_output_folder']
+    abs_beam_output = os.path.abspath(beam_output_dir)
+    origin_skims_fname = settings['origin_skims_fname']
+    all_skims_path = os.path.join(abs_beam_output, origin_skims_fname)
     current_skims_path = find_produced_origin_skims(beam_output_dir)
     if (current_skims_path is None) | (previous_skims_path == current_skims_path):
         # this means beam has not produced the skims
@@ -134,6 +138,9 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     }
 
     index_columns = ['timePeriod', 'reservationType', 'origin']
+    if "ACCESSIBLE" in settings['ridehail_path_map']:
+        index_columns += [settings['ridehail_path_map']['ACCESSIBLE']]
+        aggregatedInput[settings['ridehail_path_map']['ACCESSIBLE']] = bool
 
     all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
     all_skims.set_index(index_columns, drop=True, inplace=True)
@@ -141,14 +148,14 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
-    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'origin']).apply(aggregateInTimePeriod)
+    cur_skims = cur_skims.groupby(index_columns).apply(aggregateInTimePeriod)
     all_skims = pd.concat([cur_skims, all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)]])
     if all_skims.index.duplicated().sum() > 0:
         logger.warning("Duplicated values in index: \n {0}".format(all_skims.loc[all_skims.duplicated()]))
         all_skims.drop_duplicates(inplace=True)
     all_skims.to_csv(all_skims_path, index=True)
     cur_skims['totalWaitTimeInMinutes'] = cur_skims['waitTimeInMinutes'] * cur_skims['completedRequests']
-    totals = cur_skims.groupby(['timePeriod', 'reservationType']).sum()
+    totals = cur_skims.groupby(list(set(index_columns) - {'origin'})).sum()
     totals['matchedPercent'] = totals['completedRequests'] / totals['observations']
     totals['meanWaitTimeInMinutes'] = totals['totalWaitTimeInMinutes'] / totals['completedRequests']
     logger.info("Ridehail matching summary: \n {0}".format(totals[['meanWaitTimeInMinutes', 'matchedPercent']]))
