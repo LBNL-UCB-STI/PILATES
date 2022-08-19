@@ -626,7 +626,7 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
                     name = '{0}_{1}{2}__{3}'.format(path, measure, accessibility_level, period)
                     if measure == 'REJECTIONPROB':
                         mtx = _build_square_matrix(series, num_taz, 'origin',
-                                                   ridehail_skim_defaults.get(ridehail_skim_defaults, 0.0))
+                                                   ridehail_skim_defaults.get(skimMeasure, 0.0))
                     elif measure_map[measure] in df_.columns:
                         # activitysim estimated its models using transit skims from Cube
                         # which store time values as scaled integers (e.g. x100), so their
@@ -635,7 +635,7 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
                         # This only applies for travel times.
                         # EDIT: I don't think this is true for wait time
                         mtx = _build_square_matrix(df_[skimMeasure], num_taz, 'origin',
-                                                   ridehail_skim_defaults.get(ridehail_skim_defaults, 0.0))
+                                                   ridehail_skim_defaults.get(skimMeasure, 0.0))
 
                     else:
                         mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
