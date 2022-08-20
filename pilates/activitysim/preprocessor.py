@@ -363,7 +363,7 @@ def _create_skims_by_mode(settings, skims_df):
 
 def _build_square_matrix(series, num_taz, source="origin", fill_na=0):
     if series is None:
-        out = np.ones((num_taz, num_taz), dype='Float32') * fill_na
+        out = np.ones((num_taz, num_taz), dtype=np.float32) * fill_na
         return out
     else:
         out = np.tile(series.fillna(fill_na).values, (num_taz, 1))
