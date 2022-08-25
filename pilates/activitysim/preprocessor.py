@@ -361,12 +361,13 @@ def _create_skims_by_mode(settings, skims_df):
     return auto_df, transit_df
 
 
-def _build_square_matrix(series, num_taz, source="origin", fill_na=0):
+def _build_square_matrix(series, index, source="origin", fill_na=0):
+    num_taz = len(index)
     if series is None:
         out = np.full((num_taz, num_taz), fill_na, dtype=np.float32)
         return out
     else:
-        out = np.tile(series.fillna(fill_na).values, (num_taz, 1))
+        out = np.tile(series.reindex(index, fill_value=fill_na).values, (num_taz, 1))
     if source == "origin":
         return out.transpose()
     elif source == "destination":
@@ -618,14 +619,14 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
                 for accessibility_level, index_val in accessibility_levels.items():
                     if useAccessibility:
                         try:
-                            series = df_.loc[pd.IndexSlice[:, :, :, index_val]][skimMeasure]
+                            series = df_.loc[pd.IndexSlice[:, :, :, index_val]][skimMeasure].droplevel([0, 1])
                         except:
                             series = None
                     else:
                         series = df_['skimMeasure']
                     name = '{0}_{1}{2}__{3}'.format(path, measure, accessibility_level, period)
                     if measure == 'REJECTIONPROB':
-                        mtx = _build_square_matrix(series, num_taz, 'origin',
+                        mtx = _build_square_matrix(series, order, 'origin',
                                                    ridehail_skim_defaults.get(skimMeasure, 0.0))
                     elif measure_map[measure] in df_.columns:
                         # activitysim estimated its models using transit skims from Cube
@@ -634,7 +635,7 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
                         # aren't coming out of Cube, we multiply by 100 to negate the division.
                         # This only applies for travel times.
                         # EDIT: I don't think this is true for wait time
-                        mtx = _build_square_matrix(df_[skimMeasure], num_taz, 'origin',
+                        mtx = _build_square_matrix(df_[skimMeasure], order, 'origin',
                                                    ridehail_skim_defaults.get(skimMeasure, 0.0))
 
                     else:
