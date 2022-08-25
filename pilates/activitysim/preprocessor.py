@@ -386,7 +386,8 @@ def _build_od_matrix(df, metric, order, fill_na=0.0):
     ---------
     - numpy square 0-D matrix 
     """
-    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin", columns="destination")
+    out = pd.DataFrame(np.nan, index=order, columns=order, dtype=np.float32).rename_axis(index="origin",
+                                                                                         columns="destination")
     if metric in df.columns:
         pivot = df[metric].unstack()
         out.loc[pivot.index, pivot.columns] = pivot.fillna(np.nan)
@@ -627,10 +628,11 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
     beam_hwy_paths = settings['beam_simulated_hwy_paths']
     fill_na = np.nan
 
-    groupBy = auto_df.groupby(level=[0,1])
+    groupBy = auto_df.groupby(level=[0, 1])
 
-    with Pool(cpu_count()-1) as p:
-        ret_list = p.map(_build_od_matrix_parallel, [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
+    with Pool(cpu_count() - 1) as p:
+        ret_list = p.map(_build_od_matrix_parallel,
+                         [(group.loc[name], measure_map, num_taz, order, fill_na) for name, group in groupBy])
 
     resultsDict = dict()
 
@@ -869,11 +871,15 @@ def _get_part_time_enrollment(state_fips):
     return s
 
 
-def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
+def _update_persons_table(persons, households, blocks, wheelchairColumn, asim_zone_id_col='TAZ'):
     # assign zones
     persons[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id'].reindex(persons['household_id']).values).values
     persons[asim_zone_id_col] = persons[asim_zone_id_col].astype(str)
+
+    if wheelchairColumn is not None:
+        wheelchairSeries = persons.pop(wheelchairColumn)
+        persons['in_wheelchair'] = wheelchairSeries
 
     # create new column variables
     age_mask_1 = persons.age >= 18
@@ -1390,8 +1396,10 @@ def create_asim_data_from_h5(
     # update households
     households = _update_households_table(households, blocks, asim_zone_id_col)
 
+    wheelchairColumn = settings['asim_from_usim_col_maps']['persons'].get('in_wheelchair', None)
+
     # update persons
-    persons = _update_persons_table(persons, households, blocks, asim_zone_id_col)
+    persons = _update_persons_table(persons, households, blocks, wheelchairColumn, asim_zone_id_col)
 
     # update jobs
     jobs_cols = jobs.columns
