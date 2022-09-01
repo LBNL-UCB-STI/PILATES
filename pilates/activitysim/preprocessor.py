@@ -966,11 +966,13 @@ def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
 
 
 def _downsample_person_disability_status(persons, fractionToKeep):
+    logger.info("Starting with {} persons with disabilities".format(persons['DIS'].sum()))
     dis_idx = np.where(persons['DIS'] == 1)[0]
     numberToRemove = int(len(dis_idx) * (1.0 - fractionToKeep))
     idx_to_remove = np.random.choice(dis_idx, numberToRemove, replace=False)
     persons['in_wheelchair'] = persons['DIS'].copy()
     persons.iloc[idx_to_remove, persons.columns.get_loc('in_wheelchair')] = False
+    logger.info("Ending with {} persons in a wheelchair".format(persons['in_wheelchair'].sum()))
     return persons
 
 
