@@ -965,6 +965,15 @@ def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
     return persons
 
 
+def _downsample_person_disability_status(persons, fractionToKeep):
+    dis_idx = np.where(persons['DIS'] == 1)[0]
+    numberToRemove = int(len(dis_idx) * (1.0 - fractionToKeep))
+    idx_to_remove = np.random.choice(dis_idx, numberToRemove, replace=False)
+    persons['in_wheelchair'] = persons['DIS'].copy()
+    persons.iloc[idx_to_remove, persons.columns.get_loc('in_wheelchair')] = False
+    return persons
+
+
 def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     # assign zones
     households[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
@@ -1423,6 +1432,7 @@ def create_asim_data_from_h5(
 
     # update persons
     persons = _update_persons_table(persons, households, blocks, asim_zone_id_col)
+    persons = _downsample_person_disability_status(persons, settings['portion_with_disability_in_wheelchair'])
 
     # update jobs
     jobs_cols = jobs.columns
