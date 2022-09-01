@@ -966,7 +966,7 @@ def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
 
 
 def _downsample_person_disability_status(persons, fractionToKeep):
-    logger.info("Starting with {} persons with disabilities".format(persons['DIS'].sum()))
+    logger.info("Starting with {} persons with disabilities".format((persons['DIS'] > 0).sum()))
     dis_idx = np.where(persons['DIS'] > 0)[0]
     numberToKeep = int(len(dis_idx) * fractionToKeep)
     idx_to_keep = np.random.choice(dis_idx, numberToKeep, replace=False)
