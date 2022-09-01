@@ -970,8 +970,8 @@ def _downsample_person_disability_status(persons, fractionToKeep):
     dis_idx = np.where(persons['DIS'] == 1)[0]
     numberToRemove = int(len(dis_idx) * (1.0 - fractionToKeep))
     idx_to_remove = np.random.choice(dis_idx, numberToRemove, replace=False)
-    persons['in_wheelchair'] = persons['DIS'].copy()
-    persons.iloc[idx_to_remove, persons.columns.get_loc('in_wheelchair')] = False
+    persons['in_wheelchair'] = False
+    persons.iloc[idx_to_remove, persons.columns.get_loc('in_wheelchair')] = True
     logger.info("Ending with {} persons in a wheelchair".format(persons['in_wheelchair'].sum()))
     return persons
 
