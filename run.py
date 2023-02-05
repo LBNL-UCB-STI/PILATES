@@ -1,5 +1,8 @@
 import warnings
 
+from pilates.activitysim.preprocessor import copy_beam_geoms
+from pilates.utils.geog import geoid_to_zone_map
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import shutil
@@ -34,7 +37,7 @@ from pilates.beam import postprocessor as beam_post
 from pilates.atlas import preprocessor as atlas_pre  ##
 from pilates.atlas import postprocessor as atlas_post  ##
 from pilates.utils.io import parse_args_and_settings
-from pilates.postprocessing.postprocessor import process_event_file
+from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
 
 # from pilates.polaris.travel_model import run_polaris
 
@@ -128,7 +131,7 @@ def setup_beam_skims(settings):
         beam_geoms_location,
         asim_geoms_location))
 
-    shutil.copyfile(beam_geoms_location, asim_geoms_location)
+    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
 
 
 def get_base_asim_cmd(settings, household_sample_size=None):
@@ -643,9 +646,7 @@ def run_traffic_assignment(
                     'mode': 'rw'}},
             environment={
                 'JAVA_OPTS': (
-                    '-XX:+UnlockExperimentalVMOptions -XX:+'
-                    'UseCGroupMemoryLimitForHeap -Xmx{0}'.format(
-                        beam_memory))},
+                    '-XX:+UnlockExperimentalVMOptions -Xmx{0}'.format(beam_memory))},
             command="--config={0}".format(path_to_beam_config),
             stdout=docker_stdout, stderr=True, detach=False, remove=True
         )
@@ -758,6 +759,11 @@ def run_replanning_loop(settings, forecast_year):
             print(log)
 
         # e) run BEAM
+        if replanning_iteration_number < replan_iters:
+            beam_pre.update_beam_config(settings, 'beam_replanning_portion')
+            beam_pre.update_beam_config(settings, 'max_plans_memory')
+        else:
+            beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
             settings, year, forecast_year, client, replanning_iteration_number)
 
@@ -821,6 +827,9 @@ if __name__ == '__main__':
         print("ACTIVITY DEMAND MODEL DISABLED")
     if not traffic_assignment_enabled:
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
+
+    if traffic_assignment_enabled:
+        beam_pre.update_beam_config(settings, 'beam_sample')
 
     if warm_start_skims:
         formatted_print('"WARM START SKIMS" MODE ENABLED')
@@ -891,15 +900,6 @@ if __name__ == '__main__':
             generate_activity_plans(
                 settings, year, forecast_year, client, warm_start=warm_start_skims)
 
-            if settings['traffic_assignment_enabled']:
-                print_str = (
-                    "Copying full {0} BEAM input data from "
-                    "Activitysim outputs before replanning loop".format(
-                        year))
-                formatted_print(print_str)
-                beam_pre.copy_plans_from_asim(
-                    settings, year, -1)
-
             # 5. INITIALIZE ASIM LITE IF BEAM REPLANNING ENABLED
             # have to re-run asim all the way through on sample to shrink the
             # cache for use in re-planning, otherwise cache will use entire pop
@@ -918,13 +918,20 @@ if __name__ == '__main__':
         if traffic_assignment_enabled:
 
             # 4. RUN TRAFFIC ASSIGNMENT
+            if settings['discard_plans_every_year']:
+                beam_pre.update_beam_config(settings, 'max_plans_memory', 0)
+            else:
+                beam_pre.update_beam_config(settings, 'max_plans_memory')
+            beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
             run_traffic_assignment(settings, year, forecast_year, client, -1)
 
             # 5. REPLAN
             if replanning_enabled > 0:
                 run_replanning_loop(settings, forecast_year)
                 process_event_file(settings, year, settings['replan_iters'])
+                copy_outputs_to_mep(settings, year, settings['replan_iters'])
             else:
                 process_event_file(settings, year, -1)
+                copy_outputs_to_mep(settings, year, -1)
 
     logger.info("Finished")

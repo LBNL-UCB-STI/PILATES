@@ -7,6 +7,39 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+beam_param_map = {'beam_sample': 'beam.agentsim.agentSampleSizeAsFractionOfPopulation',
+                  'beam_replanning_portion': 'beam.agentsim.agents.plans.merge.fraction',
+                  'max_plans_memory': 'beam.replanning.maxAgentPlanMemorySize'
+                  }
+
+
+def update_beam_config(settings, param, valueOverride=None):
+    if param in settings:
+        config_header = beam_param_map[param]
+        if valueOverride is None:
+            config_value = settings[param]
+        else:
+            config_value = valueOverride
+        beam_config_path = os.path.join(
+            settings['beam_local_input_folder'],
+            settings['region'],
+            settings['beam_config'])
+        modified = False
+        with open(beam_config_path, 'r') as file:
+            data = file.readlines()
+        with open(beam_config_path, 'w') as file:
+            for line in data:
+                if config_header in line:
+                    if ~modified:
+                        file.writelines(config_header + " = " + str(config_value) + "\n")
+                    modified = True
+                else:
+                    file.writelines(line)
+            if not modified:
+                file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
+    else:
+        logger.warn("Tried to modify parameter {0} but couldn't find it in settings.yaml".format(param))
+
 
 def make_archive(source, destination):
     """

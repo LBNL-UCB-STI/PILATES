@@ -1,3 +1,4 @@
+import gzip
 import os
 import pandas as pd
 import numpy as np
@@ -8,11 +9,16 @@ from zipfile import ZipFile
 import shutil
 import os
 from pilates.utils.geog import get_taz_geoms
+from pilates.utils.geog import get_taz_labels
 from pilates.utils.io import parse_args_and_settings
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 import zipfile
 from datetime import date
+import logging
+from pilates.activitysim.postprocessor import get_usim_datastore_fname
+
+logger = logging.getLogger(__name__)
 
 dtypes = {
     "time": "float32",
@@ -33,8 +39,95 @@ dtypes = {
     'currentTourMode': 'category',
     'currentActivity': 'category',
     'nextActivity': 'category',
-    'tripId': "Float32"
+    'tripId': 'Int64'
 }
+
+
+def copy_outputs_to_mep(settings, year, iter):
+    asim_output_data_dir = settings['asim_local_output_folder']
+    mep_output_data_dir = os.path.join(settings['mep_local_output_folder'], str(year))
+    if not os.path.exists(mep_output_data_dir):
+        os.makedirs(mep_output_data_dir)
+    beam_iter_output_dir = os.path.join(settings['beam_local_output_folder'], settings['region'],
+                                        "year-{0}-iteration-{1}".format(year, iter))
+
+    def copy_with_compression_asim_file_to_mep(asim_file_name, mep_file_name):
+        asim_file_path = os.path.join(asim_output_data_dir, asim_file_name)
+        mep_file_path = os.path.join(mep_output_data_dir, mep_file_name)
+        logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, mep_file_path)
+
+        if os.path.exists(asim_file_path):
+            with open(asim_file_path, 'rb') as f_in, gzip.open(
+                    mep_file_path, 'wb') as f_out:
+                f_out.writelines(f_in)
+
+    def copy_urbansim_outputs_to_mep():
+        data_dir = settings['usim_local_data_folder']
+        usim_output_store_name = get_usim_datastore_fname(
+            settings, io='input', year=year)
+        usim_output_store_path = os.path.join(data_dir, usim_output_store_name)
+        if not os.path.exists(usim_output_store_path):
+            raise ValueError('No output data store found at {0}'.format(
+                usim_output_store_path))
+        usim_output_store = pd.HDFStore(usim_output_store_path)
+        jobs = usim_output_store.get('jobs')
+        blocks = usim_output_store.get('blocks')
+        jobs.to_csv(os.path.join(mep_output_data_dir, "jobs.csv.gz"))
+        blocks.to_csv(os.path.join(mep_output_data_dir, "blocks.csv.gz"))
+
+    def copy_asim_files_to_mep():
+        ds = pd.HDFStore(os.path.join(asim_output_data_dir, "pipeline.h5"))
+        trips = ds.get('trips/trip_mode_choice')
+        trips.value_counts(["destination", "purpose"]).unstack(fill_value=0).to_csv(
+            os.path.join(mep_output_data_dir, "activity_frequency.csv.gz"))
+        copy_with_compression_asim_file_to_mep('final_plans.csv', 'plans.csv.gz')
+        copy_with_compression_asim_file_to_mep('final_households.csv', 'households.csv.gz')
+        copy_with_compression_asim_file_to_mep('final_persons.csv', 'persons.csv.gz')
+        copy_with_compression_asim_file_to_mep('final_land_use.csv', 'land_use.csv.gz')
+
+    def copy_beam_files_to_mep():
+        shutil.copy(os.path.join(beam_iter_output_dir, "network.csv.gz"),
+                    os.path.join(mep_output_data_dir, "network.csv.gz"))
+        linkstats_path = os.path.join(beam_iter_output_dir, "ITERS", "it.0", "0.linkstats.csv.gz")
+        try:
+            shutil.copy(linkstats_path, os.path.join(mep_output_data_dir, "linkstats.csv.gz"))
+        except:
+            logger.error("Missing expected beam output file {0}".format(linkstats_path))
+        parkingStats = os.path.join(beam_iter_output_dir, "ITERS", "it.0", "0.parkingStats.csv")
+        try:
+            shutil.copy(parkingStats, os.path.join(mep_output_data_dir, "parkingStats.csv"))
+        except:
+            logger.error("Missing expected beam output file {0}".format(parkingStats))
+        ridehailSkims = os.path.join(beam_iter_output_dir, "ITERS", "it.0", "0.skimsRidehail.csv.gz")
+        try:
+            shutil.copy(ridehailSkims, os.path.join(mep_output_data_dir, "ridehailSkims.csv.gz"))
+        except:
+            logger.error("Missing expected beam output file {0}".format(ridehailSkims))
+        odSkims = os.path.join(beam_iter_output_dir, "ITERS", "it.0", "0.skimsTAZ.csv.gz")
+        try:
+            shutil.copy(odSkims, os.path.join(mep_output_data_dir, "odSkims.csv.gz"))
+        except:
+            logger.error("Missing expected beam output file {0}".format(odSkims))
+        beam_router_dir = os.path.join(settings['beam_local_input_folder'], settings['region'],
+                                       settings['beam_router_directory'])
+        mep_gtfs_dir = os.path.join(mep_output_data_dir, "GTFS")
+        if not os.path.exists(mep_gtfs_dir):
+            os.makedirs(mep_gtfs_dir)
+        for file in os.listdir(beam_router_dir):
+            if file.endswith(".zip"):
+                shutil.copy(os.path.join(beam_router_dir, file), os.path.join(mep_gtfs_dir, file))
+        try:
+            shutil.copy(os.path.join(beam_iter_output_dir, "totalsByMode.csv"),
+                        os.path.join(mep_gtfs_dir, "totalsByMode.csv"))
+        except:
+            logger.error("Totals by mode were not generated by the postprocessor, expected at {0}".format(
+                os.path.join(beam_iter_output_dir, "totalsByMode.csv")))
+
+        # Also add skims, ridehail and parking info
+
+    copy_urbansim_outputs_to_mep()
+    copy_asim_files_to_mep()
+    copy_beam_files_to_mep()
 
 
 def _load_events_file(settings, year, replanning_iteration_number, beam_iteration=0):
@@ -64,7 +157,10 @@ def _reformat_events_file(events):
 
     # Replace "Work" with "work" in the "actType" column
     events["actType"].replace({"Work": "work"}, inplace=True)
-    events = events[~events.person.str.contains("Agent", na=False)].reset_index(drop=True)
+
+    initialParkingEvents = (events["type"] == "ParkingEvent") & (events["time"] == 0)
+    events = events[~events.person.str.contains("Agent", na=False) & ~initialParkingEvents].reset_index(drop=True)
+
 
     # shift column 'person' to first position
     first_column = events.pop('person')
@@ -328,15 +424,18 @@ def _add_geometry_id_to_DataFrame(df, gdf, xcol, ycol, idColumn="geometry", df_g
     gdf_data = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df[xcol], df[ycol]))
     gdf_data.set_crs(df_geom, inplace=True)
     joined = gpd.sjoin(gdf_data.to_crs('epsg:26910'), gdf.to_crs('epsg:26910'))
-    gdf_data = gdf_data.merge(joined['zone_id'], left_index=True, right_index=True, how="left")
-    gdf_data.rename(columns={'zone_id': idColumn}, inplace=True)
+    gdf_data = gdf_data.merge(joined['blkgrpid'], left_index=True, right_index=True, how="left")
+    gdf_data.rename(columns={'blkgrpid': idColumn}, inplace=True)
     df = pd.DataFrame(gdf_data.drop(columns='geometry'))
-    df.drop(columns=[xcol, ycol], inplace=True)
+    #df.drop(columns=[xcol, ycol], inplace=True)
     return df.loc[~df.index.duplicated(keep='first'), :]
 
-
 def _add_geometry_to_events(settings, events):
-    taz = get_taz_geoms(settings)
+    if settings['region'] == 'austin':
+        taz_id_col_in = 'GEOID'
+    else:
+        taz_id_col_in = 'taz1454'
+    taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in)
     processed_list = Parallel(n_jobs=cpu_count() - 1)(
         delayed(_add_geometry_id_to_DataFrame)(ev, taz, "startX", "startY", "BlockGroupStart") for ev in
         np.array_split(events, cpu_count() - 1))
@@ -344,6 +443,28 @@ def _add_geometry_to_events(settings, events):
         delayed(_add_geometry_id_to_DataFrame)(ev, taz, "endX", "endY", "BlockGroupEnd") for ev in
         processed_list)
     events = pd.concat(processed_list)
+
+
+    # Adding the block group information
+    if settings['region'] == 'sfbay':
+        gdf_labels = get_taz_labels(settings)
+        # Census block groups should have 12 digits so adding 0 to the start of it to be compatible with our block group ids
+        gdf_labels['bgid'] = '0' + gdf_labels['bgid'].astype(str)
+
+        events = pd.merge(events, gdf_labels,  how='left',  left_on = ['BlockGroupEnd'], right_on = 'bgid',)
+        events = pd.merge(events, gdf_labels,  how='left',  left_on = ['BlockGroupStart'], right_on = 'bgid',)
+
+        events.rename(columns={"bgid_x":"bgid_end"}, inplace=True)
+        events.rename(columns={"bgid_y":"bgid_start"}, inplace=True)
+        events.rename(columns={"tractid_x":"tractid_end"}, inplace=True)
+        events.rename(columns={"tractid_y":"tractid_start"}, inplace=True)
+        events.rename(columns={"juris_name_x":"juris_name_end"}, inplace=True)
+        events.rename(columns={"juris_name_y":"juris_name_start"}, inplace=True)
+        events.rename(columns={"county_name_x":"county_name_end"}, inplace=True)
+        events.rename(columns={"county_name_y":"county_name_start"}, inplace=True)
+        events.rename(columns={"mpo_x":"mpo_end"}, inplace=True)
+        events.rename(columns={"mpo_y":"mpo_start"}, inplace=True)
+
     return events
 
 
@@ -388,7 +509,21 @@ def _aggregate_on_trip(df, name):
                'fuelGasoline': np.sum,
                'fuel_marginal': np.sum,
                'BlockGroupStart': 'first',
+               'startX': 'first',
+               'startY': 'first',
+               'bgid_start': 'first',
+               'tractid_start':'first',
+               'juris_name_start': 'first',
+               'county_name_start': 'first',
+               'mpo_start': 'first',
                'BlockGroupEnd': 'last',
+               'endX': 'last',
+               'endY': 'last',
+               'bgid_end':'last',
+               'tractid_end':'last',
+               'juris_name_end':'last',
+               'county_name_end': 'last',
+               'mpo_end': 'last',
                'emissionFood': np.sum,
                'emissionElectricity': np.sum,
                'emissionDiesel': np.sum,
@@ -410,8 +545,10 @@ def _build_person_trip_events(events):
 def _process_person_trip_events(person_trip_events):
     person_trip_events['duration_door_to_door'] = person_trip_events['actStartTime'] - person_trip_events[
         'actEndTime']
-    person_trip_events['waitTime'] = person_trip_events['duration_door_to_door'] - person_trip_events[
-        'duration_travelling']
+    person_trip_events['waitTime_no_replanning'] = np.where(person_trip_events['replanning_status'] == 0,
+         person_trip_events['duration_door_to_door'] - person_trip_events['duration_travelling'], 0)
+    person_trip_events['waitTime_replanning'] = np.where(person_trip_events['replanning_status'] > 0,
+         person_trip_events['duration_door_to_door'] - person_trip_events['duration_travelling'], 0)
     person_trip_events['actPurpose'] = person_trip_events['actEndType'].astype(str) + "_to_" + person_trip_events[
         'actStartType'].astype(str)
     person_trip_events.rename(columns={"legVehicleIds": "vehicleIds_estimate"}, inplace=True)
@@ -448,6 +585,9 @@ def _process_person_trip_events(person_trip_events):
                   (person_trip_events['mode_choice_actual_BEAM'] == 'ride_hail_transit')]
     choices = ['ride_hail', 'transit', 'walk', 'bike', 'car', 'ride_hail_transit']
     person_trip_events['mode_choice_actual_6'] = np.select(conditions, choices, default=np.nan)
+    # Column with four summarized modes
+    person_trip_events['mode_choice_actual_4']  = np.where((person_trip_events['mode_choice_actual_5'] == 'walk')|(
+                          person_trip_events['mode_choice_actual_5'] == 'bike'), 'walk/bike', person_trip_events['mode_choice_actual_5'])
     return person_trip_events.sort_values(by=['IDMerged', 'tripIndex']).reset_index(drop=False)
 
 
@@ -465,14 +605,48 @@ def _read_asim_utilities(settings, year, iteration):
 
 
 def _merge_trips_with_utilities(asim_trips, asim_utilities, beam_trips):
+    tripIdsBEAM = set(beam_trips.tripIndex)
+    tripIdsASIM = set(asim_trips.trip_id)
+    logger.info("Finding {0} BEAM trips not in ASIM plans and {1} ASIM trips not in BEAM events".format(
+        len(tripIdsBEAM - tripIdsASIM), len(tripIdsASIM - tripIdsBEAM)))
     SFActMerged = pd.merge(left=asim_trips, right=asim_utilities, how='left', on=['trip_id']).sort_values(
         by=['person_id', 'trip_id']).reset_index(drop=True)
     eventsASim = pd.merge(left=beam_trips, right=SFActMerged, how='left', left_on=["IDMerged", 'tripIndex'],
                           right_on=['person_id', 'trip_id'])
     eventsASim.rename(columns={"mode_choice_logsum_y": "logsum_tours_mode_AS_tours"}, inplace=True)
     eventsASim.rename(columns={"tour_mode": "tour_mode_AS_tours"}, inplace=True)
-    eventsASim.rename(columns={"mode_choice_logsum_x": "logsum_trip_mode_AS_trips"}, inplace=True)
+    eventsASim.rename(columns={"mode_choice_logsum_x": "logsum_trip_Potential_INEXUS"}, inplace=True)
     eventsASim.rename(columns={"trip_mode": "trip_mode_AS_trips"}, inplace=True)
+
+    # Add a column of income quartiles
+    quartiles = eventsASim['income'].quantile([0,.25, .5, .75,1]).tolist()
+    # Add income deciles
+    conditions  = [(eventsASim['income'] >= quartiles[0]) & (eventsASim['income'] < quartiles[1]),
+                   (eventsASim['income'] >= quartiles[1]) & (eventsASim['income'] < quartiles[2]),
+                   (eventsASim['income'] >=  quartiles[2]) & (eventsASim['income'] < quartiles[3]),
+                   (eventsASim['income'] >= quartiles[3]) & (eventsASim['income'] <= quartiles[4])]
+
+    choices = [ '1stQ', '2ndQ', '3rdQ', '4thD']
+    eventsASim['income_quartiles'] = np.select(conditions, choices, default=None)
+    # Add a column of income deciles
+    deciles = eventsASim['income'].quantile([0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]).tolist()
+    # Add income deciles
+    conditions  = [(eventsASim['income'] >= deciles[0]) & (eventsASim['income'] < deciles[1]),
+                   (eventsASim['income'] >= deciles[1]) & (eventsASim['income'] < deciles[2]),
+                   (eventsASim['income'] >=  deciles[2]) & (eventsASim['income'] < deciles[3]),
+                   (eventsASim['income'] >= deciles[3]) & (eventsASim['income'] < deciles[4]),
+                   (eventsASim['income'] >=  deciles[4]) & (eventsASim['income'] < deciles[5]),
+                   (eventsASim['income'] >=  deciles[5]) & (eventsASim['income'] < deciles[6]),
+                   (eventsASim['income'] >=  deciles[6]) & (eventsASim['income'] < deciles[7]),
+                   (eventsASim['income'] >=  deciles[7]) & (eventsASim['income'] < deciles[8]),
+                   (eventsASim['income'] >=  deciles[8]) & (eventsASim['income'] < deciles[9]),
+                   (eventsASim['income'] >=  deciles[9]) & (eventsASim['income'] <= deciles[10])]
+
+    choices = [ '1stD', '2ndD', '3rdD',
+               '4thD', '5thD', '6thD', '7thD', '8thD', '9thD','10thD']
+
+    eventsASim['income_deciles'] = np.select(conditions, choices, default=None)
+
     return eventsASim
 
 
@@ -494,35 +668,63 @@ def _read_asim_plans(settings, year, iteration):
     return tour_trips
 
 
+def build_mep_summaries(trips, settings, year, iteration):
+    totalsByMode = trips.loc[:,
+                   ['mode_choice_actual_BEAM', 'cost_BEAM', 'distance_mode_choice', 'fuel_marginal']].groupby(
+        'mode_choice_actual_BEAM').agg(sum)
+    totalsByMode.index = totalsByMode.index.str.replace("teleportation", "passenger")
+    totalsByMode['cost_per_passenger_mile'] = totalsByMode['cost_BEAM'] / totalsByMode['distance_mode_choice'] * 1609.34
+    totalsByMode['joules_per_passenger_mile'] = totalsByMode['fuel_marginal'] / totalsByMode[
+        'distance_mode_choice'] * 1609.34
+    beam_output_dir = settings['beam_local_output_folder']
+    region = settings['region']
+    iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
+    totalsByMode.to_csv(os.path.join(beam_output_dir, region, iteration_output_dir, "totalsByMode.csv"))
+
+
 def process_event_file(settings, year, iteration):
-    print("Loading utilities")
-    utils = _read_asim_utilities(settings, year, iteration)
-    print("Loading events")
-    events = _load_events_file(settings, year, iteration)
-    events = _reformat_events_file(events)
-    print("Adding geoms to events")
-    events = _add_geometry_to_events(settings, events)
-    print("Expanding events")
-    events = _expand_events_file(events)
-    print("Building person trip events")
-    person_trip_events = _build_person_trip_events(events)
-    del events
-    person_trip_events = _process_person_trip_events(person_trip_events)
-    print("Reading asim plans")
-    tour_trips = _read_asim_plans(settings, year, iteration)
-    print("Merging final outputs")
-    final_output = _merge_trips_with_utilities(tour_trips, utils, person_trip_events)
-    scenario_defs = settings['scenario_definitions']
+    try:
+        logger.info("Loading utilities")
+        utils = _read_asim_utilities(settings, year, iteration)
+        logger.info("Loading events")
+        events = _load_events_file(settings, year, iteration)
+        events = _reformat_events_file(events)
+        # TODO: get cost and energy per passenger mile for the different modes
+        logger.info("Adding geoms to events")
+        events = _add_geometry_to_events(settings, events)
+        logger.info("Expanding events")
+        events = _expand_events_file(events)
+        logger.info("Building person trip events")
+        person_trip_events = _build_person_trip_events(events)
+        del events
+        person_trip_events = _process_person_trip_events(person_trip_events)
+        logger.info("Reading asim plans")
+        tour_trips = _read_asim_plans(settings, year, iteration)
+        logger.info("Merging final outputs")
+        try:
+            final_output = _merge_trips_with_utilities(tour_trips, utils, person_trip_events)
+        except Exception as e:
+            print("Error during merging: \n {0}".format(e))
+            logger.error("Error during merging: \n {0}".format(e))
+        scenario_defs = settings['scenario_definitions']
+        post_output_folder = settings['postprocessing_output_folder']
 
-    post_output_folder = settings['postprocessing_output_folder']
+        filename = "{0}_{1}_{2}-{3}_{4}__{5}.csv.gz".format(settings['region'],
+                                                            scenario_defs['name'],
+                                                            scenario_defs['lever'],
+                                                            scenario_defs['lever_position'],
+                                                            year,
+                                                            date.today().strftime("%Y%m%d"))
+        final_output.to_csv(os.path.join(post_output_folder, filename), compression="gzip")
 
-    filename = "{0}_{1}_{2}-{3}_{4}__{5}.csv.gz".format(settings['region'],
-                                                        scenario_defs['name'],
-                                                        scenario_defs['lever'],
-                                                        scenario_defs['lever_position'],
-                                                        year,
-                                                        date.today().strftime("%Y%m%d"))
-    final_output.to_csv(os.path.join(post_output_folder, filename), compression="gzip")
+        logger.info("Building mep summaries")
+        try:
+            build_mep_summaries(final_output, settings, year, iteration)
+        except Exception as e:
+            print("Error during mep summary: \n {0}".format(e))
+
+    except Exception as e:
+        logger.error("Did not successfully run the postproccessor, did activitysim fail? \n {0}".format(e))
 
 
 if __name__ == '__main__':
@@ -543,3 +745,4 @@ if __name__ == '__main__':
             yrs[year] = iter
     for year, iter in yrs.items():
         process_event_file(settings, year, iter)
+        copy_outputs_to_mep(settings, year, iter)

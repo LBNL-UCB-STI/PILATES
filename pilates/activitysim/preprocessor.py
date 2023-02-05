@@ -1378,6 +1378,27 @@ def _create_land_use_table(
     return zones
 
 
+def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
+    zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
+    beam_geoms_file = pd.read_csv(beam_geoms_location)
+    zone_type = settings['skims_zone_type']
+    zone_id_col = zone_type_column[zone_type]
+
+    if 'TAZ' not in beam_geoms_file.columns:
+
+        mapping = geoid_to_zone_map(settings)
+
+        if zone_type == 'block':
+            logger.info("Mapping block IDs")
+            beam_geoms_file['TAZ'] = beam_geoms_file['GEOID'].astype(str).replace(mapping)
+
+        elif zone_type == 'block_group':
+            logger.info("Mapping block group IDs to TAZ ids")
+            beam_geoms_file['TAZ'] = beam_geoms_file['GEOID'].astype(str).replace(mapping)
+
+    beam_geoms_file.to_csv(asim_geoms_location)
+
+
 def create_asim_data_from_h5(
         settings, year, warm_start=False, output_dir=None):
     # warm start: year = start_year
