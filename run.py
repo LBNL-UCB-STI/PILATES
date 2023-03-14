@@ -612,7 +612,7 @@ def run_traffic_assignment(
         activity_demand_model = settings.get('activity_demand_model', False)
         docker_stdout = settings['docker_stdout']
         skims_fname = settings['skims_fname']
-        origin_skims_fname = settings['origin_skims_fname']
+
         beam_memory = settings.get('beam_memory', str(int(psutil.virtual_memory().total / (1024. ** 3)) - 2) + 'g')
 
         # remember the last produced skims in order to detect that
@@ -661,9 +661,8 @@ def run_traffic_assignment(
                 "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
             )
             sys.exit(1)
-        path_to_origin_skims = os.path.join(abs_beam_output, origin_skims_fname)
-        beam_post.merge_current_origin_skims(
-            path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
+
+        beam_post.merge_current_origin_skims(settings, previous_origin_skims)
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
     return
