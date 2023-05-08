@@ -167,8 +167,8 @@ hwy_paths:
   - HOV3
   - HOV3TOLL
 ridehail_path_map:
-  RH_SOLO: Pooled
-  RH_POOLED: Solo
+  RH_SOLO: Solo
+  RH_POOLED: Pooled
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
   DIST: DIST_miles
