@@ -60,6 +60,7 @@ def _load_raw_skims(settings, skim_format):
                 columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
                 travel_time_mins = np.array(skims['SOV_TIME__AM'])
                 out = pd.DataFrame(travel_time_mins, index=index, columns=columns).stack().rename('SOV_AM_IVT_mins')
+                skims.close()
                 return out.to_frame()
             else:
                 raise NotImplementedError("Invalid skim format {0}".format(skims_fname.split('.')[-1]))
