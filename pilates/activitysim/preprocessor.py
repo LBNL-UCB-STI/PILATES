@@ -132,7 +132,7 @@ def read_zone_geoms(settings, year,
     """
     Returns a GeoPandas dataframe with the zones geometries. 
     """
-    store, table_prefix_year = read_datastore(settings, year)
+    store, table_prefix_year = read_datastore(settings, year, True)
     zone_type = settings['skims_zone_type']
     zone_key = '/{0}_zone_geoms'.format(zone_type)
 
