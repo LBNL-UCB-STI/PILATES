@@ -3,6 +3,8 @@ import pandas as pd
 import zipfile
 import os
 
+from pilates.utils.io import read_datastore
+
 logger = logging.getLogger(__name__)
 
 
