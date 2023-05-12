@@ -1025,7 +1025,7 @@ def create_skims_from_beam(settings, year,
         order = zone_order(settings, year)
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
-            skims = tempSkims.loc[skims.origin.isin(order) & tempSkims.destination.isin(order), :]
+            skims = tempSkims.loc[tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :]
             skims = _raw_beam_skims_preprocess(settings, year, skims)
             auto_df, transit_df = _create_skims_by_mode(settings, skims)
             ridehail_df = _load_raw_beam_origin_skims(settings)

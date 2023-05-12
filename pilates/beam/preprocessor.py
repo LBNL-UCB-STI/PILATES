@@ -38,7 +38,7 @@ def update_beam_config(settings, param, valueOverride=None):
             if not modified:
                 file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
     else:
-        logger.warn("Tried to modify parameter {0} but couldn't find it in settings.yaml".format(param))
+        logger.warning("Tried to modify parameter {0} but couldn't find it in settings.yaml".format(param))
 
 
 def make_archive(source, destination):

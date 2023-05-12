@@ -237,7 +237,7 @@ def create_usim_input_data(
     logger.info((
         "Passing last set of UrbanSim outputs through to the new "
         "Urbansim input store!"))
-    for h5_key in output_store.keys():
+    for h5_key in usim_output_store.keys():
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
             if os.path.join('/', table_prefix_year, table_name) == h5_key:
