@@ -93,6 +93,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
             complete_key,
             np.nan_to_num(np.array(outputMats[complete_key])).sum()))
         toPenalize = np.array([0])
+        toCancel = np.array([0])
         for measure in measures:
             inputKey = '_'.join([path, measure, '', timePeriod])
             if path in ["WALK", "BIKE"]:
@@ -113,7 +114,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0] * 100.0
-                elif measure == "TOTIVT":
+                elif measure in ["TOTIVT", "IVT"]:
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -132,10 +133,10 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                             " failed trips in these ODs".format(
                                 toCancel.sum(), path, completed[toCancel].sum(), failed[toCancel].sum(), timePeriod))
                     toAllow = ~toCancel & ~toPenalize
-                    outputMats[outputKey][toCancel] = 0.0
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
+                    # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
-                        outputMats[outputKeyKEYIVT][toCancel] = 0.0
+                        # outputMats[outputKeyKEYIVT][toCancel] = 0.0
                         outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * 100
                 elif ~measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
@@ -151,6 +152,16 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 logger.warning("Target skims are missing key {0}".format(outputKey))
             else:
                 logger.warning("BEAM skims are missing key {0}".format(outputKey))
+
+        if toCancel.sum() > 0:
+            for measure in measures:
+                if measure not in ["TRIPS, FAILURES"]:
+                    key = '_'.join([path, measure, '', timePeriod])
+                    try:
+                        outputMats[key][toCancel] = 0.0
+                    except:
+                        logger.warning(
+                            "Tried to cancel {0} trips for key {1} but couldn't find key".format(toCancel.sum(), key))
 
         if ("TOTIVT" in measures) & ("IWAIT" in measures) & ("KEYIVT" in measures):
             if toPenalize.sum() > 0:
