@@ -713,7 +713,7 @@ def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int
 
 
 def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
-    logger.info("Merging transit omx skims.")
+    logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings['ridehail_path_map']
     periods = settings['periods']
