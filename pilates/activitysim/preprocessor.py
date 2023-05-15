@@ -928,7 +928,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
                     output_skims[name].attrs.mode = path
                     output_skims[name].attrs.measure = measure
                     output_skims[name].attrs.timePeriod = period
-    logger.info("Created {0} new skims in the omx object")
+    logger.info("Created {0} new skims in the omx object".format(nSkimsCreated))
     if needToClose:
         output_skims.close()
 
