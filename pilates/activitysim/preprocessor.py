@@ -383,7 +383,7 @@ def _create_skims_by_mode(settings, skims_df):
 
     # Settings
     hwy_paths = settings['beam_simulated_hwy_paths']
-    transit_paths = settings['transit_paths']
+    transit_paths = settings['transit_paths'].keys()
 
     logger.info('Splitting out auto skims.')
     # auto_df = skims_df[skims_df['pathType'].isin(hwy_paths)]
@@ -648,9 +648,9 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
             name = '{0}_{1}__{2}'.format(path, measure, period)
             resultsDict[name] = mtx
 
-    for path in transit_paths:
+    for path, measures in transit_paths.items():
         for period in periods:
-            for measure in measure_map.keys():
+            for measure in measures:
                 name = '{0}_{1}__{2}'.format(path, measure, period)
                 if name in resultsDict:
                     mtx = resultsDict[name]
@@ -800,7 +800,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
 
     # NOTE: time is in units of minutes
 
-    for path in transit_paths:
+    for path, measures in transit_paths.items():
         logger.info("Writing tables for path type {0}".format(path))
         for period in periods:
             completed_measure = '{0}_{1}__{2}'.format(path, "TRIPS", period)
@@ -820,7 +820,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
                 output_skims[failed_measure].attrs.timePeriod = period
 
             # tooManyFailures = temp_failed > temp_completed
-            for measure in measure_map.keys():
+            for measure in measures:
                 name = '{0}_{1}__{2}'.format(path, measure, period)
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
