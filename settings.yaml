@@ -5,7 +5,7 @@
 ############################
 
 # scenario defs
-region: seattle
+region: sfbay
 scenario: base
 start_year: 2010
 end_year: 2014
@@ -14,7 +14,7 @@ travel_model_freq: 1
 vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
-land_use_model:
+land_use_model: urbansim
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model:
@@ -35,16 +35,15 @@ docker_images:
   beam: zaneedell/beam:0.9.3-omx
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
-  atlas:
 docker_stdout: False
 pull_latest: False
 
 # skim settings
-skims_zone_type: block_group # one of [taz, block_group, block]
-skims_fname: as-base-skims-seattle-bg.omx
+skims_zone_type: taz # one of [taz, block_group, block]
+skims_fname: as-base-skims-sfbay-taz.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
-beam_router_directory: r5
+beam_router_directory: r5-simple-no-local
 beam_geoms_fname: clipped_tazs.csv
 
 # region_zone_type:
@@ -68,7 +67,7 @@ usim_client_data_folder: /base/block_model_probaflow/data/
 usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
-warm_start_activities: False
+warm_start_activities: True
 
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client
@@ -86,8 +85,8 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: seattle.conf # OR austin-pilates-base.conf
-beam_sample: 1.0
+beam_config: sfbay-pilates-baseline2_0-omx.conf # OR austin-pilates-base.conf
+beam_sample: 0.1
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
 beam_local_output_folder: pilates/beam/beam_output/
@@ -118,7 +117,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 274783  # zero means no sampling, whole pop.
+household_sample_size: 0  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
