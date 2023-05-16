@@ -131,7 +131,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                         logger.info(
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
                             " failed trips in these ODs".format(
-                                toCancel.sum(), path, completed[toCancel].sum(), failed[toCancel].sum(), timePeriod))
+                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum()))
                     toAllow = ~toCancel & ~toPenalize
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
                     # outputMats[outputKey][toCancel] = 0.0
