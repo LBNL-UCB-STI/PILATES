@@ -354,16 +354,16 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
-    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'origin']).apply(aggregateInTimePeriod)
+    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(aggregateInTimePeriod)
     cur_skims['failures'] = cur_skims['observations'] - cur_skims['completedRequests']
     skims = omx.open_file(all_skims_path, 'a')
     idx = pd.Index(np.array(list(skims.mapping("zone_id").keys()), dtype=str).copy())
-    for (timePeriod, reservationType), _df in cur_skims.groupby(level=[0, 1]):
-        df = _df.loc[(timePeriod, reservationType)].reindex(idx, fill_value=0.0)
+    for (timePeriod, reservationType, serviceName), _df in cur_skims.groupby(level=[0, 1, 2]):
+        df = _df.loc[(timePeriod, reservationType, serviceName)].reindex(idx, fill_value=0.0)
 
-        trips = "RH_{0}_{1}__{2}".format(reservationType.upper(), 'TRIPS', timePeriod.upper())
-        failures = "RH_{0}_{1}__{2}".format(reservationType.upper(), 'FAILURES', timePeriod.upper())
-        rejectionprob = "RH_{0}_{1}__{2}".format(reservationType.upper(), 'REJECTIONPROB', timePeriod.upper())
+        trips = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'TRIPS', timePeriod.upper())
+        failures = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'FAILURES', timePeriod.upper())
+        rejectionprob = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'REJECTIONPROB', timePeriod.upper())
 
         logger.info(
             "Adding {0} complete trips and {1} failed trips to skim {2}".format(int(df['completedRequests'].sum()),
@@ -374,7 +374,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         skims[failures][:] = skims[trips][:] * 0.5 + df.loc[:, 'failures'].values[:, None]
         skims[rejectionprob][:] = np.nan_to_num(skims[failures][:] / (skims[trips][:] + skims[failures][:]))
 
-        wait = "RH_{0}_{1}__{2}".format(reservationType.upper(), 'WAIT', timePeriod.upper())
+        wait = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'WAIT', timePeriod.upper())
         originalWaitTime = np.array(
             skims[wait])  # Hack due to pytables issue https://github.com/PyTables/PyTables/issues/310
         originalWaitTime[df['completedRequests'] > 0, :] = df.loc[
@@ -420,14 +420,14 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
-    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'origin']).apply(aggregateInTimePeriod)
+    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(aggregateInTimePeriod)
     all_skims = pd.concat([cur_skims, all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)]])
     if all_skims.index.duplicated().sum() > 0:
         logger.warning("Duplicated values in index: \n {0}".format(all_skims.loc[all_skims.duplicated()]))
         all_skims.drop_duplicates(inplace=True)
     all_skims.to_csv(all_skims_path, index=True)
     cur_skims['totalWaitTimeInMinutes'] = cur_skims['waitTimeInMinutes'] * cur_skims['completedRequests']
-    totals = cur_skims.groupby(['timePeriod', 'reservationType']).sum()
+    totals = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName']).sum()
     totals['matchedPercent'] = totals['completedRequests'] / totals['observations']
     totals['meanWaitTimeInMinutes'] = totals['totalWaitTimeInMinutes'] / totals['completedRequests']
     logger.info("Ridehail matching summary: \n {0}".format(totals[['meanWaitTimeInMinutes', 'matchedPercent']]))

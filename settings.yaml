@@ -301,8 +301,26 @@ hwy_paths:
   - HOV3
   - HOV3TOLL
 ridehail_path_map:
-  RH_SOLO: Solo
-  RH_POOLED: Pooled
+#  RH_SOLO: Solo
+  RH_UBER_SOLO:
+    ReservationType: Solo
+    ServiceName: Uber
+  RH_LYFT_SOLO:
+    ReservationType: Solo
+    ServiceName: Lyft
+  RH_CRUISE_SOLO:
+    ReservationType: Solo
+    ServiceName: Cruise
+#  RH_POOLED: Pooled
+  RH_UBER_POOLED:
+    ReservationType: Pooled
+    ServiceName: Uber
+  RH_LYFT_POOLED:
+    ReservationType: Pooled
+    ServiceName: Lyft
+  RH_CRUISE_POOLED:
+    ReservationType: Pooled
+    ServiceName: Cruise
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
   DIST: DIST_miles
