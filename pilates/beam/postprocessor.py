@@ -250,6 +250,15 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
 
 def discover_impossible_ods(result, skims):
+    # return (path, timePeriod), (completed, failed)
+    allMats = skims.list_matrices()
+    metricsPerPath = dict()
+    for (path, tp), _ in result:
+        if path not in metricsPerPath.keys():
+            try:
+                metricsPerPath[path] = set([mat.split('_')[3] for mat in allMats if mat.startswith(path)])
+            except:
+                continue
     timePeriods = np.unique([b for (a, b), _ in result])
     # WALK TRANSIT:
     for tp in timePeriods:
@@ -258,14 +267,16 @@ def discover_impossible_ods(result, skims):
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
         for (path, _), mat in completed.items():
-            name = '_'.join([path, 'TOTIVT', '', tp])
-            toDelete = (mat == 0) & (totalCompleted > 50) & (totalFailed > 50) & (skims[name][:] > 0)
-            if np.any(toDelete):
-                print(
-                    "Deleting {0} ODs for {1} in the {2} because after 50 transit trips "
-                    "there no one has chosen it".format(
-                        toDelete.sum(), path, tp))
-                skims[name][toDelete] = 0
+            for metric in metricsPerPath[path]:
+                name = '_'.join([path, metric, '', tp])
+                if (name in allMats) & (metric not in ["TRIPS", "FAILURES"]):
+                    toDelete = (mat == 0) & (totalCompleted > 50) & (totalFailed > 50) & (skims[name][:] > 0)
+                    if np.any(toDelete):
+                        print(
+                            "Deleting {0} ODs for {1} in the {2} because after 50 transit trips "
+                            "there no one has chosen it".format(
+                                toDelete.sum(), name, tp))
+                        skims[name][toDelete] = 0
 
 
 def merge_current_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
