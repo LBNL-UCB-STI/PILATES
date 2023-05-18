@@ -1021,8 +1021,9 @@ def create_skims_from_beam(settings, year,
     new, convertFromCsv, blankSkims = _create_skim_object(settings, overwrite, output_dir=output_dir)
     validation = settings.get('asim_validation', False)
 
+    order = zone_order(settings, year)
+
     if new:
-        order = zone_order(settings, year)
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
             skims = tempSkims.loc[skims.origin.isin(order) & tempSkims.destination.isin(order), :]
@@ -1037,8 +1038,6 @@ def create_skims_from_beam(settings, year,
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
 
-            # Create offset
-            _create_offset(settings, order, data_dir=output_dir)
             del auto_df, transit_df
         else:
             beam_output_dir = settings['beam_local_output_folder']
@@ -1048,14 +1047,12 @@ def create_skims_from_beam(settings, year,
             _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            _create_offset(settings, order, data_dir=beam_output_dir)
             final_skims_path = os.path.join(settings['asim_local_input_folder'], 'skims.omx')
             skims_fname = settings.get('skims_fname', False)
             mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
             shutil.copyfile(mutable_skims_location, final_skims_path)
-    else:
-        order = zone_order(settings, year)
-        _create_offset(settings, order, data_dir=output_dir)
+
+    _create_offset(settings, order, data_dir=output_dir)
 
     if validation:
         order = zone_order(settings, year)
