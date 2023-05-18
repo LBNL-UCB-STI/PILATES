@@ -1053,6 +1053,10 @@ def create_skims_from_beam(settings, year,
             beam_output_dir = settings['beam_local_output_folder']
             mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
             shutil.copyfile(mutable_skims_location, final_skims_path)
+    else:
+        order = zone_order(settings, year)
+        _create_offset(settings, order, data_dir=output_dir)
+
 
     if validation:
         order = zone_order(settings, year)
