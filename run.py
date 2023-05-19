@@ -673,12 +673,12 @@ def run_traffic_assignment(
         )
 
         # 4. POSTPROCESS
-        path_to_od_skims = os.path.join(abs_beam_output, skims_fname)
+        path_to_mutable_od_skims = os.path.join(abs_beam_output, skims_fname)
         path_to_origin_skims = os.path.join(abs_beam_output, origin_skims_fname)
 
         if skimFormat == "csv.gz":
             current_od_skims = beam_post.merge_current_od_skims(
-                path_to_od_skims, previous_od_skims, beam_local_output_folder)
+                path_to_mutable_od_skims, previous_od_skims, beam_local_output_folder)
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
@@ -689,9 +689,7 @@ def run_traffic_assignment(
             beam_post.merge_current_origin_skims(
                 path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
         else:
-            asim_data_dir = settings['asim_local_input_folder']
-            skims_path = os.path.join(asim_data_dir, 'skims.omx')
-            current_od_skims = beam_post.merge_current_omx_od_skims(skims_path, previous_od_skims,
+            current_od_skims = beam_post.merge_current_omx_od_skims(path_to_mutable_od_skims, previous_od_skims,
                                                                     beam_local_output_folder)
             if current_od_skims == previous_od_skims:
                 logger.error(
@@ -701,7 +699,8 @@ def run_traffic_assignment(
                 sys.exit(1)
             beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             beam_post.merge_current_omx_origin_skims(
-                skims_path, previous_origin_skims, beam_local_output_folder, beam_asim_ridehail_measure_map)
+                path_to_mutable_od_skims, previous_origin_skims, beam_local_output_folder,
+                beam_asim_ridehail_measure_map)
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
     return
