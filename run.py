@@ -547,8 +547,9 @@ def generate_activity_plans(
         # If this is the first iteration, skims should only exist because
         # they were created during the warm start activities step. The skims
         # haven't been updated since then so we don't need to re-create them.
-        if year == settings['start_year']:
-            overwrite_skims = False
+        # if year == settings['start_year']:
+        #     overwrite_skims = False
+        overwrite_skims = False
 
         # 2. PREPROCESS DATA FOR ACTIVITY DEMAND MODEL
         print_str = "Creating {0} input data from {1} outputs".format(
@@ -689,7 +690,9 @@ def run_traffic_assignment(
             beam_post.merge_current_origin_skims(
                 path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
         else:
-            current_od_skims = beam_post.merge_current_omx_od_skims(path_to_mutable_od_skims, previous_od_skims,
+            asim_data_dir = settings['asim_local_input_folder']
+            asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
+            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
                                                                     beam_local_output_folder)
             if current_od_skims == previous_od_skims:
                 logger.error(
@@ -777,7 +780,7 @@ def run_replanning_loop(settings, forecast_year):
         formatted_print(print_str)
 
         # a) format new skims for asim
-        asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=True)
+        asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=False)
 
         # b) replan with asim
         print_str = (
