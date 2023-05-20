@@ -19,6 +19,8 @@ import numpy as np
 # from multiprocessing import Pool, cpu_count
 from joblib import Parallel, delayed
 
+from pilates.activitysim.preprocessor import zone_order
+
 logger = logging.getLogger(__name__)
 
 
@@ -221,7 +223,7 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
 
-def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
+def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
@@ -244,6 +246,13 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     discover_impossible_ods(result, skims)
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     copy_skims_for_unobserved_modes(mapping, skims)
+
+    order = zone_order(settings, settings['start_year'])
+    zone_id = np.arange(1, len(order) + 1)
+
+    # Generint offset
+    skims.create_mapping('zone_id', zone_id, overwrite=True)
+
     skims.close()
     partialSkims.close()
     return current_skims_path
