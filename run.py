@@ -693,7 +693,7 @@ def run_traffic_assignment(
             asim_data_dir = settings['asim_local_input_folder']
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
             current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
-                                                                    beam_local_output_folder)
+                                                                    beam_local_output_folder, settings)
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
@@ -702,7 +702,7 @@ def run_traffic_assignment(
                 sys.exit(1)
             beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             beam_post.merge_current_omx_origin_skims(
-                path_to_mutable_od_skims, previous_origin_skims, beam_local_output_folder,
+                asim_skims_path, previous_origin_skims, beam_local_output_folder,
                 beam_asim_ridehail_measure_map)
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
