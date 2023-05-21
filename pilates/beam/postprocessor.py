@@ -115,7 +115,9 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
-                    outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0] * 100.0
+                    valid = ~np.isnan(inputMats[inputKey][:])
+                    outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
+                                                                         (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
@@ -134,7 +136,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
                             " failed trips in these ODs".format(
                                 toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum()))
-                    toAllow = ~toCancel & ~toPenalize
+                    toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
                     # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -150,6 +152,8 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                                 np.nan_to_num(completed).sum(),
                                 np.nan_to_num(failed).sum(),
                                 newKey))
+                badVals = np.sum(np.isnan(outputMats[outputKey][:]))
+                logger.info("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
             else:
