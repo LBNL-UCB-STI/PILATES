@@ -391,6 +391,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
                                                            :,
                                                            None]
         skims[wait][:] = originalWaitTime
+    skims.close()
 
 
 def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir):
