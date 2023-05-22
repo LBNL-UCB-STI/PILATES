@@ -126,7 +126,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     else:
                         additionalFilter = False
 
-                    toCancel = (failed > 5) & (failed > 5 * completed) & (
+                    toCancel = (failed > 5) & (failed > (5 * completed)) & (
                             (outputMats[outputKey][:] > 0) | additionalFilter)
                     # save this for later so it doesn't get overwritten
                     toPenalize = (failed > completed) & ~toCancel & (
