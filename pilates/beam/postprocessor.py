@@ -126,16 +126,17 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     else:
                         additionalFilter = False
 
-                    toCancel = (failed > 5) & (failed > (5 * completed)) & (
-                            (outputMats[outputKey][:] > 0) | additionalFilter)
+                    toCancel = (failed > 3) & (failed > (6 * completed))
+                    previouslyNonZero = ((outputMats[outputKey][:] > 0) | additionalFilter) & toCancel
                     # save this for later so it doesn't get overwritten
                     toPenalize = (failed > completed) & ~toCancel & (
                             (outputMats[outputKey][:] > 0) | additionalFilter)
                     if toCancel.sum() > 0:
                         logger.info(
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
-                            " failed trips in these ODs".format(
-                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum()))
+                            " failed trips in these ODs. Previously, {5} were nonzero".format(
+                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum(),
+                                previouslyNonZero.sum()))
                     toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
                     # outputMats[outputKey][toCancel] = 0.0
