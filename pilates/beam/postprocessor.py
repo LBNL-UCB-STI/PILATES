@@ -154,7 +154,8 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                                 np.nan_to_num(failed).sum(),
                                 newKey))
                 badVals = np.sum(np.isnan(outputMats[outputKey][:]))
-                logger.info("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
+                if badVals > 0:
+                    logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
             else:
