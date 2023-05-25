@@ -54,8 +54,8 @@ beam_origin_skims_types = {"origin": str,
 default_speed_mph = {
     "COM": 25.0,
     "HVY": 20.0,
-    "LRF": 15.0,
-    "LOC": 15.0,
+    "LRF": 12.5,
+    "LOC": 12.5,
     "EXP": 17.0,
     "TRN": 15.0
 }
@@ -835,15 +835,15 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
                         elif measure == "DIST":
                             temp[missing_values] = distance_miles[missing_values]
                         elif (measure == "WAIT") | (measure == "WACC") | (measure == "WEGR") | (measure == "IWAIT"):
-                            temp[missing_values] = 500.0
+                            temp[missing_values] = 1000.0
                         elif measure == "FAR":
                             temp[missing_values] = default_fare_dollars.get(path.split("_")[1], 4.0)
                         elif measure == "BOARDS":
-                            temp[missing_values] = 1.0
+                            temp[missing_values] = 2.0
                         elif (measure == "DDIST") & (path.endswith("DRV") | path.startswith("DRV")):
                             temp[missing_values] = 2.0
                         elif (measure == "DTIME") & (path.endswith("DRV") | path.startswith("DRV")):
-                            temp[missing_values] = 500.0
+                            temp[missing_values] = 1500.0
                         else:
                             temp[missing_values] = 0.0
 
