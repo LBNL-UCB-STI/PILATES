@@ -1062,7 +1062,7 @@ def create_skims_from_beam(settings, year,
 def plot_skims(settings, zones,
                skims, order,
                random_sample=6,
-               cols=2, name='DIST',
+               cols=3, name='DIST',
                units='in miles'):
     """
     Plot a map of skims for a random set zones to all other zones. For validation/debugging purposes. 
@@ -1130,19 +1130,19 @@ def skim_validations(settings, year, order, data_dir=None):
     num_zones = len(order)
     distances = np.array(skims['DIST'])
     sov_time = np.array(skims['SOV_TIME__AM'])
-    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_IWAIT__AM',
-                     'WLK_LOC_WLK_WAIT__AM', 'WLK_LOC_WLK_WAUX__AM',
-                     'WLK_LOC_WLK_WEGR__AM', 'WLK_LOC_WLK_XWAIT__AM',
-                     'WLK_LOC_WLK_WACC__AM']
+    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_XWAIT__AM',
+                     'WLK_LOC_WLK_IWAIT__AM',
+                     'WLK_LOC_WLK_WAUX__AM']
     PuT_time = np.zeros((num_zones, num_zones), dtype=np.float32)
     for measure in loc_time_list:
         time = np.array(skims[measure]) / 100
         PuT_time = PuT_time + time
+    PuT_time[np.array(skims['WLK_LOC_WLK_TRIPS__AM']) == 0] = np.nan
 
     # Plots
-    plot_skims(settings, zone, distances, order, 6, 2, 'DIST', 'in miles')
-    plot_skims(settings, zone, sov_time, order, 6, 2, 'SOV_TIME', 'in minutes')
-    plot_skims(settings, zone, PuT_time, order, 6, 2, 'WLK_LOC_WLK_TIME', 'in minutes')
+    plot_skims(settings, zone, distances, order, 6, 3, 'DIST', 'in miles')
+    plot_skims(settings, zone, sov_time, order, 6, 3, 'SOV_TIME', 'in minutes')
+    plot_skims(settings, zone, PuT_time, order, 6, 3, 'WLK_LOC_WLK_TIME', 'in minutes')
 
 
 #######################################

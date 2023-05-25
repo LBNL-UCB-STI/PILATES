@@ -987,5 +987,6 @@ if __name__ == '__main__':
             else:
                 process_event_file(settings, year, -1)
                 copy_outputs_to_mep(settings, year, -1)
+            beam_post.trim_inaccessible_ods(settings)
 
     logger.info("Finished")

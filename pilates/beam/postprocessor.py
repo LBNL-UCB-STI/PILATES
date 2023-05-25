@@ -264,6 +264,38 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     return current_skims_path
 
 
+def trim_inaccessible_ods(settings):
+    all_skims_path = os.path.join(settings['asim_local_input_folder'], "skims.omx")
+    order = zone_order(settings, settings['start_year'])
+    skims = omx.open_file(all_skims_path, "a")
+    all_mats = skims.list_matrices()
+    totalTrips = dict()
+    for period in settings["periods"]:
+        totalTrips[period] = np.zeros((len(order), len(order)))
+    for mat in all_mats:
+        if ('TRIPS__' in mat) & ('RH_' not in mat):
+            tp = mat[-2:]
+            totalTrips[tp] += np.array(skims[mat])
+    for period in settings["periods"]:
+        completedAllTripsByOandD = totalTrips[period].sum(axis=0) + totalTrips[period].sum(axis=1)
+        for path, metrics in settings['transit_paths'].items():
+            trip_name = "{0}_TRIPS__{1}".format(path, period)
+            fail_name = "{0}_FAILURES__{1}".format(path, period)
+            if trip_name in all_mats:
+                completedTransitTrips = np.array(skims[trip_name])
+                failedTransitTrips = np.array(skims[fail_name])
+                completedTransitTripsByOandD = completedTransitTrips.sum(axis=0) + completedTransitTrips.sum(axis=1)
+                failedTransitTripsByOandD = failedTransitTrips.sum(axis=0) + failedTransitTrips.sum(axis=1)
+                toDelete = np.squeeze((completedAllTripsByOandD > 1000) & (failedTransitTripsByOandD > 200) & (
+                        completedTransitTripsByOandD == 0))
+                logger.info("Deleting all {0} service for {1} zones in {2} "
+                            "because no trips were observed".format(path, np.sum(toDelete), period))
+                for metric in metrics:
+                    name = "{0}_{1}__{2}".format(path, metric, period)
+                    if name in all_mats:
+                        skims[name][toDelete[:, None] & toDelete[None, :]] = 0.0
+
+
 def discover_impossible_ods(result, skims):
     # return (path, timePeriod), (completed, failed)
     allMats = skims.list_matrices()
@@ -277,8 +309,10 @@ def discover_impossible_ods(result, skims):
     timePeriods = np.unique([b for (a, b), _ in result])
     # WALK TRANSIT:
     for tp in timePeriods:
-        completed = {(a, b): c for (a, b), (c, d) in result if a.startswith('WLK') & a.endswith('WLK') & (b == tp)}
-        failed = {(a, b): c for (a, b), (c, d) in result if a.startswith('WLK') & a.endswith('WLK') & (b == tp)}
+        completed = {(a, b): c for (a, b), (c, d) in result if
+                     a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
+        failed = {(a, b): c for (a, b), (c, d) in result if
+                  a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
         for (path, _), mat in completed.items():
