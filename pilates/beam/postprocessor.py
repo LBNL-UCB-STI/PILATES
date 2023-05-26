@@ -294,6 +294,7 @@ def trim_inaccessible_ods(settings):
                     name = "{0}_{1}__{2}".format(path, metric, period)
                     if name in all_mats:
                         skims[name][toDelete[:, None] & toDelete[None, :]] = 0.0
+    skims.close()
 
 
 def discover_impossible_ods(result, skims):
