@@ -85,7 +85,7 @@ def find_produced_origin_skims(beam_output_dir):
 def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     complete_key = '_'.join([path, 'TRIPS', '', timePeriod])
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
-    completed, failed = None, None
+    completed, failed = None, Noneß
     if complete_key in inputMats.keys():
         completed = np.array(inputMats[complete_key])
         failed = np.array(inputMats[failed_key])
@@ -94,6 +94,12 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
             np.nan_to_num(failed).sum(),
             complete_key,
             np.nan_to_num(np.array(outputMats[complete_key])).sum()))
+        try:
+            logger.info("Of the {0} completed trips, {1} were to a previously unobserved "
+                        "OD".format(np.nan_to_num(completed).sum(),
+                                    np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()))
+        except:
+            pass
         toPenalize = np.array([0])
         toCancel = np.array([0])
         for measure in measures:
@@ -119,24 +125,29 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
                                                                          (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
+
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         additionalFilter = (outputMats[outputKeyKEYIVT][:] > 0)
                     else:
                         additionalFilter = False
-
+                    outputTravelTime = np.array(outputMats[outputKey])
                     toCancel = (failed > 3) & (failed > (6 * completed))
-                    previouslyNonZero = ((outputMats[outputKey][:] > 0) | additionalFilter) & toCancel
+                    previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
                     # save this for later so it doesn't get overwritten
-                    toPenalize = (failed > completed) & ~toCancel & (
-                            (outputMats[outputKey][:] > 0) | additionalFilter)
+                    toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
                     if toCancel.sum() > 0:
                         logger.info(
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
                             " failed trips in these ODs. Previously, {5} were nonzero".format(
                                 toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum(),
                                 previouslyNonZero.sum()))
+                        logger.info("There are now {0} observed ODs, {1} impossible ODs, and {2} default ODs".format(
+                            ((completed > 0) & (outputTravelTime > 0)).sum(),
+                            (outputTravelTime == 0).sum(),
+                            ((completed == 0) & (outputTravelTime > 0)).sum()
+                        ))
                     toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
                     # outputMats[outputKey][toCancel] = 0.0
@@ -293,7 +304,7 @@ def trim_inaccessible_ods(settings):
                 for metric in metrics:
                     name = "{0}_{1}__{2}".format(path, metric, period)
                     if name in all_mats:
-                        skims[name][toDelete[:, None] & toDelete[None, :]] = 0.0
+                        skims[name][toDelete[:, None] | toDelete[None, :]] = 0.0
     skims.close()
 
 
