@@ -57,8 +57,8 @@ def scale_data(df, scaleFactor, columns):
     for c in columns:
         if c in df.columns:
             df[c] = df[c]/scaleFactor
-        else:
-#            print("WARNING: {} NOT IN COLUMNS".format(c))
+#         else:
+# #            print("WARNING: {} NOT IN COLUMNS".format(c))
     return df
 
 def get_data(df,zipShp):
