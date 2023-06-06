@@ -5,10 +5,10 @@
 ############################
 
 # scenario defs
-region: seattle
+region: sfbay
 scenario: base
-start_year: 2010
-end_year: 2014
+start_year: 2018
+end_year: 2021
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
@@ -32,18 +32,18 @@ singularity_images:
 docker_images:
   urbansim: mxndrwgrdnr/block_model_v2_pb:latest
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.3-omx
+  beam: zaneedell/beam:0.9.4
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
 docker_stdout: False
 pull_latest: False
 
 # skim settings
-skims_zone_type: block_group # one of [taz, block_group, block]
-skims_fname: as-base-skims-seattle-bg.omx
+skims_zone_type: taz # one of [taz, block_group, block]
+skims_fname: as-base-skims-sfbay-taz.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
-beam_router_directory: r5
+beam_router_directory: r5-simple-no-local
 beam_geoms_fname: clipped_tazs.csv
 
 # region_zone_type:
@@ -85,7 +85,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: seattle.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-baseline2_0-omx.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -93,7 +93,7 @@ beam_local_output_folder: pilates/beam/beam_output/
 beam_scenario_folder: urbansim/
 #beam_memory: "650g"
 skim_zone_source_id_col: objectid
-replan_iters: 2
+replan_iters: 3
 replan_hh_samp_size: 0
 replan_after: trip_scheduling  # resume asim after this step
 discard_plans_every_year: True
@@ -117,7 +117,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 274783  # zero means no sampling, whole pop.
+household_sample_size: 50000 #274783  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
@@ -142,22 +142,156 @@ periods:
   - PM
   - EV
 transit_paths:
-  - DRV_COM_WLK
-  - DRV_HVY_WLK
-  - DRV_LOC_WLK
-  - DRV_LRF_WLK
-  - DRV_EXP_WLK
-  - WLK_COM_DRV
-  - WLK_HVY_DRV
-  - WLK_LOC_DRV
-  - WLK_LRF_DRV
-  - WLK_EXP_DRV
-  - WLK_COM_WLK
-  - WLK_HVY_WLK
-  - WLK_LOC_WLK
-  - WLK_LRF_WLK
-  - WLK_EXP_WLK
-  - WLK_TRN_WLK
+  DRV_COM_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_HVY_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_LOC_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_LRF_WLK:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_EXP_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_COM_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_HVY_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_LOC_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_LRF_DRV:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_EXP_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_COM_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_HVY_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_LOC_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_LRF_WLK:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_EXP_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_TRN_WLK:
+    - IVT
+    - WACC
+    - WEGR
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
 hwy_paths:
   - SOV
   - SOVTOLL
@@ -193,6 +327,7 @@ beam_asim_hwy_measure_map:
   VTOLL: VTOLL_FAR
 beam_asim_transit_measure_map:
   WAIT: null
+  IVT: TOTIVT_IVT_minutes
   TOTIVT: TOTIVT_IVT_minutes
   KEYIVT: KEYIVT_minutes
   FERRYIVT: FERRYIVT_minutes

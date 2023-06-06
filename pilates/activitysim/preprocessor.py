@@ -363,7 +363,8 @@ def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df):
     test_3 = len(set(order) - set(origin_taz))
     assert test_3 == 0, 'There are {} missing origin zone ids in BEAM skims'.format(test_3)
     return origin_skims_df.loc[origin_skims_df['origin'].isin(order)].set_index(['timePeriod',
-                                                                                 'reservationType', 'serviceName', 'origin'])
+                                                                                 'reservationType', 'serviceName',
+                                                                                 'origin'])
 
 
 def _create_skims_by_mode(settings, skims_df):
@@ -383,7 +384,7 @@ def _create_skims_by_mode(settings, skims_df):
 
     # Settings
     hwy_paths = settings['beam_simulated_hwy_paths']
-    transit_paths = settings['transit_paths']
+    transit_paths = settings['transit_paths'].keys()
 
     logger.info('Splitting out auto skims.')
     # auto_df = skims_df[skims_df['pathType'].isin(hwy_paths)]
@@ -648,9 +649,9 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
             name = '{0}_{1}__{2}'.format(path, measure, period)
             resultsDict[name] = mtx
 
-    for path in transit_paths:
+    for path, measures in transit_paths.items():
         for period in periods:
-            for measure in measure_map.keys():
+            for measure in measures:
                 name = '{0}_{1}__{2}'.format(path, measure, period)
                 if name in resultsDict:
                     mtx = resultsDict[name]
@@ -713,7 +714,7 @@ def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int
 
 
 def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
-    logger.info("Merging transit omx skims.")
+    logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings['ridehail_path_map']
     periods = settings['periods']
@@ -800,7 +801,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
 
     # NOTE: time is in units of minutes
 
-    for path in transit_paths:
+    for path, measures in transit_paths.items():
         logger.info("Writing tables for path type {0}".format(path))
         for period in periods:
             completed_measure = '{0}_{1}__{2}'.format(path, "TRIPS", period)
@@ -820,7 +821,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
                 output_skims[failed_measure].attrs.timePeriod = period
 
             # tooManyFailures = temp_failed > temp_completed
-            for measure in measure_map.keys():
+            for measure in measures:
                 name = '{0}_{1}__{2}'.format(path, measure, period)
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
@@ -928,7 +929,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
                     output_skims[name].attrs.mode = path
                     output_skims[name].attrs.measure = measure
                     output_skims[name].attrs.timePeriod = period
-    logger.info("Created {0} new skims in the omx object")
+    logger.info("Created {0} new skims in the omx object".format(nSkimsCreated))
     if needToClose:
         output_skims.close()
 
@@ -1021,8 +1022,8 @@ def create_skims_from_beam(settings, year,
     new, convertFromCsv, blankSkims = _create_skim_object(settings, overwrite, output_dir=output_dir)
     validation = settings.get('asim_validation', False)
 
+    order = zone_order(settings, year)
     if new:
-        order = zone_order(settings, year)
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
             skims = tempSkims.loc[skims.origin.isin(order) & tempSkims.destination.isin(order), :]
@@ -1041,18 +1042,20 @@ def create_skims_from_beam(settings, year,
             _create_offset(settings, order, data_dir=output_dir)
             del auto_df, transit_df
         else:
-            _distance_skims(settings, year, tempSkims, order, data_dir=output_dir)
-            _fill_auto_skims(settings, tempSkims, order, data_dir=output_dir)
-            _fill_transit_skims(settings, tempSkims, order, data_dir=output_dir)
-            _fill_ridehail_skims(settings, tempSkims, order, data_dir=output_dir)
+            beam_output_dir = settings['beam_local_output_folder']
+            _distance_skims(settings, year, tempSkims, order, data_dir=beam_output_dir)
+            _fill_auto_skims(settings, tempSkims, order, data_dir=beam_output_dir)
+            _fill_transit_skims(settings, tempSkims, order, data_dir=beam_output_dir)
+            _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            _create_offset(settings, order, data_dir=output_dir)
+            _create_offset(settings, order, data_dir=beam_output_dir)
             final_skims_path = os.path.join(settings['asim_local_input_folder'], 'skims.omx')
             skims_fname = settings.get('skims_fname', False)
-            beam_output_dir = settings['beam_local_output_folder']
             mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
             shutil.copyfile(mutable_skims_location, final_skims_path)
+    else:
+        _create_offset(settings, order, data_dir=output_dir)
 
     if validation:
         order = zone_order(settings, year)

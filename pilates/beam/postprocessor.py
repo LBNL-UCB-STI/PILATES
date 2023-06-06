@@ -93,6 +93,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
             complete_key,
             np.nan_to_num(np.array(outputMats[complete_key])).sum()))
         toPenalize = np.array([0])
+        toCancel = np.array([0])
         for measure in measures:
             inputKey = '_'.join([path, measure, '', timePeriod])
             if path in ["WALK", "BIKE"]:
@@ -113,7 +114,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0] * 100.0
-                elif measure == "TOTIVT":
+                elif measure in ["TOTIVT", "IVT"]:
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -121,7 +122,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     else:
                         additionalFilter = False
 
-                    toCancel = (failed > 10) & (failed > 2 * completed) & (
+                    toCancel = (failed > 5) & (failed > 5 * completed) & (
                             (outputMats[outputKey][:] > 0) | additionalFilter)
                     # save this for later so it doesn't get overwritten
                     toPenalize = (failed > completed) & ~toCancel & (
@@ -130,12 +131,12 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                         logger.info(
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
                             " failed trips in these ODs".format(
-                                toCancel.sum(), path, completed[toCancel].sum(), failed[toCancel].sum(), timePeriod))
+                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum()))
                     toAllow = ~toCancel & ~toPenalize
-                    outputMats[outputKey][toCancel] = 0.0
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
+                    # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
-                        outputMats[outputKeyKEYIVT][toCancel] = 0.0
+                        # outputMats[outputKeyKEYIVT][toCancel] = 0.0
                         outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * 100
                 elif ~measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
@@ -151,6 +152,16 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 logger.warning("Target skims are missing key {0}".format(outputKey))
             else:
                 logger.warning("BEAM skims are missing key {0}".format(outputKey))
+
+        if toCancel.sum() > 0:
+            for measure in measures:
+                if measure not in ["TRIPS, FAILURES"]:
+                    key = '_'.join([path, measure, '', timePeriod])
+                    try:
+                        outputMats[key][toCancel] = 0.0
+                    except:
+                        logger.warning(
+                            "Tried to cancel {0} trips for key {1} but couldn't find key".format(toCancel.sum(), key))
 
         if ("TOTIVT" in measures) & ("IWAIT" in measures) & ("KEYIVT" in measures):
             if toPenalize.sum() > 0:
@@ -239,6 +250,15 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
 
 def discover_impossible_ods(result, skims):
+    # return (path, timePeriod), (completed, failed)
+    allMats = skims.list_matrices()
+    metricsPerPath = dict()
+    for (path, tp), _ in result:
+        if path not in metricsPerPath.keys():
+            try:
+                metricsPerPath[path] = set([mat.split('_')[3] for mat in allMats if mat.startswith(path)])
+            except:
+                continue
     timePeriods = np.unique([b for (a, b), _ in result])
     # WALK TRANSIT:
     for tp in timePeriods:
@@ -247,14 +267,16 @@ def discover_impossible_ods(result, skims):
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
         for (path, _), mat in completed.items():
-            name = '_'.join([path, 'TOTIVT', '', tp])
-            toDelete = (mat == 0) & (totalCompleted > 50) & (totalFailed > 50) & (skims[name][:] > 0)
-            if np.any(toDelete):
-                print(
-                    "Deleting {0} ODs for {1} in the {2} because after 50 transit trips "
-                    "there no one has chosen it".format(
-                        toDelete.sum(), path, tp))
-                skims[name][toDelete] = 0
+            for metric in metricsPerPath[path]:
+                name = '_'.join([path, metric, '', tp])
+                if (name in allMats) & (metric not in ["TRIPS", "FAILURES"]):
+                    toDelete = (mat == 0) & (totalCompleted > 50) & (totalFailed > 50) & (skims[name][:] > 0)
+                    if np.any(toDelete):
+                        print(
+                            "Deleting {0} ODs for {1} in the {2} because after 50 transit trips "
+                            "there no one has chosen it".format(
+                                toDelete.sum(), name, tp))
+                        skims[name][toDelete] = 0
 
 
 def merge_current_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
