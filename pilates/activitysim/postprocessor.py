@@ -2,6 +2,7 @@ import logging
 import pandas as pd
 import zipfile
 import os
+from scripts.update_ridehail_fleets import update_fleet_files
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,9 @@ def create_next_iter_inputs(settings, year, forecast_year):
     create_usim_input_data(
         settings, year, forecast_year, asim_output_dict,
         tables_updated_by_asim)
+
+    if 'update_ridehail_fleet' in settings:
+        update_fleet_files(asim_output_dict['trips'], settings['update_ridehail_fleet'])
 
     return
 
