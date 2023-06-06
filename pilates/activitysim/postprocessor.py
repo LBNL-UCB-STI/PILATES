@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import zipfile
 import os
-from scripts.update_ridehail_fleets import update_fleet_files
+from pilates.utils.update_ridehail_fleets import update_fleet_files
 
 logger = logging.getLogger(__name__)
 
