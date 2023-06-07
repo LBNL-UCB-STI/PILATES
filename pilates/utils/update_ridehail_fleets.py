@@ -120,7 +120,7 @@ def generate_vehicles(df,fleet,fleetMixFilename,geofenceFilename=''):
         for n in range(numEnd):
             if vehCount>inactiveVehCount:
 
-                vehList[inactiveVehCount]['shifts'] = '{'+"{},{}".format(vehList[inactiveVehCount]['shifts'][0],
+                vehList[inactiveVehCount]['shifts'] = '{'+"{}:{}".format(vehList[inactiveVehCount]['shifts'][0],
                                                                     int((row['Hour']+1)*3600))+'}'
                 inactiveVehCount+=1
             else:
@@ -130,7 +130,7 @@ def generate_vehicles(df,fleet,fleetMixFilename,geofenceFilename=''):
 
     if inactiveVehCount<vehCount:
         for n in range(inactiveVehCount,vehCount):
-            vehList[n]['shifts'] = '{'+"{},{}".format(vehList[n]['shifts'][0],
+            vehList[n]['shifts'] = '{'+"{}:{}".format(vehList[n]['shifts'][0],
                                                                     int(24*3600))+'}'
 #     else:
 #        print('{} vehicles initiated; {} vehicles removed'.format(vehCount,inactiveVehCount))
