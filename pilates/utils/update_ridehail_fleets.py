@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import geopandas as gpd
 import random
+import statsmodels.api as sm
 
 
 def update_fleet_files(trips_df, settings):
