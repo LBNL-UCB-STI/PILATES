@@ -272,11 +272,12 @@ def create_next_iter_inputs(settings, year, forecast_year):
         settings, year, forecast_year, asim_output_dict,
         tables_updated_by_asim)
 
-    if 'update_ridehail_fleet' in settings:
-        update_fleet_files(asim_output_dict['trips'], settings['update_ridehail_fleet'])
-
     return
 
+def update_fleet_files(settings):
+    asim_output_dict = _load_asim_outputs(settings)
+    logger.info("Preparing fleet inputs!")
+    update_fleet_files(asim_output_dict['trips'], settings['update_ridehail_fleet'])
 
 def update_usim_inputs_after_warm_start(
         settings, usim_data_dir=None, warm_start_dir=None):
