@@ -595,7 +595,7 @@ def generate_activity_plans(
             asim_post.create_next_iter_inputs(settings, year, forecast_year)
 
         if 'update_ridehail_fleet' in settings:
-            asim_post.update_fleet_files( settings)
+            asim_post.update_fleet_files(settings)
 
         # 6. CLEANUP
         asim.remove()

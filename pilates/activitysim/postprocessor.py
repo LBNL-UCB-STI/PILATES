@@ -2,7 +2,7 @@ import logging
 import pandas as pd
 import zipfile
 import os
-from pilates.utils.update_ridehail_fleets import update_fleet_files
+import pilates.utils.update_ridehail_fleets as util_update_rh_fleet
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,7 @@ def create_next_iter_inputs(settings, year, forecast_year):
 def update_fleet_files(settings):
     asim_output_dict = _load_asim_outputs(settings)
     logger.info("Preparing fleet inputs!")
-    update_fleet_files(asim_output_dict['trips'], settings['update_ridehail_fleet'])
+    util_update_rh_fleet.update_fleet_files(asim_output_dict['trips'], settings['update_ridehail_fleet'])
 
 def update_usim_inputs_after_warm_start(
         settings, usim_data_dir=None, warm_start_dir=None):
