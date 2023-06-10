@@ -24,8 +24,8 @@ def update_fleet_files(trips_df, settings):
         df = adf.loc[(adf.trip_mode.isin(['SINGLE_{}'.format(f.upper()),'SHARED_{}'.format(f.upper())]))].copy()
         data = get_data(df,zipShp)
         data = scale_data(data, SCALE_FACTOR, columns=['Trip ends', 'Trip requests'])
-        data['prediction_ActiveVeh'] = run_model(data, AggModel_filename, 'ActiveVeh')/60
-        data['prediction_DeltaVeh'] = run_model(data, DeltaModel_filename, 'DeltaVeh')/60
+        data['prediction_ActiveVeh'] = run_model(data, AGG_MODEL_FILENAME, 'ActiveVeh')/60
+        data['prediction_DeltaVeh'] = run_model(data, DELTA_MODEL_FILENAME, 'DeltaVeh')/60
         data = scale_data(data, 1/SCALE_FACTOR, columns = ['prediction_ActiveVeh','prediction_DeltaVeh'])
 
         # Adjust predicted change in vehicles to match the predicted number of vehicles per hour
