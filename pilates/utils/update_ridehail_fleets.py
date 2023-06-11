@@ -136,7 +136,7 @@ def generate_vehicles(df,fleet,fleetMixFilename,geofenceFilename=''):
 #     else:
 #        print('{} vehicles initiated; {} vehicles removed'.format(vehCount,inactiveVehCount))
     vehDf = pd.DataFrame(vehList)
-    vehDf['vehicleType'] = genVehType(vehDf.shape[0],FLEET_MIX_FILENAME)
+    vehDf['vehicleType'] = genVehType(vehDf.shape[0],fleetMixFilename)
     return vehDf
 
 
