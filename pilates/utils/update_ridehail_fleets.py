@@ -41,7 +41,7 @@ def update_fleet_files(trips_df, settings):
         data.loc[(data.Adjustment>0)&(data.Delta_positive_total>0),'adj_DeltaVeh'] = data.loc[(data.Adjustment>0)&(data.Delta_positive_total>0),'adj_DeltaVeh'] + data.loc[(data.Adjustment>0)&(data.Delta_positive_total>0),'Adjustment']*(data.loc[(data.Adjustment>0)&(data.Delta_positive_total>0),'Delta_positive']/data.loc[(data.Adjustment>0)&(data.Delta_positive_total>0),'Delta_positive_total'])
         data.loc[(data.Adjustment<0)&(data.Delta_negative_total<0),'adj_DeltaVeh'] = data.loc[(data.Adjustment<0)&(data.Delta_negative_total<0),'adj_DeltaVeh'] + data.loc[(data.Adjustment<0)&(data.Delta_negative_total<0),'Adjustment']*(data.loc[(data.Adjustment<0)&(data.Delta_negative_total<0),'Delta_negative']/data.loc[(data.Adjustment<0)&(data.Delta_negative_total<0),'Delta_negative_total'])
 
-        vehicleFile = generate_vehicles(data.fillna(0),f,fleetMixFilename)
+        vehicleFile = generate_vehicles(data.fillna(0),f,FLEET_MIX_FILENAME)
         columns = ['id','rideHailManagerId','vehicleType','initialLocationX','initialLocationY','shifts',
                'geofenceX','geofenceY','geofenceRadius','geofenceTAZFile','fleetId','initialStateOfCharge']
 
@@ -136,7 +136,7 @@ def generate_vehicles(df,fleet,fleetMixFilename,geofenceFilename=''):
 #     else:
 #        print('{} vehicles initiated; {} vehicles removed'.format(vehCount,inactiveVehCount))
     vehDf = pd.DataFrame(vehList)
-    vehDf['vehicleType'] = genVehType(vehDf.shape[0],fleetMixFilename)
+    vehDf['vehicleType'] = genVehType(vehDf.shape[0],FLEET_MIX_FILENAME)
     return vehDf
 
 
