@@ -595,6 +595,7 @@ def generate_activity_plans(
             asim_post.create_next_iter_inputs(settings, year, forecast_year)
 
         if 'update_ridehail_fleet' in settings:
+            logger.info("Preparing fleet inputs!")
             asim_post.update_fleet_files(settings)
 
         # 6. CLEANUP
@@ -799,7 +800,9 @@ def run_replanning_loop(settings, forecast_year):
         for log in asim.logs(
                 stream=True, stderr=True, stdout=docker_stdout):
             print(log)
-
+        if 'update_ridehail_fleet' in settings:
+            logger.info("Preparing fleet inputs!")
+            asim_post.update_fleet_files(settings)
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
             beam_pre.update_beam_config(settings, 'beam_replanning_portion')
