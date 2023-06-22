@@ -319,7 +319,7 @@ def hourToTimeBin(hour: int):
         return 'EV'
 
 
-def aggregateInTimePeriod(df,settings):
+def aggregateInTimePeriod(df):
     if df['completedRequests'].sum() > 0:
         totalCompletedRequests = df['completedRequests'].sum()
         waitTime = (df['waitTime'] * df['completedRequests']).sum() / totalCompletedRequests / 60.
