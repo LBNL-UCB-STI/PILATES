@@ -319,7 +319,7 @@ def hourToTimeBin(hour: int):
         return 'EV'
 
 
-def aggregateInTimePeriod(df):
+def aggregateInTimePeriod(df,settings):
     if df['completedRequests'].sum() > 0:
         totalCompletedRequests = df['completedRequests'].sum()
         waitTime = (df['waitTime'] * df['completedRequests']).sum() / totalCompletedRequests / 60.
@@ -350,7 +350,8 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         "iterations": int
     }
 
-    cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+    cur_skims = read_cur_skims(current_skims_path,settings)
+#     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
@@ -416,7 +417,8 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
 
     all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
     all_skims.set_index(index_columns, drop=True, inplace=True)
-    cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+    cur_skims = read_cur_skims(current_skims_path,settings)
+#     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
@@ -433,3 +435,43 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     logger.info("Ridehail matching summary: \n {0}".format(totals[['meanWaitTimeInMinutes', 'matchedPercent']]))
     logger.info("Total requests: \n {0}".format(totals['observations'].sum()))
     logger.info("Total completed requests: \n {0}".format(totals['completedRequests'].sum()))
+
+def read_cur_skims(current_skims_path, settings, rawInputSchema):
+    if 'beam_ridehail_preprocessing'  in settings:
+        if settings['beam_ridehail_preprocessing']=='True':
+            rawInputSchema = { "tazId": str,
+                                     "hour": int,
+                                     "reservationType": str,
+                                     "observations": int,
+                                     "iterations": int,
+                                     'serviceName': str,
+                                     'waitTimeForRequests': float,
+                                     'costPerMileForRequests': float,
+                                     'waitTimeForQuotes': float,
+                                     'costPerMileForQuotes': float,
+                                     'unmatchedQuotesPercent': float,
+                                     'accessibleVehiclesPercent': float,
+                                     'numberOfReservationsRequested': int,
+                                     'numberOfReservationsReturned': int,
+                                     'numberOfQuotesRequested': int,
+                                     'numberOfQuotesReturned': int
+                                 }
+            rh_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+
+            rh_skims.drop(rh_skims.loc[rh_skims.numberOfQuotesReturned==0].index, axis=0, inplace=True)
+
+            rh_skims['percentQuotesRequestedReturned'] = rh_skims['numberOfQuotesReturned']/rh_skims['numberOfQuotesRequested']
+            rh_skims['percentReservationsRequestedReturned'] = rh_skims['numberOfReservationsReturned']/rh_skims['numberOfReservationsRequested']
+            rh_skims.loc[rh_skims['numberOfQuotesRequested']==0,'percentQuotesRequestedReturned']=1
+            rh_skims.loc[rh_skims['numberOfReservationsRequested']==0,'percentReservationsRequestedReturned']=1
+
+            rh_skims['unmatchedRequestsPercent'] = (1-rh_skims['percentReservationsRequestedReturned'])*(rh_skims['percentQuotesRequestedReturned'])+(1-rh_skims['percentQuotesRequestedReturned'])
+
+            rh_skims['waitTime'] = rh_skims['waitTimeForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
+            rh_skims['costPerMile'] = rh_skims['costPerMileForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
+
+            return rh_skims[["tazId","hour","reservationType","observations","iterations",'serviceName','waitTime','costPerMile','unmatchedRequestsPercent']]
+        else:
+            return pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+    else:
+        return pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
