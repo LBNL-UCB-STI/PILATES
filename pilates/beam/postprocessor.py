@@ -336,7 +336,7 @@ def aggregateInTimePeriod(df,settings):
                           "completedRequests": 0})
 
 
-def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, measure_map):
+def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, measure_map, settings):
     current_skims_path = find_produced_origin_skims(beam_output_dir)
 
     rawInputSchema = {
@@ -385,7 +385,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         skims[wait][:] = originalWaitTime
 
 
-def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir):
+def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     current_skims_path = find_produced_origin_skims(beam_output_dir)
     if (current_skims_path is None) | (previous_skims_path == current_skims_path):
         # this means beam has not produced the skims

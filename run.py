@@ -691,7 +691,7 @@ def run_traffic_assignment(
                 sys.exit(1)
 
             beam_post.merge_current_origin_skims(
-                path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
+                path_to_origin_skims, previous_origin_skims, beam_local_output_folder,settings)
         else:
             asim_data_dir = settings['asim_local_input_folder']
             skims_path = os.path.join(asim_data_dir, 'skims.omx')
@@ -705,7 +705,7 @@ def run_traffic_assignment(
                 sys.exit(1)
             beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             beam_post.merge_current_omx_origin_skims(
-                skims_path, previous_origin_skims, beam_local_output_folder, beam_asim_ridehail_measure_map)
+                skims_path, previous_origin_skims, beam_local_output_folder, beam_asim_ridehail_measure_map, settings)
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
     return
