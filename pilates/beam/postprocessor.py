@@ -350,7 +350,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         "iterations": int
     }
 
-    cur_skims = read_cur_skims(current_skims_path,settings)
+    cur_skims = read_cur_skims(current_skims_path,settings,rawInputSchema)
 #     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
@@ -417,7 +417,7 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
 
     all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
     all_skims.set_index(index_columns, drop=True, inplace=True)
-    cur_skims = read_cur_skims(current_skims_path,settings)
+    cur_skims = read_cur_skims(current_skims_path,settings,rawInputSchema)
 #     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
