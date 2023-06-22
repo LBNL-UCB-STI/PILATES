@@ -54,8 +54,8 @@ beam_origin_skims_types = {"origin": str,
 default_speed_mph = {
     "COM": 25.0,
     "HVY": 20.0,
-    "LRF": 15.0,
-    "LOC": 15.0,
+    "LRF": 12.5,
+    "LOC": 12.5,
     "EXP": 17.0,
     "TRN": 15.0
 }
@@ -836,15 +836,15 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
                         elif measure == "DIST":
                             temp[missing_values] = distance_miles[missing_values]
                         elif (measure == "WAIT") | (measure == "WACC") | (measure == "WEGR") | (measure == "IWAIT"):
-                            temp[missing_values] = 500.0
+                            temp[missing_values] = 1000.0
                         elif measure == "FAR":
                             temp[missing_values] = default_fare_dollars.get(path.split("_")[1], 4.0)
                         elif measure == "BOARDS":
-                            temp[missing_values] = 1.0
+                            temp[missing_values] = 2.0
                         elif (measure == "DDIST") & (path.endswith("DRV") | path.startswith("DRV")):
                             temp[missing_values] = 2.0
                         elif (measure == "DTIME") & (path.endswith("DRV") | path.startswith("DRV")):
-                            temp[missing_values] = 500.0
+                            temp[missing_values] = 1500.0
                         else:
                             temp[missing_values] = 0.0
 
@@ -1026,7 +1026,7 @@ def create_skims_from_beam(settings, year,
     if new:
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
-            skims = tempSkims.loc[skims.origin.isin(order) & tempSkims.destination.isin(order), :]
+            skims = tempSkims.loc[tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :]
             skims = _raw_beam_skims_preprocess(settings, year, skims)
             auto_df, transit_df = _create_skims_by_mode(settings, skims)
             ridehail_df = _load_raw_beam_origin_skims(settings)
@@ -1038,8 +1038,6 @@ def create_skims_from_beam(settings, year,
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
 
-            # Create offset
-            _create_offset(settings, order, data_dir=output_dir)
             del auto_df, transit_df
         else:
             beam_output_dir = settings['beam_local_output_folder']
@@ -1049,13 +1047,12 @@ def create_skims_from_beam(settings, year,
             _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            _create_offset(settings, order, data_dir=beam_output_dir)
             final_skims_path = os.path.join(settings['asim_local_input_folder'], 'skims.omx')
             skims_fname = settings.get('skims_fname', False)
             mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
             shutil.copyfile(mutable_skims_location, final_skims_path)
-    else:
-        _create_offset(settings, order, data_dir=output_dir)
+
+    _create_offset(settings, order, data_dir=output_dir)
 
     if validation:
         order = zone_order(settings, year)
@@ -1065,7 +1062,7 @@ def create_skims_from_beam(settings, year,
 def plot_skims(settings, zones,
                skims, order,
                random_sample=6,
-               cols=2, name='DIST',
+               cols=3, name='DIST',
                units='in miles'):
     """
     Plot a map of skims for a random set zones to all other zones. For validation/debugging purposes. 
@@ -1133,19 +1130,19 @@ def skim_validations(settings, year, order, data_dir=None):
     num_zones = len(order)
     distances = np.array(skims['DIST'])
     sov_time = np.array(skims['SOV_TIME__AM'])
-    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_IWAIT__AM',
-                     'WLK_LOC_WLK_WAIT__AM', 'WLK_LOC_WLK_WAUX__AM',
-                     'WLK_LOC_WLK_WEGR__AM', 'WLK_LOC_WLK_XWAIT__AM',
-                     'WLK_LOC_WLK_WACC__AM']
+    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_XWAIT__AM',
+                     'WLK_LOC_WLK_IWAIT__AM',
+                     'WLK_LOC_WLK_WAUX__AM']
     PuT_time = np.zeros((num_zones, num_zones), dtype=np.float32)
     for measure in loc_time_list:
         time = np.array(skims[measure]) / 100
         PuT_time = PuT_time + time
+    PuT_time[np.array(skims['WLK_LOC_WLK_TRIPS__AM']) == 0] = np.nan
 
     # Plots
-    plot_skims(settings, zone, distances, order, 6, 2, 'DIST', 'in miles')
-    plot_skims(settings, zone, sov_time, order, 6, 2, 'SOV_TIME', 'in minutes')
-    plot_skims(settings, zone, PuT_time, order, 6, 2, 'WLK_LOC_WLK_TIME', 'in minutes')
+    plot_skims(settings, zone, distances, order, 6, 3, 'DIST', 'in miles')
+    plot_skims(settings, zone, sov_time, order, 6, 3, 'SOV_TIME', 'in minutes')
+    plot_skims(settings, zone, PuT_time, order, 6, 3, 'WLK_LOC_WLK_TIME', 'in minutes')
 
 
 #######################################
