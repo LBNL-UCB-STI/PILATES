@@ -19,6 +19,8 @@ import numpy as np
 # from multiprocessing import Pool, cpu_count
 from joblib import Parallel, delayed
 
+from pilates.activitysim.preprocessor import zone_order
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,13 +87,26 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
     completed, failed = None, None
     if complete_key in inputMats.keys():
-        completed = np.array(inputMats[complete_key])
+        completed = np.array(inputMats[complete_key]).copy()
+        if '_'.join([path, 'TOTIVT', '', timePeriod]) in inputMats.keys():
+            shouldNotBeZero = (completed > 0) & (np.array(inputMats['_'.join([path, 'TOTIVT', '', timePeriod])]) == 0)
+            if shouldNotBeZero.any():
+                logger.warning(
+                    "In BEAM outputs for {0} in {1} we have {2} completed trips with "
+                    "time = 0".format(path, timePeriod, shouldNotBeZero.sum()))
+                completed[shouldNotBeZero] = 0
         failed = np.array(inputMats[failed_key])
         logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
             np.nan_to_num(completed).sum(),
             np.nan_to_num(failed).sum(),
             complete_key,
             np.nan_to_num(np.array(outputMats[complete_key])).sum()))
+        try:
+            logger.info("Of the {0} completed trips, {1} were to a previously unobserved "
+                        "OD".format(np.nan_to_num(completed).sum(),
+                                    np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()))
+        except:
+            pass
         toPenalize = np.array([0])
         toCancel = np.array([0])
         for measure in measures:
@@ -105,34 +120,42 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 outputKey = inputKey
             if (outputKey in outputMats) and (inputKey in inputMats):
                 if measure == "TRIPS":
-                    outputMats[outputKey][completed > 0] += inputMats[inputKey][completed > 0]
+                    outputMats[outputKey][completed > 0] += completed[completed > 0]
                 elif measure == "FAILURES":
-                    outputMats[outputKey][failed > 0] += inputMats[inputKey][failed > 0]
+                    outputMats[outputKey][failed > 0] += failed[failed > 0]
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
-                    outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0] * 100.0
+                    valid = ~np.isnan(inputMats[inputKey][:])
+                    outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
+                                                                         (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
+
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         additionalFilter = (outputMats[outputKeyKEYIVT][:] > 0)
                     else:
                         additionalFilter = False
-
-                    toCancel = (failed > 5) & (failed > 5 * completed) & (
-                            (outputMats[outputKey][:] > 0) | additionalFilter)
+                    outputTravelTime = np.array(outputMats[outputKey])
+                    toCancel = (failed > 3) & (failed > (6 * completed))
+                    previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
                     # save this for later so it doesn't get overwritten
-                    toPenalize = (failed > completed) & ~toCancel & (
-                            (outputMats[outputKey][:] > 0) | additionalFilter)
+                    toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
                     if toCancel.sum() > 0:
                         logger.info(
                             "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
-                            " failed trips in these ODs".format(
-                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum()))
-                    toAllow = ~toCancel & ~toPenalize
+                            " failed trips in these ODs. Previously, {5} were nonzero".format(
+                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum(),
+                                previouslyNonZero.sum()))
+                        logger.info("There are now {0} observed ODs, {1} impossible ODs, and {2} default ODs".format(
+                            ((completed > 0) & (outputTravelTime > 0)).sum(),
+                            (outputTravelTime == 0).sum(),
+                            ((completed == 0) & (outputTravelTime > 0)).sum()
+                        ))
+                    toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
                     # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -148,6 +171,9 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                                 np.nan_to_num(completed).sum(),
                                 np.nan_to_num(failed).sum(),
                                 newKey))
+                badVals = np.sum(np.isnan(outputMats[outputKey][:]))
+                if badVals > 0:
+                    logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
             else:
@@ -221,7 +247,7 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
 
-def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
+def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
@@ -244,9 +270,49 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     discover_impossible_ods(result, skims)
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     copy_skims_for_unobserved_modes(mapping, skims)
+
+    order = zone_order(settings, settings['start_year'])
+    zone_id = np.arange(1, len(order) + 1)
+
+    # Generint offset
+    skims.create_mapping('zone_id', zone_id, overwrite=True)
+
     skims.close()
     partialSkims.close()
     return current_skims_path
+
+
+def trim_inaccessible_ods(settings):
+    all_skims_path = os.path.join(settings['asim_local_input_folder'], "skims.omx")
+    order = zone_order(settings, settings['start_year'])
+    skims = omx.open_file(all_skims_path, "a")
+    all_mats = skims.list_matrices()
+    totalTrips = dict()
+    for period in settings["periods"]:
+        totalTrips[period] = np.zeros((len(order), len(order)))
+    for mat in all_mats:
+        if ('TRIPS__' in mat) & ('RH_' not in mat):
+            tp = mat[-2:]
+            totalTrips[tp] += np.array(skims[mat])
+    for period in settings["periods"]:
+        completedAllTripsByOandD = totalTrips[period].sum(axis=0) + totalTrips[period].sum(axis=1)
+        for path, metrics in settings['transit_paths'].items():
+            trip_name = "{0}_TRIPS__{1}".format(path, period)
+            fail_name = "{0}_FAILURES__{1}".format(path, period)
+            if trip_name in all_mats:
+                completedTransitTrips = np.array(skims[trip_name])
+                failedTransitTrips = np.array(skims[fail_name])
+                completedTransitTripsByOandD = completedTransitTrips.sum(axis=0) + completedTransitTrips.sum(axis=1)
+                failedTransitTripsByOandD = failedTransitTrips.sum(axis=0) + failedTransitTrips.sum(axis=1)
+                toDelete = np.squeeze((completedAllTripsByOandD > 1000) & (failedTransitTripsByOandD > 200) & (
+                        completedTransitTripsByOandD == 0))
+                logger.info("Deleting all {0} service for {1} zones in {2} "
+                            "because no trips were observed".format(path, np.sum(toDelete), period))
+                for metric in metrics:
+                    name = "{0}_{1}__{2}".format(path, metric, period)
+                    if name in all_mats:
+                        skims[name][toDelete[:, None] | toDelete[None, :]] = 0.0
+    skims.close()
 
 
 def discover_impossible_ods(result, skims):
@@ -262,8 +328,10 @@ def discover_impossible_ods(result, skims):
     timePeriods = np.unique([b for (a, b), _ in result])
     # WALK TRANSIT:
     for tp in timePeriods:
-        completed = {(a, b): c for (a, b), (c, d) in result if a.startswith('WLK') & a.endswith('WLK') & (b == tp)}
-        failed = {(a, b): c for (a, b), (c, d) in result if a.startswith('WLK') & a.endswith('WLK') & (b == tp)}
+        completed = {(a, b): c for (a, b), (c, d) in result if
+                     a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
+        failed = {(a, b): c for (a, b), (c, d) in result if
+                  a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
         for (path, _), mat in completed.items():
@@ -383,6 +451,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
                                                            :,
                                                            None]
         skims[wait][:] = originalWaitTime
+    skims.close()
 
 
 def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
