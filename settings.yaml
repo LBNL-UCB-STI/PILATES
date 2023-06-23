@@ -343,6 +343,7 @@ beam_asim_transit_measure_map:
 beam_asim_ridehail_measure_map:
   WAIT: waitTimeInMinutes
   REJECTIONPROB: unmatchedRequestPortion
+beam_ridehail_preprocessing: "True"
 asim_output_tables:
   prefix: final_
   tables:

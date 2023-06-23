@@ -547,8 +547,9 @@ def generate_activity_plans(
         # If this is the first iteration, skims should only exist because
         # they were created during the warm start activities step. The skims
         # haven't been updated since then so we don't need to re-create them.
-        if year == settings['start_year']:
-            overwrite_skims = False
+        # if year == settings['start_year']:
+        #     overwrite_skims = False
+        overwrite_skims = False
 
         # 2. PREPROCESS DATA FOR ACTIVITY DEMAND MODEL
         print_str = "Creating {0} input data from {1} outputs".format(
@@ -677,12 +678,12 @@ def run_traffic_assignment(
         )
 
         # 4. POSTPROCESS
-        path_to_od_skims = os.path.join(abs_beam_output, skims_fname)
+        path_to_mutable_od_skims = os.path.join(abs_beam_output, skims_fname)
         path_to_origin_skims = os.path.join(abs_beam_output, origin_skims_fname)
 
         if skimFormat == "csv.gz":
             current_od_skims = beam_post.merge_current_od_skims(
-                path_to_od_skims, previous_od_skims, beam_local_output_folder)
+                path_to_mutable_od_skims, previous_od_skims, beam_local_output_folder)
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
@@ -691,12 +692,12 @@ def run_traffic_assignment(
                 sys.exit(1)
 
             beam_post.merge_current_origin_skims(
-                path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
+                path_to_origin_skims, previous_origin_skims, beam_local_output_folder,settings)
         else:
             asim_data_dir = settings['asim_local_input_folder']
-            skims_path = os.path.join(asim_data_dir, 'skims.omx')
-            current_od_skims = beam_post.merge_current_omx_od_skims(skims_path, previous_od_skims,
-                                                                    beam_local_output_folder)
+            asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
+            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
+                                                                    beam_local_output_folder, settings)
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
@@ -705,7 +706,8 @@ def run_traffic_assignment(
                 sys.exit(1)
             beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             beam_post.merge_current_omx_origin_skims(
-                skims_path, previous_origin_skims, beam_local_output_folder, beam_asim_ridehail_measure_map)
+                asim_skims_path, previous_origin_skims, beam_local_output_folder,
+                beam_asim_ridehail_measure_map)
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
     return
@@ -782,7 +784,7 @@ def run_replanning_loop(settings, forecast_year):
         formatted_print(print_str)
 
         # a) format new skims for asim
-        asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=True)
+        asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=False)
 
         # b) replan with asim
         print_str = (
@@ -991,5 +993,6 @@ if __name__ == '__main__':
             else:
                 process_event_file(settings, year, -1)
                 copy_outputs_to_mep(settings, year, -1)
+            beam_post.trim_inaccessible_ods(settings)
 
     logger.info("Finished")
