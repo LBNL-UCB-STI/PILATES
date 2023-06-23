@@ -363,8 +363,7 @@ def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df):
     test_3 = len(set(order) - set(origin_taz))
     assert test_3 == 0, 'There are {} missing origin zone ids in BEAM skims'.format(test_3)
     return origin_skims_df.loc[origin_skims_df['origin'].isin(order)].set_index(['timePeriod',
-                                                                                 'reservationType', 'serviceName',
-                                                                                 'origin'])
+                                                                                 'reservationType', 'origin'])
 
 
 def _create_skims_by_mode(settings, skims_df):
@@ -1130,9 +1129,10 @@ def skim_validations(settings, year, order, data_dir=None):
     num_zones = len(order)
     distances = np.array(skims['DIST'])
     sov_time = np.array(skims['SOV_TIME__AM'])
-    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_XWAIT__AM',
-                     'WLK_LOC_WLK_IWAIT__AM',
-                     'WLK_LOC_WLK_WAUX__AM']
+    loc_time_list = ['WLK_LOC_WLK_TOTIVT__AM', 'WLK_LOC_WLK_IWAIT__AM',
+                     'WLK_LOC_WLK_WAIT__AM', 'WLK_LOC_WLK_WAUX__AM',
+                     'WLK_LOC_WLK_WEGR__AM', 'WLK_LOC_WLK_XWAIT__AM',
+                     'WLK_LOC_WLK_WACC__AM']
     PuT_time = np.zeros((num_zones, num_zones), dtype=np.float32)
     for measure in loc_time_list:
         time = np.array(skims[measure]) / 100
