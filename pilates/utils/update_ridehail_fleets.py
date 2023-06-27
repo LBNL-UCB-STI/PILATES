@@ -14,6 +14,7 @@ def update_fleet_files(trips_df, settings):
     DELTA_MODEL_FILENAME = settings['deltaModelFilename']
     FLEETS = settings['fleets']
     SCALE_FACTOR = settings['scaleFactor']
+    OVERLAP = settings['overlap']
     BEAM_INPUT_PATH = settings['beamInputPath']
 
     zipShp = load_geoData(ZIP_FILENAME,TAZ_FILENAME)
