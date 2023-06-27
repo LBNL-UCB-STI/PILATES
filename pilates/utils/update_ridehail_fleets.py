@@ -57,7 +57,7 @@ def run_model(data, model, model_name):
 def scale_data(df, scaleFactor, overlap, columns):
     for c in columns:
         if c in df.columns:
-            df[c] = (1-overlap)*df[c]/scaleFactor
+            df[c] = (df[c]/scaleFactor)/(1+overlap)
 #         else:
 # #            print("WARNING: {} NOT IN COLUMNS".format(c))
     return df
