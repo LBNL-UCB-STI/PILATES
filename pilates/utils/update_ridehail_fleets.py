@@ -26,7 +26,7 @@ def update_fleet_files(trips_df, settings):
         data = scale_data(data, SCALE_FACTOR, columns=['Trip ends', 'Trip requests'])
         data['prediction_ActiveVeh'] = run_model(data, AGG_MODEL_FILENAME, 'ActiveVeh')/60
         data['prediction_DeltaVeh'] = run_model(data, DELTA_MODEL_FILENAME, 'DeltaVeh')/60
-        data = scale_data(data, 1/SCALE_FACTOR, columns = ['prediction_ActiveVeh','prediction_DeltaVeh'])
+        data = scale_data(data, 1/SCALE_FACTOR, OVERLAP, columns = ['prediction_ActiveVeh','prediction_DeltaVeh'])
 
         # Adjust predicted change in vehicles to match the predicted number of vehicles per hour
         data['Delta_positive'] = (data['prediction_DeltaVeh']>0).astype(int)*data['prediction_DeltaVeh']
@@ -54,10 +54,10 @@ def run_model(data, model, model_name):
     y_pred = results.predict(X_test)
     return y_pred
 
-def scale_data(df, scaleFactor, columns):
+def scale_data(df, scaleFactor, overlap, columns):
     for c in columns:
         if c in df.columns:
-            df[c] = df[c]/scaleFactor
+            df[c] = (1-overlap)*df[c]/scaleFactor
 #         else:
 # #            print("WARNING: {} NOT IN COLUMNS".format(c))
     return df
