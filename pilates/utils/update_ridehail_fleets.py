@@ -14,6 +14,7 @@ def update_fleet_files(trips_df, settings):
     DELTA_MODEL_FILENAME = settings['deltaModelFilename']
     FLEETS = settings['fleets']
     SCALE_FACTOR = settings['scaleFactor']
+    OVERLAP = settings['overlap']
     BEAM_INPUT_PATH = settings['beamInputPath']
 
     zipShp = load_geoData(ZIP_FILENAME,TAZ_FILENAME)
@@ -23,10 +24,10 @@ def update_fleet_files(trips_df, settings):
     for f in FLEETS:
         df = adf.loc[(adf.trip_mode.isin(['SINGLE_{}'.format(f.upper()),'SHARED_{}'.format(f.upper())]))].copy()
         data = get_data(df,zipShp)
-        data = scale_data(data, SCALE_FACTOR, columns=['Trip ends', 'Trip requests'])
+        data = scale_data(data, SCALE_FACTOR, 0, 0, columns=['Trip ends', 'Trip requests'])
         data['prediction_ActiveVeh'] = run_model(data, AGG_MODEL_FILENAME, 'ActiveVeh')/60
         data['prediction_DeltaVeh'] = run_model(data, DELTA_MODEL_FILENAME, 'DeltaVeh')/60
-        data = scale_data(data, 1/SCALE_FACTOR, columns = ['prediction_ActiveVeh','prediction_DeltaVeh'])
+        data = scale_data(data, 1/SCALE_FACTOR, OVERLAP['both'], OVERLAP[f], columns = ['prediction_ActiveVeh','prediction_DeltaVeh'])
 
         # Adjust predicted change in vehicles to match the predicted number of vehicles per hour
         data['Delta_positive'] = (data['prediction_DeltaVeh']>0).astype(int)*data['prediction_DeltaVeh']
@@ -54,10 +55,13 @@ def run_model(data, model, model_name):
     y_pred = results.predict(X_test)
     return y_pred
 
-def scale_data(df, scaleFactor, columns):
+def scale_data(df, scaleFactor, overlapBoth, overlapFleet, columns):
     for c in columns:
         if c in df.columns:
-            df[c] = df[c]/scaleFactor
+            if overlapBoth==0:
+                df[c] = (df[c]/scaleFactor)
+            else:
+                df[c] = (df[c]/scaleFactor)*(1-(0.5*overlapBoth/overlapFleet))
 #         else:
 # #            print("WARNING: {} NOT IN COLUMNS".format(c))
     return df
