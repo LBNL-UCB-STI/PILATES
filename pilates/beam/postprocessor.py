@@ -85,7 +85,7 @@ def find_produced_origin_skims(beam_output_dir):
 def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     complete_key = '_'.join([path, 'TRIPS', '', timePeriod])
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
-    completed, failed = None, Noneß
+    completed, failed = None, None
     if complete_key in inputMats.keys():
         completed = np.array(inputMats[complete_key])
         failed = np.array(inputMats[failed_key])
