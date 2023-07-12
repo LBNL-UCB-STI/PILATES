@@ -8,6 +8,7 @@ pickle.ForkingPickler = cloudpickle.Pickler
 from pilates.activitysim.preprocessor import copy_beam_geoms
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
+from workflow_state import WorkflowState
 
 import shutil
 import subprocess
@@ -904,43 +905,38 @@ if __name__ == '__main__':
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
     #################################
-    for year in range(start_year, end_year, travel_model_freq):
-
+    state = WorkflowState.from_settings(settings)
+    for year in state:
         # 1. FORECAST LAND USE
-        if land_use_enabled:
-
+        if state.should_do(WorkflowState.Stage.land_use):
             # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
-            if (year == start_year) and (warm_start_activities):
-
+            if (state.is_start_year()) and warm_start_activities:
                 # IF ATLAS ENABLED, UPDATE USIM INPUT H5
                 if vehicle_ownership_model_enabled:
                     run_atlas_auto(settings, year, client, warm_start_atlas=True)
                 warm_start_activities(settings, year, client)
 
             # 1b. RUN LAND USE SIMULATION
-            forecast_year = min(year + travel_model_freq, end_year)
-            forecast_land_use(settings, year, forecast_year, client, container_manager)
-
-        else:
-            forecast_year = start_year
+            forecast_land_use(settings, year, state.forecast_year, client, container_manager)
+            state.complete(WorkflowState.Stage.land_use)
 
         # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
-        if vehicle_ownership_model_enabled:
-
+        if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
             # case, atlas need to update urbansim *inputs* before activitysim
             # reads it in the next step.
-            if forecast_year == year:
+            if state.forecast_year == year:
                 run_atlas_auto(settings, year, client, warm_start_atlas=True)
 
             # If urbansim has been called, ATLAS will read, run, and update
             # vehicle ownership info in urbansim *outputs* h5 datastore.
             else:
-                run_atlas_auto(settings, forecast_year, client, warm_start_atlas=False)
+                run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False)
+            state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
         # 3. GENERATE ACTIVITIES
-        if activity_demand_enabled:
+        if state.should_do(WorkflowState.Stage.activity_demand):
 
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
@@ -948,28 +944,28 @@ if __name__ == '__main__':
             # *outputs* have been generated yet. This is usually only the case
             # for generating "warm start" skims, so we treat it the same even
             # if the "warm_start_skims" setting was not set to True at runtime
-            if forecast_year == year:
-                warm_start_skims = True
-
             generate_activity_plans(
-                settings, year, forecast_year, client, warm_start=warm_start_skims)
+                settings, year, state.forecast_year, client, warm_start=warm_start_skims or not land_use_enabled)
+            state.complete(WorkflowState.Stage.activity_demand)
 
             # 5. INITIALIZE ASIM LITE IF BEAM REPLANNING ENABLED
             # have to re-run asim all the way through on sample to shrink the
             # cache for use in re-planning, otherwise cache will use entire pop
-            if replanning_enabled:
-                initialize_asim_for_replanning(settings, forecast_year)
+        if state.should_do(WorkflowState.Stage.initialize_asim_for_replanning):
+            initialize_asim_for_replanning(settings, state.forecast_year)
+            state.complete(WorkflowState.Stage.initialize_asim_for_replanning)
 
-        else:
+        if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
 
             # If not generating activities with a separate ABM (e.g.
             # ActivitySim), then we need to create the next iteration of land
             # use data directly from the last set of land use outputs.
-            usim_post.create_next_iter_usim_data(settings, year, forecast_year)
+            usim_post.create_next_iter_usim_data(settings, year, state.forecast_year)
+            state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
 
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
-        if traffic_assignment_enabled:
+        if state.should_do(WorkflowState.Stage.traffic_assignment):
 
             # 4. RUN TRAFFIC ASSIGNMENT
             if settings['discard_plans_every_year']:
@@ -977,16 +973,19 @@ if __name__ == '__main__':
             else:
                 beam_pre.update_beam_config(settings, 'max_plans_memory')
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
-            run_traffic_assignment(settings, year, forecast_year, client, -1)
+            run_traffic_assignment(settings, year, state.forecast_year, client, -1)
+            state.complete(WorkflowState.Stage.traffic_assignment)
 
-            # 5. REPLAN
+        # 5. REPLAN
+        if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             if replanning_enabled > 0:
-                run_replanning_loop(settings, forecast_year)
+                run_replanning_loop(settings, state.forecast_year)
                 process_event_file(settings, year, settings['replan_iters'])
                 copy_outputs_to_mep(settings, year, settings['replan_iters'])
             else:
                 process_event_file(settings, year, -1)
                 copy_outputs_to_mep(settings, year, -1)
             beam_post.trim_inaccessible_ods(settings)
+            state.complete(WorkflowState.Stage.traffic_assignment_replan)
 
     logger.info("Finished")
