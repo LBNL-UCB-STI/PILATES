@@ -40,12 +40,21 @@ def find_latest_beam_iteration(beam_output_dir):
     return os.path.join(last_iters_dir, it_prefix + str(max_it_num)), max_it_num
 
 
+def find_not_taken_dir_name(dir_name):
+    for x in range(1, 99999):
+        testing_name = f"{dir_name}_{x}"
+        if not os.path.exists(testing_name):
+            return testing_name
+    raise RuntimeError(f"Cannot find an appropriate not taken directory for {dir_name}")
+
 def rename_beam_output_directory(settings, year, replanning_iteration_number=0):
     beam_output_dir = settings['beam_local_output_folder']
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(beam_output_dir, settings['region'],
                                                   "year-{0}-iteration-{1}".format(year, replanning_iteration_number))
+    if os.path.exists(new_iteration_output_directory):
+        os.rename(new_iteration_output_directory, find_not_taken_dir_name(new_iteration_output_directory))
     os.rename(beam_run_output_dir, new_iteration_output_directory)
 
 
