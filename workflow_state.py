@@ -1,7 +1,9 @@
 from enum import Enum
 import os
 import yaml
+import logging
 
+logger = logging.getLogger(__name__)
 
 class WorkflowState:
     Stage = Enum('WorkflowStage', ['land_use', 'vehicle_ownership_model', 'activity_demand', 'initialize_asim_for_replanning', 'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
@@ -69,6 +71,7 @@ class WorkflowState:
 
     def should_continue(self) -> bool:
         self.year = self.year + self.travel_model_freq if self.iteration_started else self.year
+        logger.info("Started year %d", self.year)
         self.iteration_started = True
         self.forecast_year = \
             min(self.year + self.travel_model_freq, self.end_year) if self.enabled(WorkflowState.Stage.land_use)\
@@ -87,6 +90,7 @@ class WorkflowState:
         return self.stage.value <= stage.value
 
     def complete(self, stage):
+        logger.info("Completed %s of %d", stage, self.year)
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
