@@ -142,22 +142,156 @@ periods:
   - PM
   - EV
 transit_paths:
-  - DRV_COM_WLK
-  - DRV_HVY_WLK
-  - DRV_LOC_WLK
-  - DRV_LRF_WLK
-  - DRV_EXP_WLK
-  - WLK_COM_DRV
-  - WLK_HVY_DRV
-  - WLK_LOC_DRV
-  - WLK_LRF_DRV
-  - WLK_EXP_DRV
-  - WLK_COM_WLK
-  - WLK_HVY_WLK
-  - WLK_LOC_WLK
-  - WLK_LRF_WLK
-  - WLK_EXP_WLK
-  - WLK_TRN_WLK
+  DRV_COM_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_HVY_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_LOC_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_LRF_WLK:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  DRV_EXP_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_COM_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_HVY_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_LOC_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_LRF_DRV:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_EXP_DRV:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - DTIM
+    - BOARDS
+    - DDIST
+    - WAUX
+  WLK_COM_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_HVY_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_LOC_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_LRF_WLK:
+    - TOTIVT
+    - FERRYIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_EXP_WLK:
+    - TOTIVT
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
+  WLK_TRN_WLK:
+    - IVT
+    - WACC
+    - WEGR
+    - FAR
+    - XWAIT
+    - KEYIVT
+    - IWAIT
+    - BOARDS
+    - WAUX
 hwy_paths:
   - SOV
   - SOVTOLL
@@ -175,6 +309,7 @@ beam_asim_hwy_measure_map:
   VTOLL: VTOLL_FAR
 beam_asim_transit_measure_map:
   WAIT: null
+  IVT: TOTIVT_IVT_minutes
   TOTIVT: TOTIVT_IVT_minutes
   KEYIVT: KEYIVT_minutes
   FERRYIVT: FERRYIVT_minutes

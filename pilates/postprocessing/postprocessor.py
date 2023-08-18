@@ -17,6 +17,8 @@ import zipfile
 from datetime import date
 import logging
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
+import warnings
+from shapely.errors import ShapelyDeprecationWarning
 
 logger = logging.getLogger(__name__)
 
@@ -456,12 +458,14 @@ def _add_geometry_id_to_DataFrame(df, gdf, xcol, ycol, idColumn="geometry", df_g
 def _add_geometry_to_events(settings, events):
     taz_id_col_in = 'GEOID'
     taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in, zone_type="block_group")
-    processed_list = Parallel(n_jobs=cpu_count() - 1)(
-        delayed(_add_geometry_id_to_DataFrame)(ev, taz, "startX", "startY", "BlockGroupStart") for ev in
-        np.array_split(events, cpu_count() - 1))
-    processed_list = Parallel(n_jobs=cpu_count() - 1)(
-        delayed(_add_geometry_id_to_DataFrame)(ev, taz, "endX", "endY", "BlockGroupEnd") for ev in
-        processed_list)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
+        processed_list = Parallel(n_jobs=cpu_count() - 1)(
+            delayed(_add_geometry_id_to_DataFrame)(ev, taz, "startX", "startY", "BlockGroupStart") for ev in
+            np.array_split(events, cpu_count() - 1))
+        processed_list = Parallel(n_jobs=cpu_count() - 1)(
+            delayed(_add_geometry_id_to_DataFrame)(ev, taz, "endX", "endY", "BlockGroupEnd") for ev in
+            processed_list)
     events = pd.concat(processed_list)
 
     # Adding the block group information
