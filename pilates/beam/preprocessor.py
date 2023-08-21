@@ -67,7 +67,8 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
 
         if os.path.exists(asim_file_path):
-            pd.read_csv(asim_file_path, dtype={"household_id": int, "person_id": int, "trip_id": int}).to_csv(
+            pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(), "person_id": pd.Int64Dtype(),
+                                               "trip_id": pd.Int64Dtype()}).to_csv(
                 beam_file_path, compression="gzip")
             # with open(asim_file_path, 'rb') as f_in, gzip.open(
             #         beam_file_path, 'wb') as f_out:
