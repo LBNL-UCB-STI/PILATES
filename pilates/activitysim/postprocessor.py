@@ -101,11 +101,7 @@ def _prepare_updated_tables(
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
     # no new columns to persist, just convert column names
-    hh_names_dict = {
-        'hhsize': 'persons',
-        'num_workers': 'workers',
-        'auto_ownership': 'cars',
-    }
+    hh_names_dict = settings['asim_to_usim_col_maps']['households']
     hh_cols_to_replace = ['cars']
     hh_cols_to_include = required_cols['households']
     if 'households' in asim_output_dict.keys():
