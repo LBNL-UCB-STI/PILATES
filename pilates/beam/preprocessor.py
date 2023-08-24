@@ -70,7 +70,9 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
             pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
                                                "person_id": pd.Int64Dtype(),
                                                "trip_id": pd.Int64Dtype(),
-                                               "VEHICL": pd.Int64Dtype()}
+                                               "VEHICL": pd.Int64Dtype(),
+                                               "age": pd.Int64Dtype(),
+                                               "sex": pd.Int64Dtype()}
                         ).rename(columns={"VEHICL": "cars"}).to_csv(
                 beam_file_path, compression="gzip")
             # with open(asim_file_path, 'rb') as f_in, gzip.open(
