@@ -17,8 +17,9 @@ from shapely import wkt
 from tqdm import tqdm
 
 from pilates.utils.geog import get_block_geoms, \
-    get_zone_from_points, \
-    get_taz_geoms, geoid_to_zone_map
+    map_block_to_taz, get_zone_from_points, \
+    get_taz_geoms, get_county_block_geoms, geoid_to_zone_map
+
 from pilates.utils.io import read_datastore
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def read_zone_geoms(settings, year,
     """
     Returns a GeoPandas dataframe with the zones geometries. 
     """
-    store, table_prefix_year = read_datastore(settings, year)
+    store, table_prefix_year = read_datastore(settings, year, True)
     zone_type = settings['skims_zone_type']
     zone_key = '/{0}_zone_geoms'.format(zone_type)
 
@@ -1204,6 +1205,7 @@ def _get_part_time_enrollment(state_fips):
 
 def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
     # assign zones
+    persons.index = persons.index.astype(int)
     persons[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id'].reindex(persons['household_id']).values).values
     persons[asim_zone_id_col] = persons[asim_zone_id_col].astype(str)
@@ -1269,6 +1271,7 @@ def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
 
 def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     # assign zones
+    households.index = households.index.astype(int)
     households[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id']).values
     households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
@@ -1581,7 +1584,7 @@ def _create_land_use_table(
             zones['STATE'] = zones['STATE'].astype(str)
         else:
             zones['STATE'] = settings['FIPS'][settings['region']]['state']
-        zones['COUNTY'] = '1'
+        zones['COUNTY'] = zones['COUNTY'].astype(str)
         try:
             zones['TRACT'] = zones['TRACT'].astype(str)
         except:

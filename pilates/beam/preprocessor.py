@@ -38,7 +38,7 @@ def update_beam_config(settings, param, valueOverride=None):
             if not modified:
                 file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
     else:
-        logger.warn("Tried to modify parameter {0} but couldn't find it in settings.yaml".format(param))
+        logger.warning("Tried to modify parameter {0} but couldn't find it in settings.yaml".format(param))
 
 
 def make_archive(source, destination):
@@ -67,9 +67,17 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
 
         if os.path.exists(asim_file_path):
-            with open(asim_file_path, 'rb') as f_in, gzip.open(
-                    beam_file_path, 'wb') as f_out:
-                f_out.writelines(f_in)
+            pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
+                                               "person_id": pd.Int64Dtype(),
+                                               "trip_id": pd.Int64Dtype(),
+                                               "VEHICL": pd.Int64Dtype(),
+                                               "age": pd.Int64Dtype(),
+                                               "sex": pd.Int64Dtype()}
+                        ).rename(columns={"VEHICL": "cars"}).to_csv(
+                beam_file_path, compression="gzip")
+            # with open(asim_file_path, 'rb') as f_in, gzip.open(
+            #         beam_file_path, 'wb') as f_out:
+            #     f_out.writelines(f_in)
 
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
         iteration_folder_name = "year-{0}-iteration-{1}".format(year, replanning_iteration_number)

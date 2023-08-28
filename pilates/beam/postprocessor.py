@@ -1,8 +1,10 @@
-import pandas as pd
-import os
 import logging
-import openmatrix as omx
+import os
+
 import numpy as np
+import openmatrix as omx
+import pandas as pd
+
 # import pickle
 # import cloudpickle
 # import dill
@@ -17,7 +19,6 @@ import numpy as np
 
 # mp.set_start_method('spawn', True)
 # from multiprocessing import Pool, cpu_count
-from joblib import Parallel, delayed
 
 from pilates.activitysim.preprocessor import zone_order
 
@@ -404,6 +405,7 @@ def aggregateInTimePeriod(df):
                           "completedRequests": 0})
 
 
+# noinspection PyUnresolvedReferences
 def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, measure_map):
     current_skims_path = find_produced_origin_skims(beam_output_dir)
 
