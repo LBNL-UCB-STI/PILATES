@@ -2,6 +2,8 @@ import pandas as pd
 import logging
 import os
 import h5py
+import openmatrix as omx
+import numpy as np
 
 from pilates.utils.geog import geoid_to_zone_map
 
@@ -29,25 +31,39 @@ skim_dtypes = {
 
 
 def _load_raw_skims(settings, skim_format):
-
     skims_fname = settings.get('skims_fname', False)
 
     try:
         if skim_format == 'beam':
-            path_to_skims = os.path.join(
-                settings['beam_local_output_folder'], skims_fname)
-            # load skims from disk or url
-            skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
-            skims = skims.loc[(
-                skims['pathType'] == 'SOV') & (
-                skims['timePeriod'] == 'AM')]
-            skims = skims[[
-                'origin', 'destination', 'TOTIVT_IVT_minutes',
-                'DIST_meters']]
-            skims = skims.rename(columns={
-                'origin': 'from_zone_id',
-                'destination': 'to_zone_id',
-                'TOTIVT_IVT_minutes': 'SOV_AM_IVT_mins'})
+            if skims_fname.endswith('csv'):
+                path_to_skims = os.path.join(
+                    settings['beam_local_output_folder'], skims_fname)
+                # load skims from disk or url
+                skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
+                skims = skims.loc[(
+                                          skims['pathType'] == 'SOV') & (
+                                          skims['timePeriod'] == 'AM')]
+                skims = skims[[
+                    'origin', 'destination', 'TOTIVT_IVT_minutes',
+                    'DIST_meters']]
+                skims = skims.rename(columns={
+                    'origin': 'from_zone_id',
+                    'destination': 'to_zone_id',
+                    'TOTIVT_IVT_minutes': 'SOV_AM_IVT_mins'})
+            elif skims_fname.endswith('omx'):
+                beam_output_dir = settings['beam_local_output_folder']
+                skims_fname = settings['skims_fname']
+                mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+                skims = omx.open_file(mutable_skims_location, 'r')
+                zone_ids = skims.mapping('zone_id').keys()
+                index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
+                columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
+                travel_time_mins = np.array(skims['SOV_TIME__AM'])
+                out = pd.DataFrame(travel_time_mins, index=index, columns=columns).stack().rename('SOV_AM_IVT_mins')
+                skims.close()
+                return out.to_frame()
+            else:
+                raise NotImplementedError("Invalid skim format {0}".format(skims_fname.split('.')[-1]))
         elif skim_format == 'polaris':
             path_to_skims = os.path.join(
                 settings['polaris_local_data_folder'], skims_fname)
@@ -62,6 +78,7 @@ def _load_raw_skims(settings, skim_format):
             skims = ivtt_8_9.join(cost_8_9)
             skims.index.names = ['from_zone_id', 'to_zone_id']
             skims = skims.reset_index()
+
     except KeyError:
         raise KeyError(
             "Couldn't find input skims named {0}".format(skims_fname))
@@ -86,7 +103,6 @@ def usim_model_data_fname(region_id):
 
 
 def add_skims_to_model_data(settings, data_dir=None):
-
     # load skims
     logger.info("Loading skims from disk")
     region = settings['region']

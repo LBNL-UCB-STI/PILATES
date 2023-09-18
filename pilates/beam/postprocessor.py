@@ -1,8 +1,10 @@
-import pandas as pd
-import os
 import logging
-import openmatrix as omx
+import os
+
 import numpy as np
+import openmatrix as omx
+import pandas as pd
+
 # import pickle
 # import cloudpickle
 # import dill
@@ -17,7 +19,6 @@ import numpy as np
 
 # mp.set_start_method('spawn', True)
 # from multiprocessing import Pool, cpu_count
-from joblib import Parallel, delayed
 
 from pilates.activitysim.preprocessor import zone_order
 
@@ -94,9 +95,16 @@ def find_produced_origin_skims(beam_output_dir):
 def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     complete_key = '_'.join([path, 'TRIPS', '', timePeriod])
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
-    completed, failed = None, Noneß
+    completed, failed = None, None
     if complete_key in inputMats.keys():
-        completed = np.array(inputMats[complete_key])
+        completed = np.array(inputMats[complete_key]).copy()
+        if '_'.join([path, 'TOTIVT', '', timePeriod]) in inputMats.keys():
+            shouldNotBeZero = (completed > 0) & (np.array(inputMats['_'.join([path, 'TOTIVT', '', timePeriod])]) == 0)
+            if shouldNotBeZero.any():
+                logger.warning(
+                    "In BEAM outputs for {0} in {1} we have {2} completed trips with "
+                    "time = 0".format(path, timePeriod, shouldNotBeZero.sum()))
+                completed[shouldNotBeZero] = 0
         failed = np.array(inputMats[failed_key])
         logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
             np.nan_to_num(completed).sum(),
@@ -122,9 +130,9 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 outputKey = inputKey
             if (outputKey in outputMats) and (inputKey in inputMats):
                 if measure == "TRIPS":
-                    outputMats[outputKey][completed > 0] += inputMats[inputKey][completed > 0]
+                    outputMats[outputKey][completed > 0] += completed[completed > 0]
                 elif measure == "FAILURES":
-                    outputMats[outputKey][failed > 0] += inputMats[inputKey][failed > 0]
+                    outputMats[outputKey][failed > 0] += failed[failed > 0]
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
@@ -406,6 +414,7 @@ def aggregateInTimePeriod(df):
                           "completedRequests": 0})
 
 
+# noinspection PyUnresolvedReferences
 def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, measure_map):
     current_skims_path = find_produced_origin_skims(beam_output_dir)
 

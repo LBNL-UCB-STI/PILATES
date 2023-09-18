@@ -278,6 +278,8 @@ def warm_start_activities(settings, year, client):
         logger.info("Creating {0} input data from {1} outputs".format(
             activity_demand_model,
             land_use_model).upper())
+        if not os.path.exists(os.path.join(settings['asim_local_input_folder'], 'skims.omx')):
+            asim_pre.create_skims_from_beam(settings, year, overwrite=False)
         asim_pre.create_asim_data_from_h5(settings, year, warm_start=True)
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
@@ -854,7 +856,7 @@ if __name__ == '__main__':
         'RUNNING PILATES FROM {0} TO {1}'.format(start_year, end_year))
     travel_model_freq = settings.get('travel_model_freq', 1)
     warm_start_skims = settings['warm_start_skims']
-    warm_start_activities = settings['warm_start_activities']
+    warm_start_activities_enabled = settings['warm_start_activities']
     static_skims = settings['static_skims']
     land_use_enabled = settings['land_use_enabled']
     vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
