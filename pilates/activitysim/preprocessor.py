@@ -1203,9 +1203,13 @@ def _get_part_time_enrollment(state_fips):
     return s
 
 
-def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
+def _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col='TAZ'):
     # assign zones
     persons.index = persons.index.astype(int)
+    unassigned_persons = persons.household_id.isin(unassigned_households)
+    logger.info("Dropping {0} people from {1} households that haven't been assigned locations yet".format(
+        unassigned_households.shape[0], unassigned_persons.sum()))
+    persons = persons.loc[~unassigned_persons, :]
     persons[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id'].reindex(persons['household_id']).values).values
     persons[asim_zone_id_col] = persons[asim_zone_id_col].astype(str)
@@ -1281,6 +1285,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     hh_null_taz = households[asim_zone_id_col].isnull()
     logger.info('Dropping {0} households without TAZs'.format(
         hh_null_taz.sum()))
+    hh_null_taz_id = households.loc[hh_null_taz, 'household_id']
     households = households[~hh_null_taz]
 
     # create new column variables
@@ -1298,7 +1303,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     else:
         households.index.name = 'household_id'
 
-    return households
+    return households, hh_null_taz_id
 
 
 def _update_jobs_table(
@@ -1756,10 +1761,10 @@ def create_asim_data_from_h5(
         inplace=True)  # Rename happens here.
 
     # update households
-    households = _update_households_table(households, blocks, asim_zone_id_col)
+    households, unassigned_households = _update_households_table(households, blocks, asim_zone_id_col)
 
     # update persons
-    persons = _update_persons_table(persons, households, blocks, asim_zone_id_col)
+    persons = _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col)
 
     # update jobs
     jobs_cols = jobs.columns
