@@ -30,9 +30,9 @@ singularity_images:
 
 # docker settings
 docker_images:
-  urbansim: mxndrwgrdnr/block_model_v2_pb:latest
+  urbansim: jdcaicedo/urbansim_demos:09_05_23
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.3-omx
+  beam: zaneedell/beam:0.9.9
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
 docker_stdout: False
@@ -63,11 +63,11 @@ region_to_region_id:
   austin: "48197301"
   seattle: "53199100"
 usim_local_data_folder: pilates/urbansim/data/
-usim_client_data_folder: /base/block_model_probaflow/data/
+usim_client_data_folder: /base/demos_urbansim/data/
 usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
-warm_start_activities: True
+warm_start_activities: False
 
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client

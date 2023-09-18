@@ -98,6 +98,7 @@ def find_latest_beam_iteration(beam_output_dir):
 
 def setup_beam_skims(settings):
     region = settings['region']
+    region_id = settings['region_to_region_id'][region]
     beam_input_dir = settings['beam_local_input_folder']
     beam_output_dir = settings['beam_local_output_folder']
     skims_fname = settings['skims_fname']
@@ -134,6 +135,7 @@ def setup_beam_skims(settings):
             input_skims_location,
             mutable_skims_location))
         shutil.copyfile(input_skims_location, mutable_skims_location)
+        # shutil.copyfile(input_skims_location, "pilates/urbansim/data/skims_mpo_{0}.omx".format(region_id))
     else:
         if os.path.exists(mutable_skims_location):
             logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(

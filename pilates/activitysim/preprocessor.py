@@ -1266,6 +1266,8 @@ def _update_persons_table(persons, households, blocks, asim_zone_id_col='TAZ'):
     logger.info("Dropping {0} persons without TAZs".format(
         p_null_taz.sum()))
     persons = persons[~p_null_taz]
+    persons["workplace_taz"] = persons["work_zone_id"].copy()
+    persons["school_taz"] = persons["school_zone_id"].copy()
     return persons
 
 
