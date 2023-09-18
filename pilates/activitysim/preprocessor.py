@@ -1285,7 +1285,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     hh_null_taz = households[asim_zone_id_col].isnull()
     logger.info('Dropping {0} households without TAZs'.format(
         hh_null_taz.sum()))
-    hh_null_taz_id = households.index.loc[hh_null_taz]
+    hh_null_taz_id = households.index[hh_null_taz]
     households = households[~hh_null_taz]
 
     # create new column variables
