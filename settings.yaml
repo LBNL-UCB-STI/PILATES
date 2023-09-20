@@ -23,7 +23,8 @@ vehicle_ownership_model:
 container_manager: docker
 #singularity settings
 singularity_images:
-  urbansim: block_model_v2_pb.sif
+  urbansim: block_model_v2_pb_latest.sif
+  atlas:
   beam:
   activitysim:
   polaris:

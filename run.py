@@ -287,38 +287,20 @@ def warm_start_activities(settings, year, client):
             activity_demand_model).upper())
         ws_asim_cmd = base_asim_cmd + ' -w'  # warm start flag
 
-        asim = client.containers.run(
-            activity_demand_image,
-            working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=ws_asim_cmd,
-            stdout=docker_stdout,
-            stderr=True,
-            detach=True)
-        for log in asim.logs(stream=True, stderr=True, stdout=docker_stdout):
-            print(log)
+        run_container(client, settings, activity_demand_image, asim_docker_vols, ws_asim_cmd, working_dir=asim_workdir)
 
         # 4. UPDATE URBANSIM BASE YEAR INPUT DATA
         logger.info((
                         "Appending warm start activities/choices to "
                         " {0} base year input data").format(land_use_model).upper())
         asim_post.update_usim_inputs_after_warm_start(settings)
-
-        # 5. CLEANUP
-        asim.remove()
     logger.info('Done!')
 
     return
 
 
 def forecast_land_use(settings, year, forecast_year, client, container_manager):
-    if container_manager == "docker":
-        forecast_land_use_docker(settings, year, forecast_year, client)
-    elif container_manager == "singularity":
-        forecast_land_use_singularity(settings, year, forecast_year)
-    else:
-        logger.critical("Container Manager not specified")
-        sys.exit(1)
+    run_land_use(settings, year, forecast_year, client)
 
     # check for outputs, exit if none
     usim_local_data_folder = settings['usim_local_data_folder']
@@ -331,16 +313,13 @@ def forecast_land_use(settings, year, forecast_year, client, container_manager):
         sys.exit(1)
 
 
-def forecast_land_use_docker(settings, year, forecast_year, client):
-    logger.info("Running land use with docker")
+def run_land_use(settings, year, forecast_year, client):
+    logger.info("Running land use")
 
     # 1. PARSE SETTINGS
-    image_names = settings['docker_images']
-    land_use_model = settings.get('land_use_model', False)
-    land_use_image = image_names[land_use_model]
+    land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
     usim_docker_vols = get_usim_docker_vols(settings)
     usim_cmd = get_usim_cmd(settings, year, forecast_year)
-    docker_stdout = settings.get('docker_stdout', False)
 
     # 2. PREPARE URBANSIM DATA
     print_str = (
@@ -355,20 +334,7 @@ def forecast_land_use_docker(settings, year, forecast_year, client):
         "to {1} with {2}.".format(
             year, forecast_year, land_use_model))
     formatted_print(print_str)
-    usim = client.containers.run(
-        land_use_image,
-        volumes=usim_docker_vols,
-        command=usim_cmd,
-        stdout=docker_stdout,
-        stderr=True,
-        detach=True)
-    for log in usim.logs(
-            stream=True, stderr=True, stdout=docker_stdout):
-        print(log)
-
-    # 4. CLEAN UP
-    usim.remove()
-
+    run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd)
     logger.info('Done!')
 
     return
@@ -482,31 +448,6 @@ def run_atlas_auto(settings, output_year, client, warm_start_atlas):
             except:
                 logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
 
-    return
-
-
-def forecast_land_use_singularity(settings, year, forecast_year):
-    logger.info("Running land use with singularity")
-
-    # 1. PARSE SETTINGS
-    region = settings['region']
-    region_id = settings['region_to_region_id'][region]
-    land_use_freq = settings['land_use_freq']
-    skims_source = settings['travel_model']
-    usim_local_data_folder = settings['usim_local_data_folder']
-
-    # 2. PREPARE URBANSIM DATA
-    print_str = (
-        "Preparing {0} input data for land use development simulation.".format(
-            year))
-    formatted_print(print_str)
-    usim_pre.add_skims_to_model_data(settings)
-
-    # 3. RUN URBANSIM
-    subprocess.run(['bash', './run_urbansim.sh', str(region_id), str(year), str(forecast_year), str(land_use_freq),
-                    str(skims_source), os.path.abspath(usim_local_data_folder)])
-    # logger.info(output)
-    logger.info('Done!')
     return
 
 
@@ -832,6 +773,54 @@ def postprocess_all(settings):
         process_event_file(settings, year, iter)
 
 
+def to_singularity_volumes(volumes):
+    bindings = [f"{local_folder}:{binding['bind']}:{binding['mode']}" for local_folder, binding in volumes.items()]
+    return ','.join(bindings)
+
+
+def run_container(client: Client, settings: dict, image: str, volumes: dict, cmd: str, working_dir=None):
+    if client:
+        docker_stdout = settings.get('docker_stdout', False)
+        logger.info("Running docker container: %s, command: %s", image, cmd)
+        run_kwargs = {
+            'volumes': volumes,
+            'command': cmd,
+            'stdout': docker_stdout,
+            'stderr': True,
+            'detach': True
+        }
+        if working_dir:
+            run_kwargs['working_dir'] = working_dir
+        usim = client.containers.run(image, **run_kwargs)
+        for log in usim.logs(
+                stream=True, stderr=True, stdout=docker_stdout):
+            print(log)
+        usim.remove()
+        logger.info("Finished docker container: %s, command: %s", image, cmd)
+    else:
+        singularity_volumes = to_singularity_volumes(volumes)
+        proc = f"singularity exec --cleanenv -B {singularity_volumes} {image} {cmd}"
+        logger.info("Running command: %s", proc)
+        subprocess.run(proc)
+        logger.info("Finished command: %s", proc)
+
+
+def get_model_and_image(settings: dict, model_type: str):
+    manager = settings['container_manager']
+    if manager == "docker":
+        image_names = settings['singularity_images']
+    elif manager == "singularity":
+        image_names = settings['docker_images']
+    else:
+        raise ValueError("Container Manager not specified (container_manager param in settings.yaml)")
+    model_name = settings.get(model_type)
+    if not model_name:
+        raise ValueError(f"No model {model_type} specified")
+    image_name = image_names[model_name]
+    if not model_name:
+        raise ValueError(f"No {manager} image specified for model {model_name}")
+    return model_name, image_name
+
 if __name__ == '__main__':
 
     logger = logging.getLogger(__name__)
@@ -912,7 +901,7 @@ if __name__ == '__main__':
         # 1. FORECAST LAND USE
         if state.should_do(WorkflowState.Stage.land_use):
             # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
-            if (state.is_start_year()) and warm_start_activities:
+            if (state.is_start_year()) and warm_start_activities_enabled:
                 # IF ATLAS ENABLED, UPDATE USIM INPUT H5
                 if vehicle_ownership_model_enabled:
                     run_atlas_auto(settings, year, client, warm_start_atlas=True)
