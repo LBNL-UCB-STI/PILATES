@@ -244,7 +244,7 @@ def warm_start_activities(settings, year, client):
     choices it needs: workplace location, school location, and
     auto ownership.
     """
-    activity_demand_model = settings['activity_demand_model']
+    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
         run_polaris(None, settings, warm_start=True)
@@ -253,14 +253,11 @@ def warm_start_activities(settings, year, client):
         # 1. PARSE SETTINGS
         land_use_model = settings['land_use_model']
         travel_model = settings['travel_model']
-        image_names = settings['docker_images']
-        activity_demand_image = image_names[activity_demand_model]
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
         asim_workdir = os.path.join('/activitysim', asim_subdir)
         asim_docker_vols = get_asim_docker_vols(settings)
         base_asim_cmd = get_base_asim_cmd(settings)
-        docker_stdout = settings.get('docker_stdout', False)
 
         print_str = "Initializing {0} warm start sequence".format(
             activity_demand_model)
@@ -798,19 +795,24 @@ def run_container(client: Client, settings: dict, image: str, volumes: dict, cmd
         usim.remove()
         logger.info("Finished docker container: %s, command: %s", image, cmd)
     else:
+        for local_folder in volumes:
+            os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
-        proc = f"singularity exec --cleanenv -B {singularity_volumes} {image} {cmd}"
-        logger.info("Running command: %s", proc)
+        proc = ["singularity", "run", "--cleanenv"] \
+            + (["--pwd", working_dir] if working_dir else []) \
+            + ["-B", singularity_volumes, image]\
+            + cmd.split()
+        logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
-        logger.info("Finished command: %s", proc)
+        logger.info("Finished command: %s", " ".join(proc))
 
 
 def get_model_and_image(settings: dict, model_type: str):
     manager = settings['container_manager']
     if manager == "docker":
-        image_names = settings['singularity_images']
-    elif manager == "singularity":
         image_names = settings['docker_images']
+    elif manager == "singularity":
+        image_names = settings['singularity_images']
     else:
         raise ValueError("Container Manager not specified (container_manager param in settings.yaml)")
     model_name = settings.get(model_type)
