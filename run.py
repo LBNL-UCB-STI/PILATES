@@ -344,13 +344,11 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     # normal: warm_start_atlas = False, output_year = forecast_year
 
     # 1. PARSE SETTINGS
-    image_names = settings['docker_images']
-    vehicle_ownership_model = settings.get('vehicle_ownership_model', False)
+    vehicle_ownership_model, atlas_image = get_model_and_image(settings, "vehicle_ownership_model")
     freq = settings.get('vehicle_ownership_freq', False)
     npe = settings.get('atlas_num_processes', False)
     nsample = settings.get('atlas_sample_size', False)
     beamac = settings.get('atlas_beamac', 0)
-    atlas_image = image_names[vehicle_ownership_model]  ## ie atlas
     atlas_docker_vols = get_atlas_docker_vols(settings)
     atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac)
     docker_stdout = settings.get('docker_stdout', False)
@@ -396,25 +394,13 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
         "with frequency {1}, npe {2} nsample {3} beamac {4}".format(
             output_year, freq, npe, nsample, beamac))
     formatted_print(print_str)
-    atlas = client.containers.run(
-        atlas_image,
-        volumes=atlas_docker_vols,
-        command=atlas_cmd,
-        stdout=docker_stdout,
-        stderr=True,
-        detach=True)
-    for log in atlas.logs(
-            stream=True, stderr=True, stdout=docker_stdout):
-        print(log)
+    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd)
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
     atlas_post.atlas_update_h5_vehicle(settings, output_year, warm_start=warm_start_atlas)
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
     atlas_post.atlas_add_vehileTypeId(settings, output_year)
-
-    # 6. CLEAN UP
-    atlas.remove()
 
     logger.info('Atlas Done!')
 
@@ -466,7 +452,7 @@ def generate_activity_plans(
         order to generate "warm start" skims.
     """
 
-    activity_demand_model = settings['activity_demand_model']
+    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
         run_polaris(forecast_year, settings, warm_start=True)
@@ -476,8 +462,6 @@ def generate_activity_plans(
         # 1. PARSE SETTINGS
 
         land_use_model = settings['land_use_model']
-        image_names = settings['docker_images']
-        activity_demand_image = image_names[activity_demand_model]
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
         asim_workdir = os.path.join('/activitysim', asim_subdir)
@@ -512,17 +496,11 @@ def generate_activity_plans(
             print_str += ". Picking up after {0}".format(resume_after)
         formatted_print(print_str)
 
-        asim = client.containers.run(
+        run_container(client, settings,
             activity_demand_image,
             working_dir=asim_workdir,
             volumes=asim_docker_vols,
-            command=asim_cmd,
-            stdout=docker_stdout,
-            stderr=True,
-            detach=True)
-        for log in asim.logs(
-                stream=True, stderr=True, stdout=docker_stdout):
-            print(log)
+            command=asim_cmd)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -536,9 +514,6 @@ def generate_activity_plans(
             formatted_print(print_str)
             asim_post.create_next_iter_inputs(settings, year, forecast_year)
 
-        # 6. CLEANUP
-        asim.remove()
-
     logger.info('Done!')
 
     return
@@ -550,7 +525,7 @@ def run_traffic_assignment(
     This step will run the traffic simulation platform and
     generate new skims with updated congested travel times.
     """
-    travel_model = settings.get('travel_model', False)
+    travel_model, travel_model_image = get_model_and_image(settings, 'travel_model')
     if travel_model == 'polaris':
         run_polaris(forecast_year, settings, warm_start=False)
 
@@ -564,8 +539,6 @@ def run_traffic_assignment(
         abs_beam_input = os.path.abspath(beam_local_input_folder)
         beam_local_output_folder = settings['beam_local_output_folder']
         abs_beam_output = os.path.abspath(beam_local_output_folder)
-        image_names = settings['docker_images']
-        travel_model_image = image_names[travel_model]
         activity_demand_model = settings.get('activity_demand_model', False)
         docker_stdout = settings['docker_stdout']
         skims_fname = settings['skims_fname']
@@ -598,7 +571,9 @@ def run_traffic_assignment(
         logger.info(
             "Starting beam container, input: %s, output: %s, config: %s",
             abs_beam_input, abs_beam_output, beam_config)
-        client.containers.run(
+        run_container(
+            client,
+            settings,
             travel_model_image,
             volumes={
                 abs_beam_input: {
@@ -610,8 +585,7 @@ def run_traffic_assignment(
             environment={
                 'JAVA_OPTS': (
                     '-XX:+UnlockExperimentalVMOptions -Xmx{0}'.format(beam_memory))},
-            command="--config={0}".format(path_to_beam_config),
-            stdout=docker_stdout, stderr=True, detach=False, remove=True
+            command="--config={0}".format(path_to_beam_config)
         )
 
         # 4. POSTPROCESS
@@ -674,9 +648,7 @@ def initialize_docker_client(settings):
 
 def initialize_asim_for_replanning(settings, forecast_year):
     replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model = settings['activity_demand_model']
-    image_names = settings['docker_images']
-    activity_demand_image = image_names[activity_demand_model]
+    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
@@ -689,23 +661,17 @@ def initialize_asim_for_replanning(settings, forecast_year):
             "Re-running ActivitySim on smaller sample size to "
             "prepare cache for re-planning with BEAM.")
         formatted_print(print_str)
-        asim = client.containers.run(
+        run_container(client, settings,
             activity_demand_image, working_dir=asim_workdir,
             volumes=asim_docker_vols,
-            command=base_asim_cmd,
-            stdout=docker_stdout,
-            stderr=True, detach=True, remove=True)
-        for log in asim.logs(
-                stream=True, stderr=True, stdout=docker_stdout):
-            print(log)
+            command=base_asim_cmd)
+
 
 
 def run_replanning_loop(settings, forecast_year):
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model = settings['activity_demand_model']
-    image_names = settings['docker_images']
-    activity_demand_image = image_names[activity_demand_model]
+    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
@@ -728,17 +694,13 @@ def run_replanning_loop(settings, forecast_year):
             "Replanning {0} households with ActivitySim".format(
                 replan_hh_samp_size))
         formatted_print(print_str)
-        asim = client.containers.run(
+        run_container(
+            client,
+            settings,
             activity_demand_image, working_dir=asim_workdir,
             volumes=asim_docker_vols,
-            command=base_asim_cmd + ' -r ' + last_asim_step,
-            stdout=docker_stdout,
-            stderr=True,
-            detach=True,
-            remove=True)
-        for log in asim.logs(
-                stream=True, stderr=True, stdout=docker_stdout):
-            print(log)
+            command=base_asim_cmd + ' -r ' + last_asim_step)
+
 
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
@@ -772,36 +734,47 @@ def postprocess_all(settings):
 
 def to_singularity_volumes(volumes):
     bindings = [f"{local_folder}:{binding['bind']}:{binding['mode']}" for local_folder, binding in volumes.items()]
-    return ','.join(bindings)
+    result_str = ','.join(bindings)
+    return result_str
 
 
-def run_container(client: Client, settings: dict, image: str, volumes: dict, cmd: str, working_dir=None):
+def to_singularity_env(env):
+    bindings = [f"{env_var}={value}" for env_var, value in env.items()]
+    result_str = ','.join(bindings)
+    return '"' + result_str + '"'
+
+
+def run_container(client: Client, settings: dict, image: str, volumes: dict, command: str,
+                  working_dir=None, environment=None):
     if client:
         docker_stdout = settings.get('docker_stdout', False)
-        logger.info("Running docker container: %s, command: %s", image, cmd)
+        logger.info("Running docker container: %s, command: %s", image, command)
         run_kwargs = {
             'volumes': volumes,
-            'command': cmd,
+            'command': command,
             'stdout': docker_stdout,
             'stderr': True,
             'detach': True
         }
         if working_dir:
             run_kwargs['working_dir'] = working_dir
+        if environment:
+            run_kwargs['environment'] = environment
         usim = client.containers.run(image, **run_kwargs)
         for log in usim.logs(
                 stream=True, stderr=True, stdout=docker_stdout):
             print(log)
         usim.remove()
-        logger.info("Finished docker container: %s, command: %s", image, cmd)
+        logger.info("Finished docker container: %s, command: %s", image, command)
     else:
         for local_folder in volumes:
             os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
         proc = ["singularity", "run", "--cleanenv"] \
+            + (["--env", to_singularity_env(environment)] if environment else []) \
             + (["--pwd", working_dir] if working_dir else []) \
-            + ["-B", singularity_volumes, image]\
-            + cmd.split()
+            + ["-B", singularity_volumes, image] \
+            + command.split()
         logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
         logger.info("Finished command: %s", " ".join(proc))
