@@ -19,10 +19,6 @@ try:
     import docker
 except ImportError:
     print('Warning: Unable to import Docker Module')
-try:
-    from spython.main import Client
-except ImportError:
-    print('Warning: Unable to import spython (Singularity) Module')
 
 import os
 import logging
@@ -744,7 +740,7 @@ def to_singularity_env(env):
     return '"' + result_str + '"'
 
 
-def run_container(client: Client, settings: dict, image: str, volumes: dict, command: str,
+def run_container(client, settings: dict, image: str, volumes: dict, command: str,
                   working_dir=None, environment=None):
     if client:
         docker_stdout = settings.get('docker_stdout', False)
