@@ -122,7 +122,6 @@ def build_beam_vehicles_input(settings, output_year):
             except KeyError:
                 try:
                     matched = mapping.loc[(fuelType, slice(None), modelYear), :]
-                    thirdTry += 1
                 except KeyError:
                     try:
                         temp = mapping.loc[(fuelType, slice(None), slice(None), slice(None)), :]
