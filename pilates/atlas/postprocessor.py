@@ -97,3 +97,59 @@ def atlas_add_vehileTypeId(settings, output_year):
     # because original file cannot be overwritten (root-owned)
     # may revise later
     df.to_csv(os.path.join(atlas_output_path, 'vehicles2_{}.csv'.format(output_year)), index=False)
+
+
+def build_beam_vehicles_input(settings, output_year):
+    atlas_output_path = settings['atlas_host_output_folder']
+    atlas_input_path = settings['atlas_host_input_folder']
+    vehicles = pd.read_csv(os.path.join(atlas_output_path, "vehicles_{0}.csv".format(output_year)))
+    mapping = pd.read_csv(
+        os.path.join(atlas_input_path, "vehicle_type_mapping_{0}.csv".format(settings['atlas_vehicles_scenario'])))
+    mapping['numberOfVehiclesCreated'] = 0
+    mapping.set_index(["adopt_fuel", "bodytype", "modelyear", "vehicleTypeId"], inplace=True, drop=True)
+    mapping = mapping.loc[~mapping.index.duplicated(), :]
+    allCounts = mapping.copy()
+    allVehicles = []
+    for (fuelType, bodyType, modelYear), vehiclesSub in vehicles.groupby(["adopt_fuel", "bodytype", "modelyear"]):
+        try:
+            matched = mapping.loc[(fuelType, bodyType, modelYear, slice(None)), :]
+        except KeyError:
+            try:
+                temp = mapping.loc[(fuelType, bodyType, slice(None), slice(None)), :]
+                bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                matched = mapping.loc[(fuelType, bodyType, bestYear, slice(None)), :]
+            except KeyError:
+                try:
+                    matched = mapping.loc[(fuelType, slice(None), modelYear), :]
+                    thirdTry += 1
+                except KeyError:
+                    try:
+                        temp = mapping.loc[(fuelType, slice(None), slice(None), slice(None)), :]
+                        bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                        bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                        matched = mapping.loc[(fuelType, slice(None), bestYear), :]
+                    except KeyError:
+                        try:
+                            temp = mapping.loc[(slice(None), bodyType, slice(None), slice(None)), :]
+                            bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                            bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                            matched = mapping.loc[(slice(None), bodyType, bestYear), :]
+                        except KeyError:
+                            bestOption = (mapping.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                            bestYear = mapping.reset_index().iloc[bestOption, :]["modelyear"]
+                            matched = mapping.loc[(slice(None), slice(None), bestYear), :]
+        createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+                                         weights=matched['sampleProbabilityWithinCategory'].values)
+        createdVehicleCounts = createdVehicles.index.value_counts()
+        allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
+        vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
+        vehiclesSub['stateOfCharge'] = np.nan
+        allVehicles.append(
+            vehiclesSub[['household_id', 'vehicleTypeId']])
+    outputVehicles = pd.concat(allVehicles).reset_index(drop=True)
+    outputVehicles.index.rename("vehicleId", inplace=True)
+    outputVehicles.to_csv(os.path.join(atlas_output_path, 'vehicles_{0}.csv.gz'.format(output_year)))
+    allCounts.loc[allCounts.numberOfVehiclesCreated > 0, :].sort_values(by="numberOfVehiclesCreated", ascending=False)[
+        'numberOfVehiclesCreated'].to_csv(
+        os.path.join(atlas_output_path, 'vehicles_by_type_{0}.csv'.format(output_year)))

@@ -450,6 +450,7 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
     atlas_post.atlas_add_vehileTypeId(settings, output_year)
+    atlas_post.build_beam_vehicles_input(settings, output_year)
 
     # 6. CLEAN UP
     atlas.remove()
