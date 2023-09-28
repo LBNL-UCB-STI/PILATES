@@ -982,6 +982,8 @@ if __name__ == '__main__':
             else:
                 beam_pre.update_beam_config(settings, 'max_plans_memory')
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
+            if vehicle_ownership_model_enabled:
+                beam_pre.copy_vehicles_from_atlas(settings, year)
             run_traffic_assignment(settings, year, forecast_year, client, -1)
 
             # 5. REPLAN
