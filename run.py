@@ -912,7 +912,7 @@ if __name__ == '__main__':
         # 1. FORECAST LAND USE
         if state.should_do(WorkflowState.Stage.land_use):
             # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
-            if (state.is_start_year()) and warm_start_activities:
+            if (state.is_start_year()) and warm_start_activities_enabled:
                 # IF ATLAS ENABLED, UPDATE USIM INPUT H5
                 if vehicle_ownership_model_enabled:
                     run_atlas_auto(settings, year, client, warm_start_atlas=True)
