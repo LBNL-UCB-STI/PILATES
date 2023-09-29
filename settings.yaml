@@ -80,6 +80,7 @@ atlas_codedir: /
 atlas_sample_size: 0     # zero means no sampling, whole pop.
 atlas_num_processes: 9  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
+atlas_vehicles_scenario: "baseline"
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
 
 

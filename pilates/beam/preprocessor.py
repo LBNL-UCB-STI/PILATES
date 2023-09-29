@@ -54,6 +54,19 @@ def make_archive(source, destination):
     shutil.move('%s.%s' % (name, fmt), destination)
 
 
+def copy_vehicles_from_atlas(settings, year):
+    beam_scenario_folder = os.path.join(
+        settings['beam_local_input_folder'],
+        settings['region'],
+        settings['beam_scenario_folder'])
+    beam_vehicles_path = os.path.join(beam_scenario_folder, 'vehicles.csv.gz')
+    atlas_output_data_dir = settings['atlas_host_output_folder']
+    atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir, "vehicles_{0}.csv.gz".format(year))
+    if not os.path.exists(atlas_vehicle_file_loc):
+        atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir, "vehicles_{0}.csv.gz".format(year - 1))
+    shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
+
+
 def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
     asim_output_data_dir = settings['asim_local_output_folder']
     beam_scenario_folder = os.path.join(
