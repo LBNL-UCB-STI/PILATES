@@ -618,16 +618,20 @@ def run_commerce_demand(client, settings, year, forecast_year):
     logger.info(
         "Starting frism container, data dir: %s",
         frism_data_folder)
-    client.containers.run(
+    container = client.containers.run(
         image,
         volumes={
             abs_frism_data_folder: {
                 'bind': '/pop_results',
                 'mode': 'rw'},
         },
-        command=f"-rt main -md /pop_results/ -sn Dmd_G -yt {year} -msr 40",
-        stdout=docker_stdout, stderr=True, detach=False, remove=True
+        # command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt {year} -msr 40",
+        command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt 2030 -msr 40",
+        stdout=True, stderr=True, detach=True, remove=True
     )
+    for log in container.logs(
+            stream=True, stderr=True, stdout=docker_stdout):
+        print(log)
     return
 
 
