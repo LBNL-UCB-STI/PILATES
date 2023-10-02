@@ -1280,6 +1280,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     logger.warn("Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(), p_badschool.sum()))
     persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool),:]
     persons = persons.dropna()
+    persons["member_id"] -= (persons.groupby('household_id').agg({'member_id': min})['member_id'].loc[
+                                 persons.household_id] - 1).values
     return persons
 
 
