@@ -1261,6 +1261,9 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     del persons_w_res_blk
     del persons_w_xy
 
+    persons["workplace_taz"] = persons["work_zone_id"].copy()
+    persons["school_taz"] = persons["school_zone_id"].copy()
+    
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
     #     p_names_dict = {'member_id': 'PNUM'}
@@ -1272,10 +1275,11 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     p_newborn = persons['age'] < 1.0
     logger.info("Dropping {0} newborns from this iteration".format(
         p_newborn.sum()))
-    persons = persons[(~p_null_taz) & (~p_newborn)]
+    p_badwork = (persons.worker == 1) & ~(pd.to_numeric(persons.workplace_taz, errors='coerce') >= 0)
+    p_badschool = (persons.student == 1) & ~(pd.to_numeric(persons.school_taz, errors='coerce') >= 0)
+    logger.warn("Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(), p_badschool.sum()))
+    persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool),:]
     persons = persons.dropna()
-    persons["workplace_taz"] = persons["work_zone_id"].copy()
-    persons["school_taz"] = persons["school_zone_id"].copy()
     return persons
 
 
