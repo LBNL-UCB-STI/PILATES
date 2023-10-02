@@ -1272,6 +1272,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     persons = persons[~p_null_taz]
     persons["workplace_taz"] = persons["work_zone_id"].copy()
     persons["school_taz"] = persons["school_zone_id"].copy()
+    persons["member_id"] -= (persons.groupby('household_id').agg({'member_id': min})['member_id'].loc[
+                                 persons.household_id] - 1).values
     return persons
 
 
