@@ -6,10 +6,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 class WorkflowState:
-    Stage = Enum('WorkflowStage', ['land_use', 'vehicle_ownership_model', 'activity_demand', 'initialize_asim_for_replanning', 'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
+    Stage = Enum('WorkflowStage', ['land_use',
+                                   'vehicle_ownership_model',
+                                   'activity_demand',
+                                   'initialize_asim_for_replanning',
+                                   'activity_demand_directly_from_land_use',
+                                   'commerce_demand_model',
+                                   'traffic_assignment',
+                                   'traffic_assignment_replan',
+                                   ])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage):
+                 activity_demand_enabled, commerce_demand_model_enabled, traffic_assignment_enabled, replanning_enabled,
+                 year, stage):
         self.iteration_started = False
         self.start_year = start_year
         self.end_year = end_year
@@ -28,6 +37,8 @@ class WorkflowState:
                 self.enabled_stages.add(WorkflowState.Stage.initialize_asim_for_replanning)
         else:
             self.enabled_stages.add(WorkflowState.Stage.activity_demand_directly_from_land_use)
+        if commerce_demand_model_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.commerce_demand_model)
         if traffic_assignment_enabled:
             self.enabled_stages.add(WorkflowState.Stage.traffic_assignment)
             self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_replan)
@@ -41,14 +52,21 @@ class WorkflowState:
         land_use_enabled = settings['land_use_enabled']
         vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
         activity_demand_enabled = settings['activity_demand_enabled']
+        commerce_demand_model_enabled = settings['commerce_demand_model_enabled']
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
         [year, stage] = cls.read_current_stage()
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s)", year, stage)
         year = year or start_year
-        return WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                             activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage)
+        return WorkflowState(start_year, end_year, travel_model_freq,
+                             land_use_enabled,
+                             vehicle_ownership_model_enabled,
+                             activity_demand_enabled,
+                             commerce_demand_model_enabled,
+                             traffic_assignment_enabled,
+                             replanning_enabled,
+                             year, stage)
 
     @classmethod
     def write_stage(cls, year: int, current_stage: Stage):

@@ -34,6 +34,8 @@ from pilates.activitysim import preprocessor as asim_pre
 from pilates.activitysim import postprocessor as asim_post
 from pilates.urbansim import preprocessor as usim_pre
 from pilates.urbansim import postprocessor as usim_post
+from pilates.frism import preprocessor as frism_pre
+from pilates.frism import postprocessor as frism_post
 from pilates.beam import preprocessor as beam_pre
 from pilates.beam import postprocessor as beam_post
 from pilates.atlas import preprocessor as atlas_pre  ##
@@ -606,6 +608,29 @@ def generate_activity_plans(
     return
 
 
+def run_commerce_demand(client, settings, year, forecast_year):
+    frism_data_folder = settings['frism_data_folder']
+    abs_frism_data_folder = os.path.abspath(frism_data_folder)
+    image_names = settings['docker_images']
+    image = image_names[commerce_demand_model]
+    docker_stdout = settings['docker_stdout']
+    # 3. RUN BEAM
+    logger.info(
+        "Starting frism container, data dir: %s",
+        frism_data_folder)
+    client.containers.run(
+        image,
+        volumes={
+            abs_frism_data_folder: {
+                'bind': '/pop_results',
+                'mode': 'rw'},
+        },
+        command=f"-rt main -md /pop_results/ -sn Dmd_G -yt {year} -msr 40",
+        stdout=docker_stdout, stderr=True, detach=False, remove=True
+    )
+    return
+
+
 def run_traffic_assignment(
         settings, year, forecast_year, client, replanning_iteration_number=0):
     """
@@ -851,6 +876,7 @@ if __name__ == '__main__':
     # parse scenario settings
     start_year = settings['start_year']
     end_year = settings['end_year']
+    commerce_demand_model = settings.get('commerce_demand_model', False)
     travel_model = settings.get('travel_model', False)
     formatted_print(
         'RUNNING PILATES FROM {0} TO {1}'.format(start_year, end_year))
@@ -964,6 +990,15 @@ if __name__ == '__main__':
             # use data directly from the last set of land use outputs.
             usim_post.create_next_iter_usim_data(settings, year, state.forecast_year)
             state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
+
+        # DO commerce demand
+        if state.should_do(WorkflowState.Stage.commerce_demand_model):
+
+            # 4. RUN TRAFFIC ASSIGNMENT
+            frism_pre.prepare_input(settings)
+            run_commerce_demand(client, settings, year, state.forecast_year)
+            frism_post.copy_to_beam(settings)
+            state.complete(WorkflowState.Stage.commerce_demand_model)
 
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
