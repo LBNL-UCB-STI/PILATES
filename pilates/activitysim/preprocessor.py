@@ -1263,7 +1263,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
 
     persons["workplace_taz"] = persons["work_zone_id"].copy()
     persons["school_taz"] = persons["school_zone_id"].copy()
-    
+
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
     #     p_names_dict = {'member_id': 'PNUM'}
@@ -1277,11 +1277,12 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
         p_newborn.sum()))
     p_badwork = (persons.worker == 1) & ~(pd.to_numeric(persons.workplace_taz, errors='coerce') >= 0)
     p_badschool = (persons.student == 1) & ~(pd.to_numeric(persons.school_taz, errors='coerce') >= 0)
-    logger.warn("Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(), p_badschool.sum()))
-    persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool),:]
+    logger.warn(
+        "Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(),
+                                                                                                      p_badschool.sum()))
+    persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
     persons = persons.dropna()
-    persons["member_id"] -= (persons.groupby('household_id').agg({'member_id': min})['member_id'].loc[
-                                 persons.household_id] - 1).values
+    persons['member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
     return persons
 
 
@@ -1292,7 +1293,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
         households['block_id']).values
 
     hh_null_taz = (~(households[asim_zone_id_col].astype("Int64") > 0)).fillna(True)
-    
+
     households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
     logger.info('Dropping {0} households without TAZs'.format(
         hh_null_taz.sum()))
@@ -1776,6 +1777,8 @@ def create_asim_data_from_h5(
 
     # update persons
     persons = _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col)
+
+    households['hhsize'] = persons.groupby('household_id').size().reindex(households.index)
 
     # update jobs
     jobs_cols = jobs.columns
