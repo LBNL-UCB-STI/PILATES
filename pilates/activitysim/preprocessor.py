@@ -1778,7 +1778,7 @@ def create_asim_data_from_h5(
     # update persons
     persons = _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col)
 
-    households['hhsize'] = persons.groupby('household_id').size().reindex(households.index)
+    households['hh_size'] = persons.groupby('household_id').size().reindex(households.index)
 
     # update jobs
     jobs_cols = jobs.columns
