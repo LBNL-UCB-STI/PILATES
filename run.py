@@ -327,7 +327,8 @@ def run_land_use(settings, year, forecast_year, client):
         "to {1} with {2}.".format(
             year, forecast_year, land_use_model))
     formatted_print(print_str)
-    run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd)
+    run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd,
+                  working_dir='/base/block_model_probaflow')
     logger.info('Done!')
 
     return
@@ -390,7 +391,7 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
         "with frequency {1}, npe {2} nsample {3} beamac {4}".format(
             output_year, freq, npe, nsample, beamac))
     formatted_print(print_str)
-    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd)
+    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/')
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
     atlas_post.atlas_update_h5_vehicle(settings, output_year, warm_start=warm_start_atlas)
@@ -581,6 +582,7 @@ def run_traffic_assignment(
             environment={
                 'JAVA_OPTS': (
                     '-XX:+UnlockExperimentalVMOptions -Xmx{0}'.format(beam_memory))},
+            working_dir='/app',
             command="--config={0}".format(path_to_beam_config)
         )
 
@@ -742,6 +744,21 @@ def to_singularity_env(env):
 
 def run_container(client, settings: dict, image: str, volumes: dict, command: str,
                   working_dir=None, environment=None):
+    """
+    Executes container using docker or singularity
+    :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
+    :param settings: settings to get docker configuration
+    :param image: the image to run
+    :param volumes: a dictionary describing volume binding
+    :param command: the command to run
+    :param working_dir: the working directory inside the container. It's not necessary for docker because
+    docker file may have an instruction WORKDIR. In this case that directory is used. Singularity don't take this
+    instruction into account and the container working dir is the host working dir. Because of that most of the time
+     singularity requires working dir. One can get the work dir from a docker image by looking at the Dockerfile
+     (or image layers at the docker hub) and find the last WORKDIR instruction or by issuing a command:
+      docker run -it --entrypoint /bin/bash ghcr.io/lbnl-science-it/atlas:v1.0.7 -c "env | grep PWD"
+    :param environment: a dictionary that contains environment variables that needs to be set to the container
+    """
     if client:
         docker_stdout = settings.get('docker_stdout', False)
         logger.info("Running docker container: %s, command: %s", image, command)
