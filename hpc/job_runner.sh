@@ -9,7 +9,7 @@ QOS="es_normal"
 MEMORY_LIMIT="80"
 ACCOUNT="pc_beamcore"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
-EXPECTED_EXECUTION_DURATION="0-01:00:00"
+EXPECTED_EXECUTION_DURATION="3-00:00:00"
 
 mkdir -p "/global/scratch/users/$USER/pilates_logs"
 
