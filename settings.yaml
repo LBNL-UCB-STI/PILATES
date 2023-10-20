@@ -33,7 +33,7 @@ docker_images:
   urbansim: jdcaicedo/urbansim_demos:09_05_23
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: zaneedell/beam:0.9.9
-  activitysim: zaneedell/activitysim:new-geoms.1
+  activitysim: zaneedell/activitysim:0.1.0
   polaris: tbd
 docker_stdout: False
 pull_latest: False
