@@ -1283,6 +1283,39 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
     persons = persons.dropna()
     persons['member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
+
+    # Workers with school ID
+    workers_with_school_id = persons[(persons.ptype == 1) & (persons.school_zone_id >= 0)].shape
+    persons.loc[persons['ptype'] == 1, 'school_zone_id'] = -1
+    persons.loc[persons['ptype'] == 1, 'school_taz'] = -1
+    workers_with_school_id_post = persons[(persons.ptype == 1) & (persons.school_zone_id >= 0)].shape
+
+    logger.info(f"Workers with School location: {workers_with_school_id[0]}")
+    logger.info(f"Workers with School location after cleaning: {workers_with_school_id_post[0]}")
+
+    # Make Sure non-workers and non-students dont't have a school location
+    non_work_school_with_school_id = persons[(persons.ptype.isin([4, 5])) & (persons.school_zone_id > 0)].shape
+    persons.loc[persons.ptype.isin([4, 5]), 'school_zone_id'] = -1
+    persons.loc[persons.ptype.isin([4, 5]), 'school_taz'] = -1
+    non_work_school_with_school_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_zone_id > 0)].shape
+
+    logger.info(f"Non-Workers and non-students with School location: {non_work_school_with_school_id[0]}")
+    logger.info(
+        f"Non-Workers and non-students with School location after cleaning: {non_work_school_with_school_id_post[0]}")
+
+    # Make Sure non-workers and non-students dont't have a work location
+    non_work_school_with_work_id = persons[(persons.ptype.isin([4, 5])) & (persons.work_zone_id > 0)].shape
+    persons.loc[persons.ptype.isin([4, 5]), 'work_zone_id'] = -1
+    persons.loc[persons.ptype.isin([4, 5]), 'workplace_taz'] = -1
+    non_work_school_with_work_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_zone_id > 0)].shape
+
+    logger.info(f"Non-Workers and non-students with Work location: {non_work_school_with_work_id[0]}")
+    logger.info(
+        f"Non-Workers and non-students with Work location after cleaning: {non_work_school_with_work_id_post[0]}")
+
+    assert (persons['work_zone_id'] == persons['workplace_taz']).all()
+    assert (persons['school_zone_id'] == persons['school_taz']).all()
+
     return persons
 
 
@@ -1779,7 +1812,8 @@ def create_asim_data_from_h5(
     persons = _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col)
 
     households['persons'] = persons.groupby('household_id').size().reindex(households.index)
-    households['workers'] = persons.loc[persons.worker > 0].groupby('household_id').size().reindex(households.index).fillna(0)
+    households['workers'] = persons.loc[persons.worker > 0].groupby('household_id').size().reindex(
+        households.index).fillna(0)
 
     # update jobs
     jobs_cols = jobs.columns
