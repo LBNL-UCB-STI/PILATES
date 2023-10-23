@@ -15,6 +15,7 @@ vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
 land_use_model: urbansim
+firm_model: synthfirm
 commerce_demand_model: frism
 travel_model: beam
 activity_demand_model: activitysim
@@ -33,6 +34,7 @@ singularity_images:
 docker_images:
   urbansim: mxndrwgrdnr/block_model_v2_pb:latest
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
+  synthfirm: dimaopen/synthfirm:0.1.0
   frism: dimaopen/frism-light:0.1.0
   beam: zaneedell/beam:0.9.3-omx
   activitysim: zaneedell/activitysim:new-geoms.1
@@ -84,6 +86,11 @@ atlas_num_processes: 9  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
 
+# SynthFirm
+synthfirm_input_folder: pilates/synthfirm/input
+synthfirm_output_folder: pilates/synthfirm/output
+synthfirm_config: SynthFirm.conf              # it is expected to be inside synthfirm_input_folder
+synthfirm_r_config: config.R                  # it is expected to be inside synthfirm_input_folder
 # FRISM
 frism_data_folder: pilates/frism/data
 

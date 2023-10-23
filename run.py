@@ -29,11 +29,14 @@ import logging
 import sys
 import glob
 from pathlib import Path
+import configparser
 
 from pilates.activitysim import preprocessor as asim_pre
 from pilates.activitysim import postprocessor as asim_post
 from pilates.urbansim import preprocessor as usim_pre
 from pilates.urbansim import postprocessor as usim_post
+from pilates.synthfirm import preprocessor as synthfirm_pre
+from pilates.synthfirm import postprocessor as synthfirm_post
 from pilates.frism import preprocessor as frism_pre
 from pilates.frism import postprocessor as frism_post
 from pilates.beam import preprocessor as beam_pre
@@ -608,6 +611,47 @@ def generate_activity_plans(
     return
 
 
+def run_synth_firm(client, settings, year, forecast_year):
+    config = configparser.ConfigParser()
+    scenario_name = config['ENVIRONMENT']['scenario_name']
+    out_scenario_name = config['ENVIRONMENT']['out_scenario_name']
+
+    synthfirm_input_folder = settings['synthfirm_input_folder']
+    synthfirm_output_folder = settings['synthfirm_output_folder']
+    synthfirm_config = settings['synthfirm_config']
+    synthfirm_r_config = settings['synthfirm_r_config']
+    abs_config_r = os.path.abspath(os.path.join(synthfirm_input_folder, synthfirm_r_config))
+    abs_synthfirm_input_folder = os.path.abspath(synthfirm_input_folder)
+    abs_synthfirm_output_folder = os.path.abspath(synthfirm_output_folder)
+    image_names = settings['docker_images']
+    image = image_names[commerce_demand_model]
+    docker_stdout = settings['docker_stdout']
+    # RUN SYNTHFIRM
+    logger.info(
+        "Starting synthfirm container, input dir: %s, output dir: %s",
+        synthfirm_input_folder, synthfirm_output_folder)
+    container = client.containers.run(
+        image,
+        volumes={
+            abs_synthfirm_input_folder: {
+                'bind': f'/app/inputs_{scenario_name}',
+                'mode': 'rw'},
+            abs_synthfirm_output_folder: {
+                'bind': f'/app/outputs_{out_scenario_name}',
+                'mode': 'rw'},
+            abs_config_r: {
+                'bind': '/app/utils/config.R',
+                'mode': 'rw'},
+        },
+        command=f"python SynthFirm_run.py --config '/app/inputs_{scenario_name}/{synthfirm_config}'",
+        stdout=True, stderr=True, detach=True, remove=True
+    )
+    for log in container.logs(
+            stream=True, stderr=True, stdout=docker_stdout):
+        print(log)
+    return
+
+
 def run_commerce_demand(client, settings, year, forecast_year):
     frism_data_folder = settings['frism_data_folder']
     abs_frism_data_folder = os.path.abspath(frism_data_folder)
@@ -995,10 +1039,19 @@ if __name__ == '__main__':
             usim_post.create_next_iter_usim_data(settings, year, state.forecast_year)
             state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
 
+        # DO synth firm
+        if state.should_do(WorkflowState.Stage.firm_model):
+
+            # RUN SYNTH FIRM
+            synthfirm_pre.prepare_input(settings)
+            run_synth_firm(client, settings, year, state.forecast_year)
+            synthfirm_post.copy_to_commerce_demand(settings)
+            state.complete(WorkflowState.Stage.firm_model)
+
         # DO commerce demand
         if state.should_do(WorkflowState.Stage.commerce_demand_model):
 
-            # 4. RUN TRAFFIC ASSIGNMENT
+            # RUN COMMERCE DEMAND
             frism_pre.prepare_input(settings)
             run_commerce_demand(client, settings, year, state.forecast_year)
             frism_post.copy_to_beam(settings)

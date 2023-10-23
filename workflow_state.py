@@ -11,13 +11,15 @@ class WorkflowState:
                                    'activity_demand',
                                    'initialize_asim_for_replanning',
                                    'activity_demand_directly_from_land_use',
+                                   'firm_model',
                                    'commerce_demand_model',
                                    'traffic_assignment',
                                    'traffic_assignment_replan',
                                    ])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                 activity_demand_enabled, commerce_demand_model_enabled, traffic_assignment_enabled, replanning_enabled,
+                 activity_demand_enabled, firm_model_enabled, commerce_demand_model_enabled, traffic_assignment_enabled,
+                 replanning_enabled,
                  year, stage):
         self.iteration_started = False
         self.start_year = start_year
@@ -37,6 +39,8 @@ class WorkflowState:
                 self.enabled_stages.add(WorkflowState.Stage.initialize_asim_for_replanning)
         else:
             self.enabled_stages.add(WorkflowState.Stage.activity_demand_directly_from_land_use)
+        if firm_model_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.firm_model)
         if commerce_demand_model_enabled:
             self.enabled_stages.add(WorkflowState.Stage.commerce_demand_model)
         if traffic_assignment_enabled:
@@ -52,6 +56,7 @@ class WorkflowState:
         land_use_enabled = settings['land_use_enabled']
         vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
         activity_demand_enabled = settings['activity_demand_enabled']
+        firm_model_enabled = settings['firm_model_enabled']
         commerce_demand_model_enabled = settings['commerce_demand_model_enabled']
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
@@ -63,6 +68,7 @@ class WorkflowState:
                              land_use_enabled,
                              vehicle_ownership_model_enabled,
                              activity_demand_enabled,
+                             firm_model_enabled,
                              commerce_demand_model_enabled,
                              traffic_assignment_enabled,
                              replanning_enabled,

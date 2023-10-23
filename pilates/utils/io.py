@@ -65,6 +65,7 @@ def parse_args_and_settings(settings_file='settings.yaml'):
                                 "l" not in disabled_models))
 
     vehicle_ownership_model_enabled = settings.get('vehicle_ownership_model', False)  ## Atlas
+    firm_model_enabled = settings.get('firm_model', False)  ## SYNTH FIRM
     commerce_demand_model_enabled = settings.get('commerce_demand_model', False)  ## FRISM
     activity_demand_enabled = ((
                                    settings.get('activity_demand_model', False)) and (
@@ -82,6 +83,7 @@ def parse_args_and_settings(settings_file='settings.yaml'):
     settings.update({
         'land_use_enabled': land_use_enabled,
         'vehicle_ownership_model_enabled': vehicle_ownership_model_enabled,  ## Atlas
+        'firm_model_enabled': firm_model_enabled,
         'commerce_demand_model_enabled': commerce_demand_model_enabled,
         'activity_demand_enabled': activity_demand_enabled,
         'traffic_assignment_enabled': traffic_assignment_enabled,
