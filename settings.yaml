@@ -87,7 +87,7 @@ atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline c
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
 
 # SynthFirm
-synthfirm_input_folder: pilates/synthfirm/input
+synthfirm_input_folder: pilates/synthfirm/data
 synthfirm_output_folder: pilates/synthfirm/output
 synthfirm_config: SynthFirm.conf              # it is expected to be inside synthfirm_input_folder
 synthfirm_r_config: config.R                  # it is expected to be inside synthfirm_input_folder

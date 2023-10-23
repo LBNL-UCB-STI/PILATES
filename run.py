@@ -612,10 +612,6 @@ def generate_activity_plans(
 
 
 def run_synth_firm(client, settings, year, forecast_year):
-    config = configparser.ConfigParser()
-    scenario_name = config['ENVIRONMENT']['scenario_name']
-    out_scenario_name = config['ENVIRONMENT']['out_scenario_name']
-
     synthfirm_input_folder = settings['synthfirm_input_folder']
     synthfirm_output_folder = settings['synthfirm_output_folder']
     synthfirm_config = settings['synthfirm_config']
@@ -623,8 +619,14 @@ def run_synth_firm(client, settings, year, forecast_year):
     abs_config_r = os.path.abspath(os.path.join(synthfirm_input_folder, synthfirm_r_config))
     abs_synthfirm_input_folder = os.path.abspath(synthfirm_input_folder)
     abs_synthfirm_output_folder = os.path.abspath(synthfirm_output_folder)
+
+    config = configparser.ConfigParser()
+    config.read(os.path.join(synthfirm_input_folder, synthfirm_config))
+    scenario_name = config['ENVIRONMENT']['scenario_name']
+    out_scenario_name = config['ENVIRONMENT']['out_scenario_name']
+
     image_names = settings['docker_images']
-    image = image_names[commerce_demand_model]
+    image = image_names[firm_model]
     docker_stdout = settings['docker_stdout']
     # RUN SYNTHFIRM
     logger.info(
@@ -925,6 +927,7 @@ if __name__ == '__main__':
     start_year = settings['start_year']
     end_year = settings['end_year']
     commerce_demand_model = settings.get('commerce_demand_model', False)
+    firm_model = settings.get('firm_model', False)
     travel_model = settings.get('travel_model', False)
     formatted_print(
         'RUNNING PILATES FROM {0} TO {1}'.format(start_year, end_year))
