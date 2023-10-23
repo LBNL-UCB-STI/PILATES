@@ -80,14 +80,15 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
 
         if os.path.exists(asim_file_path):
-            pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
-                                               "person_id": pd.Int64Dtype(),
-                                               "trip_id": pd.Int64Dtype(),
-                                               "VEHICL": pd.Int64Dtype(),
-                                               "age": pd.Int64Dtype(),
-                                               "sex": pd.Int64Dtype()}
-                        ).rename(columns={"VEHICL": "cars"}).to_csv(
-                beam_file_path, compression="gzip")
+            df = pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
+                                                    "person_id": pd.Int64Dtype(),
+                                                    "trip_id": pd.Int64Dtype(),
+                                                    "VEHICL": pd.Int64Dtype(),
+                                                    "age": pd.Int64Dtype(),
+                                                    "sex": pd.Int64Dtype()}
+                             ).rename(columns={"VEHICL": "cars"}).rename(columns={"auto_ownership": "cars"})
+            df = df.loc[:, ~df.columns.duplicated()].copy()
+            df.to_csv(beam_file_path, compression="gzip")
             # with open(asim_file_path, 'rb') as f_in, gzip.open(
             #         beam_file_path, 'wb') as f_out:
             #     f_out.writelines(f_in)
@@ -120,21 +121,29 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         if os.path.exists(beam_plans_path):
             logger.info("Merging asim outputs with existing beam input scenario files")
             original_households = pd.read_csv(beam_households_path)
-            updated_households = pd.read_csv(asim_households_path)
+            updated_households = pd.read_csv(asim_households_path, dtype={"household_id": pd.Int64Dtype(),
+                                                                          "VEHICL": pd.Int64Dtype(),
+                                                                          "auto_ownership": pd.Int64Dtype()}
+                                             ).rename(columns={"VEHICL": "cars"}).rename(
+                columns={"auto_ownership": "cars"})
+            updated_households = updated_households.loc[:, ~updated_households.columns.duplicated()].copy()
             original_persons = pd.read_csv(beam_persons_path)
-            updated_persons = pd.read_csv(asim_persons_path)
-
+            updated_persons = pd.read_csv(asim_persons_path, dtype={"household_id": pd.Int64Dtype(),
+                                                                    "person_id": pd.Int64Dtype(),
+                                                                    "age": pd.Int64Dtype(),
+                                                                    "sex": pd.Int64Dtype()}
+                                          )
             per_o = original_persons.person_id.unique()
             per_u = updated_persons.person_id.unique()
             overlap = np.in1d(per_u, per_o).sum()
             logger.info("There were %s persons replanned out of %s originally, and %s of them existed before",
-                        len(per_u), len(per_o), overlap)
+            len(per_u), len(per_o), overlap)
 
             hh_o = (original_persons.household_id.unique())
             hh_u = (updated_persons.household_id.unique())
             overlap = np.in1d(hh_u, hh_o).sum()
             logger.info("There were %s households replanned out of %s originally, and %s of them existed before",
-                        len(hh_u), len(hh_o), overlap)
+            len(hh_u), len(hh_o), overlap)
 
             persons_final = pd.concat([updated_persons, original_persons.loc[
                                                         ~original_persons.person_id.isin(per_u), :]])
@@ -147,42 +156,45 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
             updated_plans = pd.read_csv(asim_plans_path)
             unchanged_plans = original_plans.loc[~original_plans.person_id.isin(per_u), :]
             logger.info("Adding %s new plan elements after and keeping %s from previous iteration",
-                        len(updated_plans), len(unchanged_plans))
+            len(updated_plans), len(unchanged_plans))
             plans_final = pd.concat([updated_plans, unchanged_plans])
             persons_with_plans = np.in1d(persons_final.person_id.unique(), plans_final.person_id.unique()).sum()
             logger.info("Of %s persons, %s of them have plans", len(persons_final), persons_with_plans)
             plans_final.to_csv(beam_plans_path, compression='gzip', index=False)
-        else:
+            else:
             logger.info("No plans existed already so copying them directly. THIS IS BAD")
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression='gzip')
 
-    if replanning_iteration_number < 0:
-        copy_with_compression_asim_file_to_beam('final_plans.csv', 'plans.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_households.csv', 'households.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_persons.csv', 'persons.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_joint_tour_participants.csv', 'joint_tour_participants.csv.gz')
-    else:
-        merge_only_updated_households()
+            if replanning_iteration_number < 0:
+                copy_with_compression_asim_file_to_beam('final_plans.csv', 'plans.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_households.csv', 'households.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_persons.csv', 'persons.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
+            copy_with_compression_asim_file_to_beam('final_joint_tour_participants.csv',
+            'joint_tour_participants.csv.gz')
+            else:
+            merge_only_updated_households()
 
-    if settings.get('final_asim_plans_folder', False):
-        # This first one not currently necessary when asim-lite is replanning all households
-        # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
-        #                                                 replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', year,
-                                                        replanning_iteration_number)
+            if settings.get('final_asim_plans_folder', False):
+            # This first one not currently necessary when asim-lite is replanning all households
+            # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
+            #                                                 replanning_iteration_number)
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', year,
+            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', year,
+        replanning_iteration_number)
         copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', year,
-                                                        replanning_iteration_number)
+        replanning_iteration_number)
         copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', year,
-                                                        replanning_iteration_number)
+        replanning_iteration_number)
         copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', year,
-                                                        replanning_iteration_number)
+        replanning_iteration_number)
         copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', year,
-                                                        replanning_iteration_number)
+        replanning_iteration_number)
         copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', year,
-                                                        replanning_iteration_number)
-    return
+        replanning_iteration_number)
+
+
+return
