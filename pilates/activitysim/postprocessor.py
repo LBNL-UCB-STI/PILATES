@@ -75,7 +75,7 @@ def _prepare_updated_tables(
         if prefix:
             h5_key = os.path.join(str(prefix), h5_key)
         required_cols[table_name] = list(usim_output_store[h5_key].columns)
-
+    logger.info("Reading h5 table {0}".format(h5_key))
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols['persons']
     p_cols_to_replace = ['work_zone_id', 'school_zone_id']
@@ -95,8 +95,6 @@ def _prepare_updated_tables(
             if col in asim_output_dict['persons'].columns:
                 del asim_output_dict['persons'][col]
         asim_output_dict['persons'].rename(columns=p_names_dict, inplace=True)
-        asim_output_dict['persons'] = asim_output_dict['persons'][
-            p_cols_to_include]
 
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
@@ -117,9 +115,7 @@ def _prepare_updated_tables(
         asim_output_dict['households'].rename(
             columns=hh_names_dict, inplace=True)
         # only preserve original usim columns
-        asim_output_dict['households'] = asim_output_dict[
-            'households'][required_cols['households']]
-
+    """
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
@@ -142,7 +138,7 @@ def _prepare_updated_tables(
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
                     asim_output_dict[table_name][col] = asim_output_dict[
                         table_name][col].astype(dtypes[col])
-
+    """
     usim_output_store.close()
 
     # specific dtype required conversions
