@@ -304,9 +304,9 @@ def update_usim_inputs_after_warm_start(
     assert p.shape[0] == warm_start_persons.shape[0]
     assert hh.shape[0] == warm_start_households.shape[0]
 
-    p['work_zone_id'] = warm_start_persons['workplace_taz'].reindex(p.index)
-    p['school_zone_id'] = warm_start_persons['school_taz'].reindex(p.index)
-    hh['cars'] = warm_start_households['auto_ownership'].reindex(
+    p.loc[:, 'work_zone_id'] = warm_start_persons.loc[:, 'workplace_taz'].reindex(p.index)
+    p.loc[:, 'school_zone_id'] = warm_start_persons.loc[:, 'school_taz'].reindex(p.index)
+    hh.loc[:, 'cars'] = warm_start_households['auto_ownership'].reindex(
         hh.index)
 
     usim_datastore['persons'] = p

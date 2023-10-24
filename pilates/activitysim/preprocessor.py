@@ -144,7 +144,7 @@ def read_zone_geoms(settings, year,
         zones = store[zone_key]
 
         if 'geometry' in zones.columns:
-            zones['geometry'] = zones['geometry'].apply(wkt.loads)
+            zones.loc[:, 'geometry'] = zones.loc[:, 'geometry'].apply(wkt.loads)
             zones = gpd.GeoDataFrame(
                 zones, geometry='geometry', crs='EPSG:4326')
         else:
@@ -162,14 +162,14 @@ def read_zone_geoms(settings, year,
             zones = get_block_geoms(settings)
             # zones['GEOID'] = zones['GEOID'].astype(str)
             assert is_string_dtype(zones['GEOID']), "GEOID dtype should be str"
-            zones[default_zone_id_col] = zones['GEOID'].replace(mapping)
+            zones.loc[:, default_zone_id_col] = zones.loc[:, 'GEOID'].replace(mapping)
             zones.set_index(default_zone_id_col, inplace=True)
             assert zones.index.inferred_type == 'string', "zone_id dtype should be str"
 
         # save zone geoms in .h5 datastore so we don't
         # have to do this again
         out_zones = pd.DataFrame(zones.copy())
-        out_zones['geometry'] = out_zones['geometry'].apply(lambda x: x.wkt)
+        out_zones.loc[:, 'geometry'] = out_zones['geometry'].apply(lambda x: x.wkt)
 
         logger.info("Storing zone geometries to .h5 datastore!")
         store[zone_key] = out_zones
@@ -1103,8 +1103,8 @@ def plot_skims(settings, zones,
                 name_ = name + '_zone_id_' + str(zone_id)
                 zone_measure = skims[zone_id - 1, :]
                 empty = zone_measure.sum() == 0
-            zones[name_] = zone_measure
-            zones[name_] = zones[name_].replace({999: np.nan, 0: np.nan})
+            zones.loc[:, name_] = zone_measure
+            zones.loc[:, name_] = zones.loc[:, name_].replace({999: np.nan, 0: np.nan})
             counter += 1
             bg_id = order[zone_id - 1]
 
@@ -1210,9 +1210,9 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     logger.info("Dropping {0} people from {1} households that haven't been assigned locations yet".format(
         unassigned_households.shape[0], unassigned_persons.sum()))
     persons = persons.loc[~unassigned_persons, :]
-    persons[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
+    persons.loc[:, asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id'].reindex(persons['household_id']).values).values
-    persons[asim_zone_id_col] = persons[asim_zone_id_col].astype(str)
+    persons.loc[:, asim_zone_id_col] = persons.loc[:, asim_zone_id_col].astype(str)
 
     # create new column variables
     age_mask_1 = persons.age >= 18
@@ -1231,7 +1231,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
         type_1, type_3, type_4, type_5, type_6, type_7, type_8]
     for x in type_list:
         type_1.where(type_1 != 0, x, inplace=True)
-    persons['ptype'] = type_1
+    persons.loc[:, 'ptype'] = type_1
 
     pemploy_1 = ((persons.worker == 1) & (persons.age >= 16)) * 1
     pemploy_3 = ((persons.worker == 0) & (persons.age >= 16)) * 3
@@ -1239,7 +1239,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     type_list = [pemploy_1, pemploy_3, pemploy_4]
     for x in type_list:
         pemploy_1.where(pemploy_1 != 0, x, inplace=True)
-    persons['pemploy'] = pemploy_1
+    persons.loc[:, 'pemploy'] = pemploy_1
 
     pstudent_1 = (persons.age <= 18) * 1
     pstudent_2 = ((persons.student == 1) & (persons.age > 18)) * 2
@@ -1247,7 +1247,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     type_list = [pstudent_1, pstudent_2, pstudent_3]
     for x in type_list:
         pstudent_1.where(pstudent_1 != 0, x, inplace=True)
-    persons['pstudent'] = pstudent_1
+    persons.loc[:, 'pstudent'] = pstudent_1
 
     persons_w_res_blk = pd.merge(
         persons, households[['block_id']],
@@ -1255,14 +1255,14 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     persons_w_xy = pd.merge(
         persons_w_res_blk, blocks[['x', 'y']],
         left_on='block_id', right_index=True)
-    persons['home_x'] = persons_w_xy['x']
-    persons['home_y'] = persons_w_xy['y']
+    persons.loc[:, 'home_x'] = persons_w_xy['x']
+    persons.loc[:, 'home_y'] = persons_w_xy['y']
 
     del persons_w_res_blk
     del persons_w_xy
 
-    persons["workplace_taz"] = persons["work_zone_id"].copy()
-    persons["school_taz"] = persons["school_zone_id"].copy()
+    persons.loc[:, "workplace_taz"] = persons.loc[:, "work_zone_id"].copy()
+    persons.loc[:, "school_taz"] = persons.loc[:, "school_zone_id"].copy()
 
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
@@ -1282,7 +1282,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
                                                                                                       p_badschool.sum()))
     persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
     persons = persons.dropna()
-    persons['member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
+    persons.loc[:, 'member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
 
     # Workers with school ID
     workers_with_school_id = persons[(persons.ptype == 1) & (persons.school_zone_id >= 0)].shape
@@ -1335,7 +1335,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
 
     # create new column variables
     s = households.persons
-    households['HHT'] = s.where(s == 1, 4)
+    households.loc[:, 'HHT'] = s.where(s == 1, 4)
 
     # clean up dataframe structure
     # TODO: move this to annotate_households.yaml in asim settings
@@ -1633,102 +1633,110 @@ def _create_land_use_table(
     logger.info("Creating new columns in the land use table.")
     if zone_type != 'taz':
         if 'STATE' in zones.columns:
-            zones['STATE'] = zones['STATE'].astype(str)
+            zones.loc[:, 'STATE'] = zones['STATE'].astype(str)
         else:
-            zones['STATE'] = settings['FIPS'][settings['region']]['state']
-        zones['COUNTY'] = zones['COUNTY'].astype(str)
+            zones.loc[:, 'STATE'] = settings['FIPS'][settings['region']]['state']
+        zones.loc[:, 'COUNTY'] = zones['COUNTY'].astype(str)
         try:
-            zones['TRACT'] = zones['TRACT'].astype(str)
+            zones.loc[:, 'TRACT'] = zones['TRACT'].astype(str)
         except:
             print("Skipping TRACT")
         try:
-            zones['BLKGRP'] = zones['BLKGRP'].astype(str)
+            zones.loc[:, 'BLKGRP'] = zones['BLKGRP'].astype(str)
         except:
             print("Skipping BLKGRP")
 
-    zones['TOTHH'] = households[asim_zone_id_col].groupby(households[asim_zone_id_col]).count().reindex(
+    zones.loc[:, 'TOTHH'] = households[asim_zone_id_col].groupby(households[asim_zone_id_col]).count().reindex(
         zones.index).fillna(0)
-    zones['TOTPOP'] = persons[asim_zone_id_col].groupby(persons[asim_zone_id_col]).count().reindex(zones.index).fillna(
+    zones.loc[:, 'TOTPOP'] = persons[asim_zone_id_col].groupby(persons[asim_zone_id_col]).count().reindex(
+        zones.index).fillna(
         0)
-    zones['EMPRES'] = households[[asim_zone_id_col, 'workers']].groupby(asim_zone_id_col)['workers'].sum().reindex(
+    zones.loc[:, 'EMPRES'] = households[[asim_zone_id_col, 'workers']].groupby(asim_zone_id_col)[
+        'workers'].sum().reindex(
         zones.index).fillna(0)
-    zones['HHINCQ1'] = \
+    zones.loc[:, 'HHINCQ1'] = \
         households.loc[households['income'] < 30000, [asim_zone_id_col, 'income']].groupby(asim_zone_id_col)[
             'income'].count().reindex(zones.index).fillna(0)
-    zones['HHINCQ2'] = \
+    zones.loc[:, 'HHINCQ2'] = \
         households.loc[households['income'].between(30000, 59999), [asim_zone_id_col, 'income']].groupby(
             asim_zone_id_col)[
             'income'].count().reindex(zones.index).fillna(0)
-    zones['HHINCQ3'] = \
+    zones.loc[:, 'HHINCQ3'] = \
         households.loc[households['income'].between(60000, 99999), [asim_zone_id_col, 'income']].groupby(
             asim_zone_id_col)[
             'income'].count().reindex(zones.index).fillna(0)
-    zones['HHINCQ4'] = \
+    zones.loc[:, 'HHINCQ4'] = \
         households.loc[households['income'] >= 100000, [asim_zone_id_col, 'income']].groupby(asim_zone_id_col)[
             'income'].count().reindex(zones.index).fillna(0)
-    zones['AGE0004'] = persons.loc[persons['age'].between(0, 4), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE0004'] = \
+    persons.loc[persons['age'].between(0, 4), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['AGE0519'] = persons.loc[persons['age'].between(5, 19), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE0519'] = \
+    persons.loc[persons['age'].between(5, 19), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['AGE2044'] = persons.loc[persons['age'].between(20, 44), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE2044'] = \
+    persons.loc[persons['age'].between(20, 44), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['AGE4564'] = persons.loc[persons['age'].between(45, 64), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE4564'] = \
+    persons.loc[persons['age'].between(45, 64), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['AGE64P'] = persons.loc[persons['age'] >= 65, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE64P'] = persons.loc[persons['age'] >= 65, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['AGE62P'] = persons.loc[persons['age'] >= 62, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+    zones.loc[:, 'AGE62P'] = persons.loc[persons['age'] >= 62, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
-    zones['SHPOP62P'] = (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
-    zones['TOTEMP'] = jobs[asim_zone_id_col].groupby(jobs[asim_zone_id_col]).count().reindex(zones.index).fillna(0)
-    zones['RETEMPN'] = \
+    zones.loc[:, 'SHPOP62P'] = (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
+    zones.loc[:, 'TOTEMP'] = jobs[asim_zone_id_col].groupby(jobs[asim_zone_id_col]).count().reindex(zones.index).fillna(
+        0)
+    zones.loc[:, 'RETEMPN'] = \
         jobs.loc[jobs['sector_id'].isin(['44-45']), [asim_zone_id_col, 'sector_id']].groupby(asim_zone_id_col)[
             'sector_id'].count().reindex(zones.index).fillna(0)
-    zones['FPSEMPN'] = \
+    zones.loc[:, 'FPSEMPN'] = \
         jobs.loc[jobs['sector_id'].isin(['52', '54']), [asim_zone_id_col, 'sector_id']].groupby(asim_zone_id_col)[
             'sector_id'].count().reindex(zones.index).fillna(0)
-    zones['HEREMPN'] = \
+    zones.loc[:, 'HEREMPN'] = \
         jobs.loc[jobs['sector_id'].isin(['61', '62', '71']), [asim_zone_id_col, 'sector_id']].groupby(asim_zone_id_col)[
             'sector_id'].count().reindex(zones.index).fillna(0)
-    zones['AGREMPN'] = \
+    zones.loc[:, 'AGREMPN'] = \
         jobs.loc[jobs['sector_id'].isin(['11']), [asim_zone_id_col, 'sector_id']].groupby(asim_zone_id_col)[
             'sector_id'].count().reindex(zones.index).fillna(0)
-    zones['MWTEMPN'] = \
+    zones.loc[:, 'MWTEMPN'] = \
         jobs.loc[jobs['sector_id'].isin(['42', '31-33', '32', '48-49']), [asim_zone_id_col, 'sector_id']].groupby(
             asim_zone_id_col)['sector_id'].count().reindex(zones.index).fillna(0)
-    zones['OTHEMPN'] = jobs.loc[
+    zones.loc[:, 'OTHEMPN'] = jobs.loc[
         ~jobs['sector_id'].isin(['44-45', '52', '54', '61', '62', '71', '11', '42', '31-33', '32', '48-49']), [
             asim_zone_id_col, 'sector_id']].groupby(asim_zone_id_col)['sector_id'].count().reindex(zones.index).fillna(
         0)
-    zones['TOTACRE'] = blocks[['TOTACRE', asim_zone_id_col]].groupby(asim_zone_id_col)['TOTACRE'].sum().reindex(
+    zones.loc[:, 'TOTACRE'] = blocks[['TOTACRE', asim_zone_id_col]].groupby(asim_zone_id_col)['TOTACRE'].sum().reindex(
         zones.index).fillna(0)
-    zones['HSENROLL'] = schools[['enrollment', asim_zone_id_col]].groupby(asim_zone_id_col)['enrollment'].sum().reindex(
+    zones.loc[:, 'HSENROLL'] = schools[['enrollment', asim_zone_id_col]].groupby(asim_zone_id_col)[
+        'enrollment'].sum().reindex(
         zones.index).fillna(0)
-    zones['TOPOLOGY'] = 1  # FIXME
-    zones['employment_density'] = (zones.TOTEMP / zones.TOTACRE).fillna(0.0)
-    zones['pop_density'] = (zones.TOTPOP / zones.TOTACRE).fillna(0.0)
-    zones['hh_density'] = (zones.TOTHH / zones.TOTACRE).fillna(0.0)
-    zones['hq1_density'] = (zones.HHINCQ1 / zones.TOTACRE).fillna(0.0)
-    zones['PRKCST'] = _get_park_cost(
+    zones.loc[:, 'TOPOLOGY'] = 1  # FIXME
+    zones.loc[:, 'employment_density'] = (zones.TOTEMP / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, 'pop_density'] = (zones.TOTPOP / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, 'hh_density'] = (zones.TOTHH / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, 'hq1_density'] = (zones.HHINCQ1 / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, 'PRKCST'] = _get_park_cost(
         zones, [-1.92168743, 4.89511403, 4.2772001, 0.65784643],
         ['pop_density', 'hh_density', 'hq1_density', 'employment_density'],
         ['employment_density', 'pop_density', 'hh_density', 'hq1_density'])
-    zones['OPRKCST'] = _get_park_cost(
+    zones.loc[:, 'OPRKCST'] = _get_park_cost(
         zones, [-6.17833544, 17.55155703, 2.0786466],
         ['pop_density', 'hh_density', 'employment_density'],
         ['employment_density', 'pop_density', 'hh_density'])
-    zones['COLLFTE'] = colleges[[
+    zones.loc[:, 'COLLFTE'] = colleges[[
         asim_zone_id_col, 'full_time_enrollment']].groupby(
         asim_zone_id_col)['full_time_enrollment'].sum().reindex(
         zones.index).fillna(0)
-    zones['COLLPTE'] = colleges[[
+    zones.loc[:, 'COLLPTE'] = colleges[[
         asim_zone_id_col, 'part_time_enrollment']].groupby(
         asim_zone_id_col)['part_time_enrollment'].sum().reindex(
         zones.index).fillna(0)
-    zones['TERMINAL'] = 0
-    zones['area_type_metric'] = _compute_area_type_metric(zones)
-    zones['area_type'] = _compute_area_type(zones)
-    zones['TERMINAL'] = 0  # FIXME
-    zones['COUNTY'] = 1  # FIXME
+    zones.loc[:, 'TERMINAL'] = 0
+    zones.loc[:, 'area_type_metric'] = _compute_area_type_metric(zones)
+    zones.loc[:, 'area_type'] = _compute_area_type(zones)
+    zones.loc[:, 'TERMINAL'] = 0  # FIXME
+    zones.loc[:, 'COUNTY'] = 1  # FIXME
 
     return zones
 
@@ -1811,8 +1819,8 @@ def create_asim_data_from_h5(
     # update persons
     persons = _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col)
 
-    households['persons'] = persons.groupby('household_id').size().reindex(households.index)
-    households['workers'] = persons.loc[persons.worker > 0].groupby('household_id').size().reindex(
+    households.loc[:, 'persons'] = persons.groupby('household_id').size().reindex(households.index)
+    households.loc[:, 'workers'] = persons.loc[persons.worker > 0].groupby('household_id').size().reindex(
         households.index).fillna(0)
 
     # update jobs
