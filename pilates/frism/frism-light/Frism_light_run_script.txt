@@ -1,0 +1,5 @@
+# for initial run: extract x% of sample from pouplation run
+python frism_light_run.py -rt initial -md /Users/kjeong/KJ_NREL_Work/1_Work/1_2_SMART_2_0/Model_development/Pop_level_results/ -sn Dmd_G -yt 2030 -isr 10
+# for main run: Among x% of population, y% of smaple's tour will be updated. 
+
+python frism_light_run.py -rt main -md /Users/kjeong/KJ_NREL_Work/1_Work/1_2_SMART_2_0/Model_development/Pop_level_results/ -sn Dmd_G -yt 2030 -msr 40
