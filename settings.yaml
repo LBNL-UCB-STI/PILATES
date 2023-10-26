@@ -32,7 +32,7 @@ singularity_images:
 docker_images:
   urbansim: mxndrwgrdnr/block_model_v2_pb:latest
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.5
+  beam: zaneedell/beam:0.9.6-cruise
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
 docker_stdout: False
@@ -85,7 +85,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-baseline_CruiseBAU_2FILE.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-baseline_CruiseSAVBaseline_1_fixedFleets.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -395,6 +395,10 @@ update_ridehail_fleet:
     - Uber
     - Lyft
   scaleFactor: .10
+  overlap:
+    both: .22
+    Uber: .83
+    Lyft: .39
   beamInputPath: "pilates/beam/production/sfbay"
 
 #########################################################################################################

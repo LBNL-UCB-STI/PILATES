@@ -534,7 +534,7 @@ def read_cur_skims(current_skims_path, settings, rawInputSchema):
             rh_skims.loc[rh_skims['numberOfQuotesRequested']==0,'percentQuotesRequestedReturned']=1
             rh_skims.loc[rh_skims['numberOfReservationsRequested']==0,'percentReservationsRequestedReturned']=1
 
-            rh_skims['unmatchedRequestsPercent'] = (1-rh_skims['percentReservationsRequestedReturned'])*(rh_skims['percentQuotesRequestedReturned'])+(1-rh_skims['percentQuotesRequestedReturned'])
+            rh_skims['unmatchedRequestsPercent'] = 100*((1-rh_skims['percentReservationsRequestedReturned'])*(rh_skims['percentQuotesRequestedReturned'])+(1-rh_skims['percentQuotesRequestedReturned']))
 
             rh_skims['waitTime'] = rh_skims['waitTimeForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
             rh_skims['costPerMile'] = rh_skims['costPerMileForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
