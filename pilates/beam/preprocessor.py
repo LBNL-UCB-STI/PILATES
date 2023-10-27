@@ -120,14 +120,21 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         beam_persons_path = os.path.join(beam_scenario_folder, 'persons.csv.gz')
         if os.path.exists(beam_plans_path):
             logger.info("Merging asim outputs with existing beam input scenario files")
-            original_households = pd.read_csv(beam_households_path)
+            original_households = pd.read_csv(beam_households_path, dtype={"household_id": pd.Int64Dtype(),
+                                                                           "cars": pd.Int64Dtype(),
+                                                                           "auto_ownership": pd.Int64Dtype()}
+                                              )
             updated_households = pd.read_csv(asim_households_path, dtype={"household_id": pd.Int64Dtype(),
                                                                           "VEHICL": pd.Int64Dtype(),
                                                                           "auto_ownership": pd.Int64Dtype()}
                                              ).rename(columns={"VEHICL": "cars"}).rename(
                 columns={"auto_ownership": "cars"})
             updated_households = updated_households.loc[:, ~updated_households.columns.duplicated()].copy()
-            original_persons = pd.read_csv(beam_persons_path)
+            original_persons = pd.read_csv(beam_persons_path, dtype={"household_id": pd.Int64Dtype(),
+                                                                     "person_id": pd.Int64Dtype(),
+                                                                     "age": pd.Int64Dtype(),
+                                                                     "sex": pd.Int64Dtype()}
+                                           )
             updated_persons = pd.read_csv(asim_persons_path, dtype={"household_id": pd.Int64Dtype(),
                                                                     "person_id": pd.Int64Dtype(),
                                                                     "age": pd.Int64Dtype(),
@@ -135,13 +142,13 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
                                           )
             per_o = original_persons.person_id.unique()
             per_u = updated_persons.person_id.unique()
-            overlap = np.in1d(per_u, per_o).sum()
+            overlap = np.in1d(per_u.astype(float), per_o.astype(float)).sum()
             logger.info("There were %s persons replanned out of %s originally, and %s of them existed before",
                         len(per_u), len(per_o), overlap)
 
             hh_o = (original_persons.household_id.unique())
             hh_u = (updated_persons.household_id.unique())
-            overlap = np.in1d(hh_u, hh_o).sum()
+            overlap = np.in1d(hh_u.astype(float), hh_o.astype(float)).sum()
             logger.info("There were %s households replanned out of %s originally, and %s of them existed before",
                         len(hh_u), len(hh_o), overlap)
 
@@ -158,7 +165,8 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
             logger.info("Adding %s new plan elements after and keeping %s from previous iteration",
                         len(updated_plans), len(unchanged_plans))
             plans_final = pd.concat([updated_plans, unchanged_plans])
-            persons_with_plans = np.in1d(persons_final.person_id.unique(), plans_final.person_id.unique()).sum()
+            persons_with_plans = np.in1d(persons_final.person_id.unique().astype(float),
+                                         plans_final.person_id.unique().astype(float)).sum()
             logger.info("Of %s persons, %s of them have plans", len(persons_final), persons_with_plans)
             plans_final.to_csv(beam_plans_path, compression='gzip', index=False)
         else:
