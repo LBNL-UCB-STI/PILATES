@@ -128,39 +128,48 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
                 elif (measure == "DDIST") & (path.startswith("TNC")):
                     SOVkey = 'SOV_DIST__{0}'.format(timePeriod)
-                    sovDrivingDistance = np.array(inputMats[SOVkey])
-                    toCompare = (sovDrivingDistance > 0) & (completed > 0)
-                    ratio = (inputMats[inputKey][toCompare] * completed[toCompare]).sum() / (
+                    sovDrivingDistance = np.array(outputMats[SOVkey])
+                    matrix = np.array(inputMats[inputKey])
+                    toCompare = (sovDrivingDistance > 0) & (completed > 0) & (matrix > 0)
+                    ratio = (matrix[toCompare] * completed[toCompare]).sum() / (
                             sovDrivingDistance[toCompare] * completed[toCompare]).sum()
-                    outputMats[outputKey][toCompare] = inputMats[inputKey][toCompare]
-                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
-                    ratios = inputMats[inputKey][toCompare] / sovDrivingDistance[toCompare]
+                    ratios = matrix[toCompare] / sovDrivingDistance[toCompare]
                     logger.info(
-                        "Observed driving distance ratio of {0} ({1} - {2}) for {3} compared to SOV. "
+                        "Observed driving distance ratio of {0:2.3} ({1:2.3} - {2:2.3}) for {3} compared to SOV. "
                         "Interpolating {4} missing values using that ratio".format(
                             ratio, np.nanpercentile(ratios, 10), np.nanpercentile(ratios, 90), inputKey,
                             (~toCompare).sum()))
+                    if ratio < 0.8:
+                        logger.warning(
+                            "This ratio of {0:2.3} might be too low. Setting it to 0.8 to avoid problems".format(ratio))
+                        ratio = 0.8
+                    outputMats[outputKey][toCompare] = matrix[toCompare]
+                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
                 elif (measure == "TOTIVT") & (path.startswith("TNC")):
                     SOVkey = 'SOV_TIME__{0}'.format(timePeriod)
-                    sovDrivingTime = np.array(inputMats[SOVkey])
-                    toCompare = (sovDrivingTime > 0) & (completed > 0)
-                    ratio = (inputMats[inputKey][toCompare] * completed[toCompare]).sum() / (
+                    sovDrivingTime = np.array(outputMats[SOVkey])
+                    matrix = np.array(inputMats[inputKey])
+                    toCompare = (sovDrivingTime > 0) & (completed > 0) & (matrix > 0)
+                    ratio = (matrix[toCompare] * completed[toCompare]).sum() / (
                             sovDrivingTime[toCompare] * completed[toCompare]).sum()
-                    outputMats[outputKey][toCompare] = inputMats[inputKey][toCompare]
-                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
-                    ratios = inputMats[inputKey][toCompare] / sovDrivingDistance[toCompare]
+                    ratios = matrix[toCompare] / sovDrivingTime[toCompare]
                     logger.info(
-                        "Observed driving time ratio of {0} ({1} - {2}) for {3} compared to SOV. "
+                        "Observed driving time ratio of {0:2.3} ({1:2.3} - {2:2.3}) for {3} compared to SOV. "
                         "Interpolating {4} missing values using that ratio".format(
                             ratio, np.nanpercentile(ratios, 10), np.nanpercentile(ratios, 90), inputKey,
                             (~toCompare).sum()))
+                    if ratio < 0.8:
+                        logger.warning(
+                            "This ratio of {0:2.3} might be too low. Setting it to 0.8 to avoid problems".format(ratio))
+                        ratio = 0.8
+                    outputMats[outputKey][toCompare] = matrix[toCompare]
+                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
                     valid = ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
                                                                          (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
-
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -204,7 +213,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
-            else:
+            elif ~path.startswith("TNC"):
                 logger.warning("BEAM skims are missing key {0}".format(outputKey))
 
         if toCancel.sum() > 0:
