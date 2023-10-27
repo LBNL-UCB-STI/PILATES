@@ -717,7 +717,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
 
     ridehail_path_map = settings['ridehail_path_map']
     periods = settings['periods']
-    measure_map = settings['beam_asim_ridehail_measure_map']
+    measure_map = settings['beam_asim_ridehail_omx_measure_map']
 
     num_taz = len(order)
 
@@ -763,6 +763,16 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                         temp[missing_values] = 6.0
                     elif measure == "REJECTIONPROB":
                         temp[missing_values] = 0.2
+                    elif measure == "TOTIVT":
+                        default_name = '{0}_{1}__{2}'.format("SOV", "TIME", period)
+                        default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
+                                                                                      num_taz)
+                        temp[missing_values] = default_temp[missing_values]
+                    elif measure == "DDIST":
+                        default_name = '{0}_{1}__{2}'.format("SOV", "DIST", period)
+                        default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
+                                                                                      num_taz)
+                        temp[missing_values] = default_temp[missing_values]
 
                     if not inOutputSkims:
                         output_skims[name] = temp

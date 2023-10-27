@@ -30,8 +30,8 @@ singularity_images:
 
 # docker settings
 docker_images:
-  urbansim: mxndrwgrdnr/block_model_v2_pb:latest
-  atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
+  urbansim: #mxndrwgrdnr/block_model_v2_pb:latest
+  atlas: #ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: zaneedell/beam:0.9.6-cruise
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
@@ -300,24 +300,22 @@ hwy_paths:
   - HOV3
   - HOV3TOLL
 ridehail_path_map:
-#  RH_SOLO: Solo
-  RH_UBER_SOLO:
+  TNC_SHARED_UBER:
     ReservationType: Solo
     ServiceName: Uber
-  RH_LYFT_SOLO:
+  TNC_SHARED_LYFT:
     ReservationType: Solo
     ServiceName: Lyft
-  RH_CRUISE_SOLO:
+  TNC_SHARED_CRUISE:
     ReservationType: Solo
     ServiceName: Cruise
-#  RH_POOLED: Pooled
-  RH_UBER_POOLED:
+  TNC_SINGLE_UBER:
     ReservationType: Pooled
     ServiceName: Uber
-  RH_LYFT_POOLED:
+  TNC_SINGLE_LYFT:
     ReservationType: Pooled
     ServiceName: Lyft
-  RH_CRUISE_POOLED:
+  TNC_SINGLE_CRUISE:
     ReservationType: Pooled
     ServiceName: Cruise
 beam_asim_hwy_measure_map:
@@ -343,6 +341,12 @@ beam_asim_transit_measure_map:
 beam_asim_ridehail_measure_map:
   WAIT: waitTimeInMinutes
   REJECTIONPROB: unmatchedRequestPortion
+beam_asim_ridehail_omx_measure_map:
+  WAIT: IWAIT
+  DDIST: DDIST
+  TOTIVT: TOTIVT
+  FAR: FAR
+  REJECTIONPROB: REJECTIONPROB
 beam_ridehail_preprocessing: "True"
 asim_output_tables:
   prefix: final_

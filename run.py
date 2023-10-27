@@ -643,8 +643,8 @@ def run_traffic_assignment(
             skimFormat = "omx"
         else:
             logger.error("Invalid skim format {0}".format(skims_fname))
-        previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, skimFormat)
-        previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder)
+        previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, settings['region'], skimFormat)
+        previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder, settings['region'])
         logger.info("Found skims from the previous beam run: %s", previous_od_skims)
 
         # 2. COPY ACTIVITY DEMAND OUTPUTS --> TRAFFIC ASSIGNMENT INPUTS
@@ -681,6 +681,11 @@ def run_traffic_assignment(
         path_to_mutable_od_skims = os.path.join(abs_beam_output, skims_fname)
         path_to_origin_skims = os.path.join(abs_beam_output, origin_skims_fname)
 
+        beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
+        beam_post.merge_current_omx_origin_skims(
+            asim_skims_path, previous_origin_skims, beam_local_output_folder,
+            beam_asim_ridehail_measure_map, settings)
+
         if skimFormat == "csv.gz":
             current_od_skims = beam_post.merge_current_od_skims(
                 path_to_mutable_od_skims, previous_od_skims, beam_local_output_folder)
@@ -692,7 +697,7 @@ def run_traffic_assignment(
                 sys.exit(1)
 
             beam_post.merge_current_origin_skims(
-                path_to_origin_skims, previous_origin_skims, beam_local_output_folder,settings)
+                path_to_origin_skims, previous_origin_skims, beam_local_output_folder, settings)
         else:
             asim_data_dir = settings['asim_local_input_folder']
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
@@ -704,10 +709,7 @@ def run_traffic_assignment(
                     "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
                 )
                 sys.exit(1)
-            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
-            beam_post.merge_current_omx_origin_skims(
-                asim_skims_path, previous_origin_skims, beam_local_output_folder,
-                beam_asim_ridehail_measure_map,settings)
+
         beam_post.rename_beam_output_directory(settings, year, replanning_iteration_number)
 
     return
@@ -875,8 +877,8 @@ if __name__ == '__main__':
     if not traffic_assignment_enabled:
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
 
-    if traffic_assignment_enabled:
-        beam_pre.update_beam_config(settings, 'beam_sample')
+    # if traffic_assignment_enabled:
+    #     beam_pre.update_beam_config(settings, 'beam_sample')
 
     if warm_start_skims:
         formatted_print('"WARM START SKIMS" MODE ENABLED')
@@ -887,6 +889,8 @@ if __name__ == '__main__':
 
     if settings.get('travel_model') == 'beam':
         setup_beam_skims(settings)
+        asim_pre.create_skims_from_beam(
+            settings, year=start_year, overwrite=True)
 
     # start docker client
     if container_manager == 'docker':
