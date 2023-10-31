@@ -74,8 +74,9 @@ def _prepare_updated_tables(
         h5_key = table_name
         if prefix:
             h5_key = os.path.join(str(prefix), h5_key)
+        logger.info("Reading h5 table {0}".format(h5_key))
         required_cols[table_name] = list(usim_output_store[h5_key].columns)
-    logger.info("Reading h5 table {0}".format(h5_key))
+
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols['persons']
     p_cols_to_replace = ['work_zone_id', 'school_zone_id']
@@ -94,7 +95,9 @@ def _prepare_updated_tables(
                 p_cols_to_include.append(col)
             if col in asim_output_dict['persons'].columns:
                 del asim_output_dict['persons'][col]
-        asim_output_dict['persons'].rename(columns=p_names_dict, inplace=True)
+        for fromCol, toCol in p_names_dict.items():
+            if (toCol in p_cols_to_include) & (fromCol in asim_output_dict['persons'].columns):
+                asim_output_dict['persons'].loc[:, toCol] = asim_output_dict['persons'].loc[:, fromCol].copy()
 
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
@@ -134,7 +137,7 @@ def _prepare_updated_tables(
             for col in required_cols[table_name]:
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
                     asim_output_dict[table_name][col] = asim_output_dict[
-                        table_name][col].astype(dtypes[col])
+                        table_name].loc[~asim_output_dict[table_name][col].isna(), col].fillna(0).astype(dtypes[col])
     usim_output_store.close()
 
     # specific dtype required conversions
@@ -235,11 +238,11 @@ def create_usim_input_data(
             if os.path.join('/', table_prefix_year, table_name) == h5_key:
                 new_input_store[table_name] = usim_output_store[h5_key]
                 updated_tables.append(table_name)
+            logger.info(("Passing static UrbanSim table {0} through to the new Urbansim "
+                         "input store!").format(table_name))
 
     # 3. copy USIM INPUTS into new input data store if not present already
-    logger.info((
-                    "Passing static UrbanSim inputs through to the new Urbansim "
-                    "input store!").format(table_name))
+
     for h5_key in og_input_store.keys():
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
@@ -259,8 +262,8 @@ def create_next_iter_inputs(settings, year, forecast_year):
         settings, forecast_year, asim_output_dict, tables_updated_by_asim,
         prefix=forecast_year)
 
-    if settings['traffic_assignment_enabled']:
-        create_beam_input_data(settings, forecast_year, asim_output_dict)
+    # if settings['traffic_assignment_enabled']:
+    #     create_beam_input_data(settings, forecast_year, asim_output_dict)
     create_usim_input_data(
         settings, year, forecast_year, asim_output_dict,
         tables_updated_by_asim)
