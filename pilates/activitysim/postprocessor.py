@@ -115,7 +115,6 @@ def _prepare_updated_tables(
         asim_output_dict['households'].rename(
             columns=hh_names_dict, inplace=True)
         # only preserve original usim columns
-    """
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
@@ -124,13 +123,11 @@ def _prepare_updated_tables(
             "Validating data schemas for table {0}.".format(table_name))
 
         # make sure all required columns are present
-        if not all([
-            col in asim_output_dict[table_name].columns
-            for col in required_cols[table_name]]):
+        if not all([col in asim_output_dict[table_name].columns for col in required_cols[table_name]]):
             raise KeyError(
-                "Not all required columns are in the {0} table!".format(
-                    table_name))
-
+                "Not all required columns are in the {0} table! We're missing".format(
+                    table_name,
+                    [col for col in required_cols[table_name] if col not in asim_output_dict[table_name].columns]))
         # make sure data types match
         else:
             dtypes = usim_output_store[h5_key].dtypes.to_dict()
@@ -138,7 +135,6 @@ def _prepare_updated_tables(
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
                     asim_output_dict[table_name][col] = asim_output_dict[
                         table_name][col].astype(dtypes[col])
-    """
     usim_output_store.close()
 
     # specific dtype required conversions
@@ -224,7 +220,7 @@ def create_usim_input_data(
 
     # 1. copy ASIM OUTPUTS into new input data store
     logger.info(
-        "Copying ActivitySim outputs to the new Urbansim input store!")
+        "Copying ActivitySim outputs to the new Urbansim input store! Tables: {0}".format(tables_updated_by_asim))
     for table_name in tables_updated_by_asim:
         new_input_store[table_name] = asim_output_dict[table_name]
         updated_tables.append(table_name)
