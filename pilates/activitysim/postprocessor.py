@@ -227,7 +227,7 @@ def create_usim_input_data(
         "Tables: {1}".format(input_store_path, tables_updated_by_asim))
     for table_name in tables_updated_by_asim:
         logger.info("   Moving {0}".format(table_name))
-        new_input_store[table_name] = asim_output_dict[table_name]
+        new_input_store["/" + table_name] = asim_output_dict[table_name]
         updated_tables.append(table_name)
 
     # 2. copy USIM OUTPUTS into new input data store if not present already
@@ -265,7 +265,7 @@ def create_usim_input_data(
 
 
 def create_next_iter_inputs(settings, year, forecast_year):
-    tables_updated_by_asim = ['/households', '/persons']
+    tables_updated_by_asim = ['households', 'persons']
     asim_output_dict = _load_asim_outputs(settings)
     asim_output_dict = _prepare_updated_tables(
         settings, forecast_year, asim_output_dict, tables_updated_by_asim,
