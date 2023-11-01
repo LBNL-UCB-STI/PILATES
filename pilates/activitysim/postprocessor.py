@@ -223,23 +223,29 @@ def create_usim_input_data(
 
     # 1. copy ASIM OUTPUTS into new input data store
     logger.info(
-        "Copying ActivitySim outputs to the new Urbansim input store! Tables: {0}".format(tables_updated_by_asim))
+        "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
+        "Tables: {1}".format(input_store_path, tables_updated_by_asim))
     for table_name in tables_updated_by_asim:
+        logger.info("   Moving {0}".format(table_name))
         new_input_store[table_name] = asim_output_dict[table_name]
         updated_tables.append(table_name)
 
     # 2. copy USIM OUTPUTS into new input data store if not present already
     logger.info((
         "Passing last set of UrbanSim outputs through to the new "
-        "Urbansim input store!"))
+        "Urbansim input store! {0} -> {1}".format(usim_output_datastore_name, input_store_path)))
     for h5_key in usim_output_store.keys():
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
             if os.path.join('/', table_prefix_year, table_name) == h5_key:
                 new_input_store[table_name] = usim_output_store[h5_key]
                 updated_tables.append(table_name)
-            logger.info(("Passing static UrbanSim table {0} through to the new Urbansim "
-                         "input store!").format(table_name))
+                logger.info(("    Passing static UrbanSim table {0} through to the new Urbansim "
+                             "input store!").format(table_name))
+            else:
+                logger.info("    Skipping key {0} because it is not formatted correctly".format(h5_key))
+        else:
+            logger.info("    Skipping {0} because it was updated by Asim".format(h5_key))
 
     # 3. copy USIM INPUTS into new input data store if not present already
 
@@ -247,16 +253,19 @@ def create_usim_input_data(
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
             new_input_store[table_name] = og_input_store[h5_key]
+            logger.info(("Passing original UrbanSim table {0} through to the new Urbansim "
+                         "input store!").format(table_name))
 
     og_input_store.close()
     new_input_store.close()
     usim_output_store.close()
+    logger.info("Closing all open h5 files")
 
     return
 
 
 def create_next_iter_inputs(settings, year, forecast_year):
-    tables_updated_by_asim = ['households', 'persons']
+    tables_updated_by_asim = ['/households', '/persons']
     asim_output_dict = _load_asim_outputs(settings)
     asim_output_dict = _prepare_updated_tables(
         settings, forecast_year, asim_output_dict, tables_updated_by_asim,
