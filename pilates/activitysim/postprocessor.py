@@ -98,6 +98,8 @@ def _prepare_updated_tables(
         for fromCol, toCol in p_names_dict.items():
             if (toCol in p_cols_to_include) & (fromCol in asim_output_dict['persons'].columns):
                 asim_output_dict['persons'].loc[:, toCol] = asim_output_dict['persons'].loc[:, fromCol].copy()
+        asim_output_dict['persons'] = asim_output_dict['persons'][
+            p_cols_to_include]
 
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
@@ -118,6 +120,10 @@ def _prepare_updated_tables(
         asim_output_dict['households'].rename(
             columns=hh_names_dict, inplace=True)
         # only preserve original usim columns
+        asim_output_dict['households'] = asim_output_dict[
+            'households'][required_cols['households']]
+    else:
+        logger.warning("Household table not found in ASim outputs!")
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
