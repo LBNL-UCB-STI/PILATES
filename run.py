@@ -2,6 +2,9 @@ import pickle
 import warnings
 
 import cloudpickle
+import pandas as pd
+import tables
+from tables import HDF5ExtError
 
 pickle.ForkingPickler = cloudpickle.Pickler
 
@@ -69,6 +72,16 @@ def clean_data(path, wildcard):
             os.remove(filepath)
         except:
             logger.error("Error whie deleting file : {0}".format(filepath))
+
+
+def is_already_opened_in_write_mode(filename):
+    if os.path.exists(filename):
+        try:
+            f = pd.HDFStore(filename, 'a')
+            f.close()
+        except HDF5ExtError:
+            return True
+    return False
 
 
 def init_data(dest, wildcard):
@@ -913,6 +926,15 @@ if __name__ == '__main__':
 
         # 1. FORECAST LAND USE
         if land_use_enabled:
+            # hack: make sure that the usim datastore isn't open
+            usim_data_path = os.path.join(settings['usim_local_data_folder'],
+                                          settings['usim_formattable_input_file_name'].format(
+                                              region_id=settings['region_id']))
+            if is_already_opened_in_write_mode(usim_data_path):
+                logger.warning(
+                    "Closing h5 files {0} because they were left open. You should really "
+                    "figure out where this happened".format(tables.file._open_files.filenames))
+                tables.file._open_files.close_all()
 
             # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
             if (year == start_year) and warm_start_activities_enabled:
