@@ -929,7 +929,7 @@ if __name__ == '__main__':
             # hack: make sure that the usim datastore isn't open
             usim_data_path = os.path.join(settings['usim_local_data_folder'],
                                           settings['usim_formattable_input_file_name'].format(
-                                              region_id=settings['region_id']))
+                                              region_id=settings['region_to_region_id'][settings['region']]))
             if is_already_opened_in_write_mode(usim_data_path):
                 logger.warning(
                     "Closing h5 files {0} because they were left open. You should really "
