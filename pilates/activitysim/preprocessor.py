@@ -1261,8 +1261,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     del persons_w_res_blk
     del persons_w_xy
 
-    persons.loc[:, "workplace_taz"] = persons.loc[:, "work_zone_id"].copy().astype("Int64").fillna(-1).astype(int)
-    persons.loc[:, "school_taz"] = persons.loc[:, "school_zone_id"].copy().astype("Int64").fillna(-1).astype(int)
+    persons.loc[:, "workplace_taz"] = pd.to_numeric(persons.loc[:, "work_zone_id"].copy(), errors='coerce').fillna(-1)
+    persons.loc[:, "school_taz"] = pd.to_numeric(persons.loc[:, "school_zone_id"].copy(), errors='coerce').fillna(-1)
 
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
@@ -1275,8 +1275,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     p_newborn = persons['age'] < 1.0
     logger.info("Dropping {0} newborns from this iteration".format(
         p_newborn.sum()))
-    p_badwork = (persons.worker == 1) & ~(pd.to_numeric(persons.workplace_taz, errors='coerce') >= 0)
-    p_badschool = (persons.student == 1) & ~(pd.to_numeric(persons.school_taz, errors='coerce') >= 0)
+    p_badwork = (persons.worker == 1) & ~(persons.workplace_taz >= 0)
+    p_badschool = (persons.student == 1) & ~(persons.school_taz >= 0)
     logger.warn(
         "Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(),
                                                                                                       p_badschool.sum()))
