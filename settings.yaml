@@ -23,9 +23,10 @@ vehicle_ownership_model:
 container_manager: docker
 #singularity settings
 singularity_images:
-  urbansim: block_model_v2_pb.sif
-  beam:
-  activitysim:
+  urbansim: docker://mxndrwgrdnr/block_model_v2_pb:latest
+  atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
+  beam: docker://zaneedell/beam:0.9.9
+  activitysim: docker://zaneedell/activitysim:new-geoms.1
   polaris:
 
 # docker settings
