@@ -1261,8 +1261,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     del persons_w_res_blk
     del persons_w_xy
 
-    persons.loc[:, "workplace_taz"] = persons.loc[:, "work_zone_id"].copy()
-    persons.loc[:, "school_taz"] = persons.loc[:, "school_zone_id"].copy()
+    persons.loc[:, "workplace_taz"] = persons.loc[:, "work_zone_id"].copy().astype("Int64").fillna(-1).astype(int)
+    persons.loc[:, "school_taz"] = persons.loc[:, "school_zone_id"].copy().astype("Int64").fillna(-1).astype(int)
 
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
@@ -1669,17 +1669,17 @@ def _create_land_use_table(
         households.loc[households['income'] >= 100000, [asim_zone_id_col, 'income']].groupby(asim_zone_id_col)[
             'income'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE0004'] = \
-    persons.loc[persons['age'].between(0, 4), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
-        'age'].count().reindex(zones.index).fillna(0)
+        persons.loc[persons['age'].between(0, 4), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+            'age'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE0519'] = \
-    persons.loc[persons['age'].between(5, 19), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
-        'age'].count().reindex(zones.index).fillna(0)
+        persons.loc[persons['age'].between(5, 19), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+            'age'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE2044'] = \
-    persons.loc[persons['age'].between(20, 44), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
-        'age'].count().reindex(zones.index).fillna(0)
+        persons.loc[persons['age'].between(20, 44), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+            'age'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE4564'] = \
-    persons.loc[persons['age'].between(45, 64), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
-        'age'].count().reindex(zones.index).fillna(0)
+        persons.loc[persons['age'].between(45, 64), [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
+            'age'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE64P'] = persons.loc[persons['age'] >= 65, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
         'age'].count().reindex(zones.index).fillna(0)
     zones.loc[:, 'AGE62P'] = persons.loc[persons['age'] >= 62, [asim_zone_id_col, 'age']].groupby(asim_zone_id_col)[
