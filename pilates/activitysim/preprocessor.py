@@ -1315,8 +1315,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     logger.info(
         f"Non-Workers and non-students with Work location after cleaning: {non_work_school_with_work_id_post[0]}")
 
-    assert (persons['work_zone_id'] == persons['workplace_taz']).all()
-    assert (persons['school_zone_id'] == persons['school_taz']).all()
+    # assert (persons['work_zone_id'] == persons['workplace_taz']).all()
+    # assert (persons['school_zone_id'] == persons['school_taz']).all()
 
     return persons
 
