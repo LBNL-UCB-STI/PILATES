@@ -1263,6 +1263,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
 
     persons.loc[:, "workplace_taz"] = pd.to_numeric(persons.loc[:, "work_zone_id"].copy(), errors='coerce').fillna(-1)
     persons.loc[:, "school_taz"] = pd.to_numeric(persons.loc[:, "school_zone_id"].copy(), errors='coerce').fillna(-1)
+    persons.loc[:, "worker"] = pd.to_numeric(persons.loc[:, "worker"].copy(), errors='coerce').fillna(0)
+    persons.loc[:, "student"] = pd.to_numeric(persons.loc[:, "student"].copy(), errors='coerce').fillna(0)
 
     # clean up dataframe structure
     # TODO: move this to annotate_persons.yaml in asim settings
