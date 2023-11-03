@@ -81,6 +81,9 @@ def is_already_opened_in_write_mode(filename):
             f.close()
         except HDF5ExtError:
             return True
+        except RuntimeError as e:
+            logger.warning(str(e))
+            return True
     return False
 
 
@@ -362,6 +365,12 @@ def forecast_land_use_docker(settings, year, forecast_year, client):
             year))
     formatted_print(print_str)
     usim_pre.add_skims_to_model_data(settings)
+
+    if is_already_opened_in_write_mode(usim_data_path):
+        logger.warning(
+            "Closing h5 files {0} because they were left open. You should really "
+            "figure out where this happened".format(tables.file._open_files.filenames))
+        tables.file._open_files.close_all()
 
     # 3. RUN URBANSIM
     print_str = (
