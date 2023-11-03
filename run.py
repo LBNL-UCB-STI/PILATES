@@ -773,11 +773,11 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
             run_kwargs['working_dir'] = working_dir
         if environment:
             run_kwargs['environment'] = environment
-        usim = client.containers.run(image, **run_kwargs)
-        for log in usim.logs(
+        container = client.containers.run(image, **run_kwargs)
+        for log in container.logs(
                 stream=True, stderr=True, stdout=docker_stdout):
             print(log)
-        usim.remove()
+        container.remove()
         logger.info("Finished docker container: %s, command: %s", image, command)
     else:
         for local_folder in volumes:
