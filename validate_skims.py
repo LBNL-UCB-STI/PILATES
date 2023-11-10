@@ -5,8 +5,8 @@ import numpy as np
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
-        path = "/Users/zaneedell/Desktop/git/beam-core-analysis/Users/Zach/demos/skims/fastertransit-2020.omx"
-        dry_run = False
+        path = "/Users/zaneedell/Desktop/git/beam/production/sfbay/as-base-skims-sfbay-taz.omx"
+        dry_run = True
     else:
         path = sys.argv[1]
         if len(sys.argv) >= 3:
@@ -27,13 +27,21 @@ if __name__ == '__main__':
 
     distRaw = np.array(sk['DIST'])
 
-    dist = distSOV.copy()
-    dist[~(distSOV > 0)] = distRaw[~(distSOV > 0)]
+    dist = distRaw.copy()
+
+    # dist = distSOV.copy()
+    # dist[~(distSOV > 0)] = distRaw[~(distSOV > 0)]
 
     sz = dist.size
 
     for table in tables:
         if 'TOTIVT' in table:
+            if ("HVY" in table) or ("COM" in table):
+                modeMaxSpeed = 75.
+            elif "LOC" in table:
+                modeMaxSpeed = 50.
+            else:
+                modeMaxSpeed = 60.
             print("------------------")
             print("Looking at skim {0}".format(table))
             ivt_minutes = np.array(sk[table]) / 100.0
@@ -44,9 +52,9 @@ if __name__ == '__main__':
             print("Finding {:0.2%} of remaining speeds are nan, replacing them with 30 mph".format(
                 np.isnan(spd_raw[~ignore]).sum() / sz_valid))
             spd_raw[np.isnan(spd_raw)] = 30.0
-            print("Finding {:0.2%} of remaining speeds are too fast, replacing them with 60 mph".format(
-                (spd_raw[~ignore] > 60).sum() / sz_valid))
-            spd_raw[(spd_raw > 60) & ~ignore] = 60.0
+            print("Finding {0:0.2%} of remaining speeds are too fast, replacing them with {1} mph".format(
+                (spd_raw[~ignore] > modeMaxSpeed).sum() / sz_valid, modeMaxSpeed))
+            spd_raw[(spd_raw > modeMaxSpeed) & ~ignore] = modeMaxSpeed
             print("Finding {:0.2%} of remaining speeds are too slow, replacing them with 3 mph".format(
                 (spd_raw[~ignore] < 3).sum() / sz_valid))
             spd_raw[(spd_raw < 3) & ~ignore] = 3.0
