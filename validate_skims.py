@@ -82,7 +82,7 @@ if __name__ == '__main__':
             new_tt_minutes = dist / spd_raw * 60.0
             if not dry_run:
                 print("Updating table!!")
-                sk[table][:] = new_tt_minutes * 100.0
+                sk[table][:] = new_tt_minutes
 
         if "_VTOLL_" in table:
             toll = np.array(sk[table])
@@ -92,6 +92,6 @@ if __name__ == '__main__':
                 newToll = np.zeros_like(toll)
             if not dry_run:
                 print("Updating table {0}!!".format(table))
-                sk[table][:] = newToll * 100.0
+                sk[table][:] = newToll
 
     sk.close()
