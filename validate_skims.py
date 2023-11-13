@@ -35,7 +35,7 @@ if __name__ == '__main__':
     sz = dist.size
 
     for table in tables:
-        if 'TOTIVT' in table:
+        if ('TOTIVT' in table) | ('WLK_TRN_WLK_IVT' in table):
             if ("HVY" in table) or ("COM" in table):
                 modeMaxSpeed = 75.
             elif "LOC" in table:
