@@ -535,15 +535,16 @@ def run_synth_firm(client, settings, year, forecast_year):
     scenario_name = config['ENVIRONMENT']['scenario_name']
     out_scenario_name = config['ENVIRONMENT']['out_scenario_name']
 
-    image_names = settings['docker_images']
-    image = image_names[firm_model]
-    docker_stdout = settings['docker_stdout']
-    # RUN SYNTHFIRM
+    firm_model, firm_model_image = get_model_and_image(settings, 'firm_model')
+
+# RUN SYNTHFIRM
     logger.info(
         "Starting synthfirm container, input dir: %s, output dir: %s",
         synthfirm_input_folder, synthfirm_output_folder)
-    container = client.containers.run(
-        image,
+    run_container(
+        client,
+        settings,
+        firm_model_image,
         volumes={
             abs_synthfirm_input_folder: {
                 'bind': f'/app/inputs_{scenario_name}',
@@ -556,26 +557,20 @@ def run_synth_firm(client, settings, year, forecast_year):
                 'mode': 'rw'},
         },
         command=f"python SynthFirm_run.py --config '/app/inputs_{scenario_name}/{synthfirm_config}'",
-        stdout=True, stderr=True, detach=True, remove=True
     )
-    for log in container.logs(
-            stream=True, stderr=True, stdout=docker_stdout):
-        print(log)
     return
 
 
 def run_commerce_demand(client, settings, year, forecast_year):
+    commerce_demand_model, commerce_demand_image = get_model_and_image(settings, 'commerce_demand_model')
     frism_data_folder = settings['frism_data_folder']
     abs_frism_data_folder = os.path.abspath(frism_data_folder)
-    image_names = settings['docker_images']
-    image = image_names[commerce_demand_model]
-    docker_stdout = settings['docker_stdout']
-    # 3. RUN BEAM
-    logger.info(
-        "Starting frism container, data dir: %s",
-        frism_data_folder)
-    container = client.containers.run(
-        image,
+    # 3. RUN FRISM
+    logger.info("Starting frism container, data dir: %s", frism_data_folder)
+    run_container(
+        client,
+        settings,
+        commerce_demand_image,
         volumes={
             abs_frism_data_folder: {
                 'bind': '/pop_results',
@@ -583,11 +578,7 @@ def run_commerce_demand(client, settings, year, forecast_year):
         },
         # command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt {year} -msr 40",
         command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt 2030 -msr 40",
-        stdout=True, stderr=True, detach=True, remove=True
     )
-    for log in container.logs(
-            stream=True, stderr=True, stdout=docker_stdout):
-        print(log)
     return
 
 
@@ -903,8 +894,6 @@ if __name__ == '__main__':
     # parse scenario settings
     start_year = settings['start_year']
     end_year = settings['end_year']
-    commerce_demand_model = settings.get('commerce_demand_model', False)
-    firm_model = settings.get('firm_model', False)
     travel_model = settings.get('travel_model', False)
     formatted_print(
         'RUNNING PILATES FROM {0} TO {1}'.format(start_year, end_year))
