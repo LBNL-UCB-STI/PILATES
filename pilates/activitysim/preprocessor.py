@@ -1683,7 +1683,7 @@ def _create_land_use_table(
 
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
-    beam_geoms_file = pd.read_csv(beam_geoms_location)
+    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID':str})
     zone_type = settings['skims_zone_type']
     zone_id_col = zone_type_column[zone_type]
 
