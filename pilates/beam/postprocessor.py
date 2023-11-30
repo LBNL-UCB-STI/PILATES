@@ -65,6 +65,8 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
         return None
     od_skims_path = os.path.join(iteration_dir, "{0}.activitySimODSkims_current.{1}".format(it_num, suffix))
     logger.info("expecting skims at {0}".format(od_skims_path))
+    if not os.path.exists(od_skims_path):
+        return None
     return od_skims_path
 
 
@@ -371,8 +373,11 @@ def merge_current_od_skims(all_skims_path, previous_skims_path, beam_output_dir)
     }
     index_columns = ['timePeriod', 'pathType', 'origin', 'destination']
 
-    all_skims = pd.read_csv(all_skims_path, dtype=schema, index_col=index_columns, na_values=["∞"])
     cur_skims = pd.read_csv(current_skims_path, dtype=schema, index_col=index_columns, na_values=["∞"])
+    if os.path.exists(all_skims_path):
+        all_skims = pd.read_csv(all_skims_path, dtype=schema, index_col=index_columns, na_values=["∞"])
+    else:
+        all_skims = cur_skims.copy()
     for col in cur_skims.columns:  # Handle new skim columns
         if col not in all_skims.columns:
             all_skims[col] = 0.0
@@ -494,13 +499,17 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
 
     index_columns = ['timePeriod', 'reservationType', 'origin']
 
-    all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
-    all_skims.set_index(index_columns, drop=True, inplace=True)
+
     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
     cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'origin']).apply(aggregateInTimePeriod)
+    if os.path.exists(all_skims_path):
+        all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
+        all_skims.set_index(index_columns, drop=True, inplace=True)
+    else:
+        all_skims = cur_skims.copy()
     all_skims = pd.concat([cur_skims, all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)]])
     if all_skims.index.duplicated().sum() > 0:
         logger.warning("Duplicated values in index: \n {0}".format(all_skims.loc[all_skims.duplicated()]))
