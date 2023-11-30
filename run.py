@@ -585,8 +585,7 @@ def generate_activity_plans(
         formatted_print(print_str)
         asim_pre.create_skims_from_beam(
             settings, year=forecast_year, overwrite=overwrite_skims)
-        asim_pre.create_asim_data_from_h5(
-            settings, year=forecast_year, warm_start=warm_start)
+        asim_pre.create_asim_data_from_h5(settings, year=forecast_year, warm_start=warm_start)
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = (
@@ -883,6 +882,7 @@ if __name__ == '__main__':
     warm_start_activities_enabled = settings['warm_start_activities']
     static_skims = settings['static_skims']
     land_use_enabled = settings['land_use_enabled']
+    land_use_frequency = settings['land_use_frequency']
     vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
     activity_demand_enabled = settings['activity_demand_enabled']
     traffic_assignment_enabled = settings['traffic_assignment_enabled']
@@ -931,7 +931,9 @@ if __name__ == '__main__':
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
     #################################
-    for year in range(start_year, end_year, travel_model_freq):
+    travel_model_counter = 0
+
+    for year in range(start_year, end_year, land_use_frequency):
 
         # 1. FORECAST LAND USE
         if land_use_enabled:
@@ -976,7 +978,7 @@ if __name__ == '__main__':
                 run_atlas_auto(settings, forecast_year, client, warm_start_atlas=False)
 
         # 3. GENERATE ACTIVITIES
-        if activity_demand_enabled:
+        if activity_demand_enabled & (travel_model_counter % travel_model_freq == 0):
 
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
@@ -1005,7 +1007,7 @@ if __name__ == '__main__':
 
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
-        if traffic_assignment_enabled:
+        if traffic_assignment_enabled & (travel_model_counter % travel_model_freq == 0):
 
             # 4. RUN TRAFFIC ASSIGNMENT
             if settings['discard_plans_every_year']:
@@ -1026,5 +1028,5 @@ if __name__ == '__main__':
                 process_event_file(settings, year, -1)
                 copy_outputs_to_mep(settings, year, -1)
             beam_post.trim_inaccessible_ods(settings)
-
+        travel_model_counter += 1
     logger.info("Finished")
