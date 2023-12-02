@@ -882,7 +882,7 @@ if __name__ == '__main__':
     warm_start_activities_enabled = settings['warm_start_activities']
     static_skims = settings['static_skims']
     land_use_enabled = settings['land_use_enabled']
-    land_use_frequency = settings['land_use_frequency']
+    land_use_freq = settings['land_use_freq']
     vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
     activity_demand_enabled = settings['activity_demand_enabled']
     traffic_assignment_enabled = settings['traffic_assignment_enabled']
@@ -933,7 +933,7 @@ if __name__ == '__main__':
     #################################
     travel_model_counter = 0
 
-    for year in range(start_year, end_year, land_use_frequency):
+    for year in range(start_year, end_year, land_use_freq):
 
         # 1. FORECAST LAND USE
         if land_use_enabled:
@@ -956,7 +956,7 @@ if __name__ == '__main__':
                 warm_start_activities(settings, year, client)
 
             # 1b. RUN LAND USE SIMULATION
-            forecast_year = min(year + travel_model_freq, end_year)
+            forecast_year = min(year + land_use_freq, end_year)
             forecast_land_use(settings, year, forecast_year, client, container_manager)
 
         else:
