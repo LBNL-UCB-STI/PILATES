@@ -96,7 +96,7 @@ beam_scenario_folder: urbansim/
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
-replan_after: trip_scheduling  # resume asim after this step
+replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: True
 max_plans_memory: 3
 final_asim_plans_folder: pilates/activitysim/output/final_plans

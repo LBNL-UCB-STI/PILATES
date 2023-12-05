@@ -1,12 +1,12 @@
 import pickle
 import warnings
 
-import cloudpickle
+# import cloudpickle
 import pandas as pd
 import tables
 from tables import HDF5ExtError
 
-pickle.ForkingPickler = cloudpickle.Pickler
+# pickle.ForkingPickler = cloudpickle.Pickler
 
 from pilates.activitysim.preprocessor import copy_beam_geoms
 

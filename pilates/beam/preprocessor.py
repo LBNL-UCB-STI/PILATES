@@ -177,11 +177,11 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         copy_with_compression_asim_file_to_beam('final_plans.csv', 'plans.csv.gz')
         copy_with_compression_asim_file_to_beam('final_households.csv', 'households.csv.gz')
         copy_with_compression_asim_file_to_beam('final_persons.csv', 'persons.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_joint_tour_participants.csv',
-                                                'joint_tour_participants.csv.gz')
+        # copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
+        # copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
+        # copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
+        # copy_with_compression_asim_file_to_beam('final_joint_tour_participants.csv',
+        #                                         'joint_tour_participants.csv.gz')
     else:
         merge_only_updated_households()
 
