@@ -931,9 +931,7 @@ if __name__ == '__main__':
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
     #################################
-    travel_model_counter = 0
-
-    for year in range(start_year, end_year, land_use_freq):
+    for year in range(start_year, end_year, travel_model_freq):
 
         # 1. FORECAST LAND USE
         if land_use_enabled:
@@ -956,7 +954,7 @@ if __name__ == '__main__':
                 warm_start_activities(settings, year, client)
 
             # 1b. RUN LAND USE SIMULATION
-            forecast_year = min(year + land_use_freq, end_year)
+            forecast_year = min(year + travel_model_freq, end_year)
             forecast_land_use(settings, year, forecast_year, client, container_manager)
 
         else:
@@ -978,7 +976,7 @@ if __name__ == '__main__':
                 run_atlas_auto(settings, forecast_year, client, warm_start_atlas=False)
 
         # 3. GENERATE ACTIVITIES
-        if activity_demand_enabled & (travel_model_counter % travel_model_freq == 0):
+        if activity_demand_enabled:
 
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
@@ -1007,7 +1005,7 @@ if __name__ == '__main__':
 
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
-        if traffic_assignment_enabled & (travel_model_counter % travel_model_freq == 0):
+        if traffic_assignment_enabled:
 
             # 4. RUN TRAFFIC ASSIGNMENT
             if settings['discard_plans_every_year']:
@@ -1028,5 +1026,4 @@ if __name__ == '__main__':
                 process_event_file(settings, year, -1)
                 copy_outputs_to_mep(settings, year, -1)
             beam_post.trim_inaccessible_ods(settings)
-        travel_model_counter += 1
     logger.info("Finished")
