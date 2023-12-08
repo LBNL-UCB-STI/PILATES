@@ -64,6 +64,8 @@ class WorkflowState:
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s)", year, stage)
         year = year or start_year
+        if (year < start_year) | (end_year <= year):
+            raise ValueError("Wrong unfinished year: {}, simulation range: [{}, {})".format(year, start_year, end_year))
         return WorkflowState(start_year, end_year, travel_model_freq,
                              land_use_enabled,
                              vehicle_ownership_model_enabled,
