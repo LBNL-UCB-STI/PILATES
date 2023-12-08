@@ -4,6 +4,7 @@ import os
 import numpy as np
 import openmatrix as omx
 import pandas as pd
+import typing
 
 # import pickle
 # import cloudpickle
@@ -259,7 +260,7 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
 
-def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
@@ -522,3 +523,20 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     logger.info("Ridehail matching summary: \n {0}".format(totals[['meanWaitTimeInMinutes', 'matchedPercent']]))
     logger.info("Total requests: \n {0}".format(totals['observations'].sum()))
     logger.info("Total completed requests: \n {0}".format(totals['completedRequests'].sum()))
+
+def read_beam_omx_skims_to_pd_series(path_to_skims: str, measure: str) -> typing.Optional[pd.Series]:
+    skims = omx.open_file(path_to_skims, 'r')
+    mapping_path = path_to_skims + '.mapping'
+    if os.path.exists(mapping_path):
+        zone_ids = pd.read_csv(mapping_path, dtype=str)['zone_id']
+    else:
+        mapping_exists = 'zone_id' in skims.list_mappings()
+        if not mapping_exists:
+            logger.warning(f"No mapping 'zone_id' in skim file {path_to_skims}")
+            return None
+        zone_ids = list(skims.mapping('zone_id').keys())
+    travel_time_mins = np.array(skims[measure])
+    skims.close()
+    index = pd.Index(zone_ids, name="origin", dtype=str)
+    columns = pd.Index(zone_ids, name="destination", dtype=str)
+    return pd.DataFrame(travel_time_mins, index=index, columns=columns).stack()

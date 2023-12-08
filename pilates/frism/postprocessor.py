@@ -9,9 +9,11 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def copy_to_beam(settings):
+def copy_to_beam(settings, is_initial_year: bool):
     logger.info('Copying frism results to beam input')
-    frism_tour_plan_folder = os.path.join(settings['frism_data_folder'], 'Tour_plan')
+    frism_data_folder = settings['frism_data_folder']
+    frism_tour_plan_folder = os.path.join(frism_data_folder, 'Tour_plan') if is_initial_year \
+        else os.path.join(frism_data_folder, 'frism_light', 'Tour_plan')
     carrier_tour_payload_frames = [read_carrier_tour_payload_and_modify_ids(group) for group in grouped_paths(frism_tour_plan_folder)]
     unzipped = list(zip(*carrier_tour_payload_frames))
     carrier = pd.concat(unzipped[0], ignore_index=True)

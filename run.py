@@ -561,12 +561,14 @@ def run_synth_firm(client, settings, year, forecast_year):
     return
 
 
-def run_commerce_demand(client, settings, year, forecast_year):
+def run_commerce_demand(client, settings, year: int, initial: bool):
+    # RUN FRISM
     commerce_demand_model, commerce_demand_image = get_model_and_image(settings, 'commerce_demand_model')
     frism_data_folder = settings['frism_data_folder']
     abs_frism_data_folder = os.path.abspath(frism_data_folder)
-    # 3. RUN FRISM
-    logger.info("Starting frism container, data dir: %s", frism_data_folder)
+    command = f"-rt initial -md /pop_results/ -sn Dmd_G -yt {year} -isr 10" if initial \
+        else f"-rt main -md /pop_results/ -sn Dmd_G -yt {year} -msr 40"
+    logger.info("Starting frism container, data dir: %s, command='%s'", frism_data_folder, command)
     run_container(
         client,
         settings,
@@ -576,8 +578,7 @@ def run_commerce_demand(client, settings, year, forecast_year):
                 'bind': '/pop_results',
                 'mode': 'rw'},
         },
-        # command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt {year} -msr 40",
-        command=f"-rt initial -md /pop_results/ -sn Dmd_G -yt 2030 -msr 40",
+        command=command,
     )
     return
 
@@ -671,7 +672,7 @@ def run_traffic_assignment(
         else:
             asim_data_dir = settings['asim_local_input_folder']
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
-            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
+            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path,
                                                                     beam_local_output_folder, settings)
             if current_od_skims == previous_od_skims:
                 logger.error(
@@ -1020,10 +1021,14 @@ if __name__ == '__main__':
         # DO commerce demand
         if state.should_do(WorkflowState.Stage.commerce_demand_model):
 
-            # RUN COMMERCE DEMAND
-            frism_pre.prepare_input(settings)
-            run_commerce_demand(client, settings, year, state.forecast_year)
-            frism_post.copy_to_beam(settings)
+            # RUN COMMERCE DEMAND (FRISM)
+            is_initial_year = year == start_year
+            skims_prepared = frism_pre.prepare_input(settings, is_initial_year)
+            if is_initial_year & ((not skims_prepared) | settings.get('initialize_frism_light', False)):
+                run_commerce_demand(client, settings, year, initial=True)
+
+            run_commerce_demand(client, settings, year, initial=False)
+            frism_post.copy_to_beam(settings, is_initial_year)
             state.complete(WorkflowState.Stage.commerce_demand_model)
 
         # DO traffic assignment - but skip if using polaris as this is done along

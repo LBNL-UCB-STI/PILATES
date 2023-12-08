@@ -94,6 +94,7 @@ synthfirm_config: SynthFirm.conf              # it is expected to be inside synt
 synthfirm_r_config: config.R                  # it is expected to be inside synthfirm_input_folder
 # FRISM
 frism_data_folder: pilates/frism/data
+initialize_frism_light: False
 
 # BEAM 
 beam_config: sfbay-pilates-baseline2_0-omx.conf # OR austin-pilates-base.conf
