@@ -1023,13 +1023,13 @@ if __name__ == '__main__':
         if state.should_do(WorkflowState.Stage.commerce_demand_model):
 
             # RUN COMMERCE DEMAND (FRISM)
-            is_initial_year = year == start_year
-            skims_prepared = frism_pre.prepare_input(settings, is_initial_year)
-            if is_initial_year & ((not skims_prepared) | settings.get('initialize_frism_light', False)):
+            is_start_year = year == start_year
+            skims_prepared = frism_pre.prepare_input(settings, is_start_year)
+            if is_start_year & ((not skims_prepared) | settings.get('initialize_frism_light', False)):
                 run_commerce_demand(client, settings, year, initial=True)
 
             run_commerce_demand(client, settings, year, initial=False)
-            frism_post.copy_to_beam(settings, is_initial_year)
+            frism_post.copy_to_beam(settings, is_start_year)
             state.complete(WorkflowState.Stage.commerce_demand_model)
 
         # DO traffic assignment - but skip if using polaris as this is done along
