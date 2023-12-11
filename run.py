@@ -565,10 +565,11 @@ def run_commerce_demand(client, settings, year: int, initial: bool):
     # RUN FRISM
     commerce_demand_model, commerce_demand_image = get_model_and_image(settings, 'commerce_demand_model')
     frism_data_folder = settings['frism_data_folder']
-    abs_frism_data_folder = os.path.abspath(frism_data_folder)
+    region = settings['region']
+    abs_frism_data_folder = os.path.abspath(os.path.join(frism_data_folder, region))
     command = f"-rt initial -md /pop_results/ -sn Dmd_G -yt {year} -isr 10" if initial \
         else f"-rt main -md /pop_results/ -sn Dmd_G -yt {year} -msr 40"
-    logger.info("Starting frism container, data dir: %s, command='%s'", frism_data_folder, command)
+    logger.info("Starting frism container, data dir: %s, command='%s'", abs_frism_data_folder, command)
     run_container(
         client,
         settings,

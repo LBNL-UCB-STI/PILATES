@@ -32,7 +32,7 @@ def prepare_input(settings, is_initial_year: bool) -> bool:
         'TIME_minutes': np.float32,
     }
     frism_columns = frism_schema.keys()
-    frism_tt_path = os.path.join(settings['frism_data_folder'], 'Geo_data', 'tt_df_cbg.csv.gz')
+    frism_tt_path = os.path.join(settings['frism_data_folder'], settings['region'], 'Geo_data', 'tt_df_cbg.csv.gz')
     frism_tt_df = pd.read_csv(frism_tt_path, usecols=frism_columns, index_col=['origin', 'destination'], dtype=frism_schema)
     new_tt_df = pd.concat([tt_minutes, frism_tt_df.loc[frism_tt_df.index.difference(tt_minutes.index, sort=False)]])
     new_tt_df.reset_index(inplace=True)
