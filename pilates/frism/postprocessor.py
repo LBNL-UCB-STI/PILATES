@@ -1,101 +1,202 @@
 import logging
 import os
-import re
-from itertools import groupby
+import numpy as np
 from pathlib import Path
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Most code of this file is taken from
+# https://github.com/LBNL-UCB-STI/beam/blob/284082fa9d9a90f73700fc48fa8a66f74fb20262/src/main/python/freight/frism_to_beam_freight_plans.py
+
+
+def add_prefix(prefix, column, row, to_num=True, store_dict=None, veh_type=False):
+    str_value = str(row[column])
+    if to_num and str_value.isnumeric():
+        old = str(int(row[column]))
+    else:
+        old = str(row[column])
+    if veh_type:
+        old_updated = old.replace('_', '-').replace('b2b-', '').replace('b2c-', ''). \
+            replace('Battery Electric', 'BE').replace('H2 Fuel Cell', 'H2FC')
+    else:
+        old_updated = old.lower().replace('_', '-').replace('b2b-', '').replace('b2c-', '')
+    second_prefix = ''
+    # if veh_type:
+    #     if old == '1':
+    #         second_prefix = '-MD-'
+    #     else:
+    #         second_prefix = '-HD-'
+    first_prefix = prefix
+    if 'county' in prefix:
+        first_prefix = first_prefix.replace('county', 'cty')
+
+    new = f"{first_prefix}{second_prefix}{old_updated}"
+    if store_dict is not None:
+        store_dict[old] = new
+    return new
+
 
 def copy_to_beam(settings, is_start_year: bool):
     logger.info('Copying frism results to beam input')
     frism_data_folder = settings['frism_data_folder']
     region = settings['region']
-    frism_tour_plan_folder = os.path.join(frism_data_folder, region, 'Tour_plan') if is_start_year \
+    directory_input = os.path.join(frism_data_folder, region, 'Tour_plan') if is_start_year \
         else os.path.join(frism_data_folder, region, 'frism_light', 'Tour_plan')
-    carrier_tour_payload_frames = [read_carrier_tour_payload_and_modify_ids(group) for group in grouped_paths(frism_tour_plan_folder)]
-    unzipped = list(zip(*carrier_tour_payload_frames))
-    carrier = pd.concat(unzipped[0], ignore_index=True)
-    tour = pd.concat(unzipped[1], ignore_index=True)
-    payload = pd.concat(unzipped[2], ignore_index=True)
-
-    beam_freight_path = os.path.join(
+    directory_output = os.path.join(
         settings['beam_local_input_folder'],
         settings['region'],
         settings['beam_freight_folder'])
-    carrier.rename(columns={
-        'depot_zone': 'warehouseZone',
-        'depot_zone_x': 'warehouseX',
-        'depot_zone_y': 'warehouseY'
-    }, inplace=True)
-    columns_as_type_int(['warehouseZone'], carrier)
-    carrier.to_csv(os.path.join(beam_freight_path, 'freight-carriers.csv'), index=False)
 
-    tour.rename(columns={
-        'tour_id': 'tourId',
-        'departureLocation_zone': 'departureLocationZone',
-        'departureLocation_x': 'departureLocationX',
-        'departureLocation_y': 'departureLocationY'
-    }, inplace=True)
-    columns_as_type_int(['departureTimeInSec', 'maxTourDurationInSec', 'departureLocationZone'], tour)
-    tour.to_csv(os.path.join(beam_freight_path, 'freight-tours.csv'), index=False)
+    Path(directory_output).mkdir(parents=True, exist_ok=True)
+    carriers = None
+    payload_plans = None
+    tours = None
+    vehicle_types = None
+    tour_id_with_prefix = {}
 
-    payload.loc[payload['weightInlb'] < 0, 'requestType'] = 1 # beam treats 1 as unloading
-    payload.loc[payload['weightInlb'] > 0, 'requestType'] = 0 # beam treats 0 as loading
-    payload['weightInlb'] = abs(payload['weightInlb'].astype(int)) * 0.4536
-    payload.rename(columns={
-        'arrivalTimeWindowInSec_lower': 'arrivalTimeWindowInSecLower',
-        'arrivalTimeWindowInSec_upper': 'arrivalTimeWindowInSecUpper',
-        'weightInlb': 'weightInKg',
-        'locationZone_x': 'locationX',
-        'locationZone_y': 'locationY'
-    }, inplace=True)
-    payload.drop(columns=['weightInlb', 'cummulativeWeightInlb'], inplace=True, errors='ignore')
-    columns_as_type_int(['sequenceRank',
-                         'payloadType',
-                         'requestType',
-                         'estimatedTimeOfArrivalInSec',
-                         'arrivalTimeWindowInSecLower',
-                         'arrivalTimeWindowInSecUpper',
-                         'operationDurationInSec',
-                         'locationZone',], payload)
-    payload.to_csv(os.path.join(beam_freight_path, 'freight-payload-plans.csv'), index=False)
-    return carrier
+    for filename in sorted(os.listdir(directory_input)):
+        filepath = f'{directory_input}/{filename}'
+        logger.info('Converting %s', filepath)
+        parts = filename.split('_', 2)
+        if len(parts) < 3:
+            logger.warning("Warning! could not read file: %s", filename)
+            continue
+        business_type = parts[0].lower()
+        county = parts[1].lower()
+        filetype = parts[2].lower()
 
+        if "carrier" in filetype:
+            df = pd.read_csv(filepath)
+            # df['carrierId'] = df.apply(lambda row: add_prefix(f'{business_type}-{county}-', 'carrierId', row), axis=1)
+            # df['vehicleId'] = df.apply(lambda row: add_prefix(f'{business_type}-{county}-', 'vehicleId', row), axis=1)
+            df['carrierId'] = df.apply(
+                lambda row: add_prefix(f'{business_type}-{county}-', 'carrierId', row, False),
+                axis=1)
+            df['vehicleTypeId'] = df.apply(
+                lambda row: add_prefix('freight-', 'vehicleTypeId', row, to_num=True, store_dict=None, veh_type=True),
+                axis=1)
+            df['vehicleId'] = df.apply(lambda row: add_prefix(row['carrierId']+'-', 'vehicleId', row), axis=1)
+            # df['tourId'] = df.apply(lambda row: add_prefix(f'{business_type}-{county}-', 'tourId', row), axis=1)
+            df['tourId'] = df.apply(
+                lambda row: add_prefix(row['carrierId']+'-', 'tourId', row, True, tour_id_with_prefix),
+                axis=1)
+            if carriers is None:
+                carriers = df
+            else:
+                carriers = pd.concat([carriers, df])
+        elif "freight_tours" in filetype:
+            df = pd.read_csv(filepath)
+            # df['tour_id'] = df.apply(lambda row: add_prefix(f'{business_type}-{county}-', 'tour_id', row), axis=1)
+            df['tour_id'] = df.apply(lambda row: tour_id_with_prefix[str(int(row['tour_id']))], axis=1)
+            if tours is None:
+                tours = df
+            else:
+                tours = pd.concat([tours, df])
+        elif "payload" in filetype:
+            df = pd.read_csv(filepath)
+            # df['tourId'] = df.apply(lambda row: add_prefix(f'{business_type}-{county}-', 'tourId', row), axis=1)
+            df['tourId'] = df.apply(lambda row: tour_id_with_prefix[str(int(row['tourId']))], axis=1)
+            df['payloadId'] = df.apply(lambda row: add_prefix(row['tourId']+'-', 'payloadId', row, False), axis=1)
+            if payload_plans is None:
+                payload_plans = df
+            else:
+                payload_plans = pd.concat([payload_plans, df])
+            tour_id_with_prefix = {}
+        elif "vehicle_types" in filename:
+            df = pd.read_csv(filepath)
+            empty_vectors = list(np.repeat("", len(df.index)))
+            # JoulePerMeter = 121300000/(mpgge*1609.34)
+            vehicles_techs = {
+                "vehicleTypeId": df.apply(
+                    lambda row: add_prefix('freight-', 'veh_type_id', row, to_num=True, store_dict=None, veh_type=True),
+                    axis=1),
+                "seatingCapacity": list(np.repeat(1, len(df.index))),
+                "standingRoomCapacity": list(np.repeat(0, len(df.index))),
+                "lengthInMeter": list(np.repeat(12, len(df.index))),
+                "primaryFuelType": df["primary_fuel_type"],
+                "primaryFuelConsumptionInJoulePerMeter": np.divide(121300000,
+                                                                   np.float_(df["primary_fuel_rate"])*1609.34),
+                "primaryFuelCapacityInJoule": list(np.repeat(12000000000000000, len(df.index))),
+                "primaryVehicleEnergyFile": empty_vectors,
+                "secondaryFuelType": empty_vectors,
+                "secondaryFuelConsumptionInJoulePerMeter": empty_vectors,
+                "secondaryVehicleEnergyFile": empty_vectors,
+                "secondaryFuelCapacityInJoule": empty_vectors,
+                "automationLevel": list(np.repeat(1, len(df.index))),
+                "maxVelocity": df["max_speed(mph)"],  # convert to meter per second
+                "passengerCarUnit": empty_vectors,
+                "rechargeLevel2RateLimitInWatts": empty_vectors,
+                "rechargeLevel3RateLimitInWatts": empty_vectors,
+                "vehicleCategory": list(np.repeat("LightDutyTruck", len(df.index))),
+                "sampleProbabilityWithinCategory": empty_vectors,
+                "sampleProbabilityString": empty_vectors,
+                "payloadCapacityInKg": df["payload_capacity_weight"]
+            }
+            df2 = pd.DataFrame(vehicles_techs)
+            df2["vehicleCategory"] = np.where(df2["vehicleTypeId"].str.contains('hd'),
+                                              'HeavyDutyTruck', df2.vehicleCategory)
+            if vehicle_types is None:
+                vehicle_types = df2
+            else:
+                vehicle_types = pd.concat([vehicle_types, df2])
+        else:
+            logger.warning(f'SKIPPING %s', filename)
 
-def grouped_paths(folder):
-    def file_prefix(path: Path):
-        name = path.name
-        array = re.split(r'_carrier_|_freight_tours_|_payload_', name)
-        return array[0] if len(array) == 2 else None
+    if vehicle_types is not None:
+        vehicle_types.to_csv(f'{directory_output}/freight-vehicles-types.csv', index=False)
 
-    paths = Path(folder).glob("*.csv")
-    paths = [x for x in paths if file_prefix(x)]
-    paths_sorted = sorted(paths, key=file_prefix)
-    paths_grouped = [list(it) for k, it in groupby(paths_sorted, file_prefix)]
-    return [x for x in paths_grouped if len(x) == 3]
+    # In[9]:
+    if carriers is not None:
+        # carrierId,tourId,vehicleId,vehicleTypeId,warehouseZone,warehouseX,warehouseY,MESOZONE,BoundaryZONE
+        # carrierId,tourId,vehicleId,vehicleTypeId,warehouseZone,warehouseX,warehouseY,MESOZONE,BoundaryZONE
+        carriers_renames = {
+            'depot_zone': 'warehouseZone',
+            'depot_zone_x': 'warehouseX',
+            'depot_zone_y': 'warehouseY'
+        }
+        carriers_drop = ['x', 'y', 'index']
+        carriers.rename(columns=carriers_renames, inplace=True)
+        carriers.drop(carriers_drop, axis=1, inplace=True, errors='ignore')
+        carriers['warehouseZone'] = carriers['warehouseZone'].astype(int)
+        carriers.to_csv(f'{directory_output}/freight-carriers.csv', index=False)
+    if tours is not None:
+        # tourId,departureTimeInSec,departureLocationZone,maxTourDurationInSec,departureLocationX,departureLocationY
+        # tourId,departureTimeInSec,departureLocationZone,maxTourDurationInSec,departureLocationX,departureLocationY
+        tours_renames = {
+            'tour_id': 'tourId',
+            'departureLocation_zone': 'departureLocationZone',
+            'departureLocation_x': 'departureLocationX',
+            'departureLocation_y': 'departureLocationY'
+        }
+        tours.rename(columns=tours_renames, inplace=True)
+        tours['departureTimeInSec'] = tours['departureTimeInSec'].astype(int)
+        tours['maxTourDurationInSec'] = tours['maxTourDurationInSec'].astype(int)
+        tours['departureLocationZone'] = tours['departureLocationZone'].astype(int)
+        tours.drop(['index'], axis=1, inplace=True, errors='ignore')
+        tours.to_csv(f'{directory_output}/freight-tours.csv', index=False)
+    if payload_plans is not None:
+        # payloadId,sequenceRank,tourId,payloadType,weightInKg,requestType,locationZone,estimatedTimeOfArrivalInSec,arrivalTimeWindowInSecLower,arrivalTimeWindowInSecUpper,operationDurationInSec,locationX,locationY
+        # payloadId,sequenceRank,tourId,payloadType,weightInKg,requestType,locationZone,estimatedTimeOfArrivalInSec,arrivalTimeWindowInSecLower,arrivalTimeWindowInSecUpper,operationDurationInSec,locationX,locationY
+        payload_plans_renames = {
+            'arrivalTimeWindowInSec_lower': 'arrivalTimeWindowInSecLower',
+            'arrivalTimeWindowInSec_upper': 'arrivalTimeWindowInSecUpper',
+            'locationZone_x': 'locationX',
+            'locationZone_y': 'locationY'
+        }
+        payload_plans_drop = ['weightInlb', 'cummulativeWeightInlb', 'index']
+        payload_plans['weightInKg'] = abs(payload_plans['weightInlb'].astype(int)) * 0.45359237
+        payload_plans.rename(columns=payload_plans_renames, inplace=True)
+        payload_plans.drop(payload_plans_drop, axis=1, inplace=True, errors='ignore')
+        payload_plans['sequenceRank'] = payload_plans['sequenceRank'].astype(int)
+        payload_plans['payloadType'] = payload_plans['payloadType'].astype(int)
+        payload_plans['requestType'] = payload_plans['requestType'].astype(int)
+        payload_plans['estimatedTimeOfArrivalInSec'] = payload_plans['estimatedTimeOfArrivalInSec'].astype(int)
+        payload_plans['arrivalTimeWindowInSecLower'] = payload_plans['arrivalTimeWindowInSecLower'].astype(int)
+        payload_plans['arrivalTimeWindowInSecUpper'] = payload_plans['arrivalTimeWindowInSecUpper'].astype(int)
+        payload_plans['operationDurationInSec'] = payload_plans['operationDurationInSec'].astype(int)
+        payload_plans['locationZone'] = payload_plans['locationZone'].astype(int)
+        payload_plans.to_csv(f'{directory_output}/freight-payload-plans.csv', index=False)
 
-
-def read_carrier_tour_payload_and_modify_ids(paths3):
-    payload = pd.read_csv(find_path(paths3, 'payload'))
-    tour = pd.read_csv(find_path(paths3, 'freight_tours'))
-    carrier = pd.read_csv(find_path(paths3, 'carrier'))
-    carrier['originalTourId'] = carrier['tourId']
-    carrier['tourId'] = carrier['carrierId'] + '-' + carrier['originalTourId'].astype(str)
-    carrier['vehicleId'] = carrier['carrierId'] + '-' + carrier['vehicleId'].astype(str)
-    tour['tour_id'] = pd.merge(tour, carrier, left_on='tour_id', right_on='originalTourId')['tourId']
-    payload['tourId'] = pd.merge(payload, carrier, left_on='tourId', right_on='originalTourId')['tourId_y']
-    carrier.drop(columns='originalTourId', inplace=True)
-    return carrier, tour, payload
-
-def columns_as_type_int(columns, df):
-    for column in columns:
-        df[column] = df[column].astype(int)
-
-def find_path(paths3, file_type):
-    result = next(filter(lambda path: file_type in path.name, paths3))
-    if result is None:
-        raise ValueError(f"No {file_type} for {paths3[0]}")
-    return result
+    logger.info('Done converting frism output to beam freight plans')
