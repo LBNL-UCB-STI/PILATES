@@ -36,10 +36,10 @@ def prepare_input(settings, is_start_year: bool) -> bool:
         frism_columns = frism_schema.keys()
         frism_tt_df = pd.read_csv(frism_tt_path, usecols=frism_columns, index_col=['origin', 'destination'], dtype=frism_schema)
         new_tt_df = pd.concat([tt_minutes, frism_tt_df.loc[frism_tt_df.index.difference(tt_minutes.index, sort=False)]])
-        new_tt_df.reset_index()
+        new_tt_df = new_tt_df.reset_index()
         new_tt_df.to_csv(frism_tt_path, index=False)
     else:
-        tt_minutes.reset_index()
+        tt_minutes = tt_minutes.reset_index()
         tt_minutes.to_csv(frism_tt_path, index=False)
     return True
 
