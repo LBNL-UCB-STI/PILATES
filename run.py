@@ -834,6 +834,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
             'volumes': volumes,
             'command': command,
             'stdout': docker_stdout,
+            'user': os.getuid(), # run a container with privileges of the current user
             'stderr': True,
             'detach': True
         }
