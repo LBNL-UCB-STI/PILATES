@@ -33,6 +33,8 @@ beam.exchange {
   }
 }
 beam.router.skim.activity-sim-skimmer.fileOutputFormat = "omx"
+# This allows to write skims on each iteration
+beam.router.skim.writeSkimsInterval = 1
 
 beam.agentsim.agents.freight {
   enabled = true

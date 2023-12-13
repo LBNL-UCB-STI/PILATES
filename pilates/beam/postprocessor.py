@@ -263,6 +263,8 @@ def copy_skims_for_unobserved_modes(mapping, skims):
 def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+    if current_skims_path is None:
+        return None
     partialSkims = omx.open_file(current_skims_path, mode='r')
     iterable = [(
         path, timePeriod, vals[1].to_list()) for (path, timePeriod), vals
