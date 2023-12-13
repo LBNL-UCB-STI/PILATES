@@ -37,7 +37,7 @@ docker_images:
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   synthfirm: dimaopen/synthfirm:0.1.0
   frism: dimaopen/frism-light:0.1.0
-  beam: zaneedell/beam:0.9.3-omx
+  beam: beammodel/beam:0.8.6.13
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
 docker_stdout: False
@@ -103,6 +103,7 @@ beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
 beam_local_output_folder: pilates/beam/beam_output/
 beam_scenario_folder: urbansim/
+beam_freight_folder: freight/
 #beam_memory: "650g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
