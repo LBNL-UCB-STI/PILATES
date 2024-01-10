@@ -14,7 +14,7 @@ travel_model_freq: 1
 vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
-land_use_model: urbansim
+land_use_model:
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model:
@@ -23,18 +23,18 @@ vehicle_ownership_model:
 container_manager: docker
 #singularity settings
 singularity_images:
-  urbansim: docker://mxndrwgrdnr/block_model_v2_pb:latest
+  urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: docker://zaneedell/beam:0.9.9
-  activitysim: docker://zaneedell/activitysim:new-geoms.1
+  beam: docker://zaneedell/beam:0.9.10
+  activitysim: docker://zaneedell/activitysim:0.1.1
   polaris:
 
 # docker settings
 docker_images:
-  urbansim: mxndrwgrdnr/block_model_v2_pb:latest
+  urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.3-omx
-  activitysim: zaneedell/activitysim:new-geoms.1
+  beam: zaneedell/beam:0.9.10
+  activitysim: zaneedell/activitysim:0.1.1
   polaris: tbd
 docker_stdout: False
 pull_latest: False
@@ -118,7 +118,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 0  # zero means no sampling, whole pop.
+household_sample_size: 274783  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
