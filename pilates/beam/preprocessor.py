@@ -69,7 +69,8 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         if os.path.exists(asim_file_path):
             pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
                                                "person_id": pd.Int64Dtype(),
-                                               "trip_id": pd.Int64Dtype(), "cars": pd.Int64Dtype(),
+                                               "trip_id": pd.Int64Dtype(),
+                                               "cars": pd.Int64Dtype(),
                                                "VEHICL": pd.Int64Dtype(),
                                                "age": pd.Int64Dtype(),
                                                "sex": pd.Int64Dtype()}
