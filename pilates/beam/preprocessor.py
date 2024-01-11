@@ -126,9 +126,15 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
 
             persons_final = pd.concat([updated_persons, original_persons.loc[
                                                         ~original_persons.person_id.isin(per_u), :]])
+            persons_final = persons_final.astype({"household_id": pd.Int64Dtype(),
+                                                  "person_id": pd.Int64Dtype(),
+                                                  "age": pd.Int64Dtype(),
+                                                  "sex": pd.Int64Dtype()})
             persons_final.to_csv(beam_persons_path, index=False, compression='gzip')
             households_final = pd.concat([updated_households, original_households.loc[
                                                               ~original_households.household_id.isin(hh_u), :]])
+            households_final = households_final.astype({"household_id": pd.Int64Dtype(),
+                                                        "cars": pd.Int64Dtype()})
             households_final.to_csv(beam_households_path, index=False, compression='gzip')
 
             original_plans = pd.read_csv(beam_plans_path).rename(columns={'tripId': 'trip_id'})
