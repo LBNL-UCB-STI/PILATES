@@ -45,7 +45,7 @@ def get_taz_geoms(settings, taz_id_col_in='taz1454', zone_id_col_out='zone_id',
         logger.info("Downloading {} geoms".format(zone_type))
 
         if region == 'sfbay':
-            if zone_type == 'TAZ':
+            if zone_type == 'taz':
                 url = (
                     'https://opendata.arcgis.com/datasets/'
                     '94e6e7107f0745b5b2aabd651340b739_0.geojson')
@@ -64,7 +64,9 @@ def get_taz_geoms(settings, taz_id_col_in='taz1454', zone_id_col_out='zone_id',
                 'https://github.com/LBNL-UCB-STI/beam-data-seattle/raw/develop/shape/block_groups_seattle_4326.geojson')
 
         ## FIX ME: other regions taz should be here - only sfbay for now
+        print(url)
         gdf = gpd.read_file(url, crs="EPSG:4326")
+        print(list(gdf))
         if region == 'austin':
             mapping = geoid_to_zone_map(settings)
             logger.info("Mapping block group IDs to TAZ ids")
@@ -74,6 +76,7 @@ def get_taz_geoms(settings, taz_id_col_in='taz1454', zone_id_col_out='zone_id',
             logger.info("Mapping block group IDs to TAZ ids")
             gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
         elif region == "sfbay":
+            print(f"renaming {taz_id_col_in} to {zone_id_col_out}")
             gdf.rename(columns={taz_id_col_in: zone_id_col_out}, inplace=True)
 
         # zone_id col must be str

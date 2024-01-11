@@ -14,7 +14,7 @@ travel_model_freq: 10
 vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
-land_use_model: urbansim
+land_use_model:
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model:
@@ -23,15 +23,16 @@ vehicle_ownership_model:
 container_manager: docker
 #singularity settings
 singularity_images:
-  urbansim: block_model_v2_pb.sif
-  beam:
-  activitysim:
+  urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
+  atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
+  beam: docker://zaneedell/beam:0.9.10
+  activitysim: docker://zaneedell/activitysim:0.1.1
   polaris:
 
 # docker settings
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
-  atlas: #ghcr.io/lbnl-science-it/atlas:v1.0.7
+  atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: zaneedell/beam:0.9.10
   activitysim: zaneedell/activitysim:0.1.1
   polaris: tbd

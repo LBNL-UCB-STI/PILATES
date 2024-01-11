@@ -73,9 +73,10 @@ def copy_outputs_to_mep(settings, year, iter):
                 usim_output_store_path))
         usim_output_store = pd.HDFStore(usim_output_store_path)
         jobs = usim_output_store.get('jobs')
-        blocks = usim_output_store.get('blocks')
+        blocks = usim_output_store.get('blocks').reset_index()
+        blocks['block_id'] = blocks.block_id.str.pad(15, 'left', '0')
         jobs.to_csv(os.path.join(mep_output_data_dir, "jobs.csv.gz"))
-        blocks.to_csv(os.path.join(mep_output_data_dir, "blocks.csv.gz"))
+        blocks.to_csv(os.path.join(mep_output_data_dir, "blocks.csv.gz"), index=False)
         usim_output_store.close()
 
     def copy_asim_files_to_mep():
@@ -83,6 +84,8 @@ def copy_outputs_to_mep(settings, year, iter):
         trips = ds.get('trips/trip_mode_choice')
         trips.value_counts(["destination", "purpose"]).unstack(fill_value=0).to_csv(
             os.path.join(mep_output_data_dir, "activity_frequency.csv.gz"))
+        geometries = ds.get('/land_use/init')
+        geometries.to_csv(os.path.join(mep_output_data_dir, 'geometries.csv.gz'))
         copy_with_compression_asim_file_to_mep('final_plans.csv', 'plans.csv.gz')
         copy_with_compression_asim_file_to_mep('final_households.csv', 'households.csv.gz')
         copy_with_compression_asim_file_to_mep('final_persons.csv', 'persons.csv.gz')
