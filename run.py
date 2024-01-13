@@ -352,7 +352,7 @@ def run_land_use(settings, year, forecast_year, client):
             year, forecast_year, land_use_model))
     formatted_print(print_str)
     run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd,
-                  working_dir='/base/block_model_probaflow')
+                  working_dir=settings['usim_client_base_folder'])
     logger.info('Done!')
 
     return
@@ -518,10 +518,10 @@ def generate_activity_plans(
         formatted_print(print_str)
 
         run_container(client, settings,
-            activity_demand_image,
-            working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=asim_cmd)
+                      activity_demand_image,
+                      working_dir=asim_workdir,
+                      volumes=asim_docker_vols,
+                      command=asim_cmd)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -684,10 +684,9 @@ def initialize_asim_for_replanning(settings, forecast_year):
             "prepare cache for re-planning with BEAM.")
         formatted_print(print_str)
         run_container(client, settings,
-            activity_demand_image, working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=base_asim_cmd)
-
+                      activity_demand_image, working_dir=asim_workdir,
+                      volumes=asim_docker_vols,
+                      command=base_asim_cmd)
 
 
 def run_replanning_loop(settings, forecast_year):
@@ -722,7 +721,6 @@ def run_replanning_loop(settings, forecast_year):
             activity_demand_image, working_dir=asim_workdir,
             volumes=asim_docker_vols,
             command=base_asim_cmd + ' -r ' + last_asim_step)
-
 
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
@@ -808,10 +806,10 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
             os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
         proc = ["singularity", "run", "--cleanenv"] \
-            + (["--env", to_singularity_env(environment)] if environment else []) \
-            + (["--pwd", working_dir] if working_dir else []) \
-            + ["-B", singularity_volumes, image] \
-            + command.split()
+               + (["--env", to_singularity_env(environment)] if environment else []) \
+               + (["--pwd", working_dir] if working_dir else []) \
+               + ["-B", singularity_volumes, image] \
+               + command.split()
         logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
         logger.info("Finished command: %s", " ".join(proc))
@@ -832,6 +830,7 @@ def get_model_and_image(settings: dict, model_type: str):
     if not model_name:
         raise ValueError(f"No {manager} image specified for model {model_name}")
     return model_name, image_name
+
 
 if __name__ == '__main__':
 
@@ -951,7 +950,6 @@ if __name__ == '__main__':
 
         # 3. GENERATE ACTIVITIES
         if state.should_do(WorkflowState.Stage.activity_demand):
-
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
             # case we have to read from the land use *inputs* because no
@@ -970,7 +968,6 @@ if __name__ == '__main__':
             state.complete(WorkflowState.Stage.initialize_asim_for_replanning)
 
         if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
-
             # If not generating activities with a separate ABM (e.g.
             # ActivitySim), then we need to create the next iteration of land
             # use data directly from the last set of land use outputs.
