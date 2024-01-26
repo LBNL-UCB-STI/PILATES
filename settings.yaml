@@ -301,22 +301,22 @@ hwy_paths:
   - HOV3TOLL
 ridehail_path_map:
   TNC_SHARED_UBER:
-    ReservationType: Solo
+    ReservationType: Pooled
     ServiceName: Uber
   TNC_SHARED_LYFT:
-    ReservationType: Solo
+    ReservationType: Pooled
     ServiceName: Lyft
   TNC_SHARED_CRUISE:
-    ReservationType: Solo
+    ReservationType: Pooled
     ServiceName: Cruise
   TNC_SINGLE_UBER:
-    ReservationType: Pooled
+    ReservationType: Solo
     ServiceName: Uber
   TNC_SINGLE_LYFT:
-    ReservationType: Pooled
+    ReservationType: Solo
     ServiceName: Lyft
   TNC_SINGLE_CRUISE:
-    ReservationType: Pooled
+    ReservationType: Solo
     ServiceName: Cruise
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
