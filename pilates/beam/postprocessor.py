@@ -49,8 +49,8 @@ def rename_beam_output_directory(settings, year, replanning_iteration_number=0):
     os.rename(beam_run_output_dir, new_iteration_output_directory)
 
 
-def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
+def find_produced_od_skims(beam_output_dir, region, suffix="csv.gz"):
+    iteration_dir, it_num = find_latest_beam_iteration(os.path.join(beam_output_dir, region))
     if iteration_dir is None:
         return None
     od_skims_path = os.path.join(iteration_dir, "{0}.activitySimODSkims_current.{1}".format(it_num, suffix))
@@ -73,8 +73,8 @@ def reorder(path):
         print('STOP ', path)
 
 
-def find_produced_origin_skims(beam_output_dir):
-    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
+def find_produced_origin_skims(beam_output_dir, region):
+    iteration_dir, it_num = find_latest_beam_iteration(os.path.join(beam_output_dir, region))
     if iteration_dir is None:
         return None
     ridehail_skims_path = os.path.join(iteration_dir, f"{it_num}.skimsRidehail.csv.gz")
@@ -126,13 +126,50 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
+                elif (measure == "DDIST") & (path.startswith("TNC")):
+                    SOVkey = 'SOV_DIST__{0}'.format(timePeriod)
+                    sovDrivingDistance = np.array(outputMats[SOVkey])
+                    matrix = np.array(inputMats[inputKey])
+                    toCompare = (sovDrivingDistance > 0) & (completed > 0) & (matrix > 0)
+                    ratio = (matrix[toCompare] * completed[toCompare]).sum() / (
+                            sovDrivingDistance[toCompare] * completed[toCompare]).sum()
+                    ratios = matrix[toCompare] / sovDrivingDistance[toCompare]
+                    logger.info(
+                        "Observed driving distance ratio of {0:2.3} ({1:2.3} - {2:2.3}) for {3} compared to SOV. "
+                        "Interpolating {4} missing values using that ratio".format(
+                            ratio, np.nanpercentile(ratios, 10), np.nanpercentile(ratios, 90), inputKey,
+                            (~toCompare).sum()))
+                    if ratio < 0.8:
+                        logger.warning(
+                            "This ratio of {0:2.3} might be too low. Setting it to 0.8 to avoid problems".format(ratio))
+                        ratio = 0.8
+                    outputMats[outputKey][toCompare] = matrix[toCompare]
+                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
+                elif (measure == "TOTIVT") & (path.startswith("TNC")):
+                    SOVkey = 'SOV_TIME__{0}'.format(timePeriod)
+                    sovDrivingTime = np.array(outputMats[SOVkey])
+                    matrix = np.array(inputMats[inputKey])
+                    toCompare = (sovDrivingTime > 0) & (completed > 0) & (matrix > 0)
+                    ratio = (matrix[toCompare] * completed[toCompare]).sum() / (
+                            sovDrivingTime[toCompare] * completed[toCompare]).sum()
+                    ratios = matrix[toCompare] / sovDrivingTime[toCompare]
+                    logger.info(
+                        "Observed driving time ratio of {0:2.3} ({1:2.3} - {2:2.3}) for {3} compared to SOV. "
+                        "Interpolating {4} missing values using that ratio".format(
+                            ratio, np.nanpercentile(ratios, 10), np.nanpercentile(ratios, 90), inputKey,
+                            (~toCompare).sum()))
+                    if ratio < 0.8:
+                        logger.warning(
+                            "This ratio of {0:2.3} might be too low. Setting it to 0.8 to avoid problems".format(ratio))
+                        ratio = 0.8
+                    outputMats[outputKey][toCompare] = matrix[toCompare]
+                    outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
                     valid = ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
                                                                          (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
-
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -176,7 +213,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
-            else:
+            elif ~path.startswith("TNC"):
                 logger.warning("BEAM skims are missing key {0}".format(outputKey))
 
         if toCancel.sum() > 0:
@@ -234,6 +271,10 @@ def simplify(input, timePeriod, mode, utf=False, expand=False):
                 newKey = key.replace('SOV_', 'HOV3TOLL_')
                 newDict[newKey] = item
     originalDict.update(newDict)
+    if mode.startswith("TNC"):
+        for measure in ["DIST", "TIME"]:
+            newKey = "SOV_{0}__{1}".format(measure, timePeriod)
+            originalDict[newKey] = input[newKey]
     return originalDict
 
 
@@ -249,7 +290,7 @@ def copy_skims_for_unobserved_modes(mapping, skims):
 
 def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
-    current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+    current_skims_path = find_produced_od_skims(beam_output_dir, settings['region'], "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
     iterable = [(
         path, timePeriod, vals[1].to_list()) for (path, timePeriod), vals
@@ -405,7 +446,7 @@ def aggregateInTimePeriod(df):
 
 
 def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, measure_map, settings):
-    current_skims_path = find_produced_origin_skims(beam_output_dir)
+    current_skims_path = find_produced_origin_skims(beam_output_dir, settings['region'])
 
     rawInputSchema = {
         "tazId": str,
@@ -417,22 +458,28 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         "observations": int,
         "iterations": int
     }
+    reservation_type_map = {"SOLO": "SINGLE", "POOLED": "SHARED"}
 
-    cur_skims = read_cur_skims(current_skims_path,settings,rawInputSchema)
-#     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+    cur_skims = read_cur_skims(current_skims_path, settings, rawInputSchema)
+    #     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
-    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(aggregateInTimePeriod)
+    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(
+        aggregateInTimePeriod)
     cur_skims['failures'] = cur_skims['observations'] - cur_skims['completedRequests']
     skims = omx.open_file(all_skims_path, 'a')
     idx = pd.Index(np.array(list(skims.mapping("zone_id").keys()), dtype=str).copy())
     for (timePeriod, reservationType, serviceName), _df in cur_skims.groupby(level=[0, 1, 2]):
         df = _df.loc[(timePeriod, reservationType, serviceName)].reindex(idx, fill_value=0.0)
 
-        trips = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'TRIPS', timePeriod.upper())
-        failures = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'FAILURES', timePeriod.upper())
-        rejectionprob = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'REJECTIONPROB', timePeriod.upper())
+        trips = "TNC_{1}_{0}_{2}__{3}".format(serviceName.upper(), reservation_type_map[reservationType.upper()],
+                                              'TRIPS', timePeriod.upper())
+        failures = "TNC_{1}_{0}_{2}__{3}".format(serviceName.upper(), reservation_type_map[reservationType.upper()],
+                                                 'FAILURES', timePeriod.upper())
+        rejectionprob = "TNC_{1}_{0}_{2}__{3}".format(serviceName.upper(),
+                                                      reservation_type_map[reservationType.upper()], 'REJECTIONPROB',
+                                                      timePeriod.upper())
 
         logger.info(
             "Adding {0} complete trips and {1} failed trips to skim {2}".format(int(df['completedRequests'].sum()),
@@ -443,7 +490,8 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
         skims[failures][:] = skims[trips][:] * 0.5 + df.loc[:, 'failures'].values[:, None]
         skims[rejectionprob][:] = np.nan_to_num(skims[failures][:] / (skims[trips][:] + skims[failures][:]))
 
-        wait = "RH_{0}_{1}_{2}__{3}".format(serviceName.upper(), reservationType.upper(), 'WAIT', timePeriod.upper())
+        wait = "TNC_{1}_{0}_{2}__{3}".format(serviceName.upper(), reservation_type_map[reservationType.upper()], 'WAIT',
+                                             timePeriod.upper())
         originalWaitTime = np.array(
             skims[wait])  # Hack due to pytables issue https://github.com/PyTables/PyTables/issues/310
         originalWaitTime[df['completedRequests'] > 0, :] = df.loc[
@@ -455,7 +503,7 @@ def merge_current_omx_origin_skims(all_skims_path, previous_skims_path, beam_out
 
 
 def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
-    current_skims_path = find_produced_origin_skims(beam_output_dir)
+    current_skims_path = find_produced_origin_skims(beam_output_dir, settings['region'])
     if (current_skims_path is None) | (previous_skims_path == current_skims_path):
         # this means beam has not produced the skims
         logger.error("no skims produced from path {0}".format(current_skims_path))
@@ -486,12 +534,13 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
 
     all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
     all_skims.set_index(index_columns, drop=True, inplace=True)
-    cur_skims = read_cur_skims(current_skims_path,settings,rawInputSchema)
-#     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+    cur_skims = read_cur_skims(current_skims_path, settings, rawInputSchema)
+    #     cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     cur_skims['timePeriod'] = cur_skims['hour'].apply(hourToTimeBin)
     cur_skims.rename(columns={'tazId': 'origin'}, inplace=True)
     cur_skims['completedRequests'] = cur_skims['observations'] * (1. - cur_skims['unmatchedRequestsPercent'] / 100.)
-    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(aggregateInTimePeriod)
+    cur_skims = cur_skims.groupby(['timePeriod', 'reservationType', 'serviceName', 'origin']).apply(
+        aggregateInTimePeriod)
     all_skims = pd.concat([cur_skims, all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)]])
     if all_skims.index.duplicated().sum() > 0:
         logger.warning("Duplicated values in index: \n {0}".format(all_skims.loc[all_skims.duplicated()]))
@@ -505,41 +554,48 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     logger.info("Total requests: \n {0}".format(totals['observations'].sum()))
     logger.info("Total completed requests: \n {0}".format(totals['completedRequests'].sum()))
 
+
 def read_cur_skims(current_skims_path, settings, rawInputSchema):
-    if 'beam_ridehail_preprocessing'  in settings:
-        if settings['beam_ridehail_preprocessing']=='True':
-            rawInputSchema = { "tazId": str,
-                                     "hour": int,
-                                     "reservationType": str,
-                                     "observations": int,
-                                     "iterations": int,
-                                     'serviceName': str,
-                                     'waitTimeForRequests': float,
-                                     'costPerMileForRequests': float,
-                                     'waitTimeForQuotes': float,
-                                     'costPerMileForQuotes': float,
-                                     'unmatchedQuotesPercent': float,
-                                     'accessibleVehiclesPercent': float,
-                                     'numberOfReservationsRequested': int,
-                                     'numberOfReservationsReturned': int,
-                                     'numberOfQuotesRequested': int,
-                                     'numberOfQuotesReturned': int
-                                 }
+    if 'beam_ridehail_preprocessing' in settings:
+        if settings['beam_ridehail_preprocessing'] == 'True':
+            rawInputSchema = {"tazId": str,
+                              "hour": int,
+                              "reservationType": str,
+                              "observations": int,
+                              "iterations": int,
+                              'serviceName': str,
+                              'waitTimeForRequests': float,
+                              'costPerMileForRequests': float,
+                              'waitTimeForQuotes': float,
+                              'costPerMileForQuotes': float,
+                              'unmatchedQuotesPercent': float,
+                              'accessibleVehiclesPercent': float,
+                              'numberOfReservationsRequested': int,
+                              'numberOfReservationsReturned': int,
+                              'numberOfQuotesRequested': int,
+                              'numberOfQuotesReturned': int
+                              }
             rh_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
 
-            rh_skims.drop(rh_skims.loc[rh_skims.numberOfQuotesReturned==0].index, axis=0, inplace=True)
+            rh_skims.drop(rh_skims.loc[rh_skims.numberOfQuotesReturned == 0].index, axis=0, inplace=True)
 
-            rh_skims['percentQuotesRequestedReturned'] = rh_skims['numberOfQuotesReturned']/rh_skims['numberOfQuotesRequested']
-            rh_skims['percentReservationsRequestedReturned'] = rh_skims['numberOfReservationsReturned']/rh_skims['numberOfReservationsRequested']
-            rh_skims.loc[rh_skims['numberOfQuotesRequested']==0,'percentQuotesRequestedReturned']=1
-            rh_skims.loc[rh_skims['numberOfReservationsRequested']==0,'percentReservationsRequestedReturned']=1
+            rh_skims['percentQuotesRequestedReturned'] = rh_skims['numberOfQuotesReturned'] / rh_skims[
+                'numberOfQuotesRequested']
+            rh_skims['percentReservationsRequestedReturned'] = rh_skims['numberOfReservationsReturned'] / rh_skims[
+                'numberOfReservationsRequested']
+            rh_skims.loc[rh_skims['numberOfQuotesRequested'] == 0, 'percentQuotesRequestedReturned'] = 1
+            rh_skims.loc[rh_skims['numberOfReservationsRequested'] == 0, 'percentReservationsRequestedReturned'] = 1
 
-            rh_skims['unmatchedRequestsPercent'] = 100*((1-rh_skims['percentReservationsRequestedReturned'])*(rh_skims['percentQuotesRequestedReturned'])+(1-rh_skims['percentQuotesRequestedReturned']))
+            rh_skims['unmatchedRequestsPercent'] = 100 * ((1 - rh_skims['percentReservationsRequestedReturned']) * (
+                rh_skims['percentQuotesRequestedReturned']) + (1 - rh_skims['percentQuotesRequestedReturned']))
 
-            rh_skims['waitTime'] = rh_skims['waitTimeForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
-            rh_skims['costPerMile'] = rh_skims['costPerMileForQuotes']*(rh_skims['numberOfQuotesReturned']>0).astype(int)
+            rh_skims['waitTime'] = rh_skims['waitTimeForQuotes'] * (rh_skims['numberOfQuotesReturned'] > 0).astype(int)
+            rh_skims['costPerMile'] = rh_skims['costPerMileForQuotes'] * (
+                    rh_skims['numberOfQuotesReturned'] > 0).astype(int)
 
-            return rh_skims[["tazId","hour","reservationType","observations","iterations",'serviceName','waitTime','costPerMile','unmatchedRequestsPercent']]
+            return rh_skims[
+                ["tazId", "hour", "reservationType", "observations", "iterations", 'serviceName', 'waitTime',
+                 'costPerMile', 'unmatchedRequestsPercent']]
         else:
             return pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     else:

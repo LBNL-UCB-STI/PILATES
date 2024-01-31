@@ -318,12 +318,6 @@ ridehail_path_map:
   TNC_SHARED_CRUISE:
     ReservationType: Pooled
     ServiceName: Cruise
-beam_asim_ridehail_omx_measure_map:
-  WAIT: IWAIT
-  DDIST: DDIST
-  TOTIVT: TOTIVT
-  FAR: FAR
-  REJECTIONPROB: REJECTIONPROB
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
   DIST: DIST_miles
@@ -347,6 +341,12 @@ beam_asim_transit_measure_map:
 beam_asim_ridehail_measure_map:
   WAIT: waitTimeInMinutes
   REJECTIONPROB: unmatchedRequestPortion
+beam_asim_ridehail_omx_measure_map:
+  WAIT: IWAIT
+  DDIST: DDIST
+  TOTIVT: TOTIVT
+  FAR: FAR
+  REJECTIONPROB: REJECTIONPROB
 beam_ridehail_preprocessing: "True"
 asim_output_tables:
   prefix: final_
