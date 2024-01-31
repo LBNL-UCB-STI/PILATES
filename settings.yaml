@@ -32,7 +32,7 @@ singularity_images:
 docker_images:
   urbansim: mxndrwgrdnr/block_model_v2_pb:latest
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.6-cruise
+  beam: zaneedell/beam:0.9.9-cruise
   activitysim: zaneedell/activitysim:new-geoms.1
   polaris: tbd
 docker_stdout: False
@@ -85,7 +85,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-baseline_CruiseSAVBaseline_1_fixedFleets.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-baseline_CruiseSAVBaseline_1_phase2.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -300,26 +300,30 @@ hwy_paths:
   - HOV3
   - HOV3TOLL
 ridehail_path_map:
-#  RH_SOLO: Solo
-  RH_UBER_SOLO:
+  TNC_SINGLE_UBER:
     ReservationType: Solo
     ServiceName: Uber
-  RH_LYFT_SOLO:
+  TNC_SINGLE_LYFT:
     ReservationType: Solo
     ServiceName: Lyft
-  RH_CRUISE_SOLO:
+  TNC_SINGLE_CRUISE:
     ReservationType: Solo
     ServiceName: Cruise
-#  RH_POOLED: Pooled
-  RH_UBER_POOLED:
+  TNC_SHARED_UBER:
     ReservationType: Pooled
     ServiceName: Uber
-  RH_LYFT_POOLED:
+  TNC_SHARED_LYFT:
     ReservationType: Pooled
     ServiceName: Lyft
-  RH_CRUISE_POOLED:
+  TNC_SHARED_CRUISE:
     ReservationType: Pooled
     ServiceName: Cruise
+beam_asim_ridehail_omx_measure_map:
+  WAIT: IWAIT
+  DDIST: DDIST
+  TOTIVT: TOTIVT
+  FAR: FAR
+  REJECTIONPROB: REJECTIONPROB
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
   DIST: DIST_miles
