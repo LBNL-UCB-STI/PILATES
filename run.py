@@ -805,7 +805,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
         for local_folder in volumes:
             os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
-        proc = ["singularity", "run", "--cleanenv"] \
+        proc = ["singularity", "run", "--cleanenv", "--writable-tmpfs"] \
                + (["--env", to_singularity_env(environment)] if environment else []) \
                + (["--pwd", working_dir] if working_dir else []) \
                + ["-B", singularity_volumes, image] \
