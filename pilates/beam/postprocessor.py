@@ -332,7 +332,7 @@ def trim_inaccessible_ods(settings):
     for period in settings["periods"]:
         totalTrips[period] = np.zeros((len(order), len(order)))
     for mat in all_mats:
-        if ('TRIPS__' in mat) & ('RH_' not in mat):
+        if ('TRIPS__' in mat) & ('RH_' not in mat) & ('TNC_' not in mat):
             tp = mat[-2:]
             totalTrips[tp] += np.array(skims[mat])
     for period in settings["periods"]:
