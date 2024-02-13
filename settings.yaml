@@ -5,10 +5,10 @@
 ############################
 
 # scenario defs
-region: sfbay
+region: seattle
 scenario: base
 start_year: 2010
-end_year: 2014
+end_year: 2015
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
@@ -25,7 +25,7 @@ container_manager: docker
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: docker://zaneedell/beam:0.9.10
+  beam: docker://zaneedell/beam:0.9.11
   activitysim: docker://zaneedell/activitysim:0.1.1
   polaris:
 
@@ -33,18 +33,18 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.10
+  beam: zaneedell/beam:0.9.11
   activitysim: zaneedell/activitysim:0.1.1
   polaris: tbd
 docker_stdout: False
 pull_latest: False
 
 # skim settings
-skims_zone_type: taz # one of [taz, block_group, block]
-skims_fname: as-base-skims-sfbay-taz.omx
+skims_zone_type: block_group # one of [taz, block_group, block]
+skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
-origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
-beam_router_directory: r5-simple-no-local
+origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
+beam_router_directory: r5-dense
 beam_geoms_fname: clipped_tazs.csv
 
 # region_zone_type:
@@ -86,8 +86,8 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-baseline2_0-omx.conf # OR austin-pilates-base.conf
-beam_sample: 0.1
+beam_config: seattle.conf # OR austin-pilates-base.conf
+beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
 beam_local_output_folder: pilates/beam/beam_output/
