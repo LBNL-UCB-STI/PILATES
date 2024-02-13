@@ -300,10 +300,13 @@ def geoid_to_zone_map(settings, year=None):
     zone_type = settings['skims_zone_type']
     travel_model = settings.get('travel_model', 'beam')
     zone_id_col = 'zone_id'
+    geoid_to_zone_folder = os.path.join("pilates", "utils", "data", region, travel_model)
 
-    geoid_to_zone_fpath = \
-        "pilates/utils/data/{0}/{1}/{2}_geoid_to_zone.csv".format(
-            region, travel_model, zone_type)
+    if not os.path.exists(geoid_to_zone_folder):
+        os.makedirs(geoid_to_zone_folder)
+
+    geoid_to_zone_fpath = os.path.join(geoid_to_zone_folder, "{2}_geoid_to_zone.csv".format(
+        region, travel_model, zone_type))
 
     if os.path.isfile(geoid_to_zone_fpath):
         logger.info("Reading GEOID to zone mapping.")
