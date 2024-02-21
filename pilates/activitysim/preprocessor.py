@@ -1584,7 +1584,10 @@ def _create_land_use_table(
             zones['STATE'] = zones['STATE'].astype(str)
         else:
             zones['STATE'] = settings['FIPS'][settings['region']]['state']
-        zones['COUNTY'] = zones['COUNTY'].astype(str)
+        try:
+            zones['COUNTY'] = zones['COUNTY'].astype(str)
+        except:
+            print("Skipping COUNTY")
         try:
             zones['TRACT'] = zones['TRACT'].astype(str)
         except:
@@ -1683,7 +1686,7 @@ def _create_land_use_table(
 
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
-    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID':str})
+    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
     zone_type = settings['skims_zone_type']
     zone_id_col = zone_type_column[zone_type]
 
