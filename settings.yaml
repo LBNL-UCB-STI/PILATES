@@ -130,7 +130,7 @@ region_to_asim_subdir:
   austin: austin
   detroit: detroit
   sfbay: bay_area
-  seattle: seattle
+  seattle: bay_area
 region_to_asim_bucket:
   austin: austin-activitysim
   detroit: detroit-activitysim
