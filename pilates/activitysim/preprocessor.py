@@ -1327,7 +1327,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     households[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
         households['block_id']).values
 
-    hh_null_taz = (~(households[asim_zone_id_col].astype("Int64") > 0)).fillna(True)
+    hh_null_taz = (~(households[asim_zone_id_col].astype(float).astype("Int64") > 0)).fillna(True)
 
     households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
     logger.info('Dropping {0} households without TAZs'.format(
