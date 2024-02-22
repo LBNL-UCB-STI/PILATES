@@ -5,7 +5,7 @@ import numpy as np
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
-        path = "/Users/zaneedell/Desktop/git/beam/production/sfbay/as-base-skims-sfbay-taz.omx"
+        path = "pilates/activitysim/sfbay/data/skims.omx"
         dry_run = True
     else:
         path = sys.argv[1]

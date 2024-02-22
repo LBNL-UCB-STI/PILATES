@@ -1,12 +1,8 @@
-import pickle
 import warnings
 
-# import cloudpickle
 import pandas as pd
 import tables
 from tables import HDF5ExtError
-
-# pickle.ForkingPickler = cloudpickle.Pickler
 
 from pilates.activitysim.preprocessor import copy_beam_geoms
 
@@ -148,7 +144,6 @@ def setup_beam_skims(settings):
             input_skims_location,
             mutable_skims_location))
         shutil.copyfile(input_skims_location, mutable_skims_location)
-        # shutil.copyfile(input_skims_location, "pilates/urbansim/data/skims_mpo_{0}.omx".format(region_id))
     else:
         if os.path.exists(mutable_skims_location):
             logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(
@@ -891,19 +886,6 @@ if __name__ == '__main__':
         client = initialize_docker_client(settings)
     else:
         client = None
-
-    # # DELETE ME:
-    # skimFormat = "omx"
-    # asim_data_dir = settings['asim_local_input_folder']
-    # beam_local_output_folder = settings['beam_local_output_folder']
-    # previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, skimFormat)
-    # skims_path = os.path.join(asim_data_dir, 'skims.omx')
-    # previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder)
-    # measure_map = settings['beam_asim_ridehail_measure_map']
-    # beam_post.merge_current_omx_origin_skims(
-    #     skims_path, previous_origin_skims, beam_local_output_folder, measure_map)
-    # current_od_skims = beam_post.merge_current_omx_od_skims(skims_path, previous_od_skims,
-    #                                                         beam_local_output_folder)
 
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
