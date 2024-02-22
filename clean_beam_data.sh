@@ -21,3 +21,5 @@ sudo rm pilates/urbansim/data/model*
 
 echo "Deleting inexus output data"
 sudo rm pilates/postprocessing/output/*
+sudo rm pilates/postprocessing/MEP/*
+
