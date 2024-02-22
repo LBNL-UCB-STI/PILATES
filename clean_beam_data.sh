@@ -23,3 +23,4 @@ rm pilates/urbansim/data/model*
 
 echo "Deleting inexus output data"
 rm pilates/postprocessing/output/*
+rm pilates/postprocessing/MEP/*
