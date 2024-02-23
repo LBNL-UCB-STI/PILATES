@@ -1261,8 +1261,16 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     del persons_w_res_blk
     del persons_w_xy
 
-    persons.loc[:, "workplace_taz"] = pd.to_numeric(persons.loc[:, "work_zone_id"].copy(), errors='coerce').fillna(-1)
-    persons.loc[:, "school_taz"] = pd.to_numeric(persons.loc[:, "school_zone_id"].copy(), errors='coerce').fillna(-1)
+    try:
+        persons.loc[:, "workplace_taz"] = pd.to_numeric(persons.loc[:, "work_zone_id"].copy(), errors='coerce').fillna(
+            -1)
+    except KeyError:
+        logger.info("Field `workplace_taz` not present in input h5 file. This may be a problem")
+    try:
+        persons.loc[:, "school_taz"] = pd.to_numeric(persons.loc[:, "school_zone_id"].copy(), errors='coerce').fillna(
+            -1)
+    except KeyError:
+        logger.info("Field `school_taz` not present in input h5 file. This may be a problem")
     persons.loc[:, "worker"] = pd.to_numeric(persons.loc[:, "worker"].copy(), errors='coerce').fillna(0)
     persons.loc[:, "student"] = pd.to_numeric(persons.loc[:, "student"].copy(), errors='coerce').fillna(0)
 
@@ -1277,12 +1285,14 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     p_newborn = persons['age'] < 1.0
     logger.info("Dropping {0} newborns from this iteration".format(
         p_newborn.sum()))
-    p_badwork = (persons.worker == 1) & ~(persons.workplace_taz >= 0)
-    p_badschool = (persons.student == 1) & ~(persons.school_taz >= 0)
-    logger.warn(
-        "Dropping {0} workers with undefined workplace and {1} students with undefined school".format(p_badwork.sum(),
-                                                                                                      p_badschool.sum()))
-    persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
+    if ("workplace_taz" in persons.columns) & ("school_taz" in persons.columns):
+        p_badwork = (persons.worker == 1) & ~(persons.workplace_taz >= 0)
+        p_badschool = (persons.student == 1) & ~(persons.school_taz >= 0)
+        logger.warn(
+            "Dropping {0} workers with undefined workplace and {1} students with undefined school".format(
+                p_badwork.sum(),
+                p_badschool.sum()))
+        persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
     persons = persons.dropna()
     persons.loc[:, 'member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
 
@@ -1295,25 +1305,29 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     logger.info(f"Workers with School location: {workers_with_school_id[0]}")
     logger.info(f"Workers with School location after cleaning: {workers_with_school_id_post[0]}")
 
-    # Make Sure non-workers and non-students dont't have a school location
-    non_work_school_with_school_id = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
-    persons.loc[persons.ptype.isin([4, 5]), 'school_zone_id'] = -1
-    persons.loc[persons.ptype.isin([4, 5]), 'school_taz'] = -1
-    non_work_school_with_school_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
+    if ("workplace_taz" in persons.columns) & ("school_taz" in persons.columns):
+        # Make Sure non-workers and non-students dont't have a school location
+        non_work_school_with_school_id = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
+        non_work_school_with_work_id = persons[(persons.ptype.isin([4, 5])) & (persons.workplace_taz > 0)].shape
 
-    logger.info(f"Non-Workers and non-students with School location: {non_work_school_with_school_id[0]}")
-    logger.info(
-        f"Non-Workers and non-students with School location after cleaning: {non_work_school_with_school_id_post[0]}")
+        persons.loc[persons.ptype.isin([4, 5]), 'school_taz'] = -1
+        persons.loc[persons.ptype.isin([4, 5]), 'workplace_taz'] = -1
+
+        non_work_school_with_school_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
+        logger.info(f"Non-Workers and non-students with School location: {non_work_school_with_school_id[0]}")
+        logger.info(
+            f"Non-Workers and non-students with School location after cleaning: {non_work_school_with_school_id_post[0]}")
+
+        non_work_school_with_work_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
+        logger.info(f"Non-Workers and non-students with Work location: {non_work_school_with_work_id[0]}")
+        logger.info(
+            f"Non-Workers and non-students with Work location after cleaning: {non_work_school_with_work_id_post[0]}")
+
+    persons.loc[persons.ptype.isin([4, 5]), 'school_zone_id'] = -1
 
     # Make Sure non-workers and non-students dont't have a work location
-    non_work_school_with_work_id = persons[(persons.ptype.isin([4, 5])) & (persons.workplace_taz > 0)].shape
-    persons.loc[persons.ptype.isin([4, 5]), 'work_zone_id'] = -1
-    persons.loc[persons.ptype.isin([4, 5]), 'workplace_taz'] = -1
-    non_work_school_with_work_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
 
-    logger.info(f"Non-Workers and non-students with Work location: {non_work_school_with_work_id[0]}")
-    logger.info(
-        f"Non-Workers and non-students with Work location after cleaning: {non_work_school_with_work_id_post[0]}")
+    persons.loc[persons.ptype.isin([4, 5]), 'work_zone_id'] = -1
 
     # assert (persons['work_zone_id'] == persons['workplace_taz']).all()
     # assert (persons['school_zone_id'] == persons['school_taz']).all()
@@ -1745,7 +1759,7 @@ def _create_land_use_table(
 
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
-    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID':str})
+    beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
     zone_type = settings['skims_zone_type']
     zone_id_col = zone_type_column[zone_type]
 
