@@ -600,7 +600,7 @@ def run_traffic_assignment(
                     'mode': 'rw'}},
             environment={
                 'JAVA_OPTS': (
-                    '-XX:+UnlockExperimentalVMOptions -Xmx{0}'.format(beam_memory))},
+                    '-Xmx{0}'.format(beam_memory))},
             working_dir='/app',
             command="--config={0}".format(path_to_beam_config)
         )
