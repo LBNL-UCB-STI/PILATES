@@ -1654,7 +1654,10 @@ def _create_land_use_table(
             zones.loc[:, 'STATE'] = zones['STATE'].astype(str)
         else:
             zones.loc[:, 'STATE'] = settings['FIPS'][settings['region']]['state']
-        zones.loc[:, 'COUNTY'] = zones['COUNTY'].astype(str)
+        try:
+            zones.loc[:, 'COUNTY'] = zones['COUNTY'].astype(str)
+        except:
+            print("Skipping COUNTY")
         try:
             zones.loc[:, 'TRACT'] = zones['TRACT'].astype(str)
         except:
