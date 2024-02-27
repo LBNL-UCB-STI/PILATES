@@ -10,7 +10,10 @@ if  [ $# -eq 2 ]
         TO="54047297-0b17-4dd9-ba50-ba1dc2063468:beam-core-outputs"
 
         globus mkdir "$TO/$2"
-        globus transfer "$FROM/pilates/beam/beam_output/$1/" "$TO/$2/beam/" --recursive --label "BEAM Outputs" --exclude "*xml*" --include "year-*" --exclude "*"
+        globus mkdir "$TO/$2/beam"
+        globus mkdir "$TO/$2/activitysim"
+        globus mkdir "$TO/$2/activitysim/data"
+        globus transfer "$FROM/pilates/beam/beam_output/$1/" "$TO/$2/beam/" --recursive --label "BEAM Outputs" --exclude "*xml*"
         globus transfer "$FROM/pilates/activitysim/output/" "$TO/$2/activitysim/" --recursive --label "ASim Outputs" --include "final*" --include "year*" --exclude "*"
         globus transfer "$FROM/pilates/activitysim/data/" "$TO/$2/activitysim/data/" --recursive --label "ASim Inputs"
 else
