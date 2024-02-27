@@ -185,6 +185,36 @@ def read_zone_geoms(settings, year,
     return zone_id_to_taz(zones, asim_zone_id_col, default_zone_id_col)
 
 
+asim_param_map = {'random_seed': 'rng_base_seed'}
+
+
+def update_asim_config(settings, param, valueOverride=None):
+    config_header = asim_param_map[param]
+    if valueOverride is None:
+        config_value = settings[param]
+    else:
+        config_value = valueOverride
+    asim_config_path = os.path.join(
+        settings['asim_local_configs_folder'],
+        settings['region'],
+        'settings.yaml')
+    modified = False
+    with open(asim_config_path, 'r') as file:
+        data = file.readlines()
+    with open(asim_config_path, 'w') as file:
+        for line in data:
+            if config_header in line:
+                if ~modified:
+                    indent = line.split(config_header)[0]
+                    file.writelines(indent + config_header + ": " + str(config_value) + "\n")
+                modified = True
+            else:
+                file.writelines(line)
+        if not modified:
+            indent = line.split(config_header)[0]
+            file.writelines("\n" + indent + config_header + ": " + str(config_value) + "\n")
+
+
 ####################################
 #### RAW BEAM SKIMS TO SKIMS.OMX ###
 ####################################

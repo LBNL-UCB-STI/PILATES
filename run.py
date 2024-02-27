@@ -1,3 +1,4 @@
+import random
 import warnings
 
 import pandas as pd
@@ -468,6 +469,11 @@ def generate_activity_plans(
         generating warm start activities based on the base year input data in
         order to generate "warm start" skims.
     """
+
+    if settings.get('regenerate_seed', True):
+        new_seed = random.randint(0, int(1e9))
+        logger.info("Re-seeding asim with new seed {0}".format(new_seed))
+        asim_pre.update_asim_config(settings, "random_seed", new_seed)
 
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
