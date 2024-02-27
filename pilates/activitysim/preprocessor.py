@@ -211,8 +211,8 @@ def update_asim_config(settings, param, valueOverride=None):
             else:
                 file.writelines(line)
         if not modified:
-            indent = line.split(config_header)[0]
-            file.writelines("\n" + indent + config_header + ": " + str(config_value) + "\n")
+            file.writelines("\n")
+            file.writelines(config_header + ": " + str(config_value) + "\n")
 
 
 ####################################
