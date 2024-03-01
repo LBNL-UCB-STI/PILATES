@@ -1,3 +1,4 @@
+import random
 import pickle
 import warnings
 
@@ -525,6 +526,11 @@ def generate_activity_plans(
         order to generate "warm start" skims.
     """
 
+    if settings.get('regenerate_seed', True):
+        new_seed = random.randint(0, int(1e9))
+        logger.info("Re-seeding asim with new seed {0}".format(new_seed))
+        asim_pre.update_asim_config(settings, "random_seed", new_seed)
+
     activity_demand_model = settings['activity_demand_model']
 
     if activity_demand_model == 'polaris':
@@ -786,6 +792,11 @@ def run_replanning_loop(settings, forecast_year):
         print_str = (
             'Replanning Iteration {0}'.format(replanning_iteration_number))
         formatted_print(print_str)
+
+        if settings.get('regenerate_seed', True):
+            new_seed = random.randint(0, int(1e9))
+            logger.info("Re-seeding asim with new seed {0}".format(new_seed))
+            asim_pre.update_asim_config(settings, "random_seed", new_seed)
 
         # a) format new skims for asim
         asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=False)
