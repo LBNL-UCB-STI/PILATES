@@ -716,8 +716,10 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
     logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings['ridehail_path_map']
+    ridehail_transit_paths = settings['ridehail_transit_paths']
     periods = settings['periods']
-    measure_map = settings['beam_asim_ridehail_omx_measure_map']
+    ridehail_measure_map = settings['beam_asim_ridehail_omx_measure_map']
+    ridehail_transit_measure_map = settings['beam_asim_ridehail_transit_omx_measure_map']
 
     num_taz = len(order)
 
@@ -753,7 +755,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                 output_skims[completed_measure].attrs.timePeriod = period
                 output_skims[failed_measure].attrs.timePeriod = period
 
-            for measure in measure_map.keys():
+            for measure in ridehail_measure_map.keys():
                 name = '{0}_{1}__{2}'.format(path, measure, period)
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
@@ -764,6 +766,58 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                     elif measure == "REJECTIONPROB":
                         temp[missing_values] = 0.2
                     elif measure == "TOTIVT":
+                        default_name = '{0}_{1}__{2}'.format("SOV", "TIME", period)
+                        default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
+                                                                                      num_taz)
+                        temp[missing_values] = default_temp[missing_values]
+                    elif measure == "DDIST":
+                        default_name = '{0}_{1}__{2}'.format("SOV", "DIST", period)
+                        default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
+                                                                                      num_taz)
+                        temp[missing_values] = default_temp[missing_values]
+
+                    if not inOutputSkims:
+                        output_skims[name] = temp
+                        output_skims[name].attrs.mode = path
+                        output_skims[name].attrs.measure = measure
+                        output_skims[name].attrs.timePeriod = period
+                    else:
+                        if np.any(missing_values):
+                            output_skims[name][:] = temp
+    for path in ridehail_transit_paths:
+        logger.info("Writing tables for path type {0}".format(path))
+        for period in periods:
+            completed_measure = '{0}_{1}__{2}'.format(path, "TRIPS", period)
+            failed_measure = '{0}_{1}__{2}'.format(path, "FAILURES", period)
+
+            temp_completed, createdTemp = _get_field_or_else_empty(output_skims, completed_measure, num_taz)
+            temp_failed, createdTemp = _get_field_or_else_empty(output_skims, failed_measure, num_taz)
+
+            if createdTemp:
+                output_skims[completed_measure] = np.nan_to_num(np.array(temp_completed))
+                output_skims[failed_measure] = np.nan_to_num(np.array(temp_failed))
+                output_skims[completed_measure].attrs.mode = path
+                output_skims[failed_measure].attrs.mode = path
+                output_skims[completed_measure].attrs.measure = "TRIPS"
+                output_skims[failed_measure].attrs.measure = "FAILURES"
+                output_skims[completed_measure].attrs.timePeriod = period
+                output_skims[failed_measure].attrs.timePeriod = period
+
+            for measure in ridehail_transit_measure_map.keys():
+                name = '{0}_{1}__{2}'.format(path, measure, period)
+                inOutputSkims = name in output_skim_tables
+                if not inOutputSkims:
+                    temp, createdTemp = _get_field_or_else_empty(input_skims, name, num_taz)
+                    missing_values = np.isnan(temp)
+                    if measure in ["IWAIT", "DTIM"]:
+                        temp[missing_values] = 6.0
+                    elif measure == "REJECTIONPROB":
+                        temp[missing_values] = 0.2
+                    elif measure == "XWAIT":
+                        temp[missing_values] = 6.0
+                    elif measure == "FAR":
+                        temp[missing_values] = 10.0
+                    elif measure in ["TOTIVT", "KEYIVT"]:
                         default_name = '{0}_{1}__{2}'.format("SOV", "TIME", period)
                         default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
                                                                                       num_taz)
