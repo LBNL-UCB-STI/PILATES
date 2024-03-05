@@ -86,6 +86,9 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     complete_key = '_'.join([path, 'TRIPS', '', timePeriod])
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
     completed, failed = None, None
+    if path.startswith("TNC") & path.endswith("_"):
+        logger.warning("Skim field {0} has an empty TNC name! Skipping.")
+        return (path, timePeriod), (completed, failed)
     if complete_key in inputMats.keys():
         completed = np.array(inputMats[complete_key]).copy()
         if '_'.join([path, 'TOTIVT', '', timePeriod]) in inputMats.keys():
@@ -166,10 +169,18 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
+                    if "TNC" in outputKey:
+                        scaling = 1.0
+                    else:
+                        scaling = 100.0
                     valid = ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
-                                                                         (completed > 0) & valid] * 100.0
+                                                                         (completed > 0) & valid] * scaling
                 elif measure in ["TOTIVT", "IVT"]:
+                    if "TNC" in outputKey:
+                        scaling = 1.0
+                    else:
+                        scaling = 100.0
                     inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
@@ -193,11 +204,11 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                             ((completed == 0) & (outputTravelTime > 0)).sum()
                         ))
                     toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
-                    outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
+                    outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * scaling
                     # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         # outputMats[outputKeyKEYIVT][toCancel] = 0.0
-                        outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * 100
+                        outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * scaling
                 elif ~measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
                     if path.startswith('SOV_'):
@@ -332,7 +343,7 @@ def trim_inaccessible_ods(settings):
     for period in settings["periods"]:
         totalTrips[period] = np.zeros((len(order), len(order)))
     for mat in all_mats:
-        if ('TRIPS__' in mat) & ('RH_' not in mat):
+        if ('TRIPS__' in mat) & ('RH_' not in mat) & ('TNC_' not in mat):
             tp = mat[-2:]
             totalTrips[tp] += np.array(skims[mat])
     for period in settings["periods"]:

@@ -318,6 +318,13 @@ ridehail_path_map:
   TNC_SINGLE_CRUISE:
     ReservationType: Solo
     ServiceName: Cruise
+  TNC_SINGLE_TRANSIT_CRUISE: { }
+  TNC_SINGLE_TRANSIT_LYFT: { }
+  TNC_SINGLE_TRANSIT_UBER: { }
+  TNC_SHARED_TRANSIT_CRUISE: { }
+  TNC_SHARED_TRANSIT_LYFT: { }
+  TNC_SHARED_TRANSIT_UBER: { }
+
 beam_asim_hwy_measure_map:
   TIME: TIME_minutes
   DIST: DIST_miles
