@@ -188,7 +188,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     else:
                         additionalFilter = False
                     outputTravelTime = np.array(outputMats[outputKey])
-                    toCancel = (failed > 3) & (failed > (4 * completed))
+                    toCancel = (failed > 3) & (failed > (1 * completed))
                     previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
                     # save this for later so it doesn't get overwritten
                     toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
