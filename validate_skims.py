@@ -44,11 +44,16 @@ if __name__ == '__main__':
                 modeMaxSpeed = 60.
             print("------------------")
             print("Looking at skim {0}".format(table))
+            metric = table.split("_")[-3]
+            completedTable = table.replace(metric, "TRIPS")
+            nTrips = np.array(sk[completedTable])
             ivt_minutes = np.array(sk[table]) / 100.0
             spd_raw = dist / (ivt_minutes / 60.0)
             ignore = ivt_minutes <= 0
+            nonzero = (ivt_minutes > 0) & (nTrips > 0)
             sz_valid = sz - ignore.sum().sum()
-            print("Finding {:0.2%} of speeds are 0, leaving them alone".format(ignore.sum() / sz))
+            print("Finding {:0.2%} of speeds are 0, leaving them alone".format(ignore.sum().sum() / sz))
+            print("Finding {:0.2%} of ODs have valid observations, leaving them alone".format(nonzero.sum().sum() / sz))
             print("Finding {:0.2%} of remaining speeds are nan, replacing them with 30 mph".format(
                 np.isnan(spd_raw[~ignore]).sum() / sz_valid))
             spd_raw[np.isnan(spd_raw)] = 30.0
@@ -60,6 +65,8 @@ if __name__ == '__main__':
             spd_raw[(spd_raw < 3) & ~ignore] = 3.0
             print("New mean speed {0}".format(spd_raw[~ignore].mean()))
             new_tt_minutes = dist / spd_raw * 60.0
+            weighted_speed = (dist[nonzero] * nTrips[nonzero]).sum() / (ivt_minutes[nonzero] * nTrips[nonzero] / 60.0).sum()
+            print("Weighted speed of {0} for observed ODs".format(weighted_speed))
             if not dry_run:
                 print("Updating table!!")
                 sk[table][~ignore] = new_tt_minutes[~ignore] * 100.0
