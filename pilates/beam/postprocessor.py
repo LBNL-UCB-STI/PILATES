@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 def find_latest_beam_iteration(beam_output_dir):
-    iter_dirs = [os.path.join(root, dir) for root, dirs, files in os.walk(beam_output_dir) if
-                 not root.startswith('.') for dir in dirs if dir == "ITERS"]
+    iter_dirs = [os.path.join(root, dir) for root, dirs, files in os.walk(beam_output_dir) for dir in dirs if
+                 dir == "ITERS"]
     logger.info("Looking in directories {0}".format(iter_dirs))
     if not iter_dirs:
         return None, None
@@ -87,7 +87,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
     failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
     completed, failed = None, None
     if path.startswith("TNC") & path.endswith("_"):
-        logger.warning("Skim field {0} has an empty TNC name! Skipping.")
+        logger.warning("Skim field {0} has an empty TNC name! Skipping.".format(path))
         return (path, timePeriod), (completed, failed)
     if complete_key in inputMats.keys():
         completed = np.array(inputMats[complete_key]).copy()
@@ -129,7 +129,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
-                elif (measure == "DDIST") & (path.startswith("TNC")):
+                elif (measure == "DDIST") & (path.startswith("TNC") & ("TRANSIT" not in path)):
                     SOVkey = 'SOV_DIST__{0}'.format(timePeriod)
                     sovDrivingDistance = np.array(outputMats[SOVkey])
                     matrix = np.array(inputMats[inputKey])
@@ -148,7 +148,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                         ratio = 0.8
                     outputMats[outputKey][toCompare] = matrix[toCompare]
                     outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
-                elif (measure == "TOTIVT") & (path.startswith("TNC")):
+                elif (measure == "TOTIVT") & (path.startswith("TNC") & ("TRANSIT" not in path)):
                     SOVkey = 'SOV_TIME__{0}'.format(timePeriod)
                     sovDrivingTime = np.array(outputMats[SOVkey])
                     matrix = np.array(inputMats[inputKey])
@@ -209,7 +209,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         # outputMats[outputKeyKEYIVT][toCancel] = 0.0
                         outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * scaling
-                elif ~measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
+                elif not measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
                     if path.startswith('SOV_'):
                         for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
@@ -224,7 +224,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
             elif outputKey in outputMats:
                 logger.warning("Target skims are missing key {0}".format(outputKey))
-            elif ~path.startswith("TNC"):
+            elif not path.startswith("TNC"):
                 logger.warning("BEAM skims are missing key {0}".format(outputKey))
 
         if toCancel.sum() > 0:
@@ -318,8 +318,9 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     result = [_merge_skim(simplify(partialSkims, timePeriod, path, True),
                           simplify(skims, timePeriod, path, False), path,
                           timePeriod, vals) for (path, timePeriod, vals) in iterable]
-
+    # fill_wait_times(result, skims)
     discover_impossible_ods(result, skims)
+
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     copy_skims_for_unobserved_modes(mapping, skims)
 
@@ -382,7 +383,7 @@ def discover_impossible_ods(result, skims):
     for tp in timePeriods:
         completed = {(a, b): c for (a, b), (c, d) in result if
                      a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
-        failed = {(a, b): c for (a, b), (c, d) in result if
+        failed = {(a, b): d for (a, b), (c, d) in result if
                   a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
@@ -397,6 +398,26 @@ def discover_impossible_ods(result, skims):
                             "there no one has chosen it".format(
                                 toDelete.sum(), name, tp))
                         skims[name][toDelete] = 0
+
+
+def fill_wait_times(result, skims):
+    # return (path, timePeriod), (completed, failed)
+    allMats = skims.list_matrices()
+    metricsPerPath = dict()
+    for (path, tp), _ in result:
+        if path not in metricsPerPath.keys():
+            try:
+                metricsPerPath[path] = set([mat.split('_')[3] for mat in allMats if mat.startswith(path)])
+            except:
+                continue
+    timePeriods = np.unique([b for (a, b), _ in result])
+    for tp in timePeriods:
+        completed = {(a, b): c for (a, b), (c, d) in result if
+                     a.startswith('TNC') & (b == tp) & ('TRANSIT' in a) & (c is not None)}
+        failed = {(a, b): d for (a, b), (c, d) in result if
+                  a.startswith('TNC') & (b == tp) & ('TRANSIT' in a) & (d is not None)}
+        totalCompleted = np.nansum(list(completed.values()), axis=0)
+        totalFailed = np.nansum(list(failed.values()), axis=0)
 
 
 def merge_current_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
@@ -611,3 +632,11 @@ def read_cur_skims(current_skims_path, settings, rawInputSchema):
             return pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
     else:
         return pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
+
+
+if __name__ == '__main__':
+    previous_od_skims = find_produced_od_skims("../../pilates/beam/beam_output", "sfbay", "omx")
+    current_od_skims = merge_current_omx_od_skims("../../pilates/activitysim/data/skims.omx", previous_od_skims,
+                                                  "../../pilates/beam/beam_output",
+                                                  {"region": "sfbay", "start_year": 2010, "skims_zone_type": "taz"})
+    print("DONE")
