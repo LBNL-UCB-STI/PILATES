@@ -814,7 +814,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                     elif measure == "REJECTIONPROB":
                         temp[missing_values] = 0.2
                     elif measure == "XWAIT":
-                        temp[missing_values] = 6.0
+                        temp[missing_values] = 10.0
                     elif measure == "FAR":
                         temp[missing_values] = 10.0
                     elif measure in ["TOTIVT", "KEYIVT"]:
