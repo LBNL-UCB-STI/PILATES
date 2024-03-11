@@ -48,6 +48,7 @@ def find_not_taken_dir_name(dir_name):
             return testing_name
     raise RuntimeError(f"Cannot find an appropriate not taken directory for {dir_name}")
 
+
 def rename_beam_output_directory(settings, year, replanning_iteration_number=0):
     beam_output_dir = settings['beam_local_output_folder']
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
@@ -171,7 +172,7 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         # outputMats[outputKeyKEYIVT][toCancel] = 0.0
                         outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * 100
-                elif ~measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
+                elif not measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
                     if path.startswith('SOV_'):
                         for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
@@ -340,7 +341,7 @@ def discover_impossible_ods(result, skims):
     for tp in timePeriods:
         completed = {(a, b): c for (a, b), (c, d) in result if
                      a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
-        failed = {(a, b): c for (a, b), (c, d) in result if
+        failed = {(a, b): d for (a, b), (c, d) in result if
                   a.startswith('WLK') & a.endswith('WLK') & (b == tp) & ('TRN' not in a)}
         totalCompleted = np.nansum(list(completed.values()), axis=0)
         totalFailed = np.nansum(list(failed.values()), axis=0)
