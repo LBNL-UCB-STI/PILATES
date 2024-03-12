@@ -1,9 +1,9 @@
-import pickle
+import random
 import warnings
 
-import cloudpickle
-
-pickle.ForkingPickler = cloudpickle.Pickler
+import pandas as pd
+import tables
+from tables import HDF5ExtError
 
 from pilates.activitysim.preprocessor import copy_beam_geoms
 
@@ -68,6 +68,19 @@ def clean_data(path, wildcard):
             logger.error("Error whie deleting file : {0}".format(filepath))
 
 
+def is_already_opened_in_write_mode(filename):
+    if os.path.exists(filename):
+        try:
+            f = pd.HDFStore(filename, 'a')
+            f.close()
+        except HDF5ExtError:
+            return True
+        except RuntimeError as e:
+            logger.warning(str(e))
+            return True
+    return False
+
+
 def init_data(dest, wildcard):
     backup_dir = Path(dest) / 'backup' / wildcard
     for filepath in glob.glob(str(backup_dir)):
@@ -95,6 +108,7 @@ def find_latest_beam_iteration(beam_output_dir):
 
 def setup_beam_skims(settings):
     region = settings['region']
+    region_id = settings['region_to_region_id'][region]
     beam_input_dir = settings['beam_local_input_folder']
     beam_output_dir = settings['beam_local_output_folder']
     skims_fname = settings['skims_fname']
@@ -321,6 +335,12 @@ def run_land_use(settings, year, forecast_year, client):
     formatted_print(print_str)
     usim_pre.add_skims_to_model_data(settings)
 
+    if is_already_opened_in_write_mode(usim_data_path):
+        logger.warning(
+            "Closing h5 files {0} because they were left open. You should really "
+            "figure out where this happened".format(tables.file._open_files.filenames))
+        tables.file._open_files.close_all()
+
     # 3. RUN URBANSIM
     print_str = (
         "Simulating land use development from {0} "
@@ -328,7 +348,7 @@ def run_land_use(settings, year, forecast_year, client):
             year, forecast_year, land_use_model))
     formatted_print(print_str)
     run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd,
-                  working_dir='/base/block_model_probaflow')
+                  working_dir=settings['usim_client_base_folder'])
     logger.info('Done!')
 
     return
@@ -398,6 +418,7 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
     atlas_post.atlas_add_vehileTypeId(settings, output_year)
+    atlas_post.build_beam_vehicles_input(settings, output_year)
 
     logger.info('Atlas Done!')
 
@@ -449,6 +470,11 @@ def generate_activity_plans(
         order to generate "warm start" skims.
     """
 
+    if settings.get('regenerate_seed', True):
+        new_seed = random.randint(0, int(1e9))
+        logger.info("Re-seeding asim with new seed {0}".format(new_seed))
+        asim_pre.update_asim_config(settings, "random_seed", new_seed)
+
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
@@ -480,8 +506,7 @@ def generate_activity_plans(
         formatted_print(print_str)
         asim_pre.create_skims_from_beam(
             settings, year=forecast_year, overwrite=overwrite_skims)
-        asim_pre.create_asim_data_from_h5(
-            settings, year=forecast_year, warm_start=warm_start)
+        asim_pre.create_asim_data_from_h5(settings, year=forecast_year, warm_start=warm_start)
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = (
@@ -494,10 +519,10 @@ def generate_activity_plans(
         formatted_print(print_str)
 
         run_container(client, settings,
-            activity_demand_image,
-            working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=asim_cmd)
+                      activity_demand_image,
+                      working_dir=asim_workdir,
+                      volumes=asim_docker_vols,
+                      command=asim_cmd)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -581,7 +606,7 @@ def run_traffic_assignment(
                     'mode': 'rw'}},
             environment={
                 'JAVA_OPTS': (
-                    '-XX:+UnlockExperimentalVMOptions -Xmx{0}'.format(beam_memory))},
+                    '-Xmx{0}'.format(beam_memory))},
             working_dir='/app',
             command="--config={0}".format(path_to_beam_config)
         )
@@ -660,10 +685,9 @@ def initialize_asim_for_replanning(settings, forecast_year):
             "prepare cache for re-planning with BEAM.")
         formatted_print(print_str)
         run_container(client, settings,
-            activity_demand_image, working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=base_asim_cmd)
-
+                      activity_demand_image, working_dir=asim_workdir,
+                      volumes=asim_docker_vols,
+                      command=base_asim_cmd)
 
 
 def run_replanning_loop(settings, forecast_year):
@@ -684,6 +708,11 @@ def run_replanning_loop(settings, forecast_year):
             'Replanning Iteration {0}'.format(replanning_iteration_number))
         formatted_print(print_str)
 
+        if settings.get('regenerate_seed', True):
+            new_seed = random.randint(0, int(1e9))
+            logger.info("Re-seeding asim with new seed {0}".format(new_seed))
+            asim_pre.update_asim_config(settings, "random_seed", new_seed)
+
         # a) format new skims for asim
         asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=False)
 
@@ -698,7 +727,6 @@ def run_replanning_loop(settings, forecast_year):
             activity_demand_image, working_dir=asim_workdir,
             volumes=asim_docker_vols,
             command=base_asim_cmd + ' -r ' + last_asim_step)
-
 
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
@@ -783,11 +811,11 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
         for local_folder in volumes:
             os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
-        proc = ["singularity", "run", "--cleanenv"] \
-            + (["--env", to_singularity_env(environment)] if environment else []) \
-            + (["--pwd", working_dir] if working_dir else []) \
-            + ["-B", singularity_volumes, image] \
-            + command.split()
+        proc = ["singularity", "run", "--cleanenv", "--writable-tmpfs"] \
+               + (["--env", to_singularity_env(environment)] if environment else []) \
+               + (["--pwd", working_dir] if working_dir else []) \
+               + ["-B", singularity_volumes, image] \
+               + command.split()
         logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
         logger.info("Finished command: %s", " ".join(proc))
@@ -808,6 +836,7 @@ def get_model_and_image(settings: dict, model_type: str):
     if not model_name:
         raise ValueError(f"No {manager} image specified for model {model_name}")
     return model_name, image_name
+
 
 if __name__ == '__main__':
 
@@ -836,6 +865,7 @@ if __name__ == '__main__':
     warm_start_activities_enabled = settings['warm_start_activities']
     static_skims = settings['static_skims']
     land_use_enabled = settings['land_use_enabled']
+    land_use_freq = settings['land_use_freq']
     vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
     activity_demand_enabled = settings['activity_demand_enabled']
     traffic_assignment_enabled = settings['traffic_assignment_enabled']
@@ -868,19 +898,6 @@ if __name__ == '__main__':
     else:
         client = None
 
-    # # DELETE ME:
-    # skimFormat = "omx"
-    # asim_data_dir = settings['asim_local_input_folder']
-    # beam_local_output_folder = settings['beam_local_output_folder']
-    # previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, skimFormat)
-    # skims_path = os.path.join(asim_data_dir, 'skims.omx')
-    # previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder)
-    # measure_map = settings['beam_asim_ridehail_measure_map']
-    # beam_post.merge_current_omx_origin_skims(
-    #     skims_path, previous_origin_skims, beam_local_output_folder, measure_map)
-    # current_od_skims = beam_post.merge_current_omx_od_skims(skims_path, previous_od_skims,
-    #                                                         beam_local_output_folder)
-
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
     #################################
@@ -888,6 +905,16 @@ if __name__ == '__main__':
     for year in state:
         # 1. FORECAST LAND USE
         if state.should_do(WorkflowState.Stage.land_use):
+            # hack: make sure that the usim datastore isn't open
+            usim_data_path = os.path.join(settings['usim_local_data_folder'],
+                                          settings['usim_formattable_input_file_name'].format(
+                                              region_id=settings['region_to_region_id'][settings['region']]))
+            if is_already_opened_in_write_mode(usim_data_path):
+                logger.warning(
+                    "Closing h5 files {0} because they were left open. You should really "
+                    "figure out where this happened".format(tables.file._open_files.filenames))
+                tables.file._open_files.close_all()
+
             # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
             if (state.is_start_year()) and warm_start_activities_enabled:
                 # IF ATLAS ENABLED, UPDATE USIM INPUT H5
@@ -916,7 +943,6 @@ if __name__ == '__main__':
 
         # 3. GENERATE ACTIVITIES
         if state.should_do(WorkflowState.Stage.activity_demand):
-
             # If the forecast year is the same as the base year of this
             # iteration, then land use forecasting has not been run. In this
             # case we have to read from the land use *inputs* because no
@@ -935,7 +961,6 @@ if __name__ == '__main__':
             state.complete(WorkflowState.Stage.initialize_asim_for_replanning)
 
         if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
-
             # If not generating activities with a separate ABM (e.g.
             # ActivitySim), then we need to create the next iteration of land
             # use data directly from the last set of land use outputs.
@@ -952,6 +977,8 @@ if __name__ == '__main__':
             else:
                 beam_pre.update_beam_config(settings, 'max_plans_memory')
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
+            if vehicle_ownership_model_enabled:
+                beam_pre.copy_vehicles_from_atlas(settings, year)
             run_traffic_assignment(settings, year, state.forecast_year, client, -1)
             state.complete(WorkflowState.Stage.traffic_assignment)
 

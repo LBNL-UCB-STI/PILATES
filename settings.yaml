@@ -8,25 +8,25 @@
 region: sfbay
 scenario: base
 start_year: 2010
-end_year: 2014
+end_year: 2030
 land_use_freq: 1
-travel_model_freq: 1
+travel_model_freq: 10
 vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
-land_use_model:
+land_use_model: urbansim
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model:
 
 # docker or singularity
-container_manager: docker
+container_manager: singularity
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: docker://zaneedell/beam:0.9.10
-  activitysim: docker://zaneedell/activitysim:0.1.1
+  beam: docker://zaneedell/beam:0.9.12
+  activitysim: docker://zaneedell/activitysim:0.1.2
   polaris:
 
 # docker settings
@@ -64,11 +64,12 @@ region_to_region_id:
   austin: "48197301"
   seattle: "53199100"
 usim_local_data_folder: pilates/urbansim/data/
-usim_client_data_folder: /base/block_model_probaflow/data/
+usim_client_base_folder: /base/demos_urbansim
+usim_client_data_folder: /base/demos_urbansim/data/
 usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
-warm_start_activities: True
+warm_start_activities: False
 
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client
@@ -81,6 +82,7 @@ atlas_codedir: /
 atlas_sample_size: 0     # zero means no sampling, whole pop.
 atlas_num_processes: 9  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
+atlas_vehicles_scenario: "baseline"
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
 
 
@@ -96,7 +98,7 @@ beam_scenario_folder: urbansim/
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
-replan_after: trip_scheduling  # resume asim after this step
+replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: True
 max_plans_memory: 3
 final_asim_plans_folder: pilates/activitysim/output/final_plans
@@ -118,7 +120,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 274783  # zero means no sampling, whole pop.
+household_sample_size: 0  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
