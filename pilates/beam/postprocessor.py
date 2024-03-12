@@ -119,6 +119,8 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputKey = path + "DIST"
                 else:
                     outputKey = '_'.join([path, measure])
+            elif path.startswith("TNC") & ("TRANSIT" not in path) & (measure == "IWAIT"):
+                outputKey = '_'.join([path, "WAIT", '', timePeriod])
             else:
                 outputKey = inputKey
             if (outputKey in outputMats) and (inputKey in inputMats):
@@ -126,6 +128,25 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][completed > 0] += completed[completed > 0]
                 elif measure == "FAILURES":
                     outputMats[outputKey][failed > 0] += failed[failed > 0]
+                    if path.startswith("TNC"):
+                        rejectionKey = '_'.join([path, "REJECTIONPROB", '', timePeriod])
+                        validODs = (completed > 0) & (failed > 0)
+                        validOs = (np.nansum(completed, axis=1) > 0) & (np.nansum(failed, axis=1) > 0)
+                        prob = outputMats[rejectionKey][:].copy()
+                        prob[validOs, :] = (np.nansum(failed, axis=1)[validOs] / (
+                                np.nansum(completed, axis=1)[validOs] + np.nansum(failed, axis=1)[validOs]))[:, None]
+                        prob[validODs] = failed[validODs] / (completed[validODs] + failed[validODs])
+                        outputMats[rejectionKey][:] = prob
+                elif measure == "FAR":
+                    outputMats[outputKey][completed > 0] = completed[completed > 0]
+                elif (measure == "IWAIT") & path.startswith("TNC") & ("TRANSIT" not in path):
+                    waitTimes = inputMats[inputKey][:].copy()
+                    waitTimes[~(completed > 0)] = np.nan
+                    weightedMeanByOrigin = np.nansum(waitTimes * completed, axis=1) / np.nansum(completed, axis=1)
+                    waitTimes[~(completed > 0)] = np.repeat(weightedMeanByOrigin[:, None],
+                                                            weightedMeanByOrigin.size,
+                                                            axis=1)[~(completed > 0)]
+                    outputMats[outputKey][~np.isnan(waitTimes)] = waitTimes[~np.isnan(waitTimes)]
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
                             outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
@@ -169,13 +190,23 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][~toCompare] = outputMats[SOVkey][~toCompare] * ratio
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
                     # NOTE: remember the mtc asim implementation has scaled units for these variables
+                    data = inputMats[inputKey][:]
                     if "TNC" in outputKey:
                         scaling = 1.0
+                        if measure == "IWAIT":
+                            waitTimes = inputMats[inputKey][:].copy()
+                            waitTimes[~(completed > 0)] = np.nan
+                            weightedMeanByOrigin = np.nansum(waitTimes * completed, axis=1) / np.nansum(completed,
+                                                                                                        axis=1)
+                            data[~(completed > 0)] = np.repeat(weightedMeanByOrigin[:, None],
+                                                               weightedMeanByOrigin.size,
+                                                               axis=1)[~(completed > 0)]
+                            outputMats[outputKey][~np.isnan(data)] = data[~np.isnan(data)] * scaling
+                            continue
                     else:
                         scaling = 100.0
-                    valid = ~np.isnan(inputMats[inputKey][:])
-                    outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
-                                                                         (completed > 0) & valid] * scaling
+                    valid = ~np.isnan(data)
+                    outputMats[outputKey][(completed > 0) & valid] = data[(completed > 0) & valid] * scaling
                 elif measure in ["TOTIVT", "IVT"]:
                     if "TNC" in outputKey:
                         scaling = 1.0
@@ -291,7 +322,8 @@ def simplify(input, timePeriod, mode, utf=False, expand=False):
 
 def copy_skims_for_unobserved_modes(mapping, skims):
     for fromMode, toModes in mapping.items():
-        relevantSkimKeys = [key for key in skims.list_matrices() if key.startswith(fromMode + "_") & ~("TOLL" in key)]
+        relevantSkimKeys = [key for key in skims.list_matrices() if
+                            key.startswith(fromMode + "_") & ("TOLL" not in key)]
         for skimKey in relevantSkimKeys:
             for toMode in toModes:
                 toKey = skimKey.replace(fromMode + "_", toMode + "_")
@@ -375,7 +407,7 @@ def discover_impossible_ods(result, skims):
     for (path, tp), _ in result:
         if path not in metricsPerPath.keys():
             try:
-                metricsPerPath[path] = set([mat.split('_')[3] for mat in allMats if mat.startswith(path)])
+                metricsPerPath[path] = set([mat.split('_')[-3] for mat in allMats if mat.startswith(path)])
             except:
                 continue
     timePeriods = np.unique([b for (a, b), _ in result])
@@ -638,5 +670,37 @@ if __name__ == '__main__':
     previous_od_skims = find_produced_od_skims("../../pilates/beam/beam_output", "sfbay", "omx")
     current_od_skims = merge_current_omx_od_skims("../../pilates/activitysim/data/skims.omx", previous_od_skims,
                                                   "../../pilates/beam/beam_output",
-                                                  {"region": "sfbay", "start_year": 2010, "skims_zone_type": "taz"})
+                                                  {"region": "sfbay", "start_year": 2010, "skims_zone_type": "taz",
+                                                   "beam_asim_ridehail_omx_measure_map": {"WAIT": "IWAIT",
+                                                                                          "DDIST": "DDIST",
+                                                                                          "TOTIVT": "TOTIVT",
+                                                                                          "REJECTIONPROB": "REJECTIONPROB"},
+                                                   "beam_asim_ridehail_transit_omx_measure_map": {"TOTIVT": "TOTIVT",
+                                                                                                  "KEYIVT": "KEYIVT",
+                                                                                                  "FAR": "FAR",
+                                                                                                  "IWAIT": "IWAIT",
+                                                                                                  "XWAIT": "XWAIT",
+                                                                                                  "DTIM": "DTIM",
+                                                                                                  "BOARDS": "BOARDS",
+                                                                                                  "DDIST": "DDIST",
+                                                                                                  "WAUX": "WAUX",
+                                                                                                  "REJECTIONPROB": "REJECTIONPROB"}
+                                                   })
+
+    #     beam_asim_ridehail_omx_measure_map:
+    #     WAIT: IWAIT
+    #     DDIST: DDIST
+    #     TOTIVT: TOTIVT
+    #     REJECTIONPROB: REJECTIONPROB
+    # beam_asim_ridehail_transit_omx_measure_map:
+    # TOTIVT: TOTIVT
+    # KEYIVT: KEYIVT
+    # FAR: FAR
+    # IWAIT: IWAIT
+    # XWAIT: XWAIT
+    # DTIM: DTIM
+    # BOARDS: BOARDS
+    # DDIST: DDIST
+    # WAUX: WAUX
+    # REJECTIONPROB: REJECTIONPROB
     print("DONE")
