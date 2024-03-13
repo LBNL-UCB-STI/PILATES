@@ -339,7 +339,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     iterable = [(
         path, timePeriod, vals[1].to_list()) for (path, timePeriod), vals
         in
-        pd.Series(partialSkims.listMatrices()).str.rsplit('_', n=3, expand=True).groupby([0, 3]) if "LYFT" in path]
+        pd.Series(partialSkims.listMatrices()).str.rsplit('_', n=3, expand=True).groupby([0, 3])]
 
     # GIVING UP ON PARALLELIZING THIS FOR NOW. see below for attempts that didn't work for some reason or another
 
