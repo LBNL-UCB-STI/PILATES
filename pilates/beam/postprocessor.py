@@ -130,11 +130,12 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][failed > 0] += failed[failed > 0]
                     if path.startswith("TNC"):
                         rejectionKey = '_'.join([path, "REJECTIONPROB", '', timePeriod])
-                        validODs = (completed > 0) & (failed > 0)
-                        validOs = (np.nansum(completed, axis=1) > 0) & (np.nansum(failed, axis=1) > 0)
+                        validODs = (completed > 0) | (failed > 0)
+                        validOs = (np.nan_to_num(completed).sum(axis=1) > 0) & (np.nan_to_num(failed).sum(axis=1) > 0)
                         prob = outputMats[rejectionKey][:].copy()
-                        prob[validOs, :] = (np.nansum(failed, axis=1)[validOs] / (
-                                np.nansum(completed, axis=1)[validOs] + np.nansum(failed, axis=1)[validOs]))[:, None]
+                        prob[validOs, :] = (np.nan_to_num(failed).sum(axis=1)[validOs] / (
+                                np.nan_to_num(completed).sum(axis=1)[validOs] + np.nan_to_num(failed).sum(axis=1)[
+                            validOs]))[:, None]
                         prob[validODs] = failed[validODs] / (completed[validODs] + failed[validODs])
                         outputMats[rejectionKey][:] = prob
                 elif measure == "FAR":
@@ -338,7 +339,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
     iterable = [(
         path, timePeriod, vals[1].to_list()) for (path, timePeriod), vals
         in
-        pd.Series(partialSkims.listMatrices()).str.rsplit('_', n=3, expand=True).groupby([0, 3])]
+        pd.Series(partialSkims.listMatrices()).str.rsplit('_', n=3, expand=True).groupby([0, 3]) if "LYFT" in path]
 
     # GIVING UP ON PARALLELIZING THIS FOR NOW. see below for attempts that didn't work for some reason or another
 
