@@ -7,26 +7,26 @@
 # scenario defs
 region: sfbay
 scenario: base
-start_year: 2010
-end_year: 2030
+start_year: 2017
+end_year: 2021
 land_use_freq: 1
-travel_model_freq: 10
-vehicle_ownership_freq: 1
+travel_model_freq: 2
+vehicle_ownership_freq: 2
 
 # simulation platforms (leave blank to turn off)
 land_use_model: urbansim
 travel_model: beam
 activity_demand_model: activitysim
-vehicle_ownership_model:
+vehicle_ownership_model: atlas
 
 # docker or singularity
 container_manager: singularity
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
-  atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
+  atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://zaneedell/beam:0.9.12
-  activitysim: docker://zaneedell/activitysim:0.1.2
+  activitysim: docker://zaneedell/activitysim:0.1.4
   polaris:
 
 # docker settings
@@ -66,24 +66,28 @@ region_to_region_id:
 usim_local_data_folder: pilates/urbansim/data/
 usim_client_base_folder: /base/demos_urbansim
 usim_client_data_folder: /base/demos_urbansim/data/
-usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
+usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data_2017.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
 warm_start_activities: False
 
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client
-atlas_host_input_folder: pilates/atlas/atlas_input
-atlas_host_output_folder: pilates/atlas/atlas_output
+atlas_host_input_folder: atlas/atlas_input
+atlas_host_output_folder: atlas/atlas_output
 atlas_container_input_folder: /atlas_input
 atlas_container_output_folder: /atlas_output
 atlas_basedir: /
 atlas_codedir: /
 atlas_sample_size: 0     # zero means no sampling, whole pop.
-atlas_num_processes: 9  # suggested <9 for hima
+atlas_num_processes: 40  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
-atlas_vehicles_scenario: "baseline"
-atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
+atlas_mod: 2 # 1 (static) or 2 (dynamic)
+atlas_adscen: baseline # ess_cons; zev_mandate; baseline
+atlas_rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
+atlas_taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
+atlas_discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
+atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
 
 
 

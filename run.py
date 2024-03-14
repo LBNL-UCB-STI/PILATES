@@ -366,11 +366,15 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     npe = settings.get('atlas_num_processes', False)
     nsample = settings.get('atlas_sample_size', False)
     beamac = settings.get('atlas_beamac', 0)
+    mod = settings.get('atlas_mod', 1)
+    adscen = settings.get('atlas_adscen', False)
+    rebfactor = settings.get('atlas_rebfactor', 0)
+    taxfactor = settings.get('atlas_taxfactor', 0)
+    discIncent = settings.get('atlas_discIncent', 0)
     atlas_docker_vols = get_atlas_docker_vols(settings)
-    atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac)
+    atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor,
+                              discIncent)
     docker_stdout = settings.get('docker_stdout', False)
-    activity_demand_model = settings['activity_demand_model']
-    travel_model = settings['travel_model']
 
     # 2. PREPARE ATLAS DATA
     if warm_start_atlas:
@@ -393,11 +397,11 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     atlas_pre.prepare_atlas_inputs(settings, output_year, warm_start=warm_start_atlas)
 
     # calculate accessibility if atlas_beamac != 0
-    if (beamac > 0):
-        ## if No Driving
+    if beamac > 0:
+        # if No Driving
         path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK']
         measure_list = ['WACC', 'IWAIT', 'XWAIT', 'TOTIVT', 'WEGR']
-        ## if Allow Driving for access/egress
+        # if Allow Driving for access/egress
         # path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK',
         #             'DRV_COM_DRV', 'DRV_EXP_DRV', 'DRV_HVY_DRV', 'DRV_LOC_DRV', 'DRV_LRF_DRV',
         #             'WLK_COM_DRV', 'WLK_EXP_DRV', 'WLK_HVY_DRV', 'WLK_LOC_DRV', 'WLK_LRF_DRV',
