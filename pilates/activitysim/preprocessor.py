@@ -1851,7 +1851,10 @@ def create_asim_data_from_h5(
     logger.info("Loading UrbanSim data from .h5")
     households = store[os.path.join(table_prefix_yr, 'households')]
     persons = store[os.path.join(table_prefix_yr, 'persons')]
-    blocks = store[os.path.join(table_prefix_yr, 'blocks')]
+    try:
+        blocks = store[os.path.join(table_prefix_yr, 'blocks')]
+    except AttributeError:
+        blocks = store[os.path.join(str(int(table_prefix_yr) - 1), 'blocks')]
     jobs = store[os.path.join(table_prefix_yr, 'jobs')]
 
     # update blocks
