@@ -1830,7 +1830,7 @@ def create_asim_data_from_h5(
         output_dir = settings['asim_local_input_folder']
 
     asim_zone_id_col = 'TAZ'
-    
+
     # TODO: Generalize this or add it to settings.yaml
     if region == "sfbay":
         input_zone_id_col = 'taz1454'
@@ -1862,7 +1862,8 @@ def create_asim_data_from_h5(
     if blocks_to_taz_mapping_updated:
         logger.info(
             "Storing blocks table with {} zone IDs to disk in .h5 datastore!".format(zone_type))
-        blocks_cols += [input_zone_id_col]
+        if input_zone_id_col not in blocks_cols:
+            blocks_cols += [input_zone_id_col]
         store[os.path.join(table_prefix_yr, 'blocks')] = blocks[blocks_cols]
     blocks.rename(
         columns={input_zone_id_col: asim_zone_id_col},
