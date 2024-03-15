@@ -59,7 +59,7 @@ cd ../../../
 cd /global/scratch/users/$USER/sources/PILATES/pilates/activitysim/configs/
 
 # For SFBay
-git clone https://github.com/LBNL-UCB-STI/activitysim-configs-sfbay.git sfbay
+git clone --branch demos https://github.com/LBNL-UCB-STI/activitysim-configs-sfbay.git sfbay
 # For Seattle
 git clone --branch configs-first-calibration https://github.com/LBNL-UCB-STI/activitysim-configs-seattle.git seattle
 
