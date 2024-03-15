@@ -240,11 +240,12 @@ def get_atlas_docker_vols(settings):
 
 
 ## For Atlas container command
-def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac):
+def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor, discIncent):
     basedir = settings.get('basedir', '/')
     codedir = settings.get('codedir', '/')
     formattable_atlas_cmd = settings['atlas_formattable_command']
-    atlas_cmd = formattable_atlas_cmd.format(freq, output_year, npe, nsample, basedir, codedir, beamac)
+    atlas_cmd = formattable_atlas_cmd.format(freq, output_year, npe, nsample, basedir, codedir, beamac, mod, adscen,
+                                             rebfactor, taxfactor, discIncent)
     return atlas_cmd
 
 
