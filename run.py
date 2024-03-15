@@ -387,11 +387,11 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     formatted_print(print_str)
 
     # create skims.omx (lines moved from warm_start_activities)
-    if warm_start_atlas == True & atlas_run_count == 1:
-        logger.info("Creating {0} skims from {1}".format(
-            activity_demand_model,
-            travel_model).upper())
-        asim_pre.create_skims_from_beam(settings, year)
+    # if warm_start_atlas == True & atlas_run_count == 1:
+    #     logger.info("Creating {0} skims from {1}".format(
+    #         activity_demand_model,
+    #         travel_model).upper())
+    #     asim_pre.create_skims_from_beam(settings, year)
 
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
