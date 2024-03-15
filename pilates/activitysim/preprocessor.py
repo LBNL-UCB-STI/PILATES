@@ -1830,7 +1830,10 @@ def create_asim_data_from_h5(
         output_dir = settings['asim_local_input_folder']
 
     input_zone_id_col = 'zone_id'
-    asim_zone_id_col = 'TAZ'
+    if region == "sfbay":
+        asim_zone_id_col = 'taz1454'
+    else:
+        asim_zone_id_col = 'TAZ'
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
