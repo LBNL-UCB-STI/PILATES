@@ -435,6 +435,15 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 # outputs are not generated. This is mainly for preventing crash due to parellel
 # computiing errors that can be resolved by a simple resubmission
 def run_atlas_auto(settings, output_year, client, warm_start_atlas):
+    atlas_output_path = settings['atlas_host_output_folder']
+    fname = 'vehicles_{}.csv'.format(output_year)
+    if os.path.exists(os.path.join(atlas_output_path, fname)) & warm_start_atlas:
+        logger.info(
+            "Running in warm start mode but warm started files for year {0} already exist. Assuming we can skip this "
+            "step and move on to the forecast year".format(
+                output_year))
+        return
+
     # run atlas
     atlas_run_count = 1
     # try:
@@ -443,8 +452,6 @@ def run_atlas_auto(settings, output_year, client, warm_start_atlas):
     #     logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
 
     # rerun atlas if outputs not found and run count <= 3
-    atlas_output_path = settings['atlas_host_output_folder']
-    fname = 'vehicles_{}.csv'.format(output_year)
     while atlas_run_count < 3:
         atlas_run_count = atlas_run_count + 1
         if not os.path.exists(os.path.join(atlas_output_path, fname)):
@@ -944,7 +951,6 @@ if __name__ == '__main__':
             # vehicle ownership info in urbansim *outputs* h5 datastore.
             elif state.is_start_year():
                 run_atlas_auto(settings, state.start_year, client, warm_start_atlas=True)
-            else:
                 run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False)
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
