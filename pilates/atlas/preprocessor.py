@@ -63,7 +63,7 @@ def prepare_atlas_inputs(settings, year, warm_start=False):
 
                 # prepare dead persons atlas input (RIP)
                 persons = data['/{}/graveyard'.format(year)]
-                persons.to_csv('{}/graves.csv'.format(atlas_input_path))
+                persons.to_csv('{}/grave.csv'.format(atlas_input_path))
 
                 # prepare residential unit atlas input
                 residential_units = data['/{}/residential_units'.format(year)]
