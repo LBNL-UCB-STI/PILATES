@@ -942,6 +942,8 @@ if __name__ == '__main__':
 
             # If urbansim has been called, ATLAS will read, run, and update
             # vehicle ownership info in urbansim *outputs* h5 datastore.
+            elif state.is_start_year():
+                run_atlas_auto(settings, state.start_year, client, warm_start_atlas=True)
             else:
                 run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False)
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
