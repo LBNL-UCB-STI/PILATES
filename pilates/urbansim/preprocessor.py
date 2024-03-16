@@ -122,7 +122,7 @@ def add_skims_to_model_data(settings, data_dir=None):
 
     # load datastore
     region_id = settings['region_to_region_id'][region]
-    model_data_fname = settings['usim_formattable_input_file_name'].format(region_id)
+    model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
     if not data_dir:
         data_dir = settings['usim_local_data_folder']
     model_data_fpath = os.path.join(data_dir, model_data_fname)
