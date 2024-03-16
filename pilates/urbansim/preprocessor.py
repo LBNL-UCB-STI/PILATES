@@ -57,7 +57,8 @@ def _load_raw_skims(settings, skim_format):
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
                 region_id = settings['region_to_region_id'][settings['region']]
                 input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(region_id)
-                logger.info("Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+                logger.info(
+                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
                 shutil.copyfile(mutable_skims_location, input_skims_location)
                 skims = omx.open_file(mutable_skims_location, 'r')
                 zone_ids = skims.mapping('zone_id').keys()
@@ -121,7 +122,7 @@ def add_skims_to_model_data(settings, data_dir=None):
 
     # load datastore
     region_id = settings['region_to_region_id'][region]
-    model_data_fname = usim_model_data_fname(region_id)
+    model_data_fname = settings['usim_formattable_input_file_name'].format(region_id)
     if not data_dir:
         data_dir = settings['usim_local_data_folder']
     model_data_fpath = os.path.join(data_dir, model_data_fname)
