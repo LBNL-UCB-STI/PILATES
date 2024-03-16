@@ -46,7 +46,7 @@ cd /global/scratch/users/$USER/sources/PILATES/pilates/urbansim/data/
 # For SFBay (normal)
 wget -O custom_mpo_06197001_model_data.h5 https://www.dropbox.com/scl/fi/l8396ztutpbcoucytywpz/custom_mpo_06197001_model_data.h5?rlkey=xyon6ck73deced7hoqlqtdass&dl=1
 # For SFBay (2017 warm start)
-wget -O custom_mpo_06197001_model_data_2017.h5 https://demos-data-output.s3.us-east-2.amazonaws.com/simulation_2050/custom_mpo_06197001_model_data_2017.h5
+wget -O custom_mpo_06197001_model_data.h5 https://demos-data-output.s3.us-east-2.amazonaws.com/simulation_2050/custom_mpo_06197001_model_data_2017.h5
 # For Seattle
 wget -O custom_mpo_53199100_model_data.h5 https://storage.googleapis.com/beam-core-outputs/urbansim/custom_mpo_53199100_model_data.h5
 
