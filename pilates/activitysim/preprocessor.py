@@ -122,6 +122,7 @@ def zone_id_to_taz(zones, asim_zone_id_col='TAZ',
             logger.info("Renaming index from {0} to {1}".format(default_zone_id_col, asim_zone_id_col))
             zones.index.name = asim_zone_id_col
         elif asim_zone_id_col not in zones.columns:
+            logger.info(str(zones.columns))
             zones.rename(columns={default_zone_id_col: asim_zone_id_col}, inplace=True)
             zones.set_index(asim_zone_id_col, inplace=True)
             logger.info("Setting column {0} to index and renaming it {1}".format(default_zone_id_col, asim_zone_id_col))
