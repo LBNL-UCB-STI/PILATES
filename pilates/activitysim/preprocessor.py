@@ -116,14 +116,20 @@ def zone_id_to_taz(zones, asim_zone_id_col='TAZ',
                    default_zone_id_col='zone_id'):
     if zones.index.name != asim_zone_id_col:
         if asim_zone_id_col in zones.columns:
+            logger.info("Setting column {0} to index".format(asim_zone_id_col))
             zones.set_index(asim_zone_id_col, inplace=True)
         elif zones.index.name == default_zone_id_col:
+            logger.info("Renaming index from {0} to {1}".format(default_zone_id_col, asim_zone_id_col))
             zones.index.name = asim_zone_id_col
         elif asim_zone_id_col not in zones.columns:
             zones.rename(columns={default_zone_id_col: asim_zone_id_col})
+            zones.set_index(asim_zone_id_col, inplace=True)
+            logger.info("Setting column {0} to index and renaming it {1}".format(default_zone_id_col, asim_zone_id_col))
         else:
             logger.error(
                 "Not sure what column in the zones table is the zone ID!")
+    else:
+        logger.info("Zone index is already named {0}".format(asim_zone_id_col))
     return zones
 
 
