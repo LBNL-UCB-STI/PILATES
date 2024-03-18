@@ -991,7 +991,7 @@ if __name__ == '__main__':
                 beam_pre.update_beam_config(settings, 'max_plans_memory')
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
-                beam_pre.copy_vehicles_from_atlas(settings, year)
+                beam_pre.copy_vehicles_from_atlas(settings, state.forecast_year)
             run_traffic_assignment(settings, year, state.forecast_year, client, -1)
             state.complete(WorkflowState.Stage.traffic_assignment)
 
