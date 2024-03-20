@@ -110,7 +110,7 @@ def build_beam_vehicles_input(settings, output_year):
     mapping = mapping.loc[~mapping.index.duplicated(), :]
     allCounts = mapping.copy()
     allVehicles = []
-    for (fuelType, bodyType, modelYear), vehiclesSub in vehicles.groupby(["adopt_fuel", "bodytype", "modelyear"]):
+    for (fuelType, bodyType, modelYear), vehiclesSub in vehicles.groupby(["adopt_fuel", "adopt_veh", "modelyear"]):
         try:
             matched = mapping.loc[(fuelType, bodyType, modelYear, slice(None)), :]
         except KeyError:
