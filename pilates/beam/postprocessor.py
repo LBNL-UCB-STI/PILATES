@@ -328,10 +328,19 @@ def copy_skims_for_unobserved_modes(mapping, skims):
         for skimKey in relevantSkimKeys:
             for toMode in toModes:
                 toKey = skimKey.replace(fromMode + "_", toMode + "_")
-                toKeyFields = toKey.split("_")
-                toKeyFields[-3] = "TRIPS"
-                tripsObserved = skims["_".join(toKeyFields)][:] < 0
-                skims[toKey][:] = skims[skimKey][~tripsObserved]
+                data_skim_key = skims[skimKey][:]
+                if 'TRANSIT' in skimKey:
+                    toKeyFields = toKey.split("_")
+                    toKeyFields[-3] = "TRIPS"
+                    tripsObserved = skims["_".join(toKeyFields)][:] > 0
+                    # Read the data from sk[skimKey] and replace the values for which there is observed data in sk[toKey]
+                    r,c = np.where(tripsObserved)
+                    for i in range(len(r)):
+                        data_skim_key[r[i],c[i]] = skims[toKey][r[i],c[i]]
+
+                # Write the modified data back to sk[toKey]
+                skims[toKey][:] = data_skim_key[:]
+
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
 
@@ -359,7 +368,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     rh_transit_single_paths = [p for p in settings['ridehail_transit_paths'] if "SINGLE" in p]
-    mapping.update({p: p.replace("SINGLE", "SHARED")} for p in rh_transit_single_paths)
+    mapping.update({p: [p.replace("SINGLE", "SHARED")]} for p in rh_transit_single_paths)
     copy_skims_for_unobserved_modes(mapping, skims)
 
     order = zone_order(settings, settings['start_year'])
