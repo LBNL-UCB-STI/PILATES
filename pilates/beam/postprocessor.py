@@ -334,9 +334,9 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                     toKeyFields[-3] = "TRIPS"
                     tripsObserved = skims["_".join(toKeyFields)][:] > 0
                     # Read the data from sk[skimKey] and replace the values for which there is observed data in sk[toKey]
-                    r,c = np.where(tripsObserved)
+                    r, c = np.where(tripsObserved)
                     for i in range(len(r)):
-                        data_skim_key[r[i],c[i]] = skims[toKey][r[i],c[i]]
+                        data_skim_key[r[i], c[i]] = skims[toKey][r[i], c[i]]
 
                 # Write the modified data back to sk[toKey]
                 skims[toKey][:] = data_skim_key[:]
@@ -368,7 +368,8 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     rh_transit_single_paths = [p for p in settings['ridehail_transit_paths'] if "SINGLE" in p]
-    mapping.update({p: [p.replace("SINGLE", "SHARED")]} for p in rh_transit_single_paths)
+    for p in rh_transit_single_paths:
+        mapping.update({p: [p.replace("SINGLE", "SHARED")]})
     copy_skims_for_unobserved_modes(mapping, skims)
 
     order = zone_order(settings, settings['start_year'])
