@@ -56,6 +56,7 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
                 logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
             else:
                 h5['/{}/households'.format(output_year)]['cars'] = df
+                h5['/{}/households'.format(output_year)]['VEHICL'] = df
                 h5['/{}/households'.format(output_year)]['hh_cars'] = df_hh
                 logger.info('ATLAS update h5 datastore - done')
             del df, df_hh, olddf
@@ -67,6 +68,7 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
                 logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
             else:
                 h5['households']['cars'] = df
+                h5['/{}/households'.format(output_year)]['VEHICL'] = df
                 h5['households']['hh_cars'] = df_hh
                 logger.info('ATLAS update h5 datastore - done')
             del df, df_hh, olddf
