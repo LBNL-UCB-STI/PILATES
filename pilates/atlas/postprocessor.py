@@ -46,6 +46,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     else:
         h5fname = _get_usim_datastore_fname(settings, io='output', year=output_year)
 
+    logger.info("Writing updated household vehicle info to h5 file {0}".format(h5fname))
+
     # read original h5 files
     with pd.HDFStore(os.path.join(h5path, h5fname), mode='r+') as h5:
 
@@ -56,9 +58,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
                 logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
             else:
                 h5['/{}/households'.format(output_year)]['cars'] = df
-                h5['/{}/households'.format(output_year)]['VEHICL'] = df
                 h5['/{}/households'.format(output_year)]['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore - done')
+                logger.info('ATLAS update h5 datastore table /{}/households - done'.format(output_year))
             del df, df_hh, olddf
 
         # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
@@ -68,9 +69,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
                 logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
             else:
                 h5['households']['cars'] = df
-                h5['/{}/households'.format(output_year)]['VEHICL'] = df
                 h5['households']['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore - done')
+                logger.info('ATLAS update h5 datastore table households - done')
             del df, df_hh, olddf
 
 

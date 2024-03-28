@@ -1,7 +1,10 @@
 import argparse
+import logging
 import os
 import pandas as pd
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args_and_settings(settings_file='settings.yaml'):
@@ -130,6 +133,7 @@ def read_datastore(settings, year=None, warm_start=False):
         table_prefix_yr = str(year)
 
     usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_datastore)
+    logger.info("Opening urbansim datastore at {0}".format(usim_datastore))
 
     if not os.path.exists(usim_datastore_fpath):
         raise ValueError('No land use data found at {0}!'.format(
