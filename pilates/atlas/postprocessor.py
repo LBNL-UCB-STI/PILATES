@@ -36,8 +36,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     atlas_output_path = settings['atlas_host_output_folder']  # 'pilates/atlas/atlas_output'  #
     fname = 'householdv_{}.csv'.format(output_year)
     df = pd.read_csv(os.path.join(atlas_output_path, fname))
-    df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id')['cars'].sort_index(ascending=True)
-    df_hh = pd.cut(df, bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
+    df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id').sort_index(ascending=True)
+    df['hh_cars'] = pd.cut(df['cars'], bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
 
     # set which h5 file to update
     h5path = settings['usim_local_data_folder']
@@ -53,25 +53,23 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
 
         # if in main loop, update "model_data_*.h5", which has three layers ({$year}/households/cars)
         if not warm_start:
-            olddf = h5['/{}/households'.format(output_year)]['cars']
-            if olddf.shape != df.shape:
-                logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
-            else:
-                h5['/{}/households'.format(output_year)]['cars'] = df
-                h5['/{}/households'.format(output_year)]['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore table /{}/households - done'.format(output_year))
-            del df, df_hh, olddf
-
+            key = '/{}/households'.format(output_year)
         # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
         else:
-            olddf = h5['households']['cars']
-            if olddf.shape != df.shape:
-                logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
-            else:
-                h5['households']['cars'] = df
-                h5['households']['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore table households - done')
-            del df, df_hh, olddf
+            key = 'households'
+
+        olddf = h5[key]
+        if olddf.index.istype(float):
+            olddf.index = olddf.index.astype(int)
+        olddf = olddf.reindex(df.index.astype(int))
+
+        if olddf.shape[0] != df.shape[0]:
+            logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
+        else:
+            olddf['cars'] = df['cars'].values
+            olddf['hh_cars'] = df['hh_cars'].values
+            h5[key] = df
+            logger.info('ATLAS update h5 datastore table {0} - done'.format(key))
 
 
 def atlas_add_vehileTypeId(settings, output_year):
