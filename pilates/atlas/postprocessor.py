@@ -68,7 +68,7 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
         else:
             olddf['cars'] = df['cars'].values
             olddf['hh_cars'] = df['hh_cars'].values
-            h5[key] = df
+            h5[key] = olddf
             logger.info('ATLAS update h5 datastore table {0} - done'.format(key))
 
 
