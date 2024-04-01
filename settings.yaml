@@ -58,7 +58,7 @@ beam_geoms_fname: clipped_tazs.csv
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: ~/Desktop/pilates-out
+output_directory: /global/scratch/users/$USER/pilates-output
 output_run_name: test
 
 # URBANSIM

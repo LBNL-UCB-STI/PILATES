@@ -49,7 +49,7 @@ class WorkflowState:
 
     def _create_output_dir(self, settings: dict):
         dt = datetime.now().strftime("%Y%m%d-%H%M%S")
-        base_loc = os.path.expanduser(settings['output_directory'])
+        base_loc = os.path.expandvars(settings['output_directory'])
         run_name = settings['output_run_name']
         folder_name = "{0}-{1}-{2}".format(settings['region'], run_name, dt)
         folder_path = os.path.join(base_loc, folder_name)
