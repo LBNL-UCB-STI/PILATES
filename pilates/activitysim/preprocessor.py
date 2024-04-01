@@ -21,6 +21,7 @@ from pilates.utils.geog import get_block_geoms, \
     get_taz_geoms, get_county_block_geoms, geoid_to_zone_map
 
 from pilates.utils.io import read_datastore
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +309,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
     skims_fname = settings.get('skims_fname', False)
     omx_skim_output = skims_fname.endswith('.omx')
     beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    mutable_skims_location = os.path.join(output_dir, "skims.omx")
     mutable_skims_exist = os.path.exists(mutable_skims_location)
     should_use_csv_input_skims = mutable_skims_exist & (not omx_skim_output)
 
@@ -1044,11 +1045,11 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, year,
+def create_skims_from_beam(settings, state: WorkflowState,
                            output_dir=None,
                            overwrite=True):
     if not output_dir:
-        output_dir = settings['asim_local_mutable_data_folder']
+        output_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
 
     # If running in static skims mode and ActivitySim skims already exist
     # there is no point in recreating them.
@@ -1059,7 +1060,7 @@ def create_skims_from_beam(settings, year,
     new, convertFromCsv, blankSkims = _create_skim_object(settings, overwrite, output_dir=output_dir)
     validation = settings.get('asim_validation', False)
 
-    order = zone_order(settings, year)
+    order = zone_order(settings, state.forecast_year)
 
     if new:
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
@@ -1878,12 +1879,10 @@ def create_asim_data_from_h5(
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
     region = settings['region']
-    region_id = settings['region_to_region_id'][region]
     FIPS = settings['FIPS'][region]
     state_fips = FIPS['state']
     county_codes = FIPS['counties']
     local_crs = settings['local_crs'][region]
-    usim_local_data_folder = settings['usim_local_data_folder']
     zone_type = settings['skims_zone_type']
 
     if not output_dir:

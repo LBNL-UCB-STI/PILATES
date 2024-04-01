@@ -18,10 +18,20 @@ def copy_data_to_mutable_location(settings, output_dir):
     beam_config_path = os.path.join(
         settings['beam_local_input_folder'],
         settings['region'])
+    output_subdir = os.path.join(output_dir, settings['region'])
     dest = os.path.join(output_dir, settings['region'])
     logger.info("Copying beam inputs from {0} to {1}".format(beam_config_path, dest))
+    # files = glob.iglob(os.path.join(beam_config_path, "*.conf"))
+    for file in os.listdir(beam_config_path):
+        pathname = os.path.join(beam_config_path, file)
+        if file.endswith(".conf"):
+            shutil.copy(pathname, output_subdir)
+        elif file.startswith("r5") & os.path.isdir(pathname):
+            shutil.copytree(pathname, os.path.join(output_subdir, file))
+        elif file == "urbansim":
+            shutil.copytree(pathname, os.path.join(output_subdir, file))
 
-    shutil.copytree(beam_config_path, dest)
+    # shutil.copytree(beam_config_path, dest)
     common_config_path = os.path.join(settings['beam_local_input_folder'], 'common')
     shutil.copytree(common_config_path, os.path.join(output_dir, 'common'))
 

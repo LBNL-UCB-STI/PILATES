@@ -422,7 +422,7 @@ def run_atlas_auto(settings, output_year, client, warm_start_atlas):
 
 
 def generate_activity_plans(
-        settings, year, forecast_year, client,
+        settings, year, state: WorkflowState, client,
         resume_after=None,
         warm_start=False,
         overwrite_skims=True,
@@ -447,7 +447,7 @@ def generate_activity_plans(
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
-        run_polaris(forecast_year, settings, warm_start=True)
+        run_polaris(state.forecast_year, settings, warm_start=True)
 
     elif activity_demand_model == 'activitysim':
 
@@ -474,8 +474,8 @@ def generate_activity_plans(
             land_use_model)
         formatted_print(print_str)
         asim_pre.create_skims_from_beam(
-            settings, year=forecast_year, overwrite=overwrite_skims)
-        asim_pre.create_asim_data_from_h5(settings, year=forecast_year, warm_start=warm_start)
+            settings, state=state, overwrite=overwrite_skims)
+        asim_pre.create_asim_data_from_h5(settings, year=state.forecast_year, warm_start=warm_start)
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = (
@@ -920,7 +920,7 @@ if __name__ == '__main__':
             # for generating "warm start" skims, so we treat it the same even
             # if the "warm_start_skims" setting was not set to True at runtime
             generate_activity_plans(
-                settings, year, state.forecast_year, client, warm_start=warm_start_skims or not land_use_enabled)
+                settings, year, state, client, warm_start=warm_start_skims or not land_use_enabled)
             state.complete(WorkflowState.Stage.activity_demand)
 
             # 5. INITIALIZE ASIM LITE IF BEAM REPLANNING ENABLED
