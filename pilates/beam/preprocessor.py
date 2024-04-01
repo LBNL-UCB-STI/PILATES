@@ -4,6 +4,7 @@ import gzip
 import shutil
 import pandas as pd
 import numpy as np
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,18 @@ beam_param_map = {'beam_sample': 'beam.agentsim.agentSampleSizeAsFractionOfPopul
                   'beam_replanning_portion': 'beam.agentsim.agents.plans.merge.fraction',
                   'max_plans_memory': 'beam.replanning.maxAgentPlanMemorySize'
                   }
+
+
+def copy_data_to_mutable_location(settings, output_dir):
+    beam_config_path = os.path.join(
+        settings['beam_local_input_folder'],
+        settings['region'])
+    dest = os.path.join(output_dir, settings['region'])
+    logger.info("Copying beam inputs from {0} to {1}".format(beam_config_path, dest))
+
+    shutil.copytree(beam_config_path, dest)
+    common_config_path = os.path.join(settings['beam_local_input_folder'], 'common')
+    shutil.copytree(common_config_path, os.path.join(output_dir, 'common'))
 
 
 def update_beam_config(settings, param, valueOverride=None):

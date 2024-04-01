@@ -31,7 +31,7 @@ skim_dtypes = {
 }
 
 
-def _load_raw_skims(settings, skim_format):
+def _load_raw_skims(settings, asim_data_dir, skim_format):
     skims_fname = settings.get('skims_fname', False)
 
     try:
@@ -52,14 +52,8 @@ def _load_raw_skims(settings, skim_format):
                     'destination': 'to_zone_id',
                     'TOTIVT_IVT_minutes': 'SOV_AM_IVT_mins'})
             elif skims_fname.endswith('omx'):
-                beam_output_dir = settings['beam_local_output_folder']
-                skims_fname = settings['skims_fname']
-                mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings['region_to_region_id'][settings['region']]
-                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(region_id)
-                logger.info(
-                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
-                shutil.copyfile(mutable_skims_location, input_skims_location)
+                skims_fname = "skims.omx"
+                mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
                 skims = omx.open_file(mutable_skims_location, 'r')
                 zone_ids = skims.mapping('zone_id').keys()
                 index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
@@ -104,13 +98,22 @@ def _load_raw_skims(settings, skim_format):
     return skims
 
 
-def usim_model_data_fname(region_id):
-    return 'custom_mpo_{0}_model_data.h5'.format(region_id)
+def copy_data_to_mutable_location(settings, output_dir):
+    region = settings['region']
+    region_id = settings['region_to_region_id'][region]
+    model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
+    data_dir = settings['usim_local_data_input_folder']
+    src = os.path.join(data_dir, model_data_fname)
+    dest = os.path.join(output_dir, model_data_fname)
+    logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
+    shutil.copyfile(src, dest)
 
 
-def add_skims_to_model_data(settings, data_dir=None):
+def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
     mapping = geoid_to_zone_map(settings)
-    output_geoid_loc = "pilates/urbansim/data/geoid_to_zone.csv"
+    if not data_dir:
+        data_dir = settings['usim_local_data_input_folder']
+    output_geoid_loc = os.path.join(data_dir, "geoid_to_zone.csv")
     logger.info("Writing zone mapping to {0}".format(output_geoid_loc))
     pd.Series(mapping).to_frame("zone_id").rename_axis("GEOID").to_csv(output_geoid_loc)
 
@@ -118,13 +121,12 @@ def add_skims_to_model_data(settings, data_dir=None):
     logger.info("Loading skims from disk")
     region = settings['region']
     skim_format = settings['travel_model']
-    df = _load_raw_skims(settings, skim_format=skim_format)
+    df = _load_raw_skims(settings, skims_dir, skim_format=skim_format)
 
     # load datastore
     region_id = settings['region_to_region_id'][region]
     model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
-    if not data_dir:
-        data_dir = settings['usim_local_data_folder']
+
     model_data_fpath = os.path.join(data_dir, model_data_fname)
     if not os.path.exists(model_data_fpath):
         raise ValueError('No input data found at {0}'.format(

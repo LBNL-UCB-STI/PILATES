@@ -1,5 +1,6 @@
 import random
 import warnings
+from datetime import datetime
 
 import pandas as pd
 import tables
@@ -106,60 +107,6 @@ def find_latest_beam_iteration(beam_output_dir):
     print(iter_dirs)
 
 
-def setup_beam_skims(settings):
-    region = settings['region']
-    region_id = settings['region_to_region_id'][region]
-    beam_input_dir = settings['beam_local_input_folder']
-    beam_output_dir = settings['beam_local_output_folder']
-    skims_fname = settings['skims_fname']
-    origin_skims_fname = settings['origin_skims_fname']
-    beam_geoms_fname = settings['beam_geoms_fname']
-    beam_router_directory = settings['beam_router_directory']
-    asim_geoms_location = os.path.join(settings['asim_local_input_folder'], beam_geoms_fname)
-
-    input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-
-    beam_geoms_location = os.path.join(beam_input_dir, region, beam_router_directory, beam_geoms_fname)
-
-    # TODO: Handle exception when these dont exist
-
-    if os.path.exists(input_skims_location):
-        logger.info("Copying input skims from {0} to {1}".format(
-            input_skims_location,
-            mutable_skims_location))
-        shutil.copyfile(input_skims_location, mutable_skims_location)
-    else:
-        if os.path.exists(mutable_skims_location):
-            logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(
-                input_skims_location,
-                mutable_skims_location))
-        else:
-            logger.info("No default skims found anywhere. We will generate defaults instead")
-
-    input_skims_location = os.path.join(beam_input_dir, region, origin_skims_fname)
-    mutable_skims_location = os.path.join(beam_output_dir, origin_skims_fname)
-
-    if os.path.exists(input_skims_location):
-        logger.info("Copying input origin skims from {0} to {1}".format(
-            input_skims_location,
-            mutable_skims_location))
-        shutil.copyfile(input_skims_location, mutable_skims_location)
-    else:
-        if os.path.exists(mutable_skims_location):
-            logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(
-                input_skims_location,
-                mutable_skims_location))
-        else:
-            logger.info("No default input skims found anywhere. We will generate defaults instead")
-
-    logger.info("Copying beam zone geoms from {0} to {1}".format(
-        beam_geoms_location,
-        asim_geoms_location))
-
-    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
-
-
 def get_base_asim_cmd(settings, household_sample_size=None):
     formattable_asim_cmd = settings['asim_formattable_command']
     if not household_sample_size:
@@ -175,8 +122,8 @@ def get_asim_docker_vols(settings):
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_remote_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_local_input_folder = os.path.abspath(
-        settings['asim_local_input_folder'])
+    asim_local_mutable_data_folder = os.path.abspath(
+        settings['asim_local_mutable_data_folder'])
     asim_local_output_folder = os.path.abspath(
         settings['asim_local_output_folder'])
     asim_local_configs_folder = os.path.abspath(
@@ -188,7 +135,7 @@ def get_asim_docker_vols(settings):
     asim_remote_configs_folder = os.path.join(
         asim_remote_workdir, 'configs')
     asim_docker_vols = {
-        asim_local_input_folder: {
+        asim_local_mutable_data_folder: {
             'bind': asim_remote_input_folder,
             'mode': 'rw'},
         asim_local_output_folder: {
@@ -200,10 +147,12 @@ def get_asim_docker_vols(settings):
     return asim_docker_vols
 
 
-def get_usim_docker_vols(settings):
+def get_usim_docker_vols(settings, output_dir=None):
     usim_remote_data_folder = settings['usim_client_data_folder']
+    if output_dir is None:
+        output_dir = settings['usim_local_data_input_folder']
     usim_local_data_folder = os.path.abspath(
-        settings['usim_local_data_folder'])
+        output_dir)
     usim_docker_vols = {
         usim_local_data_folder: {
             'bind': usim_remote_data_folder,
@@ -286,7 +235,7 @@ def warm_start_activities(settings, year, client):
         logger.info("Creating {0} input data from {1} outputs".format(
             activity_demand_model,
             land_use_model).upper())
-        if not os.path.exists(os.path.join(settings['asim_local_input_folder'], 'skims.omx')):
+        if not os.path.exists(os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')):
             asim_pre.create_skims_from_beam(settings, year, overwrite=False)
         asim_pre.create_asim_data_from_h5(settings, year, warm_start=True)
 
@@ -307,8 +256,8 @@ def warm_start_activities(settings, year, client):
     return
 
 
-def forecast_land_use(settings, year, forecast_year, client, container_manager):
-    run_land_use(settings, year, forecast_year, client)
+def forecast_land_use(settings, year, workflow_state: WorkflowState, client, container_manager):
+    run_land_use(settings, year, workflow_state, client)
 
     # check for outputs, exit if none
     usim_local_data_folder = settings['usim_local_data_folder']
@@ -321,12 +270,16 @@ def forecast_land_use(settings, year, forecast_year, client, container_manager):
         sys.exit(1)
 
 
-def run_land_use(settings, year, forecast_year, client):
+def run_land_use(settings, year, workflow_state: WorkflowState, client):
     logger.info("Running land use")
 
     # 1. PARSE SETTINGS
+    output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
+                              settings['usim_local_mutable_data_folder'])
+    os.makedirs(output_dir, exist_ok=True)
     land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
     usim_docker_vols = get_usim_docker_vols(settings)
+    forecast_year = workflow_state.forecast_year
     usim_cmd = get_usim_cmd(settings, year, forecast_year)
 
     # 2. PREPARE URBANSIM DATA
@@ -334,7 +287,11 @@ def run_land_use(settings, year, forecast_year, client):
         "Preparing {0} input data for land use development simulation.".format(
             year))
     formatted_print(print_str)
-    usim_pre.add_skims_to_model_data(settings)
+
+    # usim_pre.copy_data_to_mutable_location(settings, output_dir)
+    asim_output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
+                                   settings['asim_local_mutable_data_folder'])
+    usim_pre.add_skims_to_model_data(settings, output_dir, asim_output_dir)
 
     if is_already_opened_in_write_mode(usim_data_path):
         logger.warning(
@@ -554,14 +511,14 @@ def generate_activity_plans(
 
 
 def run_traffic_assignment(
-        settings, year, forecast_year, client, replanning_iteration_number=0):
+        settings, year, state: WorkflowState, client, replanning_iteration_number=0):
     """
     This step will run the traffic simulation platform and
     generate new skims with updated congested travel times.
     """
     travel_model, travel_model_image = get_model_and_image(settings, 'travel_model')
     if travel_model == 'polaris':
-        run_polaris(forecast_year, settings, warm_start=False)
+        run_polaris(state.forecast_year, settings, warm_start=False)
 
     elif travel_model == 'beam':
         # 1. PARSE SETTINGS
@@ -569,9 +526,10 @@ def run_traffic_assignment(
         region = settings['region']
         path_to_beam_config = '/app/input/{0}/{1}'.format(
             region, beam_config)
-        beam_local_input_folder = settings['beam_local_input_folder']
+        run_path = state.full_path
+        beam_local_input_folder = os.path.join(run_path, settings['beam_local_input_folder'])
         abs_beam_input = os.path.abspath(beam_local_input_folder)
-        beam_local_output_folder = settings['beam_local_output_folder']
+        beam_local_output_folder = os.path.join(run_path, settings['beam_local_output_folder'])
         abs_beam_output = os.path.abspath(beam_local_output_folder)
         activity_demand_model = settings.get('activity_demand_model', False)
         docker_stdout = settings['docker_stdout']
@@ -640,7 +598,7 @@ def run_traffic_assignment(
             beam_post.merge_current_origin_skims(
                 path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
         else:
-            asim_data_dir = settings['asim_local_input_folder']
+            asim_data_dir = settings['asim_local_mutable_data_folder']
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
             current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
                                                                     beam_local_output_folder, settings)
@@ -702,7 +660,7 @@ def initialize_asim_for_replanning(settings, forecast_year):
                       command=base_asim_cmd)
 
 
-def run_replanning_loop(settings, forecast_year):
+def run_replanning_loop(settings, state: WorkflowState):
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
@@ -726,7 +684,7 @@ def run_replanning_loop(settings, forecast_year):
             asim_pre.update_asim_config(settings, "random_seed", new_seed)
 
         # a) format new skims for asim
-        asim_pre.create_skims_from_beam(settings, forecast_year, overwrite=False)
+        asim_pre.create_skims_from_beam(settings, state.forecast_year, overwrite=False)
 
         # b) replan with asim
         print_str = (
@@ -747,7 +705,7 @@ def run_replanning_loop(settings, forecast_year):
         else:
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
-            settings, year, forecast_year, client, replanning_iteration_number)
+            settings, year, state, client, replanning_iteration_number)
 
     return
 
@@ -884,6 +842,8 @@ if __name__ == '__main__':
     replanning_enabled = settings['replanning_enabled']
     container_manager = settings['container_manager']
 
+    state = WorkflowState.from_settings(settings)
+
     if not land_use_enabled:
         print("LAND USE MODEL DISABLED")
     if not activity_demand_enabled:
@@ -901,9 +861,6 @@ if __name__ == '__main__':
         formatted_print('"STATIC SKIMS" MODE ENABLED')
         logger.info('Using the same set of skims for every iteration.')
 
-    if settings.get('travel_model') == 'beam':
-        setup_beam_skims(settings)
-
     # start docker client
     if container_manager == 'docker':
         client = initialize_docker_client(settings)
@@ -913,12 +870,12 @@ if __name__ == '__main__':
     #################################
     #  RUN THE SIMULATION WORKFLOW  #
     #################################
-    state = WorkflowState.from_settings(settings)
+
     for year in state:
         # 1. FORECAST LAND USE
         if state.should_do(WorkflowState.Stage.land_use):
             # hack: make sure that the usim datastore isn't open
-            usim_data_path = os.path.join(settings['usim_local_data_folder'],
+            usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
                                           settings['usim_formattable_input_file_name'].format(
                                               region_id=settings['region_to_region_id'][settings['region']]))
             if is_already_opened_in_write_mode(usim_data_path):
@@ -935,7 +892,7 @@ if __name__ == '__main__':
                 warm_start_activities(settings, year, client)
 
             # 1b. RUN LAND USE SIMULATION
-            forecast_land_use(settings, year, state.forecast_year, client, container_manager)
+            forecast_land_use(settings, year, state, client, container_manager)
             state.complete(WorkflowState.Stage.land_use)
 
         # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
@@ -992,13 +949,13 @@ if __name__ == '__main__':
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
                 beam_pre.copy_vehicles_from_atlas(settings, state.forecast_year)
-            run_traffic_assignment(settings, year, state.forecast_year, client, -1)
+            run_traffic_assignment(settings, year, state, client, -1)
             state.complete(WorkflowState.Stage.traffic_assignment)
 
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             if replanning_enabled > 0:
-                run_replanning_loop(settings, state.forecast_year)
+                run_replanning_loop(settings, state)
                 process_event_file(settings, year, settings['replan_iters'])
                 copy_outputs_to_mep(settings, year, settings['replan_iters'])
             else:

@@ -294,7 +294,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
 
 def trim_inaccessible_ods(settings):
-    all_skims_path = os.path.join(settings['asim_local_input_folder'], "skims.omx")
+    all_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], "skims.omx")
     order = zone_order(settings, settings['start_year'])
     skims = omx.open_file(all_skims_path, "a")
     all_mats = skims.list_matrices()
