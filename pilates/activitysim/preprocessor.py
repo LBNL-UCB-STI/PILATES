@@ -1874,7 +1874,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
 
 
 def create_asim_data_from_h5(
-        settings, year, warm_start=False, output_dir=None):
+        settings, state: WorkflowState, warm_start=False, output_dir=None):
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
@@ -1886,7 +1886,7 @@ def create_asim_data_from_h5(
     zone_type = settings['skims_zone_type']
 
     if not output_dir:
-        output_dir = settings['asim_local_mutable_data_folder']
+        output_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
 
     asim_zone_id_col = 'TAZ'
 
@@ -1900,12 +1900,12 @@ def create_asim_data_from_h5(
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
     # need zone geoms and we can simply instantiate the zones table from
     # the unique zone ids in the blocks/persons/households tables.
-    zones = read_zone_geoms(settings, year,
+    zones = read_zone_geoms(settings, state.forecast_year,
                             asim_zone_id_col=asim_zone_id_col,
                             default_zone_id_col=input_zone_id_col)
 
     store, table_prefix_yr = read_datastore(
-        settings, year, warm_start=warm_start)
+        settings, state.forecast_year, warm_start=warm_start, mutable_data_dir=state.full_path)
 
     logger.info("Loading UrbanSim data from .h5")
     households = store[os.path.join(table_prefix_yr, 'households')]
@@ -1919,7 +1919,7 @@ def create_asim_data_from_h5(
     # update blocks
     blocks_cols = blocks.columns.tolist()
     blocks_to_taz_mapping_updated, blocks = _update_blocks_table(
-        settings, year, blocks, households, jobs, input_zone_id_col)
+        settings, state.forecast_year, blocks, households, jobs, input_zone_id_col)
     input_zone_id_col = "{0}_zone_id".format(zone_type)
     if blocks_to_taz_mapping_updated:
         logger.info(

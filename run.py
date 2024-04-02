@@ -237,7 +237,7 @@ def warm_start_activities(settings, year, client):
             land_use_model).upper())
         if not os.path.exists(os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')):
             asim_pre.create_skims_from_beam(settings, year, overwrite=False)
-        asim_pre.create_asim_data_from_h5(settings, year, warm_start=True)
+        asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
         logger.info("Running {0} in warm start mode".format(
@@ -475,13 +475,13 @@ def generate_activity_plans(
         formatted_print(print_str)
         asim_pre.create_skims_from_beam(
             settings, state=state, overwrite=overwrite_skims)
-        asim_pre.create_asim_data_from_h5(settings, year=state.forecast_year, warm_start=warm_start)
+        asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = (
             "Generating activity plans for the year "
             "{0} with {1}".format(
-                forecast_year, activity_demand_model))
+                state.forecast_year, activity_demand_model))
         if resume_after:
             asim_cmd += ' -r {0}'.format(resume_after)
             print_str += ". Picking up after {0}".format(resume_after)
