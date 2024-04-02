@@ -118,12 +118,16 @@ def get_base_asim_cmd(settings, household_sample_size=None):
     return base_asim_cmd
 
 
-def get_asim_docker_vols(settings):
+def get_asim_docker_vols(settings, working_dir=None):
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_remote_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_local_mutable_data_folder = os.path.abspath(
-        settings['asim_local_mutable_data_folder'])
+    if working_dir is not None:
+        asim_local_mutable_data_folder = os.path.abspath(
+            os.path.join(working_dir, settings['asim_local_mutable_data_folder']))
+    else:
+        asim_local_mutable_data_folder = os.path.abspath(
+            settings['asim_local_mutable_data_folder'])
     asim_local_output_folder = os.path.abspath(
         settings['asim_local_output_folder'])
     asim_local_configs_folder = os.path.abspath(
@@ -457,7 +461,7 @@ def generate_activity_plans(
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
         asim_workdir = os.path.join('/activitysim', asim_subdir)
-        asim_docker_vols = get_asim_docker_vols(settings)
+        asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
         asim_cmd = get_base_asim_cmd(settings)
         docker_stdout = settings.get('docker_stdout', False)
 
@@ -645,7 +649,7 @@ def initialize_asim_for_replanning(settings, forecast_year):
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings)
+    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
     base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
     docker_stdout = settings.get('docker_stdout', False)
 
@@ -667,7 +671,7 @@ def run_replanning_loop(settings, state: WorkflowState):
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings)
+    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
     base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
     docker_stdout = settings.get('docker_stdout', False)
     last_asim_step = settings['replan_after']
