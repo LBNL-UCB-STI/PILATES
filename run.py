@@ -402,7 +402,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
 # run_atlas_auto is a run_atlas upgraded version, which will run_atlas again if
 # outputs are not generated. This is mainly for preventing crash due to parellel
 # computiing errors that can be resolved by a simple resubmission
-def run_atlas_auto(settings, state: workflow_state, client, warm_start_atlas, forecast=False):
+def run_atlas_auto(settings, state: WorkflowState, client, warm_start_atlas, forecast=False):
     if forecast:
         yr = state.forecast_year
     else:
@@ -903,7 +903,7 @@ if __name__ == '__main__':
             if (state.is_start_year()) and warm_start_activities_enabled:
                 # IF ATLAS ENABLED, UPDATE USIM INPUT H5
                 if vehicle_ownership_model_enabled:
-                    run_atlas_auto(settings, year, client, warm_start_atlas=True)
+                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
                 warm_start_activities(settings, year, client)
 
             # 1b. RUN LAND USE SIMULATION
@@ -917,13 +917,13 @@ if __name__ == '__main__':
             # case, atlas need to update urbansim *inputs* before activitysim
             # reads it in the next step.
             if state.forecast_year == year:
-                run_atlas_auto(settings, year, client, warm_start_atlas=True)
+                run_atlas_auto(settings, state, client, warm_start_atlas=True)
 
             # If urbansim has been called, ATLAS will read, run, and update
             # vehicle ownership info in urbansim *outputs* h5 datastore.
             elif state.is_start_year():
-                run_atlas_auto(settings, state.start_year, client, warm_start_atlas=True)
-                run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False, forecast=True)
+                run_atlas_auto(settings, state, client, warm_start_atlas=True)
+                run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
         # 3. GENERATE ACTIVITIES
