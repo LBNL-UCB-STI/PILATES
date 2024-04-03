@@ -1874,7 +1874,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
             beam_geoms_file['TAZ'] = beam_geoms_file['GEOID'].astype(str).replace(mapping)
 
         elif zone_type == 'TAZ':
-            from_col = settings.get('beam_geoms_index_col', 'zone_id')
+            from_col = settings.get('geoms_index_col', 'zone_id')
             to_col = 'TAZ'
             logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
             beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
@@ -1900,7 +1900,7 @@ def create_asim_data_from_h5(
     asim_zone_id_col = 'TAZ'
 
     # TODO: Generalize this or add it to settings.yaml
-    input_zone_id_col = settings.get('beam_geoms_index_col', 'zone_id')
+    input_zone_id_col = settings.get('geoms_index_col', 'zone_id')
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
