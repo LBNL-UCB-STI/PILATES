@@ -70,9 +70,11 @@ class WorkflowState:
                     output_dir = os.path.join(folder_path, settings['beam_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                 elif model_name == "activitysim":
-                    output_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
+                    input_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
+                    os.makedirs(input_dir, exist_ok=True)
+                    asim_pre.copy_data_to_mutable_location(settings, input_dir)
+                    output_dir = os.path.join(folder_path, settings['asim_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
-                    asim_pre.copy_data_to_mutable_location(settings, output_dir)
 
         self.output_path = base_loc
         self.folder_name = folder_name

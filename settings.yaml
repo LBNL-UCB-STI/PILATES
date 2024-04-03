@@ -134,7 +134,7 @@ chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
 asim_local_mutable_data_folder: activitysim/data/
-asim_local_output_folder: pilates/activitysim/output/
+asim_local_output_folder: activitysim/output/
 asim_local_configs_folder: pilates/activitysim/configs/
 asim_validation_folder: pilates/activitysim/validation
 asim_formattable_command: "-h {0} -n {1} -c {2}"
