@@ -179,9 +179,9 @@ def get_usim_cmd(settings, year, forecast_year):
 
 ## Atlas vehicle ownership model volume mount defintion, equivalent to
 ## docker run -v atlas_host_input_folder:atlas_container_input_folder
-def get_atlas_docker_vols(settings):
-    atlas_host_input_folder = os.path.abspath(settings['atlas_host_input_folder'])
-    atlas_host_output_folder = os.path.abspath(settings['atlas_host_output_folder'])
+def get_atlas_docker_vols(settings, working_dir=None):
+    atlas_host_input_folder = os.path.abspath(os.path.join(working_dir or "", settings['atlas_host_input_folder']))
+    atlas_host_output_folder = os.path.abspath(os.path.join(working_dir or "", settings['atlas_host_output_folder']))
     atlas_container_input_folder = os.path.abspath(settings['atlas_container_input_folder'])
     atlas_container_output_folder = os.path.abspath(settings['atlas_container_output_folder'])
     atlas_docker_vols = {
@@ -284,7 +284,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
                               settings['usim_local_mutable_data_folder'])
     os.makedirs(output_dir, exist_ok=True)
     land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
-    usim_docker_vols = get_usim_docker_vols(settings)
+    usim_docker_vols = get_usim_docker_vols(settings, output_dir)
     forecast_year = workflow_state.forecast_year
     usim_cmd = get_usim_cmd(settings, year, forecast_year)
 
@@ -319,10 +319,15 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
 
 
 ## Atlas: evolve household vehicle ownership
-def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1):
+def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast=False, atlas_run_count=1):
     # warm_start: warm_start_atlas = True, output_year = year = start_year
     # asim_no_usim: warm_start_atlas = True, output_year = year (should  = start_year)
     # normal: warm_start_atlas = False, output_year = forecast_year
+
+    if forecast:
+        yr = state.forecast_year
+    else:
+        yr = state.start_year
 
     # 1. PARSE SETTINGS
     vehicle_ownership_model, atlas_image = get_model_and_image(settings, "vehicle_ownership_model")
@@ -335,18 +340,18 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     rebfactor = settings.get('atlas_rebfactor', 0)
     taxfactor = settings.get('atlas_taxfactor', 0)
     discIncent = settings.get('atlas_discIncent', 0)
-    atlas_docker_vols = get_atlas_docker_vols(settings)
-    atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor,
+    atlas_docker_vols = get_atlas_docker_vols(settings, state.full_path)
+    atlas_cmd = get_atlas_cmd(settings, freq, yr, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor,
                               discIncent)
     docker_stdout = settings.get('docker_stdout', False)
 
     # 2. PREPARE ATLAS DATA
     if warm_start_atlas:
         print_str = (
-            "Preparing input data for warm start vehicle ownership simulation for {0}.".format(output_year))
+            "Preparing input data for warm start vehicle ownership simulation for {0}.".format(yr))
     else:
         print_str = (
-            "Preparing input data for vehicle ownership simulation for {0}.".format(output_year))
+            "Preparing input data for vehicle ownership simulation for {0}.".format(yr))
     formatted_print(print_str)
 
     # create skims.omx (lines moved from warm_start_activities)
@@ -358,7 +363,7 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
-    atlas_pre.prepare_atlas_inputs(settings, output_year, warm_start=warm_start_atlas)
+    atlas_pre.prepare_atlas_inputs(settings, yr, warm_start=warm_start_atlas)
 
     # calculate accessibility if atlas_beamac != 0
     if beamac > 0:
@@ -377,16 +382,16 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     print_str = (
         "Simulating vehicle ownership for {0} "
         "with frequency {1}, npe {2} nsample {3} beamac {4}".format(
-            output_year, freq, npe, nsample, beamac))
+            yr, freq, npe, nsample, beamac))
     formatted_print(print_str)
     run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/')
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
-    atlas_post.atlas_update_h5_vehicle(settings, output_year, warm_start=warm_start_atlas)
+    atlas_post.atlas_update_h5_vehicle(settings, yr, warm_start=warm_start_atlas)
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
-    atlas_post.atlas_add_vehileTypeId(settings, output_year)
-    atlas_post.build_beam_vehicles_input(settings, output_year)
+    atlas_post.atlas_add_vehileTypeId(settings, yr)
+    atlas_post.build_beam_vehicles_input(settings, yr)
 
     logger.info('Atlas Done!')
 
@@ -397,20 +402,24 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 # run_atlas_auto is a run_atlas upgraded version, which will run_atlas again if
 # outputs are not generated. This is mainly for preventing crash due to parellel
 # computiing errors that can be resolved by a simple resubmission
-def run_atlas_auto(settings, output_year, client, warm_start_atlas):
+def run_atlas_auto(settings, state: workflow_state, client, warm_start_atlas, forecast=False):
+    if forecast:
+        yr = state.forecast_year
+    else:
+        yr = state.start_year
     atlas_output_path = settings['atlas_host_output_folder']
-    fname = 'vehicles_{}.csv'.format(output_year)
+    fname = 'vehicles_{}.csv'.format(yr)
     if os.path.exists(os.path.join(atlas_output_path, fname)) & warm_start_atlas:
         logger.info(
             "Running in warm start mode but warm started files for year {0} already exist. Assuming we can skip this "
             "step and move on to the forecast year".format(
-                output_year))
+                yr))
         return
 
     # run atlas
     atlas_run_count = 1
     # try:
-    run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count)
+    run_atlas(settings, state, client, warm_start_atlas, forecast, atlas_run_count)
     # except:
     #     logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
 
@@ -420,7 +429,7 @@ def run_atlas_auto(settings, output_year, client, warm_start_atlas):
         if not os.path.exists(os.path.join(atlas_output_path, fname)):
             logger.error('LAST ATLAS RUN FAILED -> RE-LAUNCHING ATLAS RUN #{} BELOW'.format(atlas_run_count))
             try:
-                run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count)
+                run_atlas(settings, state, client, warm_start_atlas, forecast, atlas_run_count)
             except:
                 logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
 
@@ -914,7 +923,7 @@ if __name__ == '__main__':
             # vehicle ownership info in urbansim *outputs* h5 datastore.
             elif state.is_start_year():
                 run_atlas_auto(settings, state.start_year, client, warm_start_atlas=True)
-                run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False)
+                run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False, forecast=True)
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
         # 3. GENERATE ACTIVITIES
