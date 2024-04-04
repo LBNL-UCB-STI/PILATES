@@ -96,7 +96,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
     asim_output_data_dir = os.path.join(state.full_path, settings['asim_local_output_folder'])
     beam_scenario_folder = os.path.join(
         state.full_path,
-        settings['beam_local_input_folder'],
+        settings['beam_local_mutable_data_folder'],
         settings['region'],
         settings['beam_scenario_folder'])
 
