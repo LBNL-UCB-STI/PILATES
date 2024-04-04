@@ -18,7 +18,7 @@ class WorkflowState:
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                  activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, output_path,
-                 folder_name):
+                 folder_name, file_loc):
         self.iteration_started = False
         self.start_year = start_year
         self.end_year = end_year
@@ -29,6 +29,7 @@ class WorkflowState:
         self.enabled_stages = set([])
         self.folder_name = folder_name
         self.output_path = output_path
+        self.file_loc = file_loc
         if land_use_enabled:
             self.enabled_stages.add(WorkflowState.Stage.land_use)
         if vehicle_ownership_model_enabled:
@@ -91,7 +92,8 @@ class WorkflowState:
         activity_demand_enabled = settings['activity_demand_enabled']
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
-        [year, stage, path, folder_name] = cls.read_current_stage()
+        file_loc = settings['state_file_loc']
+        [year, stage, path, folder_name] = cls.read_current_stage(file_loc)
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s)", year, stage)
         year = year or start_year
@@ -103,17 +105,17 @@ class WorkflowState:
         return out
 
     @classmethod
-    def write_stage(cls, year: int, current_stage: Stage, path, folder_name):
+    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name):
         to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
                    "folder_name": folder_name}
-        with open('current_stage.yaml', mode="w", encoding="utf-8") as f:
+        with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
     @classmethod
-    def read_current_stage(cls):
-        if not os.path.exists('current_stage.yaml'):
+    def read_current_stage(cls, file_loc):
+        if not os.path.exists(file_loc):
             return [None, None, None, None]
-        with open('current_stage.yaml', encoding="utf-8") as f:
+        with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
             year = data.get('year', None)
@@ -154,9 +156,9 @@ class WorkflowState:
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
-            WorkflowState.write_stage(year, next_stage, self.output_path, self.folder_name)
+            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name)
         else:
-            os.remove('current_stage.yaml')
+            os.remove(self.file_loc)
 
     def next_stage(self, year: int, stage: Stage):
         next_enabled_stage = next(filter(self.enabled, list(WorkflowState.Stage)[stage.value:]), None)

@@ -35,6 +35,9 @@ def parse_args_and_settings(settings_file='settings.yaml'):
     parser.add_argument(
         '-c', '--config', action='store',
         help='config file name')
+    parser.add_argument(
+        '-S', '--stage', default="current_stage.yaml",
+        help='current state file to pick up from')
     args = parser.parse_args()
 
     if args.config:
@@ -48,7 +51,8 @@ def parse_args_and_settings(settings_file='settings.yaml'):
     settings.update({
         'static_skims': args.static_skims,
         'warm_start_skims': args.warm_start_skims,
-        'asim_validation': args.figures})
+        'asim_validation': args.figures,
+        'state_file_loc': args.stage})
 
     # override .yaml settings with command-line values if command-line
     # values are not False/None

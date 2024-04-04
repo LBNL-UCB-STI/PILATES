@@ -1,3 +1,4 @@
+import argparse
 import random
 import warnings
 from datetime import datetime
@@ -822,6 +823,11 @@ def get_model_and_image(settings: dict, model_type: str):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--config", help="Path to the config file to be used",
+                        action="store_true")
+    parser.add_argument("-s", "--state", help="Path to the current_state file to be used",
+                        action="store_true")
 
     logger = logging.getLogger(__name__)
 
