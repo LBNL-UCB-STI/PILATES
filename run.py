@@ -6,8 +6,6 @@ import pandas as pd
 import tables
 from tables import HDF5ExtError
 
-from pilates.activitysim.preprocessor import copy_beam_geoms
-
 warnings.simplefilter(action='ignore', category=FutureWarning)
 from workflow_state import WorkflowState
 
@@ -572,7 +570,7 @@ def run_traffic_assignment(
                     year, travel_model, activity_demand_model))
             formatted_print(print_str)
             beam_pre.copy_plans_from_asim(
-                settings, year, replanning_iteration_number)
+                settings, state, replanning_iteration_number)
 
         # 3. RUN BEAM
         logger.info(
@@ -675,7 +673,7 @@ def initialize_asim_for_replanning(settings, forecast_year):
                       command=base_asim_cmd)
 
 
-def run_replanning_loop(settings, state: WorkflowState):
+def run_replanning_loop():
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
@@ -715,10 +713,10 @@ def run_replanning_loop(settings, state: WorkflowState):
 
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
-            beam_pre.update_beam_config(settings, 'beam_replanning_portion')
-            beam_pre.update_beam_config(settings, 'max_plans_memory')
+            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion')
+            beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
         else:
-            beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
+            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
             settings, year, state, client, replanning_iteration_number)
 
@@ -867,7 +865,7 @@ if __name__ == '__main__':
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
 
     if traffic_assignment_enabled:
-        beam_pre.update_beam_config(settings, 'beam_sample')
+        beam_pre.update_beam_config(settings, working_dir, 'beam_sample')
 
     if warm_start_skims:
         formatted_print('"WARM START SKIMS" MODE ENABLED')
@@ -955,13 +953,14 @@ if __name__ == '__main__':
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
         if state.should_do(WorkflowState.Stage.traffic_assignment):
+            working_dir = state.full_path
 
             # 4. RUN TRAFFIC ASSIGNMENT
             if settings['discard_plans_every_year']:
-                beam_pre.update_beam_config(settings, 'max_plans_memory', 0)
+                beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
             else:
-                beam_pre.update_beam_config(settings, 'max_plans_memory')
-            beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
+                beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
+            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
                 beam_pre.copy_vehicles_from_atlas(settings, state.forecast_year)
             run_traffic_assignment(settings, year, state, client, -1)
@@ -970,7 +969,7 @@ if __name__ == '__main__':
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             if replanning_enabled > 0:
-                run_replanning_loop(settings, state)
+                run_replanning_loop()
                 process_event_file(settings, year, settings['replan_iters'])
                 copy_outputs_to_mep(settings, year, settings['replan_iters'])
             else:
