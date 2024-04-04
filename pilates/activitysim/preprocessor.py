@@ -21,7 +21,6 @@ from pilates.utils.geog import get_block_geoms, \
     get_taz_geoms, get_county_block_geoms, geoid_to_zone_map
 
 from pilates.utils.io import read_datastore
-from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -1045,7 +1044,7 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, state: WorkflowState,
+def create_skims_from_beam(settings, state: "WorkflowState",
                            output_dir=None,
                            overwrite=True):
     if not output_dir:
@@ -1883,7 +1882,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
 
 
 def create_asim_data_from_h5(
-        settings, state: WorkflowState, warm_start=False, output_dir=None):
+        settings, state: "WorkflowState", warm_start=False, output_dir=None):
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year

@@ -843,6 +843,8 @@ if __name__ == '__main__':
     # load args and settings
     settings = parse_args_and_settings()
 
+    logger.info("Using config file {}".format(settings['settings_file']))
+
     # parse scenario settings
     start_year = settings['start_year']
     end_year = settings['end_year']

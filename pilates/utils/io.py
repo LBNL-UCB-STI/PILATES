@@ -52,7 +52,8 @@ def parse_args_and_settings(settings_file='settings.yaml'):
         'static_skims': args.static_skims,
         'warm_start_skims': args.warm_start_skims,
         'asim_validation': args.figures,
-        'state_file_loc': args.stage})
+        'state_file_loc': args.stage,
+        'settings_file': settings_file})
 
     # override .yaml settings with command-line values if command-line
     # values are not False/None

@@ -95,11 +95,11 @@ class WorkflowState:
         file_loc = settings['state_file_loc']
         [year, stage, path, folder_name] = cls.read_current_stage(file_loc)
         if year:
-            logger.info("Found unfinished run: year=%s, stage=%s)", year, stage)
+            logger.info("Found unfinished run: year=%s, stage=%s, filename=%s)", year, stage, file_loc)
         year = year or start_year
         out = WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                             activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, path,
-                            folder_name)
+                            folder_name, file_loc)
         if (path is None) | (folder_name is None):
             out._create_output_dir(settings)
         return out
@@ -116,6 +116,7 @@ class WorkflowState:
         if not os.path.exists(file_loc):
             return [None, None, None, None]
         with open(file_loc, encoding="utf-8") as f:
+            logger.info("Creating new stage info at {}".format(file_loc))
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
             year = data.get('year', None)

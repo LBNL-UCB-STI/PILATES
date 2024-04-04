@@ -6,8 +6,6 @@ import pandas as pd
 import numpy as np
 import glob
 
-from workflow_state import WorkflowState
-
 logger = logging.getLogger(__name__)
 
 beam_param_map = {'beam_sample': 'beam.agentsim.agentSampleSizeAsFractionOfPopulation',
@@ -94,7 +92,7 @@ def copy_vehicles_from_atlas(settings, year):
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
 
 
-def copy_plans_from_asim(settings, state: WorkflowState, replanning_iteration_number=0):
+def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_number=0):
     asim_output_data_dir = os.path.join(state.full_path, settings['asim_local_output_folder'])
     beam_scenario_folder = os.path.join(
         state.full_path,
