@@ -114,9 +114,9 @@ class WorkflowState:
     @classmethod
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
+            logger.info("Creating new stage info at {}".format(file_loc))
             return [None, None, None, None]
         with open(file_loc, encoding="utf-8") as f:
-            logger.info("Creating new stage info at {}".format(file_loc))
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
             year = data.get('year', None)

@@ -873,7 +873,7 @@ if __name__ == '__main__':
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
 
     if traffic_assignment_enabled:
-        beam_pre.update_beam_config(settings, working_dir, 'beam_sample')
+        beam_pre.update_beam_config(settings, state.full_path, 'beam_sample')
 
     if warm_start_skims:
         formatted_print('"WARM START SKIMS" MODE ENABLED')
