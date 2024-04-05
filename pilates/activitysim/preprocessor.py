@@ -821,6 +821,8 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                         temp[missing_values] = 10.0
                     elif measure == "WAUX":
                         temp[missing_values] = 0.0
+                    elif measure == "TNCLEGS":
+                        temp[missing_values] = 1.0
                     elif measure in ["TOTIVT", "KEYIVT"]:
                         default_name = '{0}_{1}__{2}'.format("SOV", "TIME", period)
                         default_temp, created_default_temp = _get_field_or_else_empty(output_skims, default_name,
