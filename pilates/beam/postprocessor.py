@@ -107,12 +107,13 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     "time = 0".format(path, timePeriod, shouldNotBeZero.sum()))
                 completed[shouldNotBeZero] = 0
         failed = np.array(inputMats[failed_key])
-        logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
-            np.nan_to_num(completed).sum(),
-            np.nan_to_num(failed).sum(),
-            complete_key,
-            np.nan_to_num(np.array(outputMats[complete_key])).sum()))
         try:
+            logger.info(
+                "Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
+                    np.nan_to_num(completed).sum(),
+                    np.nan_to_num(failed).sum(),
+                    complete_key,
+                    np.nan_to_num(np.array(outputMats[complete_key])).sum()))
             logger.info("Of the {0} completed trips, {1} were to a previously unobserved "
                         "OD".format(np.nan_to_num(completed).sum(),
                                     np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()))
