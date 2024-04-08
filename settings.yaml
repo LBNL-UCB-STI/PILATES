@@ -32,8 +32,8 @@ singularity_images:
 docker_images:
   urbansim: #mxndrwgrdnr/block_model_v2_pb:latest
   atlas: #ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.11-cruise
-  activitysim: zaneedell/activitysim:new-geoms.1
+  beam: zaneedell/beam:0.9.13-cruise
+  activitysim: zaneedell/activitysim:0.1.4
   polaris: tbd
 docker_stdout: False
 pull_latest: False
