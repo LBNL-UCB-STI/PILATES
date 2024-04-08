@@ -365,6 +365,7 @@ beam_asim_ridehail_transit_omx_measure_map:
   BOARDS: BOARDS
   DDIST: DDIST
   WAUX: WAUX
+  TNCLEGS: TNCLEGS
   REJECTIONPROB: REJECTIONPROB
 beam_ridehail_preprocessing: "True"
 asim_output_tables:
