@@ -50,7 +50,6 @@ def find_not_taken_dir_name(dir_name):
 
 
 def rename_beam_output_directory(beam_output_dir, settings, year, replanning_iteration_number=0):
-    beam_output_dir = settings['beam_local_output_folder']
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(beam_output_dir, settings['region'],
