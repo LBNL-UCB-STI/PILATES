@@ -626,7 +626,7 @@ def run_traffic_assignment(
             beam_post.merge_current_omx_origin_skims(
                 asim_skims_path, previous_origin_skims, beam_local_output_folder,
                 beam_asim_ridehail_measure_map)
-        beam_post.rename_beam_output_directory(beam_local_output_folder, settings, year, replanning_iteration_number)
+        beam_post.rename_beam_output_directory(abs_beam_output, settings, year, replanning_iteration_number)
 
     return
 
