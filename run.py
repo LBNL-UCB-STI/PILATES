@@ -976,6 +976,7 @@ if __name__ == '__main__':
 
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
+            working_dir = state.full_path
             if replanning_enabled > 0:
                 run_replanning_loop()
                 process_event_file(settings, year, settings['replan_iters'])
