@@ -56,7 +56,11 @@ def rename_beam_output_directory(beam_output_dir, settings, year, replanning_ite
                                                   "year-{0}-iteration-{1}".format(year, replanning_iteration_number))
     if os.path.exists(new_iteration_output_directory):
         os.rename(new_iteration_output_directory, find_not_taken_dir_name(new_iteration_output_directory))
-    os.rename(beam_run_output_dir, new_iteration_output_directory)
+    try:
+        os.rename(beam_run_output_dir, new_iteration_output_directory)
+    except FileNotFoundError:
+        logger.warning("Files {0} not found. Adding a slash".format(beam_run_output_dir))
+        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
