@@ -241,7 +241,7 @@ def warm_start_activities(settings, year, client):
             activity_demand_model,
             land_use_model).upper())
         if not os.path.exists(os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')):
-            asim_pre.create_skims_from_beam(settings, year, overwrite=False)
+            asim_pre.create_skims_from_beam(settings, state, overwrite=False)
         asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
@@ -698,7 +698,7 @@ def run_replanning_loop():
             asim_pre.update_asim_config(settings, "random_seed", new_seed)
 
         # a) format new skims for asim
-        asim_pre.create_skims_from_beam(settings, state.forecast_year, overwrite=False)
+        asim_pre.create_skims_from_beam(settings, state, overwrite=False)
 
         # b) replan with asim
         print_str = (
