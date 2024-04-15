@@ -567,7 +567,7 @@ def impute_distances(zones, origin=None, destination=None):
         return orig.distance(dest).replace({0: 100}).values * (0.621371 / 1000)
 
 
-def _distance_skims(settings, year, input_skims, order, data_dir=None):
+def _distance_skims(settings, year, input_skims, order, data_dir):
     """
     Generates distance matrices for drive, walk and bike modes.
     Parameters:
@@ -581,14 +581,14 @@ def _distance_skims(settings, year, input_skims, order, data_dir=None):
     logger.info("Creating distance skims.")
 
     skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
         needToClose = False
     else:
-        output_skims = omx.open_file(mutable_skims_location, mode='a')
+        output_skims = omx.open_file(data_dir, mode='a')
 
     # TO DO: Include walk and bike distances,
     # for now walk and bike are the same as drive.
