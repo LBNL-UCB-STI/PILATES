@@ -588,7 +588,7 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
         output_skims = input_skims
         needToClose = False
     else:
-        output_skims = omx.open_file(data_dir, mode='a')
+        output_skims = omx.open_file(mutable_skims_location, mode='a')
 
     # TO DO: Include walk and bike distances,
     # for now walk and bike are the same as drive.
