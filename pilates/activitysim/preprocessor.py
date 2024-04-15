@@ -750,7 +750,7 @@ def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int
         return np.full((num_taz, num_taz), np.nan, dtype=np.float32), True
 
 
-def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
+def _fill_ridehail_skims(settings, input_skims, order, data_dir):
     logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings['ridehail_path_map']
@@ -760,8 +760,8 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
     num_taz = len(order)
 
     skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -814,7 +814,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
         output_skims.close()
 
 
-def _fill_transit_skims(settings, input_skims, order, data_dir=None):
+def _fill_transit_skims(settings, input_skims, order, data_dir):
     logger.info("Merging transit omx skims.")
 
     transit_paths = settings['transit_paths']
@@ -824,8 +824,8 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
     num_taz = len(order)
 
     skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -905,8 +905,8 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
     num_taz = len(order)
 
     skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
