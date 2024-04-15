@@ -33,7 +33,7 @@ def parse_args_and_settings(settings_file='settings.yaml'):
             '"l" for land use, "a" for activity demand, '
             '"t" for traffic assignment. Can specify multiple (e.g. "at")'))
     parser.add_argument(
-        '-c', '--config', action='store',
+        '-c', '--config', default='settings.yaml',
         help='config file name')
     parser.add_argument(
         '-S', '--stage', default="current_stage.yaml",
