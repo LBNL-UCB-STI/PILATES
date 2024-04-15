@@ -1071,7 +1071,7 @@ def create_skims_from_beam(settings, state: "WorkflowState",
             ridehail_df = _raw_beam_origin_skims_preprocess(settings, year, ridehail_df)
 
             # Create skims
-            _distance_skims(settings, year, auto_df, order, data_dir=output_dir)
+            _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir)
             _auto_skims(settings, auto_df, order, data_dir=output_dir)
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
@@ -1079,7 +1079,7 @@ def create_skims_from_beam(settings, state: "WorkflowState",
             del auto_df, transit_df
         else:
             beam_output_dir = settings['beam_local_output_folder']
-            _distance_skims(settings, year, tempSkims, order, data_dir=beam_output_dir)
+            _distance_skims(settings, state.year, tempSkims, order, data_dir=beam_output_dir)
             _fill_auto_skims(settings, tempSkims, order, data_dir=beam_output_dir)
             _fill_transit_skims(settings, tempSkims, order, data_dir=beam_output_dir)
             _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
