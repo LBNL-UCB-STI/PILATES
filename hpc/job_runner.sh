@@ -7,7 +7,7 @@ JOB_NAME="$RANDOM_PART.$DATETIME"
 
 settings_file="settings.yaml"
 stage_file="current_stage_${JOB_NAME}.yaml"
-while getopts cs: name
+while getopts :c:s: name
 do
     case $name in
     c)    cflag=1
