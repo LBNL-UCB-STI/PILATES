@@ -864,6 +864,7 @@ if __name__ == '__main__':
     container_manager = settings['container_manager']
 
     state = WorkflowState.from_settings(settings)
+    working_dir = state.full_path
 
     if not land_use_enabled:
         print("LAND USE MODEL DISABLED")
@@ -961,7 +962,6 @@ if __name__ == '__main__':
         # DO traffic assignment - but skip if using polaris as this is done along
         # with activity_demand generation
         if state.should_do(WorkflowState.Stage.traffic_assignment):
-            working_dir = state.full_path
 
             # 4. RUN TRAFFIC ASSIGNMENT
             if settings['discard_plans_every_year']:
@@ -976,7 +976,6 @@ if __name__ == '__main__':
 
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
-            working_dir = state.full_path
             if replanning_enabled > 0:
                 run_replanning_loop()
                 process_event_file(settings, year, settings['replan_iters'])
