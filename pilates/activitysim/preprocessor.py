@@ -1078,17 +1078,17 @@ def create_skims_from_beam(settings, state: "WorkflowState",
 
             del auto_df, transit_df
         else:
-            beam_output_dir = settings['beam_local_output_folder']
-            _distance_skims(settings, state.year, tempSkims, order, data_dir=beam_output_dir)
-            _fill_auto_skims(settings, tempSkims, order, data_dir=beam_output_dir)
-            _fill_transit_skims(settings, tempSkims, order, data_dir=beam_output_dir)
-            _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
+            # beam_output_dir = settings['beam_local_output_folder']
+            _distance_skims(settings, state.year, tempSkims, order, data_dir=output_dir)
+            _fill_auto_skims(settings, tempSkims, order, data_dir=output_dir)
+            _fill_transit_skims(settings, tempSkims, order, data_dir=output_dir)
+            _fill_ridehail_skims(settings, tempSkims, order, data_dir=output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            final_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')
-            skims_fname = settings.get('skims_fname', False)
-            mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-            shutil.copyfile(mutable_skims_location, final_skims_path)
+            # final_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')
+            # skims_fname = settings.get('skims_fname', False)
+            # mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+            # shutil.copyfile(mutable_skims_location, final_skims_path)
 
     _create_offset(settings, order, data_dir=output_dir)
 
