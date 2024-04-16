@@ -978,11 +978,17 @@ if __name__ == '__main__':
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             if replanning_enabled > 0:
                 run_replanning_loop()
-                process_event_file(settings, year, settings['replan_iters'])
-                copy_outputs_to_mep(settings, year, settings['replan_iters'])
+                try:
+                    process_event_file(settings, year, settings['replan_iters'])
+                    copy_outputs_to_mep(settings, year, settings['replan_iters'])
+                except:
+                    print("Skipping post")
             else:
-                process_event_file(settings, year, -1)
-                copy_outputs_to_mep(settings, year, -1)
+                try:
+                    process_event_file(settings, year, -1)
+                    copy_outputs_to_mep(settings, year, -1)
+                except:
+                    print("Skipping post")
             beam_post.trim_inaccessible_ods(settings)
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
 

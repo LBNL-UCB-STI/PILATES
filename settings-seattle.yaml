@@ -59,8 +59,8 @@ geoms_index_col: GEOID
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: /Users/$USER/Desktop/pilates-out
-output_run_name: test
+output_directory: /global/scratch/users/$USER/pilates-output
+output_run_name: congergence
 
 # URBANSIM
 region_to_region_id:

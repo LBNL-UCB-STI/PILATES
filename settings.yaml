@@ -59,7 +59,7 @@ geoms_index_col: taz1454
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: /Users/$USER/Desktop/pilates-out
+output_directory: /global/scratch/users/$USER/pilates-output
 output_run_name: test
 
 # URBANSIM
@@ -97,8 +97,8 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-network--simp-jdeq-07.conf # OR austin-pilates-base.conf
-beam_sample: 0.1
+beam_config: sfbay-pilates-network--respartial-jdeq-07.conf # OR austin-pilates-base.conf
+beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
@@ -109,7 +109,7 @@ skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
-discard_plans_every_year: True
+discard_plans_every_year: False
 max_plans_memory: 3
 final_asim_plans_folder: pilates/activitysim/output/final_plans
 beam_simulated_hwy_paths:
@@ -130,7 +130,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 0  # zero means no sampling, whole pop.
+household_sample_size: 275000  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
