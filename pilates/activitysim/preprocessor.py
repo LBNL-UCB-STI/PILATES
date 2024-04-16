@@ -580,7 +580,7 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
     """
     logger.info("Creating distance skims.")
 
-    skims_fname = settings.get('skims_fname', False)
+    skims_fname = 'skims.omx'
     # beam_output_dir = settings['beam_local_output_folder']
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
@@ -759,7 +759,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
+    skims_fname = 'skims.omx'
     # beam_output_dir = settings['beam_local_output_folder']
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
@@ -823,7 +823,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
+    skims_fname = "skims.omx"
     # beam_output_dir = settings['beam_local_output_folder']
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
@@ -904,7 +904,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
+    skims_fname = 'skims.omx'
     # beam_output_dir = settings['beam_local_output_folder']
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
