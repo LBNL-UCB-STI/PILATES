@@ -6,7 +6,8 @@ if  [ $# -eq 2 ]
         echo "GCloud directory: $2";
 
         gcloud alpha storage cp -r -n pilates/beam/beam_output/$1/year-* gs://cruise-outputs/$2/beam/
-        gcloud alpha storage cp -r -n pilates/activitysim/output/final* gs://cruise-outputs/$2/activitysim/
+#	gcloud alpha storage cp -r -n pilates/beam/beam_output/$1/* gs://cruise-outputs/$2/beam/
+	gcloud alpha storage cp -r -n pilates/activitysim/output/final* gs://cruise-outputs/$2/activitysim/
         gcloud alpha storage cp -r -n pilates/activitysim/output/year* gs://cruise-outputs/$2/activitysim/
         gcloud alpha storage cp -r -n pilates/activitysim/output/pipeline.h5 gs://cruise-outputs/$2/activitysim/pipeline.h5
         gcloud alpha storage cp -r  pilates/activitysim/data/ gs://cruise-outputs/$2/activitysim/data/
