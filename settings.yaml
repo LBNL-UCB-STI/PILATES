@@ -319,10 +319,8 @@ ridehail_path_map:
     ReservationType: Solo
     ServiceName: Cruise
 ridehail_transit_paths:
-  - TNC_SINGLE_TRANSIT_CRUISE
   - TNC_SINGLE_TRANSIT_LYFT
   - TNC_SINGLE_TRANSIT_UBER
-  - TNC_SHARED_TRANSIT_CRUISE
   - TNC_SHARED_TRANSIT_LYFT
   - TNC_SHARED_TRANSIT_UBER
 
