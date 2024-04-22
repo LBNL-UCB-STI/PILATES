@@ -13,7 +13,7 @@ if  [ $# -eq 2 ]
         gcloud alpha storage cp -r  pilates/activitysim/data/ gs://cruise-outputs/$2/activitysim/data/
         gcloud alpha storage cp -r -n pilates/postprocessing/output/ gs://cruise-outputs/$2/inexus/
         #gcloud alpha storage cp -r -n pilates/postprocessing/MEP/ gs://cruise-outputs/$2/MEP/
-        gcloud alpha storage cp -n log_pilates_$1.out gs://cruise-outputs/$2/log_pilates_$1.out
+        gcloud alpha storage cp  log_pilates_$1.out gs://cruise-outputs/$2/log_pilates_$1.out
         #rclone copy pilates/postprocessing/MEP/ s3://cruise-outputs/pilates-outputs/$2/MEP/
 
 else
