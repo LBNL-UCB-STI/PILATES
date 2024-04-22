@@ -43,7 +43,7 @@ skims_zone_type: taz # one of [taz, block_group, block]
 skims_fname: as-base-skims-sfbay-taz.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
-beam_router_directory: r5-updated
+beam_router_directory: r5-simplified-sfres
 beam_geoms_fname: clipped_tazs.csv
 
 # region_zone_type:
