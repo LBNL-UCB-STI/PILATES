@@ -4,7 +4,7 @@ import os
 import geopandas as gpd
 import random
 import statsmodels.api as sm
-
+from shapely import wkt
 
 def update_fleet_files(trips_df, settings):
     FLEET_MIX_FILENAME = settings['TNCfleetMixFilename']
@@ -196,7 +196,12 @@ def load_geoData(zip_filename, tazFilename):
     zipShp['ZIP_CODE'] = zipShp['ZIP_CODE'].astype(int)
     zipShp.rename(columns={'ZIP_CODE': 'Zip', 'PO_NAME': 'City', 'POPULATION': 'Population'}, inplace=True)
 
-    taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"})
+    if 'csv' in tazFilename:
+        taz_df = pd.read_csv(tazFilename)
+        taz_df['geom'] = taz_df['geometry'].apply(wkt.loads)
+        taz = gpd.GeoDataFrame(taz_df.drop(columns='geometry'), geometry='geom').rename(columns={'geom':'geometry','county': 'County','TAZ':"Taz"})
+    else:
+        taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"})
     taz[['minx', 'miny', 'maxx', 'maxy']] = taz.bounds
     taz_join = gpd.sjoin(taz[['Taz', 'geometry', 'minx', 'miny', 'maxx', 'maxy', 'County']],
                          zipShp, how='right', op='intersects')
