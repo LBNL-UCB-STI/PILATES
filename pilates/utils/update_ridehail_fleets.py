@@ -199,9 +199,9 @@ def load_geoData(zip_filename, tazFilename):
     if 'csv' in tazFilename:
         taz_df = pd.read_csv(tazFilename)
         taz_df['geometry'] = taz_df['geometry'].apply(wkt.loads)
-        taz = gpd.GeoDataFrame(taz_df, geometry='geometry').rename(columns={'county': 'County','TAZ':"Taz"})
+        taz = gpd.GeoDataFrame(taz_df, geometry='geometry').rename(columns={'county': 'County','TAZ':"Taz"}).set_crs('epsg:4326').to_crs('epsg:26910')
     else:
-        taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"})
+        taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"}).set_crs('epsg:4326').to_crs('epsg:26910')
     taz[['minx', 'miny', 'maxx', 'maxy']] = taz.bounds
     taz_join = gpd.sjoin(taz[['Taz', 'geometry', 'minx', 'miny', 'maxx', 'maxy', 'County']],
                          zipShp, how='right', op='intersects')
