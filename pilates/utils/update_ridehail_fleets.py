@@ -196,7 +196,7 @@ def load_geoData(zip_filename, tazFilename):
     zipShp['ZIP_CODE'] = zipShp['ZIP_CODE'].astype(int)
     zipShp.rename(columns={'ZIP_CODE': 'Zip', 'PO_NAME': 'City', 'POPULATION': 'Population'}, inplace=True)
 
-    taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County'})
+    taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"})
     taz[['minx', 'miny', 'maxx', 'maxy']] = taz.bounds
     taz_join = gpd.sjoin(taz[['Taz', 'geometry', 'minx', 'miny', 'maxx', 'maxy', 'County']],
                          zipShp, how='right', op='intersects')

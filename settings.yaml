@@ -411,7 +411,7 @@ scenario_definitions:
 
 update_ridehail_fleet:
   TNCfleetMixFilename: "pilates/beam/production/sfbay/TNCVehicleFleetMix.csv"
-  tazFilename: "pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp"
+  tazFilename: "pilates/beam/production/sfbay/r5-simplified-sfres/clipped_tazs.csv"
   zipFilename: "pilates/beam/production/sfbay/shape/California_Zip_Codes/California_Zip_Codes.shp"
   aggModelFilename: "pilates/beam/production/sfbay/fleetAdjustment/vehicleAdjustment_ActiveVehiclesCityHour_ResultsMult60.pkl"
   deltaModelFilename: "pilates/beam/production/sfbay/fleetAdjustment/vehicleAdjustment_DeltaVehiclesCityHour_Results.pkl"
