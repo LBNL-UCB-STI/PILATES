@@ -4,18 +4,21 @@ import os
 import geopandas as gpd
 import random
 import statsmodels.api as sm
+from shapely import wkt
 
 
 def update_fleet_files(trips_df, settings):
     FLEET_MIX_FILENAME = settings['TNCfleetMixFilename']
-    TAZ_FILENAME = settings['tazFilename']
+    BEAM_INPUT_PATH = '{}{}'.format(settings['beam_local_input_folder'],settings['region'])
+    TAZ_FILENAME = '{}/{}/{}'.format(BEAM_INPUT_PATH ,settings['beam_router_directory'],settings['beam_geoms_fname'])
+    #settings['tazFilename']
     ZIP_FILENAME = settings['zipFilename']
     AGG_MODEL_FILENAME = settings['aggModelFilename']
     DELTA_MODEL_FILENAME = settings['deltaModelFilename']
     FLEETS = settings['fleets']
     SCALE_FACTOR = settings['scaleFactor']
     OVERLAP = settings['overlap']
-    BEAM_INPUT_PATH = settings['beamInputPath']
+
 
     zipShp = load_geoData(ZIP_FILENAME, TAZ_FILENAME)
     adf = trips_df.copy()
