@@ -198,8 +198,8 @@ def load_geoData(zip_filename, tazFilename):
 
     if 'csv' in tazFilename:
         taz_df = pd.read_csv(tazFilename)
-        taz_df['geom'] = taz_df['geometry'].apply(wkt.loads)
-        taz = gpd.GeoDataFrame(taz_df.drop(columns='geometry'), geometry='geom').rename(columns={'geom':'geometry','county': 'County','TAZ':"Taz"})
+        taz_df['geometry'] = taz_df['geometry'].apply(wkt.loads)
+        taz = gpd.GeoDataFrame(taz_df, geometry='geometry').rename(columns={'county': 'County','TAZ':"Taz"})
     else:
         taz = gpd.read_file(tazFilename).rename(columns={'taz1454': 'Taz', 'county': 'County','TAZ':"Taz"})
     taz[['minx', 'miny', 'maxx', 'maxy']] = taz.bounds
