@@ -814,7 +814,10 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
                     elif measure == "REJECTIONPROB":
                         temp[missing_values] = 0.2
                     elif measure == "XWAIT":
-                        temp[missing_values] = 10.0
+                        if path.lower().startswith('tnc_shared'):
+                            temp[missing_values] = 15.0
+                        else:
+                            temp[missing_values] = 10.0
                     elif measure == "BOARDS":
                         temp[missing_values] = 1.0
                     elif measure == "FAR":
