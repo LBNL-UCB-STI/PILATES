@@ -24,7 +24,7 @@ def update_fleet_files(trips_df, settings):
     adf.rename(columns={'depart': 'Hour'})
 
     for f in FLEETS:
-        df = adf.loc[(adf.trip_mode.isin(['SINGLE_{}'.format(f.upper()), 'SHARED_{}'.format(f.upper())]))].copy()
+        df = adf.loc[(adf.trip_mode.isin(['SINGLE_{}'.format(f.upper()), 'SHARED_{}'.format(f.upper()),'TNC_SINGLE_TRANSIT_{}'.format(f.upper()),'TNC_SHARED_TRANSIT_{}'.format(f.upper())]))].copy()
         data = get_data(df, zipShp)
         data = scale_data(data, SCALE_FACTOR, 0, 0, columns=['Trip ends', 'Trip requests'])
         data['prediction_ActiveVeh'] = run_model(data, AGG_MODEL_FILENAME, 'ActiveVeh') / 60
