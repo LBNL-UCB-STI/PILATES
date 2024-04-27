@@ -67,7 +67,7 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
     if iteration_dir is None:
         return None
-    od_skims_path = os.path.join(iteration_dir, "{0}.activitySimODSkims_current.{1}".format(it_num, suffix))
+    od_skims_path = os.path.join(iteration_dir, "{0}.skimsActivitySimOD_current.{1}".format(it_num, suffix))
     logger.info("expecting skims at {0}".format(od_skims_path))
     return od_skims_path
 
