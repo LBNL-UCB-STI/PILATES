@@ -194,16 +194,16 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     data = inputMats[inputKey][:]
                     if "TNC" in outputKey:
                         scaling = 1.0
-                        if measure == "IWAIT":
-                            waitTimes = inputMats[inputKey][:].copy()
-                            waitTimes[~(completed > 0)] = np.nan
-                            weightedMeanByOrigin = np.nansum(waitTimes * completed, axis=1) / np.nansum(completed,
-                                                                                                        axis=1)
-                            data[~(completed > 0)] = np.repeat(weightedMeanByOrigin[:, None],
-                                                               weightedMeanByOrigin.size,
-                                                               axis=1)[~(completed > 0)]
-                            outputMats[outputKey][~np.isnan(data)] = data[~np.isnan(data)] * scaling
-                            continue
+#                         if measure == "IWAIT":
+#                             waitTimes = inputMats[inputKey][:].copy()
+#                             waitTimes[~(completed > 0)] = np.nan
+#                             weightedMeanByOrigin = np.nansum(waitTimes * completed, axis=1) / np.nansum(completed,
+#                                                                                                         axis=1)
+#                             data[~(completed > 0)] = np.repeat(weightedMeanByOrigin[:, None],
+#                                                                weightedMeanByOrigin.size,
+#                                                                axis=1)[~(completed > 0)]
+#                             outputMats[outputKey][~np.isnan(data)] = data[~np.isnan(data)] * scaling
+#                             continue
                     else:
                         scaling = 100.0
                     valid = ~np.isnan(data)
