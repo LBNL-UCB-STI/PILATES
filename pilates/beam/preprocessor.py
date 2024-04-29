@@ -222,19 +222,19 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         # This first one not currently necessary when asim-lite is replanning all households
         # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
         #                                                 replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.forecast_year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
                                                         replanning_iteration_number)
 
     return
