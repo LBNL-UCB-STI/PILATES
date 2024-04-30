@@ -24,9 +24,9 @@ if  [ $# -eq 3 ]
         globus mkdir "$TO/$output_dir/beam"
         globus mkdir "$TO/$output_dir/activitysim"
         globus mkdir "$TO/$output_dir/activitysim/data"
-        globus transfer "$FROM/pilates/beam/beam_output/$region/" "$TO/$output_dir/beam/" --recursive --label "BEAM Outputs" --exclude "*xml*"
-        globus transfer "$FROM/pilates/activitysim/output/" "$TO/$output_dir/activitysim/" --recursive --label "ASim Outputs" --include "final*" --include "year*" --exclude "*"
-        globus transfer "$FROM/pilates/activitysim/data/" "$TO/$output_dir/activitysim/data/" --recursive --label "ASim Inputs"
+        globus transfer "$FROM/beam/beam_output/$region/" "$TO/$output_dir/beam/" --recursive --label "BEAM Outputs" --exclude "*xml*"
+        globus transfer "$FROM/activitysim/output/" "$TO/$output_dir/activitysim/" --recursive --label "ASim Outputs" --include "final*" --include "year*" --exclude "*"
+        globus transfer "$FROM/activitysim/data/" "$TO/$output_dir/activitysim/data/" --recursive --label "ASim Inputs"
 else
     echo "Please provide a region (e.g. 'austin' or 'sfbay') and S3 directory name"
 fi        
