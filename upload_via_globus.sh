@@ -3,8 +3,8 @@
 if  [ $# -eq 3 ]
     then
         file=$1
-        region = $2
-        output_dir = $3
+        region=$2
+        output_dir=$3
 
         echo "Reading run state from file $file"
 
