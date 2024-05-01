@@ -29,7 +29,7 @@ def update_fleet_files(trips_df, settings):
         data = scale_data(data, SCALE_FACTOR, 0, 0, columns=['Trip ends', 'Trip requests'])
         data['prediction_ActiveVeh'] = run_model(data, AGG_MODEL_FILENAME, 'ActiveVeh') / 60
         data['prediction_DeltaVeh'] = run_model(data, DELTA_MODEL_FILENAME, 'DeltaVeh') / 60
-        data = scale_data(data, 1 / SCALE_FACTOR, OVERLAP['both'], OVERLAP[f],
+        data = scale_data(data, 1 / (SCALE_FACTOR+.02), OVERLAP['both'], OVERLAP[f],
                           columns=['prediction_ActiveVeh', 'prediction_DeltaVeh'])
 
         # Adjust predicted change in vehicles to match the predicted number of vehicles per hour
