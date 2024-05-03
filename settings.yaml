@@ -418,8 +418,8 @@ update_ridehail_fleet:
   scaleFactor: .10
   overlap:
     both: .22
-    Uber: .83
-    Lyft: .39
+    Uber: .72 #.83
+    Lyft: .28 #.39
   beamInputPath: "pilates/beam/production/sfbay"
 
 #########################################################################################################
