@@ -93,7 +93,7 @@ def scale_data(df, scaleFactor, overlapBoth, overlapFleet, columns):
             if overlapBoth == 0:
                 df[c] = (df[c] / scaleFactor)
             else:
-                df[c] = (df[c] / scaleFactor) * (1 - (0.5 * overlapBoth / overlapFleet))
+                df[c] = (df[c] / scaleFactor) * (1 - (0.5 * (overlapBoth/(1+overlapBoth)) / overlapFleet))
     #         else:
     # #            print("WARNING: {} NOT IN COLUMNS".format(c))
     return df
