@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:0.9.12
-  activitysim: docker://zaneedell/activitysim:0.1.4
+  beam: docker://zaneedell/beam:0.9.13-beta-v2
+  activitysim: docker://zaneedell/activitysim:0.1.5
   polaris:
 
 # docker settings
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: null
+output_run_name: null-run
 
 # URBANSIM
 region_to_region_id:
@@ -104,7 +104,7 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-#beam_memory: "650g"
+beam_memory: 480g
 skim_zone_source_id_col: objectid
 replan_iters: 0
 replan_hh_samp_size: 0
@@ -130,7 +130,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 150000  # zero means no sampling, whole pop.
+household_sample_size: 226950  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
