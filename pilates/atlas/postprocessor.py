@@ -36,8 +36,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     atlas_output_path = settings['atlas_host_output_folder']  # 'pilates/atlas/atlas_output'  #
     fname = 'householdv_{}.csv'.format(output_year)
     df = pd.read_csv(os.path.join(atlas_output_path, fname))
-    df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id')['cars'].sort_index(ascending=True)
-    df_hh = pd.cut(df, bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
+    df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id').sort_index(ascending=True)
+    df['hh_cars'] = pd.cut(df['cars'], bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
 
     # set which h5 file to update
     h5path = settings['usim_local_data_folder']
@@ -46,30 +46,30 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     else:
         h5fname = _get_usim_datastore_fname(settings, io='output', year=output_year)
 
+    logger.info("Writing updated household vehicle info to h5 file {0}".format(h5fname))
+
     # read original h5 files
     with pd.HDFStore(os.path.join(h5path, h5fname), mode='r+') as h5:
 
         # if in main loop, update "model_data_*.h5", which has three layers ({$year}/households/cars)
         if not warm_start:
-            olddf = h5['/{}/households'.format(output_year)]['cars']
-            if olddf.shape != df.shape:
-                logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
-            else:
-                h5['/{}/households'.format(output_year)]['cars'] = df
-                h5['/{}/households'.format(output_year)]['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore - done')
-            del df, df_hh, olddf
-
+            key = '/{}/households'.format(output_year)
         # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
         else:
-            olddf = h5['households']['cars']
-            if olddf.shape != df.shape:
-                logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
-            else:
-                h5['households']['cars'] = df
-                h5['households']['hh_cars'] = df_hh
-                logger.info('ATLAS update h5 datastore - done')
-            del df, df_hh, olddf
+            key = 'households'
+
+        olddf = h5[key]
+        if olddf.index.istype(float):
+            olddf.index = olddf.index.astype(int)
+        olddf = olddf.reindex(df.index.astype(int))
+
+        if olddf.shape[0] != df.shape[0]:
+            logger.error('ATLAS household_id mismatch found - NOT update h5 datastore')
+        else:
+            olddf['cars'] = df['cars'].values
+            olddf['hh_cars'] = df['hh_cars'].values
+            h5[key] = olddf
+            logger.info('ATLAS update h5 datastore table {0} - done'.format(key))
 
 
 def atlas_add_vehileTypeId(settings, output_year):
@@ -97,3 +97,60 @@ def atlas_add_vehileTypeId(settings, output_year):
     # because original file cannot be overwritten (root-owned)
     # may revise later
     df.to_csv(os.path.join(atlas_output_path, 'vehicles2_{}.csv'.format(output_year)), index=False)
+
+
+def build_beam_vehicles_input(settings, output_year):
+    atlas_output_path = settings['atlas_host_output_folder']
+    atlas_input_path = settings['atlas_host_input_folder']
+    vehicles = pd.read_csv(os.path.join(atlas_output_path, "vehicles_{0}.csv".format(output_year)),
+                           dtype={"householdId": pd.Int64Dtype()})
+    mapping = pd.read_csv(
+        os.path.join(atlas_input_path, "vehicle_type_mapping_{0}.csv".format(settings['atlas_adscen'])))
+    mapping['numberOfVehiclesCreated'] = 0
+    mapping.set_index(["adopt_fuel", "bodytype", "modelyear", "vehicleTypeId"], inplace=True, drop=True)
+    mapping = mapping.loc[~mapping.index.duplicated(), :]
+    allCounts = mapping.copy()
+    allVehicles = []
+    for (fuelType, bodyType, modelYear), vehiclesSub in vehicles.groupby(["adopt_fuel", "adopt_veh", "modelyear"]):
+        try:
+            matched = mapping.loc[(fuelType, bodyType, modelYear, slice(None)), :]
+        except KeyError:
+            try:
+                temp = mapping.loc[(fuelType, bodyType, slice(None), slice(None)), :]
+                bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                matched = mapping.loc[(fuelType, bodyType, bestYear, slice(None)), :]
+            except KeyError:
+                try:
+                    matched = mapping.loc[(fuelType, slice(None), modelYear), :]
+                except KeyError:
+                    try:
+                        temp = mapping.loc[(fuelType, slice(None), slice(None), slice(None)), :]
+                        bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                        bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                        matched = mapping.loc[(fuelType, slice(None), bestYear), :]
+                    except KeyError:
+                        try:
+                            temp = mapping.loc[(slice(None), bodyType, slice(None), slice(None)), :]
+                            bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                            bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
+                            matched = mapping.loc[(slice(None), bodyType, bestYear), :]
+                        except KeyError:
+                            bestOption = (mapping.reset_index()['modelyear'] - modelYear).abs().idxmin()
+                            bestYear = mapping.reset_index().iloc[bestOption, :]["modelyear"]
+                            matched = mapping.loc[(slice(None), slice(None), bestYear), :]
+        createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+                                         weights=matched['sampleProbabilityWithinCategory'].values)
+        createdVehicleCounts = createdVehicles.index.value_counts()
+        allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
+        vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
+        vehiclesSub['stateOfCharge'] = np.nan
+        allVehicles.append(
+            vehiclesSub[['household_id', 'vehicleTypeId']])
+    outputVehicles = pd.concat(allVehicles).reset_index(drop=True)
+    outputVehicles.rename(columns={"household_id": "householdId"}, inplace=True)
+    outputVehicles.index.rename("vehicleId", inplace=True)
+    outputVehicles.to_csv(os.path.join(atlas_output_path, 'vehicles_{0}.csv.gz'.format(output_year)))
+    allCounts.loc[allCounts.numberOfVehiclesCreated > 0, :].sort_values(by="numberOfVehiclesCreated", ascending=False)[
+        'numberOfVehiclesCreated'].to_csv(
+        os.path.join(atlas_output_path, 'vehicles_by_type_{0}.csv'.format(output_year)))

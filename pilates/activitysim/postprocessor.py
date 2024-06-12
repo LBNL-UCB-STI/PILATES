@@ -74,6 +74,7 @@ def _prepare_updated_tables(
         h5_key = table_name
         if prefix:
             h5_key = os.path.join(str(prefix), h5_key)
+        logger.info("Reading h5 table {0}".format(h5_key))
         required_cols[table_name] = list(usim_output_store[h5_key].columns)
 
     # This is the inverse process of asim_pre._update_persons_table()
@@ -94,7 +95,9 @@ def _prepare_updated_tables(
                 p_cols_to_include.append(col)
             if col in asim_output_dict['persons'].columns:
                 del asim_output_dict['persons'][col]
-        asim_output_dict['persons'].rename(columns=p_names_dict, inplace=True)
+        for fromCol, toCol in p_names_dict.items():
+            if (toCol in p_cols_to_include) & (fromCol in asim_output_dict['persons'].columns):
+                asim_output_dict['persons'].loc[:, toCol] = asim_output_dict['persons'].loc[:, fromCol].copy()
         asim_output_dict['persons'] = asim_output_dict['persons'][
             p_cols_to_include]
 
@@ -119,7 +122,8 @@ def _prepare_updated_tables(
         # only preserve original usim columns
         asim_output_dict['households'] = asim_output_dict[
             'households'][required_cols['households']]
-
+    else:
+        logger.warning("Household table not found in ASim outputs!")
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
@@ -128,21 +132,18 @@ def _prepare_updated_tables(
             "Validating data schemas for table {0}.".format(table_name))
 
         # make sure all required columns are present
-        if not all([
-            col in asim_output_dict[table_name].columns
-            for col in required_cols[table_name]]):
+        if not all([col in asim_output_dict[table_name].columns for col in required_cols[table_name]]):
             raise KeyError(
-                "Not all required columns are in the {0} table!".format(
-                    table_name))
-
+                "Not all required columns are in the {0} table! We're missing".format(
+                    table_name,
+                    [col for col in required_cols[table_name] if col not in asim_output_dict[table_name].columns]))
         # make sure data types match
         else:
             dtypes = usim_output_store[h5_key].dtypes.to_dict()
             for col in required_cols[table_name]:
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
                     asim_output_dict[table_name][col] = asim_output_dict[
-                        table_name][col].astype(dtypes[col])
-
+                        table_name].loc[~asim_output_dict[table_name][col].isna(), col].fillna(0).astype(dtypes[col])
     usim_output_store.close()
 
     # specific dtype required conversions
@@ -228,34 +229,43 @@ def create_usim_input_data(
 
     # 1. copy ASIM OUTPUTS into new input data store
     logger.info(
-        "Copying ActivitySim outputs to the new Urbansim input store!")
+        "Copying ActivitySim outputs to the new Urbansim input store at {0}! "
+        "Tables: {1}".format(input_store_path, tables_updated_by_asim))
     for table_name in tables_updated_by_asim:
-        new_input_store[table_name] = asim_output_dict[table_name]
+        logger.info("   Moving {0}".format(table_name))
+        new_input_store["/" + table_name] = asim_output_dict[table_name]
         updated_tables.append(table_name)
 
     # 2. copy USIM OUTPUTS into new input data store if not present already
     logger.info((
         "Passing last set of UrbanSim outputs through to the new "
-        "Urbansim input store!"))
+        "Urbansim input store! {0} -> {1}".format(usim_output_datastore_name, input_store_path)))
     for h5_key in usim_output_store.keys():
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
             if os.path.join('/', table_prefix_year, table_name) == h5_key:
                 new_input_store[table_name] = usim_output_store[h5_key]
                 updated_tables.append(table_name)
+                logger.info(("    Passing static UrbanSim table {0} through to the new Urbansim "
+                             "input store!").format(table_name))
+            else:
+                logger.info("    Skipping key {0} because it is not formatted correctly".format(h5_key))
+        else:
+            logger.info("    Skipping {0} because it was updated by Asim".format(h5_key))
 
     # 3. copy USIM INPUTS into new input data store if not present already
-    logger.info((
-                    "Passing static UrbanSim inputs through to the new Urbansim "
-                    "input store!").format(table_name))
+
     for h5_key in og_input_store.keys():
         table_name = h5_key.split('/')[-1]
         if table_name not in updated_tables:
             new_input_store[table_name] = og_input_store[h5_key]
+            logger.info(("Passing original UrbanSim table {0} through to the new Urbansim "
+                         "input store!").format(table_name))
 
     og_input_store.close()
     new_input_store.close()
     usim_output_store.close()
+    logger.info("Closing all open h5 files")
 
     return
 
@@ -267,8 +277,8 @@ def create_next_iter_inputs(settings, year, forecast_year):
         settings, forecast_year, asim_output_dict, tables_updated_by_asim,
         prefix=forecast_year)
 
-    if settings['traffic_assignment_enabled']:
-        create_beam_input_data(settings, forecast_year, asim_output_dict)
+    # if settings['traffic_assignment_enabled']:
+    #     create_beam_input_data(settings, forecast_year, asim_output_dict)
     create_usim_input_data(
         settings, year, forecast_year, asim_output_dict,
         tables_updated_by_asim)
@@ -308,9 +318,9 @@ def update_usim_inputs_after_warm_start(
     assert p.shape[0] == warm_start_persons.shape[0]
     assert hh.shape[0] == warm_start_households.shape[0]
 
-    p['work_zone_id'] = warm_start_persons['workplace_taz'].reindex(p.index)
-    p['school_zone_id'] = warm_start_persons['school_taz'].reindex(p.index)
-    hh['cars'] = warm_start_households['auto_ownership'].reindex(
+    p.loc[:, 'work_zone_id'] = warm_start_persons.loc[:, 'workplace_taz'].reindex(p.index)
+    p.loc[:, 'school_zone_id'] = warm_start_persons.loc[:, 'school_taz'].reindex(p.index)
+    hh.loc[:, 'cars'] = warm_start_households['auto_ownership'].reindex(
         hh.index)
 
     usim_datastore['persons'] = p

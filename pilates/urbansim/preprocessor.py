@@ -4,6 +4,7 @@ import os
 import h5py
 import openmatrix as omx
 import numpy as np
+import shutil
 
 from pilates.utils.geog import geoid_to_zone_map
 
@@ -54,6 +55,11 @@ def _load_raw_skims(settings, skim_format):
                 beam_output_dir = settings['beam_local_output_folder']
                 skims_fname = settings['skims_fname']
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+                region_id = settings['region_to_region_id'][settings['region']]
+                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(region_id)
+                logger.info(
+                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+                shutil.copyfile(mutable_skims_location, input_skims_location)
                 skims = omx.open_file(mutable_skims_location, 'r')
                 zone_ids = skims.mapping('zone_id').keys()
                 index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
@@ -103,6 +109,11 @@ def usim_model_data_fname(region_id):
 
 
 def add_skims_to_model_data(settings, data_dir=None):
+    mapping = geoid_to_zone_map(settings)
+    output_geoid_loc = "pilates/urbansim/data/geoid_to_zone.csv"
+    logger.info("Writing zone mapping to {0}".format(output_geoid_loc))
+    pd.Series(mapping).to_frame("zone_id").rename_axis("GEOID").to_csv(output_geoid_loc)
+
     # load skims
     logger.info("Loading skims from disk")
     region = settings['region']
@@ -111,7 +122,7 @@ def add_skims_to_model_data(settings, data_dir=None):
 
     # load datastore
     region_id = settings['region_to_region_id'][region]
-    model_data_fname = usim_model_data_fname(region_id)
+    model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
     if not data_dir:
         data_dir = settings['usim_local_data_folder']
     model_data_fpath = os.path.join(data_dir, model_data_fname)

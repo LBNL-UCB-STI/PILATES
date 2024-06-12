@@ -77,6 +77,7 @@ def copy_outputs_to_mep(settings, year, iter):
         blocks['block_id'] = blocks.block_id.str.pad(15, 'left', '0')
         jobs.to_csv(os.path.join(mep_output_data_dir, "jobs.csv.gz"))
         blocks.to_csv(os.path.join(mep_output_data_dir, "blocks.csv.gz"), index=False)
+        usim_output_store.close()
 
     def copy_asim_files_to_mep():
         ds = pd.HDFStore(os.path.join(asim_output_data_dir, "pipeline.h5"))
@@ -460,7 +461,7 @@ def _add_geometry_id_to_DataFrame(df, gdf, xcol, ycol, idColumn="geometry", df_g
 
 def _add_geometry_to_events(settings, events):
     taz_id_col_in = 'GEOID'
-    taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in, zone_type="block_group")
+    taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in, zone_type="TAZ")
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
         processed_list = Parallel(n_jobs=cpu_count() - 1)(
