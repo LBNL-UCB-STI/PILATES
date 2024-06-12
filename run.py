@@ -126,13 +126,15 @@ def get_asim_docker_vols(settings, working_dir=None):
             os.path.join(working_dir, settings['asim_local_mutable_data_folder']))
         asim_local_output_folder = os.path.abspath(
             os.path.join(working_dir, settings['asim_local_output_folder']))
+        asim_local_configs_folder = os.path.abspath(
+            os.path.join(working_dir, settings['asim_local_configs_folder'], region))
     else:
         asim_local_mutable_data_folder = os.path.abspath(
             settings['asim_local_mutable_data_folder'])
         asim_local_output_folder = os.path.abspath(
             settings['asim_local_output_folder'])
-    asim_local_configs_folder = os.path.abspath(
-        os.path.join(settings['asim_local_configs_folder'], region))
+        asim_local_configs_folder = os.path.abspath(
+            os.path.join(settings['asim_local_configs_folder'], region))
     asim_remote_input_folder = os.path.join(
         asim_remote_workdir, 'data')
     asim_remote_output_folder = os.path.join(
