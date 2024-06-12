@@ -716,8 +716,8 @@ def run_replanning_loop():
         if replanning_iteration_number < replan_iters:
             beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion')
             beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-        else:
-            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
+        #else:
+        #    beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
             settings, year, state, client, replanning_iteration_number)
 
