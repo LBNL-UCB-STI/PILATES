@@ -7,26 +7,26 @@
 # scenario defs
 region: sfbay
 scenario: base
-start_year: 2010
-end_year: 2030
+start_year: 2017
+end_year: 2021
 land_use_freq: 1
-travel_model_freq: 10
-vehicle_ownership_freq: 1
+travel_model_freq: 2
+vehicle_ownership_freq: 2
 
 # simulation platforms (leave blank to turn off)
 land_use_model: urbansim
 travel_model: beam
 activity_demand_model: activitysim
-vehicle_ownership_model:
+vehicle_ownership_model: atlas
 
 # docker or singularity
 container_manager: singularity
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
-  atlas: docker://ghcr.io/lbnl-science-it/atlas:v1.0.7
+  atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://zaneedell/beam:0.9.12
-  activitysim: docker://zaneedell/activitysim:0.1.2
+  activitysim: docker://zaneedell/activitysim:0.1.4
   polaris:
 
 # docker settings
@@ -80,10 +80,14 @@ atlas_container_output_folder: /atlas_output
 atlas_basedir: /
 atlas_codedir: /
 atlas_sample_size: 0     # zero means no sampling, whole pop.
-atlas_num_processes: 9  # suggested <9 for hima
+atlas_num_processes: 40  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
-atlas_vehicles_scenario: "baseline"
-atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6}"
+atlas_mod: 2 # 1 (static) or 2 (dynamic)
+atlas_adscen: baseline # ess_cons; zev_mandate; baseline
+atlas_rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
+atlas_taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
+atlas_discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
+atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
 
 
 

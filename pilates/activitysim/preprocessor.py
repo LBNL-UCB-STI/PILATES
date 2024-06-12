@@ -116,14 +116,21 @@ def zone_id_to_taz(zones, asim_zone_id_col='TAZ',
                    default_zone_id_col='zone_id'):
     if zones.index.name != asim_zone_id_col:
         if asim_zone_id_col in zones.columns:
+            logger.info("Setting column {0} to index".format(asim_zone_id_col))
             zones.set_index(asim_zone_id_col, inplace=True)
         elif zones.index.name == default_zone_id_col:
+            logger.info("Renaming index from {0} to {1}".format(default_zone_id_col, asim_zone_id_col))
             zones.index.name = asim_zone_id_col
         elif asim_zone_id_col not in zones.columns:
-            zones.rename(columns={default_zone_id_col: asim_zone_id_col})
+            logger.info(str(zones.columns))
+            zones.rename(columns={default_zone_id_col: asim_zone_id_col}, inplace=True)
+            zones.set_index(asim_zone_id_col, inplace=True)
+            logger.info("Setting column {0} to index and renaming it {1}".format(default_zone_id_col, asim_zone_id_col))
         else:
             logger.error(
                 "Not sure what column in the zones table is the zone ID!")
+    else:
+        logger.info("Zone index is already named {0}".format(asim_zone_id_col))
     return zones
 
 
@@ -1829,8 +1836,13 @@ def create_asim_data_from_h5(
     if not output_dir:
         output_dir = settings['asim_local_input_folder']
 
-    input_zone_id_col = 'zone_id'
     asim_zone_id_col = 'TAZ'
+
+    # TODO: Generalize this or add it to settings.yaml
+    if region == "sfbay":
+        input_zone_id_col = 'taz1454'
+    else:
+        input_zone_id_col = 'zone_id'
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
@@ -1846,7 +1858,10 @@ def create_asim_data_from_h5(
     logger.info("Loading UrbanSim data from .h5")
     households = store[os.path.join(table_prefix_yr, 'households')]
     persons = store[os.path.join(table_prefix_yr, 'persons')]
-    blocks = store[os.path.join(table_prefix_yr, 'blocks')]
+    try:
+        blocks = store[os.path.join(table_prefix_yr, 'blocks')]
+    except AttributeError:
+        blocks = store[os.path.join(str(int(table_prefix_yr) - 1), 'blocks')]
     jobs = store[os.path.join(table_prefix_yr, 'jobs')]
 
     # update blocks
@@ -1857,7 +1872,8 @@ def create_asim_data_from_h5(
     if blocks_to_taz_mapping_updated:
         logger.info(
             "Storing blocks table with {} zone IDs to disk in .h5 datastore!".format(zone_type))
-        blocks_cols += [input_zone_id_col]
+        if input_zone_id_col not in blocks_cols:
+            blocks_cols += [input_zone_id_col]
         store[os.path.join(table_prefix_yr, 'blocks')] = blocks[blocks_cols]
     blocks.rename(
         columns={input_zone_id_col: asim_zone_id_col},

@@ -240,11 +240,12 @@ def get_atlas_docker_vols(settings):
 
 
 ## For Atlas container command
-def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac):
+def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor, discIncent):
     basedir = settings.get('basedir', '/')
     codedir = settings.get('codedir', '/')
     formattable_atlas_cmd = settings['atlas_formattable_command']
-    atlas_cmd = formattable_atlas_cmd.format(freq, output_year, npe, nsample, basedir, codedir, beamac)
+    atlas_cmd = formattable_atlas_cmd.format(freq, output_year, npe, nsample, basedir, codedir, beamac, mod, adscen,
+                                             rebfactor, taxfactor, discIncent)
     return atlas_cmd
 
 
@@ -366,11 +367,15 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     npe = settings.get('atlas_num_processes', False)
     nsample = settings.get('atlas_sample_size', False)
     beamac = settings.get('atlas_beamac', 0)
+    mod = settings.get('atlas_mod', 1)
+    adscen = settings.get('atlas_adscen', False)
+    rebfactor = settings.get('atlas_rebfactor', 0)
+    taxfactor = settings.get('atlas_taxfactor', 0)
+    discIncent = settings.get('atlas_discIncent', 0)
     atlas_docker_vols = get_atlas_docker_vols(settings)
-    atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac)
+    atlas_cmd = get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor,
+                              discIncent)
     docker_stdout = settings.get('docker_stdout', False)
-    activity_demand_model = settings['activity_demand_model']
-    travel_model = settings['travel_model']
 
     # 2. PREPARE ATLAS DATA
     if warm_start_atlas:
@@ -382,22 +387,22 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
     formatted_print(print_str)
 
     # create skims.omx (lines moved from warm_start_activities)
-    if warm_start_atlas == True & atlas_run_count == 1:
-        logger.info("Creating {0} skims from {1}".format(
-            activity_demand_model,
-            travel_model).upper())
-        asim_pre.create_skims_from_beam(settings, year)
+    # if warm_start_atlas == True & atlas_run_count == 1:
+    #     logger.info("Creating {0} skims from {1}".format(
+    #         activity_demand_model,
+    #         travel_model).upper())
+    #     asim_pre.create_skims_from_beam(settings, year)
 
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
     atlas_pre.prepare_atlas_inputs(settings, output_year, warm_start=warm_start_atlas)
 
     # calculate accessibility if atlas_beamac != 0
-    if (beamac > 0):
-        ## if No Driving
+    if beamac > 0:
+        # if No Driving
         path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK']
         measure_list = ['WACC', 'IWAIT', 'XWAIT', 'TOTIVT', 'WEGR']
-        ## if Allow Driving for access/egress
+        # if Allow Driving for access/egress
         # path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK',
         #             'DRV_COM_DRV', 'DRV_EXP_DRV', 'DRV_HVY_DRV', 'DRV_LOC_DRV', 'DRV_LRF_DRV',
         #             'WLK_COM_DRV', 'WLK_EXP_DRV', 'WLK_HVY_DRV', 'WLK_LOC_DRV', 'WLK_LRF_DRV',
@@ -430,16 +435,23 @@ def run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count=1
 # outputs are not generated. This is mainly for preventing crash due to parellel
 # computiing errors that can be resolved by a simple resubmission
 def run_atlas_auto(settings, output_year, client, warm_start_atlas):
-    # run atlas
-    atlas_run_count = 1
-    try:
-        run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count)
-    except:
-        logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
-
-    # rerun atlas if outputs not found and run count <= 3
     atlas_output_path = settings['atlas_host_output_folder']
     fname = 'vehicles_{}.csv'.format(output_year)
+    if os.path.exists(os.path.join(atlas_output_path, fname)) & warm_start_atlas:
+        logger.info(
+            "Running in warm start mode but warm started files for year {0} already exist. Assuming we can skip this "
+            "step and move on to the forecast year".format(
+                output_year))
+        return
+
+    # run atlas
+    atlas_run_count = 1
+    # try:
+    run_atlas(settings, output_year, client, warm_start_atlas, atlas_run_count)
+    # except:
+    #     logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
+
+    # rerun atlas if outputs not found and run count <= 3
     while atlas_run_count < 3:
         atlas_run_count = atlas_run_count + 1
         if not os.path.exists(os.path.join(atlas_output_path, fname)):
@@ -937,7 +949,8 @@ if __name__ == '__main__':
 
             # If urbansim has been called, ATLAS will read, run, and update
             # vehicle ownership info in urbansim *outputs* h5 datastore.
-            else:
+            elif state.is_start_year():
+                run_atlas_auto(settings, state.start_year, client, warm_start_atlas=True)
                 run_atlas_auto(settings, state.forecast_year, client, warm_start_atlas=False)
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
@@ -978,7 +991,7 @@ if __name__ == '__main__':
                 beam_pre.update_beam_config(settings, 'max_plans_memory')
             beam_pre.update_beam_config(settings, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
-                beam_pre.copy_vehicles_from_atlas(settings, year)
+                beam_pre.copy_vehicles_from_atlas(settings, state.forecast_year)
             run_traffic_assignment(settings, year, state.forecast_year, client, -1)
             state.complete(WorkflowState.Stage.traffic_assignment)
 
