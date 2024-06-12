@@ -14,10 +14,10 @@ travel_model_freq: 2
 vehicle_ownership_freq: 2
 
 # simulation platforms (leave blank to turn off)
-land_use_model:
+land_use_model: urbansim
 travel_model: beam
 activity_demand_model: activitysim
-vehicle_ownership_model:
+vehicle_ownership_model: atlas
 
 # docker or singularity
 container_manager: singularity
@@ -34,7 +34,7 @@ docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: zaneedell/beam:0.9.10
-  activitysim: zaneedell/activitysim:0.1.1
+  activitysim: zaneedell/activitysim:0.1.4
   polaris: tbd
 docker_stdout: False
 pull_latest: False
@@ -79,7 +79,8 @@ warm_start_activities: False
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client
 atlas_host_input_folder: pilates/atlas/atlas_input
-atlas_host_output_folder: pilates/atlas/atlas_output
+atlas_host_mutable_input_folder: pilates/atlas/atlas_input
+atlas_host_output_folder: atlas/atlas_output
 atlas_container_input_folder: /atlas_input
 atlas_container_output_folder: /atlas_output
 atlas_basedir: /
