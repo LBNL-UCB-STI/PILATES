@@ -181,7 +181,11 @@ def get_usim_cmd(settings, year, forecast_year):
 ## Atlas vehicle ownership model volume mount defintion, equivalent to
 ## docker run -v atlas_host_input_folder:atlas_container_input_folder
 def get_atlas_docker_vols(settings, working_dir=None):
-    atlas_host_input_folder = os.path.abspath(os.path.join(working_dir or "", settings['atlas_host_input_folder']))
+    if working_dir is None:
+        atlas_host_input_folder = os.path.abspath(settings['atlas_host_input_folder'])
+    else:
+        atlas_host_input_folder = os.path.abspath(
+            os.path.join(working_dir, settings['atlas_host_mutable_input_folder']))
     atlas_host_output_folder = os.path.abspath(os.path.join(working_dir or "", settings['atlas_host_output_folder']))
     atlas_container_input_folder = os.path.abspath(settings['atlas_container_input_folder'])
     atlas_container_output_folder = os.path.abspath(settings['atlas_container_output_folder'])
