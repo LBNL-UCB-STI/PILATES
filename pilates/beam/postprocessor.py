@@ -49,22 +49,25 @@ def find_not_taken_dir_name(dir_name):
     raise RuntimeError(f"Cannot find an appropriate not taken directory for {dir_name}")
 
 
-def rename_beam_output_directory(settings, year, replanning_iteration_number=0):
-    beam_output_dir = settings['beam_local_output_folder']
+def rename_beam_output_directory(beam_output_dir, settings, year, replanning_iteration_number=0):
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(beam_output_dir, settings['region'],
                                                   "year-{0}-iteration-{1}".format(year, replanning_iteration_number))
     if os.path.exists(new_iteration_output_directory):
         os.rename(new_iteration_output_directory, find_not_taken_dir_name(new_iteration_output_directory))
-    os.rename(beam_run_output_dir, new_iteration_output_directory)
+    try:
+        os.rename(beam_run_output_dir, new_iteration_output_directory)
+    except FileNotFoundError:
+        logger.warning("Files {0} not found. Adding a slash".format(beam_run_output_dir))
+        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
     if iteration_dir is None:
         return None
-    od_skims_path = os.path.join(iteration_dir, "{0}.activitySimODSkims_current.{1}".format(it_num, suffix))
+    od_skims_path = os.path.join(iteration_dir, "{0}.skimsActivitySimOD_current.{1}".format(it_num, suffix))
     logger.info("expecting skims at {0}".format(od_skims_path))
     return od_skims_path
 
@@ -107,12 +110,13 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     "time = 0".format(path, timePeriod, shouldNotBeZero.sum()))
                 completed[shouldNotBeZero] = 0
         failed = np.array(inputMats[failed_key])
-        logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
-            np.nan_to_num(completed).sum(),
-            np.nan_to_num(failed).sum(),
-            complete_key,
-            np.nan_to_num(np.array(outputMats[complete_key])).sum()))
         try:
+            logger.info(
+                "Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
+                    np.nan_to_num(completed).sum(),
+                    np.nan_to_num(failed).sum(),
+                    complete_key,
+                    np.nan_to_num(np.array(outputMats[complete_key])).sum()))
             logger.info("Of the {0} completed trips, {1} were to a previously unobserved "
                         "OD".format(np.nan_to_num(completed).sum(),
                                     np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()))
@@ -294,7 +298,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 
 
 def trim_inaccessible_ods(settings):
-    all_skims_path = os.path.join(settings['asim_local_input_folder'], "skims.omx")
+    all_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], "skims.omx")
     order = zone_order(settings, settings['start_year'])
     skims = omx.open_file(all_skims_path, "a")
     all_mats = skims.list_matrices()

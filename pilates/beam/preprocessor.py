@@ -4,6 +4,7 @@ import gzip
 import shutil
 import pandas as pd
 import numpy as np
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,30 @@ beam_param_map = {'beam_sample': 'beam.agentsim.agentSampleSizeAsFractionOfPopul
                   }
 
 
-def update_beam_config(settings, param, valueOverride=None):
+def copy_data_to_mutable_location(settings, output_dir):
+    beam_config_path = os.path.join(
+        settings['beam_local_input_folder'],
+        settings['region'])
+    dest = os.path.join(output_dir, settings['region'])
+    logger.info("Copying beam inputs from {0} to {1}".format(beam_config_path, dest))
+
+    ## TODO: Update configs not to rely on beam.inputDirectory or update BEAM to have it be relative to code location and/or configurable
+
+    # for file in os.listdir(beam_config_path):
+    #     pathname = os.path.join(beam_config_path, file)
+    #     if file.endswith(".conf"):
+    #         shutil.copy(pathname, output_subdir)
+    #     elif file.startswith("r5") & os.path.isdir(pathname):
+    #         shutil.copytree(pathname, os.path.join(output_subdir, file))
+    #     elif file == "urbansim":
+    #         shutil.copytree(pathname, os.path.join(output_subdir, file))
+
+    shutil.copytree(beam_config_path, dest)
+    common_config_path = os.path.join(settings['beam_local_input_folder'], 'common')
+    shutil.copytree(common_config_path, os.path.join(output_dir, 'common'))
+
+
+def update_beam_config(settings, working_dir, param, valueOverride=None):
     if param in settings:
         config_header = beam_param_map[param]
         if valueOverride is None:
@@ -21,7 +45,8 @@ def update_beam_config(settings, param, valueOverride=None):
         else:
             config_value = valueOverride
         beam_config_path = os.path.join(
-            settings['beam_local_input_folder'],
+            working_dir,
+            settings['beam_local_mutable_data_folder'],
             settings['region'],
             settings['beam_config'])
         modified = False
@@ -67,10 +92,11 @@ def copy_vehicles_from_atlas(settings, year):
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
 
 
-def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
-    asim_output_data_dir = settings['asim_local_output_folder']
+def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_number=0):
+    asim_output_data_dir = os.path.join(state.full_path, settings['asim_local_output_folder'])
     beam_scenario_folder = os.path.join(
-        settings['beam_local_input_folder'],
+        state.full_path,
+        settings['beam_local_mutable_data_folder'],
         settings['region'],
         settings['beam_scenario_folder'])
 
@@ -196,19 +222,19 @@ def copy_plans_from_asim(settings, year, replanning_iteration_number=0):
         # This first one not currently necessary when asim-lite is replanning all households
         # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
         #                                                 replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', year,
+        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.year,
                                                         replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', year,
+        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
                                                         replanning_iteration_number)
 
     return

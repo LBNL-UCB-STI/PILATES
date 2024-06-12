@@ -179,7 +179,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 
 def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
     # open skims file
-    skims_dir = settings['asim_local_input_folder']
+    skims_dir = settings['asim_local_mutable_data_folder']
     skims = omx.open_file(os.path.join(skims_dir, 'skims.omx'), mode='r')
 
     # find the path with minimum time for each o-d

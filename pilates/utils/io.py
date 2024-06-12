@@ -33,8 +33,11 @@ def parse_args_and_settings(settings_file='settings.yaml'):
             '"l" for land use, "a" for activity demand, '
             '"t" for traffic assignment. Can specify multiple (e.g. "at")'))
     parser.add_argument(
-        '-c', '--config', action='store',
+        '-c', '--config', default='settings.yaml',
         help='config file name')
+    parser.add_argument(
+        '-S', '--stage', default="current_stage.yaml",
+        help='current state file to pick up from')
     args = parser.parse_args()
 
     if args.config:
@@ -48,7 +51,9 @@ def parse_args_and_settings(settings_file='settings.yaml'):
     settings.update({
         'static_skims': args.static_skims,
         'warm_start_skims': args.warm_start_skims,
-        'asim_validation': args.figures})
+        'asim_validation': args.figures,
+        'state_file_loc': args.stage,
+        'settings_file': settings_file})
 
     # override .yaml settings with command-line values if command-line
     # values are not False/None
@@ -104,12 +109,13 @@ def parse_args_and_settings(settings_file='settings.yaml'):
     return settings
 
 
-def read_datastore(settings, year=None, warm_start=False):
+def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None):
     """
     Access to the land use .H5 data store
     """
     # If `year` is the start year of the whole simulation, or `warm_start` is
-    # True, then land use forecasting has been skipped. This is useful for
+    # True, or if urbansim is turned off entirely, then land use forecasting
+    # has been skipped. This is useful for
     # generating "warm start" skims for the base year. In this case, the
     # ActivitySim inputs must be created from the base year land use *inputs*
     # since no land use outputs have been created yet.
@@ -119,20 +125,25 @@ def read_datastore(settings, year=None, warm_start=False):
 
     region = settings['region']
     region_id = settings['region_to_region_id'][region]
-    usim_local_data_folder = settings['usim_local_data_folder']
+    usim_local_data_folder = settings['usim_local_data_input_folder']
+    urbansim_enabled = settings.get('land_use_model') is not None
 
-    if (year == settings['start_year']) or (warm_start):
+    if (year == settings['start_year']) or warm_start or ~urbansim_enabled:
         table_prefix_yr = ''  # input data store tables have no year prefix
         usim_datastore = settings['usim_formattable_input_file_name'].format(
             region_id=region_id)
+        usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_datastore)
 
     # Otherwise we read from the land use outputs
     else:
+        if mutable_data_dir is None:
+            raise IOError("Need to path the mutable data directory to read_datastore if urbansim is turned on")
         usim_datastore = settings['usim_formattable_output_file_name'].format(
             year=year)
         table_prefix_yr = str(year)
+        mutable_usim_dir = settings['usim_local_mutable_data_folder']
+        usim_datastore_fpath = os.path.join(mutable_data_dir, mutable_usim_dir, usim_datastore)
 
-    usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_datastore)
     logger.info("Opening urbansim datastore at {0}".format(usim_datastore))
 
     if not os.path.exists(usim_datastore_fpath):

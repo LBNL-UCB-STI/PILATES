@@ -1,8 +1,24 @@
 #!/bin/bash
 
+
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
+
+settings_file="settings.yaml"
+stage_file="current_stage_${JOB_NAME}.yaml"
+while getopts :c:s: name
+do
+    case $name in
+    c)    cflag=1
+          settings_file="$OPTARG";;
+    s)    sflag=1
+          stage_file="$OPTARG";;
+    ?)   printf "Usage: %s: [-c settings/config file loc] [-s stage file loc] args\n" $0
+          exit 2;;
+    esac
+done
+
 
 PARTITION="lr7"
 QOS="lr_normal"
@@ -23,6 +39,6 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    job.sh
+    job.sh "$settings_file" "$stage_file"
 
 echo $JOB_LOG_FILE_PATH

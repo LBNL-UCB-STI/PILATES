@@ -106,7 +106,7 @@ def read_skims(settings, mode='a', data_dir=None, file_name='skims.omx'):
         Ignored in read-only mode.  
     """
     if data_dir is None:
-        data_dir = settings['asim_local_input_folder']
+        data_dir = settings['asim_local_mutable_data_folder']
     path = os.path.join(data_dir, file_name)
     skims = omx.open_file(path, mode=mode)
     return skims
@@ -301,14 +301,14 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
     
     """
     if output_dir is None:
-        output_dir = settings['asim_local_input_folder']
+        output_dir = settings['asim_local_mutable_data_folder']
     skims_path = os.path.join(output_dir, 'skims.omx')
     final_skims_exist = os.path.exists(skims_path)
 
     skims_fname = settings.get('skims_fname', False)
     omx_skim_output = skims_fname.endswith('.omx')
     beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    mutable_skims_location = os.path.join(output_dir, "skims.omx")
     mutable_skims_exist = os.path.exists(mutable_skims_location)
     should_use_csv_input_skims = mutable_skims_exist & (not omx_skim_output)
 
@@ -567,7 +567,7 @@ def impute_distances(zones, origin=None, destination=None):
         return orig.distance(dest).replace({0: 100}).values * (0.621371 / 1000)
 
 
-def _distance_skims(settings, year, input_skims, order, data_dir=None):
+def _distance_skims(settings, year, input_skims, order, data_dir):
     """
     Generates distance matrices for drive, walk and bike modes.
     Parameters:
@@ -580,9 +580,9 @@ def _distance_skims(settings, year, input_skims, order, data_dir=None):
     """
     logger.info("Creating distance skims.")
 
-    skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    skims_fname = 'skims.omx'
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -750,7 +750,7 @@ def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int
         return np.full((num_taz, num_taz), np.nan, dtype=np.float32), True
 
 
-def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
+def _fill_ridehail_skims(settings, input_skims, order, data_dir):
     logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings['ridehail_path_map']
@@ -759,9 +759,9 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    skims_fname = 'skims.omx'
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -814,7 +814,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir=None):
         output_skims.close()
 
 
-def _fill_transit_skims(settings, input_skims, order, data_dir=None):
+def _fill_transit_skims(settings, input_skims, order, data_dir):
     logger.info("Merging transit omx skims.")
 
     transit_paths = settings['transit_paths']
@@ -823,9 +823,9 @@ def _fill_transit_skims(settings, input_skims, order, data_dir=None):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    skims_fname = "skims.omx"
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -904,9 +904,9 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
 
     num_taz = len(order)
 
-    skims_fname = settings.get('skims_fname', False)
-    beam_output_dir = settings['beam_local_output_folder']
-    mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+    skims_fname = 'skims.omx'
+    # beam_output_dir = settings['beam_local_output_folder']
+    mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
         output_skims = input_skims
@@ -1044,11 +1044,11 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, year,
+def create_skims_from_beam(settings, state: "WorkflowState",
                            output_dir=None,
                            overwrite=True):
     if not output_dir:
-        output_dir = settings['asim_local_input_folder']
+        output_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
 
     # If running in static skims mode and ActivitySim skims already exist
     # there is no point in recreating them.
@@ -1059,7 +1059,7 @@ def create_skims_from_beam(settings, year,
     new, convertFromCsv, blankSkims = _create_skim_object(settings, overwrite, output_dir=output_dir)
     validation = settings.get('asim_validation', False)
 
-    order = zone_order(settings, year)
+    order = zone_order(settings, state.forecast_year)
 
     if new:
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
@@ -1071,24 +1071,24 @@ def create_skims_from_beam(settings, year,
             ridehail_df = _raw_beam_origin_skims_preprocess(settings, year, ridehail_df)
 
             # Create skims
-            _distance_skims(settings, year, auto_df, order, data_dir=output_dir)
+            _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir)
             _auto_skims(settings, auto_df, order, data_dir=output_dir)
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
 
             del auto_df, transit_df
         else:
-            beam_output_dir = settings['beam_local_output_folder']
-            _distance_skims(settings, year, tempSkims, order, data_dir=beam_output_dir)
-            _fill_auto_skims(settings, tempSkims, order, data_dir=beam_output_dir)
-            _fill_transit_skims(settings, tempSkims, order, data_dir=beam_output_dir)
-            _fill_ridehail_skims(settings, tempSkims, order, data_dir=beam_output_dir)
+            # beam_output_dir = settings['beam_local_output_folder']
+            _distance_skims(settings, state.year, tempSkims, order, data_dir=output_dir)
+            _fill_auto_skims(settings, tempSkims, order, data_dir=output_dir)
+            _fill_transit_skims(settings, tempSkims, order, data_dir=output_dir)
+            _fill_ridehail_skims(settings, tempSkims, order, data_dir=output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            final_skims_path = os.path.join(settings['asim_local_input_folder'], 'skims.omx')
-            skims_fname = settings.get('skims_fname', False)
-            mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-            shutil.copyfile(mutable_skims_location, final_skims_path)
+            # final_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')
+            # skims_fname = settings.get('skims_fname', False)
+            # mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+            # shutil.copyfile(mutable_skims_location, final_skims_path)
 
     _create_offset(settings, order, data_dir=output_dir)
 
@@ -1795,7 +1795,63 @@ def _create_land_use_table(
     zones.loc[:, 'TERMINAL'] = 0  # FIXME
     zones.loc[:, 'COUNTY'] = 1  # FIXME
 
+    logger.info(zones.head())
+    logger.info(zones.dtypes)
+
     return zones
+
+
+def copy_data_to_mutable_location(settings, output_dir):
+    region = settings['region']
+    beam_input_dir = settings['beam_local_input_folder']
+    beam_output_dir = settings['beam_local_output_folder']
+    skims_fname = settings['skims_fname']
+    origin_skims_fname = settings['origin_skims_fname']
+    beam_geoms_fname = settings['beam_geoms_fname']
+    beam_router_directory = settings['beam_router_directory']
+    asim_geoms_location = os.path.join(output_dir, beam_geoms_fname)
+
+    input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
+    mutable_skims_location = os.path.join(output_dir, "skims.omx")
+
+    beam_geoms_location = os.path.join(beam_input_dir, region, beam_router_directory, beam_geoms_fname)
+
+    # TODO: Handle exception when these dont exist
+
+    if os.path.exists(input_skims_location):
+        logger.info("Copying input skims from {0} to {1}".format(
+            input_skims_location,
+            mutable_skims_location))
+        shutil.copyfile(input_skims_location, mutable_skims_location)
+    else:
+        if os.path.exists(mutable_skims_location):
+            logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(
+                input_skims_location,
+                mutable_skims_location))
+        else:
+            logger.info("No default skims found anywhere. We will generate defaults instead")
+
+    input_skims_location = os.path.join(beam_input_dir, region, origin_skims_fname)
+    mutable_skims_location = os.path.join(output_dir, "origin_skims.csv.gz")
+
+    if os.path.exists(input_skims_location):
+        logger.info("Copying input origin skims from {0} to {1}".format(
+            input_skims_location,
+            mutable_skims_location))
+        shutil.copyfile(input_skims_location, mutable_skims_location)
+    else:
+        if os.path.exists(mutable_skims_location):
+            logger.info("No input skims at {0}. Proceeding with defaults at {1}".format(
+                input_skims_location,
+                mutable_skims_location))
+        else:
+            logger.info("No default input skims found anywhere. We will generate defaults instead")
+
+    logger.info("Copying beam zone geoms from {0} to {1}".format(
+        beam_geoms_location,
+        asim_geoms_location))
+
+    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
 
 
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
@@ -1804,7 +1860,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
     zone_type = settings['skims_zone_type']
     zone_id_col = zone_type_column[zone_type]
 
-    if 'TAZ' not in beam_geoms_file.columns:
+    if zone_id_col not in beam_geoms_file.columns:
 
         mapping = geoid_to_zone_map(settings, settings['start_year'])
 
@@ -1816,44 +1872,45 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
             logger.info("Mapping block group IDs to TAZ ids")
             beam_geoms_file['TAZ'] = beam_geoms_file['GEOID'].astype(str).replace(mapping)
 
+        elif zone_type == 'TAZ':
+            from_col = settings.get('geoms_index_col', 'zone_id')
+            to_col = 'TAZ'
+            logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
+            beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
+
     beam_geoms_file.to_csv(asim_geoms_location)
 
 
 def create_asim_data_from_h5(
-        settings, year, warm_start=False, output_dir=None):
+        settings, state: "WorkflowState", warm_start=False, output_dir=None):
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
     region = settings['region']
-    region_id = settings['region_to_region_id'][region]
     FIPS = settings['FIPS'][region]
     state_fips = FIPS['state']
     county_codes = FIPS['counties']
     local_crs = settings['local_crs'][region]
-    usim_local_data_folder = settings['usim_local_data_folder']
     zone_type = settings['skims_zone_type']
 
     if not output_dir:
-        output_dir = settings['asim_local_input_folder']
+        output_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
 
     asim_zone_id_col = 'TAZ'
 
     # TODO: Generalize this or add it to settings.yaml
-    if region == "sfbay":
-        input_zone_id_col = 'taz1454'
-    else:
-        input_zone_id_col = 'zone_id'
+    input_zone_id_col = settings.get('geoms_index_col', 'zone_id')
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
     # need zone geoms and we can simply instantiate the zones table from
     # the unique zone ids in the blocks/persons/households tables.
-    zones = read_zone_geoms(settings, year,
+    zones = read_zone_geoms(settings, state.forecast_year,
                             asim_zone_id_col=asim_zone_id_col,
                             default_zone_id_col=input_zone_id_col)
 
     store, table_prefix_yr = read_datastore(
-        settings, year, warm_start=warm_start)
+        settings, state.forecast_year, warm_start=warm_start, mutable_data_dir=state.full_path)
 
     logger.info("Loading UrbanSim data from .h5")
     households = store[os.path.join(table_prefix_yr, 'households')]
@@ -1867,7 +1924,7 @@ def create_asim_data_from_h5(
     # update blocks
     blocks_cols = blocks.columns.tolist()
     blocks_to_taz_mapping_updated, blocks = _update_blocks_table(
-        settings, year, blocks, households, jobs, input_zone_id_col)
+        settings, state.forecast_year, blocks, households, jobs, input_zone_id_col)
     input_zone_id_col = "{0}_zone_id".format(zone_type)
     if blocks_to_taz_mapping_updated:
         logger.info(
