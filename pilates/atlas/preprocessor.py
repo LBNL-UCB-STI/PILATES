@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 
 import numpy as np
 import openmatrix as omx
@@ -10,6 +11,13 @@ with open('settings.yaml') as file:
     settings = yaml.load(file, Loader=yaml.FullLoader)
 
 logger = logging.getLogger(__name__)
+
+
+def copy_data_to_mutable_location(settings, output_dir):
+    atlas_input_path = settings['atlas_host_input_folder']
+    dest = os.path.join(output_dir, settings['atlas_host_input_folder'])
+    logger.info("Copying atlas inputs from {0} to {1}".format(atlas_input_path, dest))
+    shutil.copytree(atlas_input_path, dest)
 
 
 def _get_usim_datastore_fname(settings, io, year=None):
