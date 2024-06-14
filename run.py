@@ -271,7 +271,7 @@ def forecast_land_use(settings, year, workflow_state: WorkflowState, client, con
     run_land_use(settings, year, workflow_state, client)
 
     # check for outputs, exit if none
-    usim_local_data_folder = settings['usim_local_data_folder']
+    usim_local_data_folder = settings['usim_local_mutable_data_folder']
     usim_output_store = settings['usim_formattable_output_file_name'].format(
         year=forecast_year)
     usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_output_store)
