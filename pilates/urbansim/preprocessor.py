@@ -135,7 +135,9 @@ def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
     skim_format = settings['travel_model']
     df = _load_raw_skims(settings, skims_dir, skim_format=skim_format)
     if skims_dir is not None:
-        source = os.path.join(data_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
+        source = os.path.join(
+            data_dir.replace(settings['usim_local_mutable_data_folder'], settings['asim_local_mutable_data_folder']),
+            "skims.omx")
         dest = os.path.join(data_dir, "skims_mpo_{0}.omx".format(region_id))
         shutil.copyfile(source, dest)
         logger.info("Copying skims from {0} to {1}".format(source, dest))
