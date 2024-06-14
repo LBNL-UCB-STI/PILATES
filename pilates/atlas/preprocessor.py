@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def copy_data_to_mutable_location(settings, output_dir):
     atlas_input_path = settings['atlas_host_input_folder']
-    dest = os.path.join(output_dir, settings['atlas_host_input_folder'])
+    dest = os.path.join(output_dir, settings['atlas_host_mutable_input_folder'])
     logger.info("Copying atlas inputs from {0} to {1}".format(atlas_input_path, dest))
     shutil.copytree(atlas_input_path, dest)
 
