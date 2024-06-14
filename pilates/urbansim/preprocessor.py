@@ -106,7 +106,17 @@ def copy_data_to_mutable_location(settings, output_dir):
     src = os.path.join(data_dir, model_data_fname)
     dest = os.path.join(output_dir, model_data_fname)
     logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
-    shutil.copyfile(src, dest)
+    other_data_fnames = [
+        "hsize_ct_{0}.csv".format(region_id),
+        "income_rates_{0}.csv".format(region_id),
+        "relmap_{0}.csv".format(region_id),
+        "blocks_school_districts_2010.csv"
+    ]
+    for fname in other_data_fnames:
+        src = os.path.join(data_dir, fname)
+        dest = os.path.join(output_dir, fname)
+        logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
+        shutil.copyfile(src, dest)
 
 
 def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
