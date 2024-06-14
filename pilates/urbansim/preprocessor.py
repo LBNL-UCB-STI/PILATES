@@ -133,7 +133,7 @@ def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
     logger.info("Loading skims from disk")
     region = settings['region']
     region_id = settings['region_to_region_id'][region]
-    skim_format = settings['travel_model']
+    skim_format = settings['travel_model'] or "beam"
     df = _load_raw_skims(settings, skims_dir, skim_format=skim_format)
     if skims_dir is not None:
         source = os.path.join(
