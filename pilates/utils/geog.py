@@ -300,7 +300,7 @@ def geoid_to_zone_map(settings, year=None):
     zone_type = settings['skims_zone_type']
     travel_model = settings.get('travel_model', 'beam')
     zone_id_col = 'zone_id'
-    geoid_to_zone_folder = os.path.join("pilates", "utils", "data", region, travel_model)
+    geoid_to_zone_folder = os.path.join("pilates", "utils", "data", region, travel_model or "beam")
 
     if not os.path.exists(geoid_to_zone_folder):
         os.makedirs(geoid_to_zone_folder)
