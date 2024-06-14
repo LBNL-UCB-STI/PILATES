@@ -273,7 +273,7 @@ def forecast_land_use(settings, year, workflow_state: WorkflowState, client, con
     # check for outputs, exit if none
     usim_local_data_folder = settings['usim_local_mutable_data_folder']
     usim_output_store = settings['usim_formattable_output_file_name'].format(
-        year=forecast_year)
+        year=workflow_state.forecast_year)
     usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_output_store)
     if not os.path.exists(usim_datastore_fpath):
         logger.critical(
@@ -925,18 +925,21 @@ if __name__ == '__main__':
 
         # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
         if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
-            # If the forecast year is the same as the base year of this
-            # iteration, then land use forecasting has not been run. In this
-            # case, atlas need to update urbansim *inputs* before activitysim
-            # reads it in the next step.
-            if state.forecast_year == year:
-                run_atlas_auto(settings, state, client, warm_start_atlas=True)
+            if state.year >= 2016:
+                # If the forecast year is the same as the base year of this
+                # iteration, then land use forecasting has not been run. In this
+                # case, atlas need to update urbansim *inputs* before activitysim
+                # reads it in the next step.
+                if state.forecast_year == year:
+                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
 
-            # If urbansim has been called, ATLAS will read, run, and update
-            # vehicle ownership info in urbansim *outputs* h5 datastore.
-            elif state.is_start_year():
-                run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+                # If urbansim has been called, ATLAS will read, run, and update
+                # vehicle ownership info in urbansim *outputs* h5 datastore.
+                elif state.is_start_year():
+                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
+                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+            else:
+                logger.info("Skipping atlas in year {0} because we can't start until 2017".format(state.year))
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
 
         # 3. GENERATE ACTIVITIES
