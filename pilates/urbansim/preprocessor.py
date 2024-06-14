@@ -131,11 +131,19 @@ def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
     # load skims
     logger.info("Loading skims from disk")
     region = settings['region']
+    region_id = settings['region_to_region_id'][region]
     skim_format = settings['travel_model']
     df = _load_raw_skims(settings, skims_dir, skim_format=skim_format)
+    if skims_dir is not None:
+        source = os.path.join(data_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
+        dest = os.path.join(data_dir, "skims_mpo_{0}.omx".format(region_id))
+        shutil.copyfile(source, dest)
+        logger.info("Copying skims from {0} to {1}".format(source, dest))
+
+    ## IF SKIMS DON"T EXIST IN USIM DIRECTORY COPY THEM OVER
 
     # load datastore
-    region_id = settings['region_to_region_id'][region]
+
     model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
 
     model_data_fpath = os.path.join(data_dir, model_data_fname)

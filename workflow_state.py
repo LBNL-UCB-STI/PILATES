@@ -56,7 +56,7 @@ class WorkflowState:
         folder_path = os.path.join(base_loc, folder_name)
         os.makedirs(folder_path, exist_ok=True)
 
-        for model in ['land_use_model', 'travel_model', 'activity_demand_model', 'vehicle_ownership_model']:
+        for model in ['travel_model', 'activity_demand_model', 'vehicle_ownership_model', 'land_use_model']:
             if settings.get(model) is not None:
                 model_name = settings[model]
                 os.makedirs(os.path.join(folder_path, model_name))
