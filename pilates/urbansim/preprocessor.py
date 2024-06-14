@@ -111,7 +111,7 @@ def copy_data_to_mutable_location(settings, output_dir):
         "hsize_ct_{0}.csv".format(region_id),
         "income_rates_{0}.csv".format(region_id),
         "relmap_{0}.csv".format(region_id),
-        "schools_2010.csv,
+        "schools_2010.csv",
         "blocks_school_districts_2010.csv"
     ]
     for fname in other_data_fnames:
