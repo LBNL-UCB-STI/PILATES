@@ -523,9 +523,9 @@ def generate_activity_plans(
             print_str = (
                 "Generating {0} {1} input data from "
                 "{2} outputs".format(
-                    forecast_year, land_use_model, activity_demand_model))
+                    state.forecast_year, land_use_model, activity_demand_model))
             formatted_print(print_str)
-            asim_post.create_next_iter_inputs(settings, year, forecast_year)
+            asim_post.create_next_iter_inputs(settings, year, state.forecast_year)
 
     logger.info('Done!')
 
