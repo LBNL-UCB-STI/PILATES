@@ -77,9 +77,8 @@ class WorkflowState:
                     output_dir = os.path.join(folder_path, settings['atlas_host_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                 elif model_name == "activitysim":
-                    input_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
-                    os.makedirs(input_dir, exist_ok=True)
-                    asim_pre.copy_data_to_mutable_location(settings, input_dir)
+
+                    asim_pre.copy_data_to_mutable_location(settings, folder_path)
                     output_dir = os.path.join(folder_path, settings['asim_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
 
