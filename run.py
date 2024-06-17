@@ -271,13 +271,15 @@ def forecast_land_use(settings, year, workflow_state: WorkflowState, client, con
     run_land_use(settings, year, workflow_state, client)
 
     # check for outputs, exit if none
-    usim_local_data_folder = settings['usim_local_mutable_data_folder']
     usim_output_store = settings['usim_formattable_output_file_name'].format(
         year=workflow_state.forecast_year)
-    usim_datastore_fpath = os.path.join(usim_local_data_folder, usim_output_store)
+    output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
+                              settings['usim_local_mutable_data_folder'])
+    usim_datastore_fpath = os.path.join(output_dir, usim_output_store)
     if not os.path.exists(usim_datastore_fpath):
         logger.critical(
-            "No UrbanSim output data found. It probably did not finish successfully.")
+            "No UrbanSim output data found at {0}. It probably did not finish successfully.".format(
+                usim_datastore_fpath))
         sys.exit(1)
 
 
