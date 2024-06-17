@@ -1801,7 +1801,9 @@ def _create_land_use_table(
     return zones
 
 
-def copy_data_to_mutable_location(settings, output_dir):
+def copy_data_to_mutable_location(settings, folder_path):
+    input_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
+    os.makedirs(input_dir, exist_ok=True)
     region = settings['region']
     beam_input_dir = settings['beam_local_input_folder']
     beam_output_dir = settings['beam_local_output_folder']
@@ -1850,6 +1852,11 @@ def copy_data_to_mutable_location(settings, output_dir):
     logger.info("Copying beam zone geoms from {0} to {1}".format(
         beam_geoms_location,
         asim_geoms_location))
+
+    configs_source_dir = os.path.join(settings['asim_local_configs_folder'], settings['region'])
+    configs_dest_dir = os.path.join(folder_path, settings['asim_local_mutable_configs_folder'])
+    logger.info("Moving asim configs from {0} to {1}".format(configs_source_dir, configs_dest_dir))
+    shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
 
     copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
 
