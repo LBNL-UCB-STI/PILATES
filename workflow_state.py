@@ -151,8 +151,8 @@ class WorkflowState:
         logger.info("Started year %d", self.year)
         self.iteration_started = True
         self.forecast_year = \
-            min(self.year + self.travel_model_freq, self.end_year) if self.enabled(WorkflowState.Stage.land_use) \
-                else self.start_year
+            min(self.year + (step or self.travel_model_freq), self.end_year) if self.enabled(
+                WorkflowState.Stage.land_use) else self.start_year
         return self.year < self.end_year
 
     def is_start_year(self):
