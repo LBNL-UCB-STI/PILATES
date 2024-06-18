@@ -927,7 +927,7 @@ if __name__ == '__main__':
 
         # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
         if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
-            if state.year >= 2016:
+            if state.forecast_year >= 2017:
                 # If the forecast year is the same as the base year of this
                 # iteration, then land use forecasting has not been run. In this
                 # case, atlas need to update urbansim *inputs* before activitysim
