@@ -370,7 +370,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
 
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
-    atlas_pre.prepare_atlas_inputs(settings, yr, warm_start=warm_start_atlas)
+    atlas_pre.prepare_atlas_inputs(settings, yr, state, warm_start=warm_start_atlas)
 
     # calculate accessibility if atlas_beamac != 0
     if beamac > 0:
@@ -383,7 +383,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
         #             'WLK_COM_DRV', 'WLK_EXP_DRV', 'WLK_HVY_DRV', 'WLK_LOC_DRV', 'WLK_LRF_DRV',
         #             'DRV_COM_WLK', 'DRV_EXP_WLK', 'DRV_HVY_WLK', 'DRV_LOC_WLK', 'DRV_LRF_WLK']
         # measure_list = ['WACC','IWAIT','XWAIT','TOTIVT','WEGR','DTIM']
-        atlas_pre.compute_accessibility(path_list, measure_list, settings, output_year)
+        atlas_pre.compute_accessibility(path_list, measure_list, settings, state.forecast_year)
 
     # 3. RUN ATLAS via docker container client
     print_str = (
