@@ -4,19 +4,19 @@ import zipfile
 import os
 
 from pilates.utils.io import read_datastore
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
 
-def _load_asim_outputs(settings):
+def _load_asim_outputs(settings, output_path):
     output_tables_settings = settings['asim_output_tables']
     prefix = output_tables_settings['prefix']
     output_tables = output_tables_settings['tables']
     asim_output_dict = {}
     for table_name in output_tables:
         file_name = "%s%s.csv" % (prefix, table_name)
-        file_path = os.path.join(
-            settings['asim_local_output_folder'], file_name)
+        file_path = os.path.join(output_path, settings['asim_local_output_folder'], file_name)
         if table_name == 'persons':
             index_col = 'person_id'
         elif table_name == 'households':
@@ -50,18 +50,18 @@ def get_usim_datastore_fname(settings, io, year=None):
 
 
 def _prepare_updated_tables(
-        settings, forecast_year, asim_output_dict, tables_updated_by_asim,
+        settings, state: WorkflowState, asim_output_dict, tables_updated_by_asim,
         prefix=None):
     """
     Combines ActivitySim and UrbanSim outputs for tables updated by
     ActivitySim (e.g. households and persons)
     """
 
-    data_dir = settings['usim_local_data_folder']
+    data_dir = os.path.join(state.full_path, settings['usim_local_mutable_data_folder'])
 
     # e.g. model_data_2012.h5
     usim_output_store_name = get_usim_datastore_fname(
-        settings, io='output', year=forecast_year)
+        settings, io='output', year=state.forecast_year)
     usim_output_store_path = os.path.join(data_dir, usim_output_store_name)
     if not os.path.exists(usim_output_store_path):
         raise ValueError('No output data store found at {0}'.format(
@@ -270,9 +270,10 @@ def create_usim_input_data(
     return
 
 
-def create_next_iter_inputs(settings, year, forecast_year):
+def create_next_iter_inputs(settings, year, state: WorkflowState):
+    forecast_year = state.forecast_year
     tables_updated_by_asim = ['households', 'persons']
-    asim_output_dict = _load_asim_outputs(settings)
+    asim_output_dict = _load_asim_outputs(settings, state.full_path)
     asim_output_dict = _prepare_updated_tables(
         settings, forecast_year, asim_output_dict, tables_updated_by_asim,
         prefix=forecast_year)
