@@ -17,6 +17,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     atlas_input_path = settings['atlas_host_input_folder']
     logger.info("Copying atlas inputs from {0} to {1}".format(atlas_input_path, output_dir))
     shutil.copytree(atlas_input_path, output_dir)
+    # TODO: Download preprocessed inputs from here and unzip to the correct folder: https://storage.googleapis.com/beam-core-outputs/atlas-inputs/freeze_startpoint.zip
 
 
 def _get_usim_datastore_fname(settings, io, year=None):
