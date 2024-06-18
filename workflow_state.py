@@ -30,6 +30,10 @@ class WorkflowState:
         self.folder_name = folder_name
         self.output_path = output_path
         self.file_loc = file_loc
+        if year == 2010:
+            self.initial_step = 7
+        else:
+            self.initial_step = None
         if land_use_enabled:
             self.enabled_stages.add(WorkflowState.Stage.land_use)
         if vehicle_ownership_model_enabled:
@@ -135,7 +139,12 @@ class WorkflowState:
         return stage in self.enabled_stages
 
     def should_continue(self) -> bool:
-        next_year = self.year + self.travel_model_freq if self.iteration_started else self.year
+        if self.initial_step is not None:
+            step = self.initial_step
+            self.initial_step = None
+        else:
+            step = None
+        next_year = self.year + (step or self.travel_model_freq) if self.iteration_started else self.year
         if next_year >= self.end_year:
             return False
         self.year = next_year
