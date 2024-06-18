@@ -1065,10 +1065,10 @@ def create_skims_from_beam(settings, state: "WorkflowState",
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
             skims = tempSkims.loc[tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :]
-            skims = _raw_beam_skims_preprocess(settings, year, skims)
+            skims = _raw_beam_skims_preprocess(settings, state.year, skims)
             auto_df, transit_df = _create_skims_by_mode(settings, skims)
             ridehail_df = _load_raw_beam_origin_skims(settings)
-            ridehail_df = _raw_beam_origin_skims_preprocess(settings, year, ridehail_df)
+            ridehail_df = _raw_beam_origin_skims_preprocess(settings, state.year, ridehail_df)
 
             # Create skims
             _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir)
@@ -1093,8 +1093,8 @@ def create_skims_from_beam(settings, state: "WorkflowState",
     _create_offset(settings, order, data_dir=output_dir)
 
     if validation:
-        order = zone_order(settings, year)
-        skim_validations(settings, year, order, data_dir=output_dir)
+        order = zone_order(settings, state.year)
+        skim_validations(settings, state.year, order, data_dir=output_dir)
 
 
 def plot_skims(settings, zones,
@@ -1811,10 +1811,10 @@ def copy_data_to_mutable_location(settings, folder_path):
     origin_skims_fname = settings['origin_skims_fname']
     beam_geoms_fname = settings['beam_geoms_fname']
     beam_router_directory = settings['beam_router_directory']
-    asim_geoms_location = os.path.join(output_dir, beam_geoms_fname)
+    asim_geoms_location = os.path.join(input_dir, beam_geoms_fname)
 
     input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
-    mutable_skims_location = os.path.join(output_dir, "skims.omx")
+    mutable_skims_location = os.path.join(input_dir, "skims.omx")
 
     beam_geoms_location = os.path.join(beam_input_dir, region, beam_router_directory, beam_geoms_fname)
 
@@ -1834,7 +1834,7 @@ def copy_data_to_mutable_location(settings, folder_path):
             logger.info("No default skims found anywhere. We will generate defaults instead")
 
     input_skims_location = os.path.join(beam_input_dir, region, origin_skims_fname)
-    mutable_skims_location = os.path.join(output_dir, "origin_skims.csv.gz")
+    mutable_skims_location = os.path.join(input_dir, "origin_skims.csv.gz")
 
     if os.path.exists(input_skims_location):
         logger.info("Copying input origin skims from {0} to {1}".format(
