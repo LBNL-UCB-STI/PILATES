@@ -88,13 +88,13 @@ def init_data(dest, wildcard):
 
 
 def formatted_print(string, width=50, fill_char='#'):
-    print('\n')
+    logger.info('\n')
     if len(string) + 2 > width:
         width = len(string) + 4
     string = string.upper()
-    print(fill_char * width)
-    print('{:#^{width}}'.format(' ' + string + ' ', width=width))
-    print(fill_char * width, '\n')
+    logger.info(fill_char * width)
+    logger.info('{:#^{width}}'.format(' ' + string + ' ', width=width))
+    logger.info(fill_char * width, '\n')
 
 
 def find_latest_beam_iteration(beam_output_dir):
