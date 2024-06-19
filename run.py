@@ -397,8 +397,8 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
     atlas_post.atlas_update_h5_vehicle(settings, yr, state, warm_start=warm_start_atlas)
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
-    atlas_post.atlas_add_vehileTypeId(settings, yr)
-    atlas_post.build_beam_vehicles_input(settings, yr)
+    atlas_post.atlas_add_vehileTypeId(settings, yr, state)
+    atlas_post.build_beam_vehicles_input(settings, yr, state)
 
     logger.info('Atlas Done!')
 
