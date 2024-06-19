@@ -20,7 +20,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     shutil.copytree(atlas_input_path, output_dir, dirs_exist_ok=True)
     if settings['start_year'] == 2017:
         logger.info("Copying atlas warmstart outputs from {0} to {1}".format(atlas_output_path, output_dir))
-        shutil.copytree(atlas_output_path, output_dir)
+        shutil.copytree(atlas_output_path, output_dir, dirs_exist_ok=True)
     # TODO: Download preprocessed inputs from here and unzip to the correct folder: https://storage.googleapis.com/beam-core-outputs/atlas-inputs/freeze_startpoint.zip
 
 
