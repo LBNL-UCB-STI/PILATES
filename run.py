@@ -940,6 +940,8 @@ if __name__ == '__main__':
                 elif state.is_start_year():
                     run_atlas_auto(settings, state, client, warm_start_atlas=True)
                     run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+                else:
+                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
             else:
                 logger.info("Skipping atlas in year {0} because we can't start until 2017".format(state.year))
             state.complete(WorkflowState.Stage.vehicle_ownership_model)
