@@ -27,20 +27,21 @@ def _get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
-def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
+def atlas_update_h5_vehicle(settings, output_year, state: "WorkflowState", warm_start=False):
     # use atlas outputs in year provided and update "cars" & "hh_cars"
     # columns in urbansim h5 files
     logger.info('ATLAS is updating urbansim outputs for Year {}'.format(output_year))
 
     # read and format atlas vehicle ownership output
-    atlas_output_path = settings['atlas_host_output_folder']  # 'pilates/atlas/atlas_output'  #
+    atlas_output_path = os.path.join(state.full_path,
+                                     settings['atlas_host_output_folder'])  # 'pilates/atlas/atlas_output'  #
     fname = 'householdv_{}.csv'.format(output_year)
     df = pd.read_csv(os.path.join(atlas_output_path, fname))
     df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id').sort_index(ascending=True)
     df['hh_cars'] = pd.cut(df['cars'], bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
 
     # set which h5 file to update
-    h5path = settings['usim_local_data_folder']
+    h5path = os.path.join(state.full_path, settings['usim_local_mutable_data_folder'])
     if warm_start:
         h5fname = _get_usim_datastore_fname(settings, io='input')
     else:

@@ -88,13 +88,13 @@ def init_data(dest, wildcard):
 
 
 def formatted_print(string, width=50, fill_char='#'):
-    logger.info('\n')
+    print('\n')
     if len(string) + 2 > width:
         width = len(string) + 4
     string = string.upper()
-    logger.info(fill_char * width)
-    logger.info('{:#^{width}}'.format(' ' + string + ' ', width=width))
-    logger.info(fill_char * width, '\n')
+    print(fill_char * width)
+    print('{:#^{width}}'.format(' ' + string + ' ', width=width))
+    print(fill_char * width, '\n')
 
 
 def find_latest_beam_iteration(beam_output_dir):
@@ -158,10 +158,10 @@ def get_usim_docker_vols(settings, output_dir=None):
     usim_remote_data_folder = settings['usim_client_data_folder']
     if output_dir is None:
         output_dir = settings['usim_local_data_input_folder']
-    usim_local_data_folder = os.path.abspath(
+    usim_local_mutable_data_folder = os.path.abspath(
         output_dir)
     usim_docker_vols = {
-        usim_local_data_folder: {
+        usim_local_mutable_data_folder: {
             'bind': usim_remote_data_folder,
             'mode': 'rw'}}
     return usim_docker_vols
@@ -394,7 +394,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
     run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/')
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
-    atlas_post.atlas_update_h5_vehicle(settings, yr, warm_start=warm_start_atlas)
+    atlas_post.atlas_update_h5_vehicle(settings, yr, state, warm_start=warm_start_atlas)
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
     atlas_post.atlas_add_vehileTypeId(settings, yr)

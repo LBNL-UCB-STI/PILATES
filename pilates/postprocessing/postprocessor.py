@@ -64,7 +64,7 @@ def copy_outputs_to_mep(settings, year, iter):
                 f_out.writelines(f_in)
 
     def copy_urbansim_outputs_to_mep():
-        data_dir = settings['usim_local_data_folder']
+        data_dir = settings['usim_local_mutable_data_folder']
         usim_output_store_name = get_usim_datastore_fname(
             settings, io='input', year=year)
         usim_output_store_path = os.path.join(data_dir, usim_output_store_name)
