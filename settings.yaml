@@ -72,6 +72,7 @@ usim_local_mutable_data_folder: urbansim/data/
 usim_client_base_folder: /base/demos_urbansim
 usim_client_data_folder: /base/demos_urbansim/data/
 usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
+usim_formattable_input_file_name_year: "custom_mpo_{region_id}_model_data_{start_year}.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
 warm_start_activities: False
