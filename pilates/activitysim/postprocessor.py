@@ -172,7 +172,7 @@ def create_beam_input_data(settings, forecast_year, asim_output_dict):
 
 def create_usim_input_data(
         settings, input_year, forecast_year, asim_output_dict,
-        tables_updated_by_asim):
+        tables_updated_by_asim, full_path=None):
     """
     Creates UrbanSim input data for the next iteration.
 
@@ -187,6 +187,8 @@ def create_usim_input_data(
 
     # parse settings
     data_dir = settings['usim_local_mutable_data_folder']
+    if full_path is not None:
+        data_dir = os.path.join(full_path, data_dir)
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
@@ -282,7 +284,7 @@ def create_next_iter_inputs(settings, year, state: WorkflowState):
     #     create_beam_input_data(settings, forecast_year, asim_output_dict)
     create_usim_input_data(
         settings, year, forecast_year, asim_output_dict,
-        tables_updated_by_asim)
+        tables_updated_by_asim, state.full_path)
 
     return
 
