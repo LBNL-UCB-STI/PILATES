@@ -186,7 +186,7 @@ def create_usim_input_data(
     """
 
     # parse settings
-    data_dir = settings['usim_local_data_folder']
+    data_dir = settings['usim_local_mutable_data_folder']
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
@@ -295,7 +295,7 @@ def update_usim_inputs_after_warm_start(
 
     # load usim data
     if not usim_data_dir:
-        usim_data_dir = settings['usim_local_data_folder']
+        usim_data_dir = settings['usim_local_mutable_data_folder']
     datastore_name = get_usim_datastore_fname(settings, io='input')
     input_store_path = os.path.join(usim_data_dir, datastore_name)
     if not os.path.exists(input_store_path):
