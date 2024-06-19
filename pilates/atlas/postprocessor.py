@@ -76,13 +76,13 @@ def atlas_update_h5_vehicle(settings, output_year, state: "WorkflowState", warm_
             logger.info('ATLAS update h5 datastore table {0} - done'.format(key))
 
 
-def atlas_add_vehileTypeId(settings, output_year):
+def atlas_add_vehileTypeId(settings, output_year, state):
     # add a "vehicleTypeId" column in atlas output vehicles_{$year}.csv,
     # write as vehicles2_{$year}.csv
     # which will be read by beam preprocessor
     # vehicleTypeId = conc "bodytype"-"vintage_category"-"pred_power"
 
-    atlas_output_path = settings['atlas_host_output_folder']
+    atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
     fname = 'vehicles_{}.csv'.format(output_year)
 
     # read original atlas output "vehicles_*.csv" as dataframe
@@ -103,9 +103,9 @@ def atlas_add_vehileTypeId(settings, output_year):
     df.to_csv(os.path.join(atlas_output_path, 'vehicles2_{}.csv'.format(output_year)), index=False)
 
 
-def build_beam_vehicles_input(settings, output_year):
-    atlas_output_path = settings['atlas_host_output_folder']
-    atlas_input_path = settings['atlas_host_input_folder']
+def build_beam_vehicles_input(settings, output_year, state):
+    atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
+    atlas_input_path = os.path.join(state.full_path, settings['atlas_host_input_folder'])
     vehicles = pd.read_csv(os.path.join(atlas_output_path, "vehicles_{0}.csv".format(output_year)),
                            dtype={"householdId": pd.Int64Dtype()})
     mapping = pd.read_csv(
