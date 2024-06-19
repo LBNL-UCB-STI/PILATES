@@ -60,8 +60,7 @@ def atlas_update_h5_vehicle(settings, output_year, state: "WorkflowState", warm_
             key = 'households'
 
         olddf = h5[key]
-        if olddf.index.istype(float):
-            olddf.index = olddf.index.astype(int)
+        olddf.index = olddf.index.astype(int)
         olddf = olddf.reindex(df.index.astype(int))
 
         if olddf.shape[0] != df.shape[0]:
