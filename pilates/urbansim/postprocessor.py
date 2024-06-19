@@ -7,7 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 def _get_usim_datastore_fname(settings, io, year=None):
-
     if io == 'output':
         datastore_name = settings['usim_formattable_output_file_name'].format(
             year=year)
@@ -21,8 +20,7 @@ def _get_usim_datastore_fname(settings, io, year=None):
 
 
 def create_next_iter_usim_data(settings, year, forecast_year):
-
-    data_dir = settings['usim_local_data_folder']
+    data_dir = settings['usim_local_mutable_data_folder']
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
@@ -46,7 +44,7 @@ def create_next_iter_usim_data(settings, year, forecast_year):
     # load last iter output data
     output_datastore_name = _get_usim_datastore_fname(settings, 'output', forecast_year)
     output_store_path = os.path.join(data_dir, output_datastore_name)
-    
+
     # copy usim outputs into new input data store
     logger.info(
         'Merging results back into UrbanSim and storing as .h5!')
@@ -57,7 +55,7 @@ def create_next_iter_usim_data(settings, year, forecast_year):
         if os.path.join('/', table_prefix_year, table_name) == h5_key:
             updated_tables.append(table_name)
             new_input_store[table_name] = output_store[h5_key]
-        
+
     # copy missing tables from original usim inputs into new input data store
     for h5_key in og_input_store.keys():
         table_name = h5_key.split('/')[-1]
@@ -71,4 +69,3 @@ def create_next_iter_usim_data(settings, year, forecast_year):
     og_input_store.close()
     new_input_store.close()
     output_store.close()
-    

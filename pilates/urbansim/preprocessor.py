@@ -102,6 +102,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     region = settings['region']
     region_id = settings['region_to_region_id'][region]
     model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
+    ## TODO: Copy over other file if start year is 2017
     data_dir = settings['usim_local_data_input_folder']
     src = os.path.join(data_dir, model_data_fname)
     dest = os.path.join(output_dir, model_data_fname)
