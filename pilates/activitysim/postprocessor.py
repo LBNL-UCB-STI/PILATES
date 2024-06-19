@@ -275,7 +275,7 @@ def create_next_iter_inputs(settings, year, state: WorkflowState):
     tables_updated_by_asim = ['households', 'persons']
     asim_output_dict = _load_asim_outputs(settings, state.full_path)
     asim_output_dict = _prepare_updated_tables(
-        settings, forecast_year, asim_output_dict, tables_updated_by_asim,
+        settings, state, asim_output_dict, tables_updated_by_asim,
         prefix=forecast_year)
 
     # if settings['traffic_assignment_enabled']:
