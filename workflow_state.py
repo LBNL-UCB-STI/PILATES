@@ -111,6 +111,8 @@ class WorkflowState:
                             folder_name, file_loc)
         if (path is None) | (folder_name is None):
             out._create_output_dir(settings)
+        if year:
+            out.forecast_year = min(year + (stage or travel_model_freq), end_year) if land_use_enabled else start_year
         return out
 
     @classmethod
