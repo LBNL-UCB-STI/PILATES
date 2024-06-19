@@ -17,7 +17,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     atlas_input_path = settings['atlas_host_input_folder']
     atlas_output_path = settings['atlas_host_output_folder']
     logger.info("Copying atlas inputs from {0} to {1}".format(atlas_input_path, output_dir))
-    shutil.copytree(atlas_input_path, output_dir)
+    shutil.copytree(atlas_input_path, output_dir, dirs_exist_ok=True)
     if settings.start_year == 2017:
         logger.info("Copying atlas warmstart outputs from {0} to {1}".format(atlas_output_path, output_dir))
         shutil.copytree(atlas_output_path, output_dir)
