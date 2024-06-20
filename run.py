@@ -414,7 +414,7 @@ def run_atlas_auto(settings, state: WorkflowState, client, warm_start_atlas, for
         yr = state.forecast_year
     else:
         yr = state.start_year
-    atlas_output_path = settings['atlas_host_output_folder']
+    atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
     fname = 'vehicles_{}.csv'.format(yr)
     if os.path.exists(os.path.join(atlas_output_path, fname)) & warm_start_atlas:
         logger.info(
