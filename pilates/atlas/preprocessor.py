@@ -65,7 +65,8 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
         for f in glob.glob(os.path.join(old_input_path, "*.RData")):
             if os.path.exists(os.path.join(atlas_input_path, Path(f).name)):
                 logger.info(
-                    "Not file {0} to atlas input  {1} b/c it exists".format(f, os.path.join(atlas_input_path, f.name)))
+                    "Not file {0} to atlas input  {1} b/c it exists".format(f, os.path.join(atlas_input_path,
+                                                                                            Path(f).name)))
             else:
                 logger.info("Moving file {0} to atlas input for year {1}".format(f, year))
                 shutil.copyfile(f, atlas_input_path)
