@@ -2,6 +2,7 @@ import glob
 import logging
 import os
 import shutil
+from pathlib import Path
 
 import numpy as np
 import openmatrix as omx
@@ -56,7 +57,7 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
         old_input_path = os.path.join(state.full_path, settings['atlas_host_mutable_input_folder'],
                                       "year{}".format(state.year))
         for f in glob.glob(os.path.join(old_input_path, "*.RData")):
-            if os.path.exists(os.path.join(atlas_input_path, f.name)):
+            if os.path.exists(os.path.join(atlas_input_path, Path(f).name)):
                 logger.info(
                     "Not file {0} to atlas input  {1} b/c it exists".format(f, os.path.join(atlas_input_path, f.name)))
             else:
