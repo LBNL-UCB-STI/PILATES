@@ -69,7 +69,7 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
                                                                                             Path(f).name)))
             else:
                 logger.info("Moving file {0} to atlas input for year {1}".format(f, year))
-                shutil.copyfile(f, atlas_input_path)
+                shutil.copyfile(f, os.path.join(atlas_input_path, Path(f).name))
 
     # read urbansim h5 outputs
     with pd.HDFStore(urbansim_output, mode='r') as data:
