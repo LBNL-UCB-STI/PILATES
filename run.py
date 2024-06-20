@@ -370,7 +370,12 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
 
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
-    atlas_pre.prepare_atlas_inputs(settings, yr, state, warm_start=warm_start_atlas)
+    if forecast:
+        yrs = range(state.year + freq, yr, freq)
+    else:
+        yrs = [yr]
+    for yr_it in yrs:
+        atlas_pre.prepare_atlas_inputs(settings, yr_it, state, warm_start=warm_start_atlas)
 
     # calculate accessibility if atlas_beamac != 0
     if beamac > 0:
