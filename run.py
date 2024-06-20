@@ -371,7 +371,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
     # prepare atlas inputs from urbansim h5 output
     # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
     if forecast:
-        yrs = range(state.year + freq, yr, freq)
+        yrs = [y + 2 for y in range(state.year, yr, 2)]
     else:
         yrs = [yr]
     for yr_it in yrs:
