@@ -1,3 +1,4 @@
+import glob
 import logging
 import os
 import shutil
@@ -51,6 +52,16 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
 
     # set where to put atlas csv inputs (processed from urbansim outputs)
     atlas_input_path = os.path.join(state.full_path, settings['atlas_host_mutable_input_folder'], "year{}".format(year))
+    if year != state.year:
+        old_input_path = os.path.join(state.full_path, settings['atlas_host_mutable_input_folder'],
+                                      "year{}".format(state.year))
+        for f in glob.glob(os.path.join(old_input_path, "*.RData")):
+            if os.path.exists(os.path.join(atlas_input_path, f.name)):
+                logger.info(
+                    "Not file {0} to atlas input  {1} b/c it exists".format(f, os.path.join(atlas_input_path, f.name)))
+            else:
+                logger.info("Moving file {0} to atlas input for year {1}".format(f, year))
+                shutil.move(f, atlas_input_path)
 
     # if atlas input path does not exist, create one
     if not os.path.exists(atlas_input_path):

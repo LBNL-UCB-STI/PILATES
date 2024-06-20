@@ -75,7 +75,7 @@ class WorkflowState:
                     output_dir = os.path.join(folder_path, settings['beam_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                 elif model_name == "atlas":
-                    input_dir = os.path.join(folder_path, settings['atlas_host_input_folder'])
+                    input_dir = os.path.join(folder_path, settings['atlas_host_mutable_input_folder'])
                     os.makedirs(input_dir, exist_ok=True)
                     atlas_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(folder_path, settings['atlas_host_output_folder'])
