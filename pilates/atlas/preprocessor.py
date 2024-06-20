@@ -46,7 +46,7 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
         urbansim_output_fname = _get_usim_datastore_fname(settings, io='input')
     else:
         # if in main loop, read urbansim-generated h5 
-        urbansim_output_fname = _get_usim_datastore_fname(settings, io='output', year=year)
+        urbansim_output_fname = _get_usim_datastore_fname(settings, io='output', year=state.forecast_year)
     urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
 
     # set where to put atlas csv inputs (processed from urbansim outputs)
