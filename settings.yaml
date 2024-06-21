@@ -20,7 +20,7 @@ activity_demand_model: activitysim
 vehicle_ownership_model: atlas
 
 # docker or singularity
-container_manager: singularity
+container_manager: docker
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
