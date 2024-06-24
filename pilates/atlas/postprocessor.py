@@ -59,7 +59,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
             key = 'households'
 
         olddf = h5[key]
-        if olddf.index.istype(float):
+        # https://pandas.pydata.org/docs/dev/reference/api/pandas.Index.dtype.html#pandas.Index.dtype
+        if float == olddf.index.dtype:
             olddf.index = olddf.index.astype(int)
         olddf = olddf.reindex(df.index.astype(int))
 
