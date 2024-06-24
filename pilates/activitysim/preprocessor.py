@@ -1920,6 +1920,8 @@ def create_asim_data_from_h5(
         settings, state.forecast_year, warm_start=warm_start, mutable_data_dir=state.full_path)
 
     logger.info("Loading UrbanSim data from .h5")
+    logger.info("Reading households table from {0} in table {1}".format(store._path,
+                                                                        os.path.join(table_prefix_yr, 'households')))
     households = store[os.path.join(table_prefix_yr, 'households')]
     persons = store[os.path.join(table_prefix_yr, 'persons')]
     try:
