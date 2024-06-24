@@ -81,7 +81,8 @@ def make_archive(source, destination):
 
 def copy_vehicles_from_atlas(settings, state: "WorkflowState"):
     beam_scenario_folder = os.path.join(
-        settings['beam_local_input_folder'],
+        state.full_path,
+        settings['beam_local_mutable_data_folder'],
         settings['region'],
         settings['beam_scenario_folder'])
     beam_vehicles_path = os.path.join(beam_scenario_folder, 'vehicles.csv.gz')
@@ -90,6 +91,7 @@ def copy_vehicles_from_atlas(settings, state: "WorkflowState"):
     if not os.path.exists(atlas_vehicle_file_loc):
         atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir,
                                               "vehicles_{0}.csv.gz".format(state.forecast_year - 1))
+    logger.info("Copying atlas vehicles file from {0} to {1}".format(atlas_vehicle_file_loc, beam_vehicles_path))
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
 
 
