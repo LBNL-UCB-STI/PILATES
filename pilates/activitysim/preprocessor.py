@@ -1919,7 +1919,8 @@ def create_asim_data_from_h5(
     store, table_prefix_yr = read_datastore(
         settings, state.forecast_year, warm_start=warm_start, mutable_data_dir=state.full_path)
 
-    logger.info("Loading UrbanSim data from .h5")
+    logger.info(
+        "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(state.forecast_year, warm_start))
     logger.info("Reading households table from {0} in table {1}".format(store._path,
                                                                         os.path.join(table_prefix_yr, 'households')))
     households = store[os.path.join(table_prefix_yr, 'households')]
