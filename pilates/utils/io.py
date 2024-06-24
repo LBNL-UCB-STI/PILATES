@@ -128,7 +128,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     usim_local_mutable_data_folder = settings['usim_local_data_input_folder']
     urbansim_enabled = settings.get('land_use_model') is not None
 
-    if (year == settings['start_year']) or warm_start or ~urbansim_enabled:
+    if (year == settings['start_year']) or warm_start or not urbansim_enabled:
         logger.info(
             "Year {0}, start year {1}, warm_start {2}, urbansim_enabled {3}".format(year, settings['start_year'],
                                                                                     warm_start, urbansim_enabled))
