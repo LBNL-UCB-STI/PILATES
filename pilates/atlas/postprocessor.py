@@ -35,9 +35,15 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     # read and format atlas vehicle ownership output
     atlas_output_path = settings['atlas_host_output_folder']  # 'pilates/atlas/atlas_output'  #
     fname = 'householdv_{}.csv'.format(output_year)
-    df = pd.read_csv(os.path.join(atlas_output_path, fname))
+    atlas_output_file_path = os.path.join(atlas_output_path, fname)
+
+    logger.info("Reading atlas output from {0}".format(atlas_output_file_path))
+    df = pd.read_csv(atlas_output_file_path)
     df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id').sort_index(ascending=True)
     df['hh_cars'] = pd.cut(df['cars'], bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
+
+    # fix for 'Cannot store a category dtype in a HDF5 dataset that uses format="fixed". Use format="table"'
+    df['hh_cars'] = df['hh_cars'].astype(object)
 
     # set which h5 file to update
     h5path = settings['usim_local_data_folder']
@@ -60,7 +66,7 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
 
         olddf = h5[key]
         # https://pandas.pydata.org/docs/dev/reference/api/pandas.Index.dtype.html#pandas.Index.dtype
-        if float == olddf.index.dtype:
+        if olddf.index.dtype != int:
             olddf.index = olddf.index.astype(int)
         olddf = olddf.reindex(df.index.astype(int))
 
