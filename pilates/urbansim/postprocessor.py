@@ -19,7 +19,7 @@ def _get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
-def create_next_iter_usim_data(settings, year, forecast_year):
+def create_next_iter_usim_data(settings, year, forecast_year, full_path):
     data_dir = settings['usim_local_mutable_data_folder']
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
@@ -48,7 +48,7 @@ def create_next_iter_usim_data(settings, year, forecast_year):
     # copy usim outputs into new input data store
     logger.info(
         'Merging results back into UrbanSim and storing as .h5!')
-    output_store, table_prefix_year = read_datastore(settings, forecast_year)
+    output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=full_path)
 
     for h5_key in output_store.keys():
         table_name = h5_key.split('/')[-1]

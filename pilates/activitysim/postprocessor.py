@@ -217,7 +217,7 @@ def create_usim_input_data(
     if not os.path.exists(usim_output_store_path):
         raise ValueError('No output data found at {0}.'.format(
             usim_output_store_path))
-    usim_output_store, table_prefix_year = read_datastore(settings, forecast_year)
+    usim_output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=full_path)
 
     logger.info(
         'Merging results back into UrbanSim format and storing as .h5!')
