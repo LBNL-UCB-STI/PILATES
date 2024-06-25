@@ -211,7 +211,7 @@ def update_asim_config(settings, param, valueOverride=None):
     with open(asim_config_path, 'w') as file:
         for line in data:
             if config_header in line:
-                if ~modified:
+                if not modified:
                     indent = line.split(config_header)[0]
                     file.writelines(indent + config_header + ": " + str(config_value) + "\n")
                 modified = True
@@ -323,7 +323,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
             logger.info("Found existing skims, no need to re-create.")
             return False, False, False
 
-    if (~final_skims_exist | overwrite) & omx_skim_output:
+    if ((not final_skims_exist) or overwrite) and omx_skim_output:
         if mutable_skims_exist:
             return True, should_use_csv_input_skims, False
         else:

@@ -254,7 +254,8 @@ def simplify(input, timePeriod, mode, utf=False, expand=False):
 
 def copy_skims_for_unobserved_modes(mapping, skims):
     for fromMode, toModes in mapping.items():
-        relevantSkimKeys = [key for key in skims.list_matrices() if key.startswith(fromMode + "_") & ~("TOLL" in key)]
+        relevantSkimKeys = [key for key in skims.list_matrices() if
+                            key.startswith(fromMode + "_") and not ("TOLL" in key)]
         for skimKey in relevantSkimKeys:
             for toMode in toModes:
                 toKey = skimKey.replace(fromMode + "_", toMode + "_")

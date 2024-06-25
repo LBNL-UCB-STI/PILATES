@@ -55,7 +55,7 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
         with open(beam_config_path, 'w') as file:
             for line in data:
                 if config_header in line:
-                    if ~modified:
+                    if not modified:
                         file.writelines(config_header + " = " + str(config_value) + "\n")
                     modified = True
                 else:
@@ -126,7 +126,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
         iteration_folder_name = "year-{0}-iteration-{1}".format(year, replanning_iteration_number)
         iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
-        if ~os.path.exists(os.path.abspath(iteration_folder_path)):
+        if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
         input_file_path = os.path.join(file_path, file_name)
         target_file_path = os.path.join(iteration_folder_path, file_name)

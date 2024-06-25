@@ -974,7 +974,7 @@ if __name__ == '__main__':
             # If not generating activities with a separate ABM (e.g.
             # ActivitySim), then we need to create the next iteration of land
             # use data directly from the last set of land use outputs.
-            usim_post.create_next_iter_usim_data(settings, year, state.forecast_year)
+            usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
             state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
 
         # DO traffic assignment - but skip if using polaris as this is done along
