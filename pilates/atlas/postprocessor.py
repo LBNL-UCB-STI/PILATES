@@ -153,6 +153,7 @@ def build_beam_vehicles_input(settings, output_year, state):
             vehiclesSub[['household_id', 'vehicleTypeId']])
     outputVehicles = pd.concat(allVehicles).reset_index(drop=True)
     outputVehicles.rename(columns={"household_id": "householdId"}, inplace=True)
+    outputVehicles['householdId'] = outputVehicles['householdId'].astype(int)
     outputVehicles.index.rename("vehicleId", inplace=True)
     outputVehicles.to_csv(os.path.join(atlas_output_path, 'vehicles_{0}.csv.gz'.format(output_year)))
     allCounts.loc[allCounts.numberOfVehiclesCreated > 0, :].sort_values(by="numberOfVehiclesCreated", ascending=False)[
