@@ -146,14 +146,23 @@ def build_beam_vehicles_input(settings, output_year):
                             bestOption = (mapping.reset_index()['modelyear'] - modelYear).abs().idxmin()
                             bestYear = mapping.reset_index().iloc[bestOption, :]["modelyear"]
                             matched = mapping.loc[(slice(None), slice(None), bestYear), :]
-        createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
-                                         weights=matched['sampleProbabilityWithinCategory'].values)
-        createdVehicleCounts = createdVehicles.index.value_counts()
-        allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
-        vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
-        vehiclesSub['stateOfCharge'] = np.nan
-        allVehicles.append(
-            vehiclesSub[['household_id', 'vehicleTypeId']])
+        try:
+            createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+                                             weights=matched['sampleProbabilityWithinCategory'].values)
+            createdVehicleCounts = createdVehicles.index.value_counts()
+            allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
+            vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
+            vehiclesSub['stateOfCharge'] = np.nan
+            allVehicles.append(
+                vehiclesSub[['household_id', 'vehicleTypeId']])
+        except ValueError as we:
+            # File "..../pilates/atlas/postprocessor.py", line 149, in build_beam_vehicles_input
+            #     createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+            # File "/opt/conda/lib/python3.8/site-packages/pandas/core/generic.py", line 4959, in sample
+            #     raise ValueError("Invalid weights: weights sum to zero")
+            # ValueError: Invalid weights: weights sum to zero
+            logger.error(f"Exception ignored: {we}, 'allVehicles' not extended.")
+
     outputVehicles = pd.concat(allVehicles).reset_index(drop=True)
     outputVehicles.rename(columns={"household_id": "householdId"}, inplace=True)
     outputVehicles.index.rename("vehicleId", inplace=True)
