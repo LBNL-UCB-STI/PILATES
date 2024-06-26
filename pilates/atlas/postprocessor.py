@@ -127,7 +127,7 @@ def build_beam_vehicles_input(settings, output_year):
                 bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                 bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                 matched = mapping.loc[(fuelType, bodyType, bestYear, slice(None)), :]
-            except KeyError:
+            except (KeyError, ValueError):
                 try:
                     matched = mapping.loc[(fuelType, slice(None), modelYear), :]
                 except KeyError:
@@ -136,13 +136,13 @@ def build_beam_vehicles_input(settings, output_year):
                         bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                         bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                         matched = mapping.loc[(fuelType, slice(None), bestYear), :]
-                    except KeyError:
+                    except (KeyError, ValueError):
                         try:
                             temp = mapping.loc[(slice(None), bodyType, slice(None), slice(None)), :]
                             bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                             bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                             matched = mapping.loc[(slice(None), bodyType, bestYear), :]
-                        except KeyError:
+                        except (KeyError, ValueError):
                             bestOption = (mapping.reset_index()['modelyear'] - modelYear).abs().idxmin()
                             bestYear = mapping.reset_index().iloc[bestOption, :]["modelyear"]
                             matched = mapping.loc[(slice(None), slice(None), bestYear), :]
