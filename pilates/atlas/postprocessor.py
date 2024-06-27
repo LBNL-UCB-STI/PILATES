@@ -105,7 +105,7 @@ def atlas_add_vehileTypeId(settings, output_year, state):
 
 def build_beam_vehicles_input(settings, output_year, state):
     atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
-    atlas_input_path = os.path.join(state.full_path, settings['atlas_host_input_folder'])
+    atlas_input_path = os.path.join(state.full_path, settings['atlas_host_mutable_input_folder'])
     vehicles = pd.read_csv(os.path.join(atlas_output_path, "vehicles_{0}.csv".format(output_year)),
                            dtype={"householdId": pd.Int64Dtype()})
     mapping = pd.read_csv(
