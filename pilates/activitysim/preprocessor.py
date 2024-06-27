@@ -1864,7 +1864,7 @@ def copy_data_to_mutable_location(settings, folder_path):
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
-    zone_type = settings['skims_zone_type']
+    zone_type = settings['skims_zone_type'].lower()
     zone_id_col = zone_type_column[zone_type]
 
     if zone_id_col not in beam_geoms_file.columns:
@@ -1879,11 +1879,13 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
             logger.info("Mapping block group IDs to TAZ ids")
             beam_geoms_file['TAZ'] = beam_geoms_file['GEOID'].astype(str).replace(mapping)
 
-        elif zone_type == 'TAZ':
+        elif zone_type == 'taz':
             from_col = settings.get('geoms_index_col', 'zone_id')
             to_col = 'TAZ'
             logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
             beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
+        else:
+            logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
 
     beam_geoms_file.to_csv(asim_geoms_location)
 

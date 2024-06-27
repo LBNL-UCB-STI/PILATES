@@ -81,7 +81,7 @@ warm_start_activities: False
 ## Docker bind mounts: host == local; container == remote == client
 atlas_host_input_folder: pilates/atlas/atlas_input
 atlas_warmstart_input_folder: pilates/atlas/atlas_input
-atlas_host_mutable_input_folder: pilates/atlas/atlas_input
+atlas_host_mutable_input_folder: atlas/atlas_input
 atlas_host_output_folder: atlas/atlas_output
 atlas_container_input_folder: /atlas_input
 atlas_container_output_folder: /atlas_output
