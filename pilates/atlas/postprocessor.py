@@ -35,9 +35,15 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
     # read and format atlas vehicle ownership output
     atlas_output_path = settings['atlas_host_output_folder']  # 'pilates/atlas/atlas_output'  #
     fname = 'householdv_{}.csv'.format(output_year)
-    df = pd.read_csv(os.path.join(atlas_output_path, fname))
+    atlas_output_file_path = os.path.join(atlas_output_path, fname)
+
+    logger.info("Reading atlas output from {0}".format(atlas_output_file_path))
+    df = pd.read_csv(atlas_output_file_path)
     df = df.rename(columns={'nvehicles': 'cars'}).set_index('household_id').sort_index(ascending=True)
     df['hh_cars'] = pd.cut(df['cars'], bins=[-0.5, 0.5, 1.5, np.inf], labels=['none', 'one', 'two or more'])
+
+    # fix for 'Cannot store a category dtype in a HDF5 dataset that uses format="fixed". Use format="table"'
+    df['hh_cars'] = df['hh_cars'].astype(object)
 
     # set which h5 file to update
     h5path = settings['usim_local_data_folder']
@@ -59,7 +65,8 @@ def atlas_update_h5_vehicle(settings, output_year, warm_start=False):
             key = 'households'
 
         olddf = h5[key]
-        if olddf.index.istype(float):
+        # https://pandas.pydata.org/docs/dev/reference/api/pandas.Index.dtype.html#pandas.Index.dtype
+        if olddf.index.dtype != int:
             olddf.index = olddf.index.astype(int)
         olddf = olddf.reindex(df.index.astype(int))
 
@@ -120,7 +127,7 @@ def build_beam_vehicles_input(settings, output_year):
                 bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                 bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                 matched = mapping.loc[(fuelType, bodyType, bestYear, slice(None)), :]
-            except KeyError:
+            except (KeyError, ValueError):
                 try:
                     matched = mapping.loc[(fuelType, slice(None), modelYear), :]
                 except KeyError:
@@ -129,24 +136,33 @@ def build_beam_vehicles_input(settings, output_year):
                         bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                         bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                         matched = mapping.loc[(fuelType, slice(None), bestYear), :]
-                    except KeyError:
+                    except (KeyError, ValueError):
                         try:
                             temp = mapping.loc[(slice(None), bodyType, slice(None), slice(None)), :]
                             bestOption = (temp.reset_index()['modelyear'] - modelYear).abs().idxmin()
                             bestYear = temp.reset_index().iloc[bestOption, :]["modelyear"]
                             matched = mapping.loc[(slice(None), bodyType, bestYear), :]
-                        except KeyError:
+                        except (KeyError, ValueError):
                             bestOption = (mapping.reset_index()['modelyear'] - modelYear).abs().idxmin()
                             bestYear = mapping.reset_index().iloc[bestOption, :]["modelyear"]
                             matched = mapping.loc[(slice(None), slice(None), bestYear), :]
-        createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
-                                         weights=matched['sampleProbabilityWithinCategory'].values)
-        createdVehicleCounts = createdVehicles.index.value_counts()
-        allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
-        vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
-        vehiclesSub['stateOfCharge'] = np.nan
-        allVehicles.append(
-            vehiclesSub[['household_id', 'vehicleTypeId']])
+        try:
+            createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+                                             weights=matched['sampleProbabilityWithinCategory'].values)
+            createdVehicleCounts = createdVehicles.index.value_counts()
+            allCounts.loc[createdVehicleCounts.index, 'numberOfVehiclesCreated'] += createdVehicleCounts.values
+            vehiclesSub['vehicleTypeId'] = createdVehicles.index.get_level_values('vehicleTypeId')
+            vehiclesSub['stateOfCharge'] = np.nan
+            allVehicles.append(
+                vehiclesSub[['household_id', 'vehicleTypeId']])
+        except ValueError as we:
+            # File "..../pilates/atlas/postprocessor.py", line 149, in build_beam_vehicles_input
+            #     createdVehicles = matched.sample(vehiclesSub.shape[0], replace=True,
+            # File "/opt/conda/lib/python3.8/site-packages/pandas/core/generic.py", line 4959, in sample
+            #     raise ValueError("Invalid weights: weights sum to zero")
+            # ValueError: Invalid weights: weights sum to zero
+            logger.error(f"Exception ignored: {we}, 'allVehicles' not extended.")
+
     outputVehicles = pd.concat(allVehicles).reset_index(drop=True)
     outputVehicles.rename(columns={"household_id": "householdId"}, inplace=True)
     outputVehicles.index.rename("vehicleId", inplace=True)

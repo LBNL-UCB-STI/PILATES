@@ -20,7 +20,7 @@ activity_demand_model: activitysim
 vehicle_ownership_model: atlas
 
 # docker or singularity
-container_manager: singularity
+container_manager: docker
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
@@ -132,6 +132,7 @@ asim_local_output_folder: pilates/activitysim/output/
 asim_local_configs_folder: pilates/activitysim/configs/
 asim_validation_folder: pilates/activitysim/validation
 asim_formattable_command: "-h {0} -n {1} -c {2}"
+asim_input_zone_id_col: "zone_id"
 region_to_asim_subdir:
   austin: austin
   detroit: detroit
