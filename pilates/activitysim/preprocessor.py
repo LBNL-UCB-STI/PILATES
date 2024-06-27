@@ -115,7 +115,8 @@ def read_skims(settings, mode='a', data_dir=None, file_name='skims.omx'):
 def zone_id_to_taz(zones,
                    asim_zone_id_col='TAZ',
                    default_zone_id_col='zone_id'):
-    logger.info("Zones table columns: {0}", str(zones.columns))
+    logger.info("Zones table columns: '{0}' with index '{1}', asim zone ID col is '{2}', default is '{3}'.",
+                ", ".join(zones.columns), zones.index.name, asim_zone_id_col, default_zone_id_col)
 
     if zones.index.name != asim_zone_id_col:
         if asim_zone_id_col in zones.columns:
@@ -1839,11 +1840,13 @@ def create_asim_data_from_h5(
 
     asim_zone_id_col = 'TAZ'
 
+    input_zone_id_col = settings.get("asim_input_zone_id_col", "")
     # TODO: Generalize this or add it to settings.yaml
-    if region == "sfbay":
-        input_zone_id_col = 'taz1454'
-    else:
-        input_zone_id_col = 'zone_id'
+    if not input_zone_id_col:
+        if region == "sfbay":
+            input_zone_id_col = 'taz1454'
+        else:
+            input_zone_id_col = 'zone_id'
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
