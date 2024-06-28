@@ -109,7 +109,7 @@ def build_beam_vehicles_input(settings, output_year, state):
     vehicles = pd.read_csv(os.path.join(atlas_output_path, "vehicles_{0}.csv".format(output_year)),
                            dtype={"householdId": pd.Int64Dtype()})
     mapping = pd.read_csv(
-        os.path.join(atlas_input_path, "vehicle_type_mapping_{0}.csv".format(settings['atlas_adscen'])))
+        os.path.join(atlas_input_path, "vehicle_type_mapping_{0}.csv".format(settings['atlas_scenario'])))
     mapping['numberOfVehiclesCreated'] = 0
     mapping.set_index(["adopt_fuel", "bodytype", "modelyear", "vehicleTypeId"], inplace=True, drop=True)
     mapping = mapping.loc[~mapping.index.duplicated(), :]
