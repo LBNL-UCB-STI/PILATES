@@ -8,7 +8,7 @@
 region: seattle
 scenario: base
 start_year: 2010
-end_year: 2022
+end_year: 2012
 land_use_freq: 1
 travel_model_freq: 2
 vehicle_ownership_freq: 2
@@ -26,7 +26,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://zaneedell/beam:0.9.13-beta-v2
-  activitysim: docker://zaneedell/activitysim:0.1.5
+  activitysim: docker://zaneedell/activitysim:0.1.7
   polaris:
 
 # docker settings
@@ -130,7 +130,7 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 226950  # zero means no sampling, whole pop.
+household_sample_size: 22695  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
