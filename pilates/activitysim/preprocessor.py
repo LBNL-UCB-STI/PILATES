@@ -1253,7 +1253,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
 
     # create new column variables
     age_mask_1 = persons.age >= 18
-    age_mask_2 = persons.age.between(18, 64, inclusive=True)
+    age_mask_2 = persons.age.between(18, 64, inclusive="left")
     age_mask_3 = persons.age >= 65
     work_mask = persons.worker == 1
     student_mask = persons.student == 1
@@ -1261,9 +1261,9 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     type_4 = ((age_mask_2) & (~work_mask) & (~student_mask)) * 4
     type_5 = ((age_mask_3) & (~work_mask) & (~student_mask)) * 5
     type_3 = ((age_mask_1) & (student_mask)) * 3
-    type_6 = (persons.age.between(16, 17, inclusive=True)) * 6
-    type_7 = (persons.age.between(6, 16, inclusive=True)) * 7
-    type_8 = (persons.age.between(0, 5, inclusive=True)) * 8
+    type_6 = (persons.age.between(16, 17, inclusive="left")) * 6
+    type_7 = (persons.age.between(6, 16, inclusive="left")) * 7
+    type_8 = (persons.age.between(0, 5, inclusive="left")) * 8
     type_list = [
         type_1, type_3, type_4, type_5, type_6, type_7, type_8]
     for x in type_list:
