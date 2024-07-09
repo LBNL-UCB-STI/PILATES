@@ -126,8 +126,9 @@ def copy_data_to_mutable_location(settings, output_dir):
     for fname in other_data_fnames:
         src = os.path.join(data_dir, fname)
         dest = os.path.join(output_dir, fname)
-        logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
-        shutil.copyfile(src, dest)
+        if os.path.exists(src):
+            logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
+            shutil.copyfile(src, dest)
 
 
 def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
