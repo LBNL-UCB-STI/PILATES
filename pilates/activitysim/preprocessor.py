@@ -1331,7 +1331,8 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
                 p_badschool.sum()))
         persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
     persons = persons.dropna()
-    persons.loc[:, 'member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort) + 1
+    persons.loc[:, 'member_id'] = persons.groupby('household_id')['member_id'].apply(np.argsort).reindex(
+        persons.index) + 1
 
     persons.loc[persons['ptype'] == 1, 'school_zone_id'] = -1
 
