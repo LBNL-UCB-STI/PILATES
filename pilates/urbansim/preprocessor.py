@@ -101,9 +101,10 @@ def _load_raw_skims(settings, asim_data_dir, skim_format):
 def copy_data_to_mutable_location(settings, output_dir):
     region = settings['region']
     region_id = settings['region_to_region_id'][region]
-    year_specific_model_data_fname = settings['usim_formattable_input_file_name_year'].format(region_id=region_id,
-                                                                                              start_year=settings[
-                                                                                                  'start_year'])
+    year_specific_model_data_fname = settings.get('usim_formattable_input_file_name_year', '').format(
+        region_id=region_id,
+        start_year=settings[
+            'start_year'])
     model_data_fname = settings['usim_formattable_input_file_name'].format(region_id=region_id)
     ## TODO: Copy over other file if start year is 2017
     data_dir = settings['usim_local_data_input_folder']
