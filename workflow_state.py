@@ -60,28 +60,30 @@ class WorkflowState:
         folder_path = os.path.join(base_loc, folder_name)
         os.makedirs(folder_path, exist_ok=True)
 
+        have_not_copied_usim_data = True
+
         for model in ['travel_model', 'activity_demand_model', 'vehicle_ownership_model', 'land_use_model']:
             if settings.get(model) is not None:
                 model_name = settings[model]
                 os.makedirs(os.path.join(folder_path, model_name))
-                if model_name == "urbansim":
+                if (model_name == "urbansim") | ((model_name == "activitysim") & have_not_copied_usim_data):
                     output_dir = os.path.join(folder_path, settings['usim_local_mutable_data_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                     usim_pre.copy_data_to_mutable_location(settings, output_dir)
-                elif model_name == "beam":
+                    have_not_copied_usim_data = False
+                if model_name == "beam":
                     input_dir = os.path.join(folder_path, settings['beam_local_mutable_data_folder'])
                     os.makedirs(input_dir, exist_ok=True)
                     beam_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(folder_path, settings['beam_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
-                elif model_name == "atlas":
+                if model_name == "atlas":
                     input_dir = os.path.join(folder_path, settings['atlas_host_mutable_input_folder'])
                     os.makedirs(input_dir, exist_ok=True)
                     atlas_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(folder_path, settings['atlas_host_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
-                elif model_name == "activitysim":
-
+                if model_name == "activitysim":
                     asim_pre.copy_data_to_mutable_location(settings, folder_path)
                     output_dir = os.path.join(folder_path, settings['asim_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
