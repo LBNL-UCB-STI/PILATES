@@ -729,7 +729,7 @@ def run_replanning_loop():
         if replanning_iteration_number < replan_iters:
             beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion')
             beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-        #else:
+        # else:
         #    beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
             settings, year, state, client, replanning_iteration_number)
@@ -1007,7 +1007,7 @@ if __name__ == '__main__':
                     copy_outputs_to_mep(settings, year, -1)
                 except:
                     print("Skipping post")
-            beam_post.trim_inaccessible_ods(settings)
+            beam_post.trim_inaccessible_ods(settings, working_dir)
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
 
     logger.info("Finished")
