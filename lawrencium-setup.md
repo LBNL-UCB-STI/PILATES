@@ -4,16 +4,21 @@
 cd /global/scratch/users/$USER
 mkdir sources
 cd sources
-git clone --branch atlas-v2 https://github.com/LBNL-UCB-STI/PILATES.git
+git clone --branch copy-woorking-directory https://github.com/LBNL-UCB-STI/PILATES.git
 cd PILATES
 ```
 
 ## Setup Python
 
 ```commandline
-module load python/3.8.8
-pip install --user openmatrix
-pip install --user geopandas
+module load python/3.10.12
+python -m pip uninstall --user shapely
+python -m pip install --user shapely
+python -m pip install --user openmatrix
+python -m pip install --user pygeos
+python -m pip install --user geopandas
+python -m pip install --user table
+python -m pip install --user PyYAML
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
 ```
 
@@ -85,4 +90,7 @@ cd ../../../
 cd hpc
 ./job_runner.sh
 ```
+#### Optional tags:
+`-c`: Define a new settings file, defaults to `settings.yaml`
 
+`-s`: Current stage file name of run to restart in the middle of. If none, starts a new run with a new current stage file. Defaults to none.
