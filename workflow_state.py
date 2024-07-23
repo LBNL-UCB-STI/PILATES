@@ -17,9 +17,8 @@ class WorkflowState:
                   'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iter,
-                 output_path,
-                 folder_name, file_loc):
+                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iteration,
+                 output_path, folder_name, file_loc):
         self.iteration_started = False
         self.start_year = start_year
         self.end_year = end_year
