@@ -32,8 +32,8 @@ singularity_images:
 # docker settings
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
-  atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.10
+  atlas: ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
+  beam: zaneedell/beam:0.9.12
   activitysim: zaneedell/activitysim:0.1.4
   polaris: tbd
 docker_stdout: False
