@@ -17,7 +17,8 @@ class WorkflowState:
                   'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, output_path,
+                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iter,
+                 output_path,
                  folder_name, file_loc):
         self.iteration_started = False
         self.start_year = start_year
@@ -25,6 +26,7 @@ class WorkflowState:
         self.travel_model_freq = travel_model_freq
         self.year = year
         self.stage = stage
+        self.iteration = iteration
         self.forecast_year = None
         self.enabled_stages = set([])
         self.folder_name = folder_name
@@ -104,13 +106,13 @@ class WorkflowState:
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
         file_loc = settings['state_file_loc']
-        [year, stage, path, folder_name] = cls.read_current_stage(file_loc)
+        [year, stage, iteration, path, folder_name] = cls.read_current_stage(file_loc)
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s, filename=%s)", year, stage, file_loc)
         year = year or start_year
         out = WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                            activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, path,
-                            folder_name, file_loc)
+                            activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage,
+                            iteration, path, folder_name, file_loc)
         if (path is None) | (folder_name is None):
             out._create_output_dir(settings)
         if year:
@@ -119,9 +121,9 @@ class WorkflowState:
         return out
 
     @classmethod
-    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name):
+    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration):
         to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
-                   "folder_name": folder_name}
+                   "folder_name": folder_name, "iteration": iteration}
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -138,7 +140,8 @@ class WorkflowState:
             stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
             path = data.get('path', None)
             folder_name = data.get('folder_name', None)
-            return [year, stage, path, folder_name]
+            iteration = data.get('iteration', 0)
+            return [year, stage, iteration, path, folder_name]
 
     def enabled(self, stage) -> bool:
         return stage in self.enabled_stages
@@ -176,9 +179,15 @@ class WorkflowState:
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
-            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name)
+            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0)
         else:
             os.remove(self.file_loc)
+
+    def complete_iteration(self, iteration):
+        logger.info("Completed iteration %d of stage %s of %d", iteration, self.stage, self.year)
+        self.iteration += 1
+        WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name,
+                                  self.iteration)
 
     def next_stage(self, year: int, stage: Stage):
         next_enabled_stage = next(filter(self.enabled, list(WorkflowState.Stage)[stage.value:]), None)

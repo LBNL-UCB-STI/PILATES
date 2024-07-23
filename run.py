@@ -687,7 +687,7 @@ def initialize_asim_for_replanning(settings, forecast_year):
                       command=base_asim_cmd)
 
 
-def run_replanning_loop():
+def run_replanning_loop(state: WorkflowState):
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
@@ -699,8 +699,8 @@ def run_replanning_loop():
     docker_stdout = settings.get('docker_stdout', False)
     last_asim_step = settings['replan_after']
 
-    for i in range(replan_iters):
-        replanning_iteration_number = i + 1
+    for i in range(state.iteration + 1, replan_iters):
+        replanning_iteration_number = i
         print_str = (
             'Replanning Iteration {0}'.format(replanning_iteration_number))
         formatted_print(print_str)
@@ -995,7 +995,7 @@ if __name__ == '__main__':
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             if replanning_enabled > 0:
-                run_replanning_loop()
+                run_replanning_loop(state)
                 try:
                     process_event_file(settings, year, settings['replan_iters'])
                     copy_outputs_to_mep(settings, year, settings['replan_iters'])
