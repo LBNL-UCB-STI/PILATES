@@ -14,7 +14,7 @@ travel_model_freq: 2
 vehicle_ownership_freq: 2
 
 # simulation platforms (leave blank to turn off)
-land_use_model: urbansim
+land_use_model: # urbansim
 travel_model:
 activity_demand_model: activitysim
 vehicle_ownership_model: atlas
