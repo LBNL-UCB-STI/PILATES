@@ -20,7 +20,7 @@ activity_demand_model: activitysim
 vehicle_ownership_model: atlas
 
 # docker or singularity
-container_manager: singularity
+container_manager: docker
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
@@ -59,7 +59,7 @@ geoms_index_col: taz1454
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: /global/scratch/users/$USER/pilates-output
+output_directory: pilates-simulation-output
 output_run_name: test
 
 # URBANSIM
