@@ -699,8 +699,8 @@ def run_replanning_loop(state: WorkflowState):
     docker_stdout = settings.get('docker_stdout', False)
     last_asim_step = settings['replan_after']
 
-    for i in range(state.iteration + 1, replan_iters):
-        replanning_iteration_number = i
+    for i in range(state.iteration, replan_iters):
+        replanning_iteration_number = i + 1
         print_str = (
             'Replanning Iteration {0}'.format(replanning_iteration_number))
         formatted_print(print_str)
