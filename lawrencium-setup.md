@@ -13,7 +13,7 @@ Or start up an interactive Jupyter session on a [small] node via LRC-OnDemand: h
 > [!TIP]
 > It's useful to set up a symlink from the home directory (where you're logged in) to the scratch directory (where we want to store big files like the PILATES data)
 > ```commandline
-> ln -s scratch/ /global/scratch/users/[username]
+> ln -s /global/scratch/users/[username] ./scratch
 > ```
 
 ## Installing PILATES
