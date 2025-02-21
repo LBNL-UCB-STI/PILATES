@@ -66,7 +66,7 @@ class WorkflowState:
         for model in ['travel_model', 'activity_demand_model', 'vehicle_ownership_model', 'land_use_model']:
             if settings.get(model) is not None:
                 model_name = settings[model]
-                os.makedirs(os.path.join(folder_path, model_name))
+                os.makedirs(os.path.join(folder_path, model_name), exist_ok=True)
                 if (model_name == "urbansim") | ((model_name == "activitysim") & have_not_copied_usim_data):
                     output_dir = os.path.join(folder_path, settings['usim_local_mutable_data_folder'])
                     os.makedirs(output_dir, exist_ok=True)
