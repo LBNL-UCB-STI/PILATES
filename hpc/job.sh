@@ -5,6 +5,13 @@ module load gcc/11.4.0
 module load geos/3.12.0
 module load python/3.10.12
 
+# Find and export GEOS library path
+GEOS_PREFIX=$(dirname $(dirname $(which geos-config)))
+export LD_LIBRARY_PATH=$GEOS_PREFIX/lib:$LD_LIBRARY_PATH
+
+# Let's also try to find the PROJ data directory
+export PROJ_LIB=$GEOS_PREFIX/share/proj
+
 # First, remove all relevant packages from user space
 rm -rf ~/.local/lib/python3.10/site-packages/numpy*
 rm -rf ~/.local/lib/python3.10/site-packages/pandas*
@@ -26,6 +33,11 @@ pip install --user --no-deps matplotlib==3.7.1
 
 # Install dependencies
 pip install --user python-dateutil pytz numexpr bottleneck
+
+# Print the library paths to verify
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo "PROJ_LIB: $PROJ_LIB"
+ls -l $GEOS_PREFIX/lib/libgeos*
 
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
 cd /global/scratch/users/$USER/sources/PILATES
