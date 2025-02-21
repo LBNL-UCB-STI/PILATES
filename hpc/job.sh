@@ -5,15 +5,20 @@ module load gcc/11.4.0
 module load geos/3.12.0
 module load python/3.10.12
 
-# First install numpy with a compatible version
-pip install --user --force-reinstall "numpy<2.0.0"
+# First uninstall everything
+pip uninstall -y numpy pandas geopandas shapely pyproj pygeos tables numexpr bottleneck matplotlib
 
-# Then install other packages
-pip install --user --force-reinstall shapely==1.8.5
-pip install --user --force-reinstall pyproj==3.6.1
-pip install --user --force-reinstall pygeos==0.14
-pip install --user --force-reinstall geopandas==0.11.1
-pip install --user --force-reinstall pandas<2.0.0  # Use older pandas to ensure compatibility
+# Install specific version of numpy first
+pip install --user numpy==1.24.4
+
+# Then install other packages specifying versions that work with numpy 1.24
+pip install --user pandas==1.5.3
+pip install --user shapely==1.8.5
+pip install --user pyproj==3.6.1
+pip install --user pygeos==0.14
+pip install --user geopandas==0.11.1
+pip install --user tables==3.8.0
+pip install --user matplotlib==3.7.1
 
 # If you need tables package:
 pip install --user --force-reinstall tables
