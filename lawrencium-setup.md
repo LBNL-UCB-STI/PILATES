@@ -1,10 +1,28 @@
+## Logging into Lawrencium
+
+Make sure you have an account set up at MyLRC: https://mylrc.lbl.gov
+
+Either ssh into the login node:
+
+```commandline
+ssh [your_username]@lrc-login.lbl.gov
+```
+
+Or start up an interactive Jupyter session on a [small] node via LRC-OnDemand: https://lrc-ondemand.lbl.gov/
+
+> [!TIP]
+> It's useful to set up a symlink from the home directory (where you're logged in) to the scratch directory (where we want to store big files like the PILATES data)
+> ```commandline
+> ln -s /global/scratch/users/[username] ./scratch
+> ```
+
 ## Installing PILATES
 
 ```commandline
 cd /global/scratch/users/$USER
 mkdir sources
 cd sources
-git clone --branch copy-woorking-directory https://github.com/LBNL-UCB-STI/PILATES.git
+git clone --branch copy-working-directory https://github.com/LBNL-UCB-STI/PILATES.git
 cd PILATES
 ```
 
