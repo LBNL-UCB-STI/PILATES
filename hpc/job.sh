@@ -6,6 +6,7 @@
 #conda install -c conda-forge geopandas h5py openmatrix pytables numpy docker-py tqdm pyyaml psutil cloudpickle
 module load python/3.10.12
 pip uninstall shapely
+pip uninstall geopandas
 pip install --user shapely
 pip install --user openmatrix
 pip install --user pygeos
