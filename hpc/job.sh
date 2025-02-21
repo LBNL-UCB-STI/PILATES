@@ -1,6 +1,6 @@
 #!/bin/bash
 
-module load python/3.8.8
+module load python/3.10.12
 #pip install --user openmatrix
 #pip install --user geopandas
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
