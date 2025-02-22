@@ -27,9 +27,12 @@ pip install --user --no-deps matplotlib==3.7.1
 pip install --user --no-deps numexpr==2.10.2
 pip install --user --no-deps bottleneck==1.4.2
 
-# Verify numpy version
-echo "Checking numpy version:"
-python -c "import numpy; print(numpy.__version__)"
+# Install additional required packages
+pip install --user requests
+pip install --user 'urllib3<2.0.0'
+pip install --user certifi
+pip install --user charset-normalizer
+pip install --user idna
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
