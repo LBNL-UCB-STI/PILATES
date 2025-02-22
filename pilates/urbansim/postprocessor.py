@@ -35,11 +35,22 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
     new_input_store_path = input_store_path.replace(input_datastore_name, archive_fname)
 
     # Move existing input store to archive if it exists
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Looking for input store at absolute path: {os.path.abspath(input_store_path)}")
+    logger.info(f"Data directory setting is: {data_dir}")
+
     if os.path.exists(input_store_path):
         logger.info("Moving urbansim inputs from the previous iteration to {0}".format(archive_fname))
         os.rename(input_store_path, new_input_store_path)
     else:
         logger.error(f"Input store path {input_store_path} does not exist")
+        # Maybe list contents of parent directory to help debug
+        parent_dir = os.path.dirname(input_store_path)
+        if os.path.exists(parent_dir):
+            logger.info(f"Contents of {parent_dir}:")
+            logger.info(str(os.listdir(parent_dir)))
+        else:
+            logger.error(f"Parent directory {parent_dir} does not exist")
         return  # or handle this case appropriately
 
     og_input_store = pd.HDFStore(new_input_store_path)
