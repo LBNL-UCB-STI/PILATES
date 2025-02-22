@@ -25,16 +25,22 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
     # it will be overwritten in the next step.
+
+    # Get input datastore name and path
     input_datastore_name = _get_usim_datastore_fname(settings, io='input')
     input_store_path = os.path.join(data_dir, input_datastore_name)
+
+    # Create archive filename
+    archive_fname = 'input_data_for_{0}_outputs.h5'.format(forecast_year)
+    new_input_store_path = input_store_path.replace(input_datastore_name, archive_fname)
+
+    # Move existing input store to archive if it exists
     if os.path.exists(input_store_path):
-        archive_fname = 'input_data_for_{0}_outputs.h5'.format(forecast_year)
-        logger.info(
-            "Moving urbansim inputs from the previous iteration to {0}".format(
-                archive_fname))
-        new_input_store_path = input_store_path.replace(
-            input_datastore_name, archive_fname)
+        logger.info("Moving urbansim inputs from the previous iteration to {0}".format(archive_fname))
         os.rename(input_store_path, new_input_store_path)
+    else:
+        logger.error(f"Input store path {input_store_path} does not exist")
+        return  # or handle this case appropriately
 
     og_input_store = pd.HDFStore(new_input_store_path)
     new_input_store = pd.HDFStore(input_store_path)

@@ -24,35 +24,35 @@ export LD_LIBRARY_PATH=$HOME/.local/geos/lib64:$LD_LIBRARY_PATH
 export PATH=$HOME/.local/geos/bin:$PATH
 export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 
-# Clean previous installations more thoroughly
-pip uninstall -y numpy pandas geopandas shapely pyproj pygeos tables matplotlib python-dateutil pytz numexpr bottleneck
-
-# Force reinstall core packages in correct order
-pip install --user --no-deps numpy==1.23.5
-pip install --user --no-deps six==1.17.0
-pip install --user --no-deps python-dateutil==2.9.0.post0
-pip install --user --no-deps pytz==2025.1
-pip install --user --no-deps pandas==1.5.3
-GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary shapely shapely==1.8.5
-pip install --user --no-deps pyproj==3.6.1
-GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary pygeos pygeos==0.14
-pip install --user --no-deps geopandas==0.11.1
-pip install --user --no-deps tables==3.8.0
-pip install --user --no-deps matplotlib==3.7.1
-pip install --user --no-deps numexpr==2.10.2
-pip install --user --no-deps bottleneck==1.4.2
-
-# Install additional required packages
-pip install --user requests
-pip install --user 'urllib3<2.0.0'
-pip install --user certifi
-pip install --user charset-normalizer
-pip install --user idna
-pip install --user tqdm
-pip install --user pyyaml
-pip install --user h5py
-pip install --user psutil
-pip install --user joblib  # Adding joblib for parallel processing
+## Clean previous installations more thoroughly
+#pip uninstall -y numpy pandas geopandas shapely pyproj pygeos tables matplotlib python-dateutil pytz numexpr bottleneck
+#
+## Force reinstall core packages in correct order
+#pip install --user --no-deps numpy==1.23.5
+#pip install --user --no-deps six==1.17.0
+#pip install --user --no-deps python-dateutil==2.9.0.post0
+#pip install --user --no-deps pytz==2025.1
+#pip install --user --no-deps pandas==1.5.3
+#GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary shapely shapely==1.8.5
+#pip install --user --no-deps pyproj==3.6.1
+#GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary pygeos pygeos==0.14
+#pip install --user --no-deps geopandas==0.11.1
+#pip install --user --no-deps tables==3.8.0
+#pip install --user --no-deps matplotlib==3.7.1
+#pip install --user --no-deps numexpr==2.10.2
+#pip install --user --no-deps bottleneck==1.4.2
+#
+## Install additional required packages
+#pip install --user requests
+#pip install --user 'urllib3<2.0.0'
+#pip install --user certifi
+#pip install --user charset-normalizer
+#pip install --user idna
+#pip install --user tqdm
+#pip install --user pyyaml
+#pip install --user h5py
+#pip install --user psutil
+#pip install --user joblib  # Adding joblib for parallel processing
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
