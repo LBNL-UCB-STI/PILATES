@@ -9,33 +9,27 @@ export LD_LIBRARY_PATH=$HOME/.local/geos/lib64:$LD_LIBRARY_PATH
 export PATH=$HOME/.local/geos/bin:$PATH
 export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 
-# Clean previous installations
-rm -rf ~/.local/lib/python3.10/site-packages/numpy*
-rm -rf ~/.local/lib/python3.10/site-packages/pandas*
-rm -rf ~/.local/lib/python3.10/site-packages/geopandas*
-rm -rf ~/.local/lib/python3.10/site-packages/shapely*
-rm -rf ~/.local/lib/python3.10/site-packages/pyproj*
-rm -rf ~/.local/lib/python3.10/site-packages/pygeos*
-rm -rf ~/.local/lib/python3.10/site-packages/tables*
+# Clean previous installations more thoroughly
+pip uninstall -y numpy pandas geopandas shapely pyproj pygeos tables matplotlib python-dateutil pytz numexpr bottleneck
 
-# Force reinstall all packages
-pip install --user --force-reinstall --no-deps numpy==1.23.5
-pip install --user --force-reinstall --no-deps pandas==1.5.3
-pip install --user --force-reinstall --no-binary shapely shapely==1.8.5
-pip install --user --force-reinstall --no-deps pyproj==3.6.1
-pip install --user --force-reinstall --no-deps pygeos==0.14
-pip install --user --force-reinstall --no-deps geopandas==0.11.1
-pip install --user --force-reinstall --no-deps tables==3.8.0
-pip install --user --force-reinstall --no-deps matplotlib==3.7.1
+# Force reinstall core packages in correct order
+pip install --user --no-deps numpy==1.23.5
+pip install --user --no-deps six==1.17.0
+pip install --user --no-deps python-dateutil==2.9.0.post0
+pip install --user --no-deps pytz==2025.1
+pip install --user --no-deps pandas==1.5.3
+GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary shapely shapely==1.8.5
+pip install --user --no-deps pyproj==3.6.1
+GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary pygeos pygeos==0.14
+pip install --user --no-deps geopandas==0.11.1
+pip install --user --no-deps tables==3.8.0
+pip install --user --no-deps matplotlib==3.7.1
+pip install --user --no-deps numexpr==2.10.2
+pip install --user --no-deps bottleneck==1.4.2
 
-# Install dependencies
-pip install --user --force-reinstall python-dateutil pytz numexpr bottleneck
-
-# Verify GEOS installation
-echo "Checking GEOS installation:"
-ls -l $HOME/.local/geos/lib64/libgeos*
-echo "GEOS_CONFIG location: $GEOS_CONFIG"
-$GEOS_CONFIG --version
+# Verify numpy version
+echo "Checking numpy version:"
+python -c "import numpy; print(numpy.__version__)"
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
