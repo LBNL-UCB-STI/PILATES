@@ -33,10 +33,11 @@ pip install --user 'urllib3<2.0.0'
 pip install --user certifi
 pip install --user charset-normalizer
 pip install --user idna
-pip install --user tqdm  # Adding tqdm package
-pip install --user pyyaml  # Often needed for config files
-pip install --user h5py   # Often needed with tables
-pip install --user psutil  # Common dependency
+pip install --user tqdm
+pip install --user pyyaml
+pip install --user h5py
+pip install --user psutil
+pip install --user joblib  # Adding joblib for parallel processing
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
