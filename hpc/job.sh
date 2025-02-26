@@ -3,7 +3,7 @@
 # Load required modules
 module load gcc/11.4.0
 module load python/3.10.12-gcc-11.4.0
-
+module load proj/9.2.1
 
 ## Create directories for local installation
 #mkdir -p $HOME/.local/src
@@ -33,9 +33,9 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 #pip install --user --no-deps python-dateutil==2.9.0.post0
 #pip install --user --no-deps pytz==2025.1
 #pip install --user --no-deps pandas==1.5.3
-#GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary shapely shapely==1.8.5
-#pip install --user --no-deps pyproj==3.6.1
-#GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary pygeos pygeos==0.14
+# GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary shapely shapely==1.8.5
+# pip install --user --no-deps pyproj==3.6.1
+# GEOS_CONFIG=$HOME/.local/geos/bin/geos-config pip install --user --no-binary pygeos pygeos==0.14
 #pip install --user --no-deps geopandas==0.11.1
 #pip install --user --no-deps tables==3.8.0
 #pip install --user --no-deps matplotlib==3.7.1
@@ -53,12 +53,12 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 #pip install --user h5py
 #pip install --user psutil
 #pip install --user joblib  # Adding joblib for parallel processing
+pip install --user docker
 
-# For PROJ < 9.1
-export PROJ_LIB=$HOME/.local/geos/share/proj
-
-# For PROJ >= 9.1
-export PROJ_DATA=$HOME/.local/geos/share/proj
+## Use the existing PROJ data from fiona
+#export PROJ_DATA="/global/home/users/hmlaarabi/.local/lib/python3.10/site-packages/fiona/proj_data"
+## Keeping this for backward compatibility with older PROJ versions
+#export PROJ_LIB="/global/home/users/hmlaarabi/.local/lib/python3.10/site-packages/fiona/proj_data"
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
