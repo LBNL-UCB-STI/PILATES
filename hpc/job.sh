@@ -54,6 +54,12 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 #pip install --user psutil
 #pip install --user joblib  # Adding joblib for parallel processing
 
+# For PROJ < 9.1
+export PROJ_LIB=$HOME/.local/geos/share/proj
+
+# For PROJ >= 9.1
+export PROJ_DATA=$HOME/.local/geos/share/proj
+
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
 
