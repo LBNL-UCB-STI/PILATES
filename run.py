@@ -554,10 +554,10 @@ def run_traffic_assignment(
         path_to_beam_config = '/app/input/{0}/{1}'.format(
             region, beam_config)
         run_path = state.full_path
-        beam_local_input_folder = os.path.join(run_path, settings['beam_local_mutable_data_folder'])
-        abs_beam_input = os.path.abspath(beam_local_input_folder)
+        beam_local_mutable_data_folder = os.path.join(run_path, settings['beam_local_mutable_data_folder'])
+        abs_beam_input = os.path.abspath(str(beam_local_mutable_data_folder))
         beam_local_output_folder = os.path.join(run_path, settings['beam_local_output_folder'])
-        abs_beam_output = os.path.abspath(beam_local_output_folder)
+        abs_beam_output = os.path.abspath(str(beam_local_output_folder))
         activity_demand_model = settings.get('activity_demand_model', False)
         docker_stdout = settings['docker_stdout']
         skims_fname = settings['skims_fname']
