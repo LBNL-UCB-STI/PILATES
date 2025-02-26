@@ -57,14 +57,6 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
 
-# Add these debugging lines before running the Python script
-echo "Current working directory:"
-pwd
-echo "Checking if urbansim/data exists:"
-ls -la urbansim/data 2>/dev/null || echo "Directory does not exist"
-echo "Full directory structure:"
-find . -maxdepth 3 -type d 2>/dev/null || echo "Cannot list directories"
-
 # Change to your working directory and run
 cd /global/scratch/users/$USER/sources/PILATES
 echo "$1"

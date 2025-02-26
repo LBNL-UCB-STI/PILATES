@@ -221,23 +221,35 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
     else:
         merge_only_updated_households()
 
-    if settings.get('final_asim_plans_folder', False):
-        # This first one not currently necessary when asim-lite is replanning all households
-        # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
-        #                                                 replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.year,
-                                                        replanning_iteration_number)
-        copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
-                                                        replanning_iteration_number)
+    if settings.get('use_final_asim_plans', False):
+        logging.info("You have chosen to use final ASIM plans. Will attempt to read files from:")
+        logging.info(f"- Beam scenario folder: {beam_scenario_folder}")
+        logging.info(f"- ASIM output data directory: {asim_output_data_dir}")
+
+        # Files from beam_scenario_folder
+        if os.path.exists(beam_scenario_folder):
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.year,
+                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.year,
+                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.year,
+                                                            replanning_iteration_number)
+        else:
+            logging.warning(
+                f"Warning: Directory {beam_scenario_folder} does not exist. Cannot copy beam scenario files.")
+
+        # Files from asim_output_data_dir
+        if os.path.exists(asim_output_data_dir):
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.year,
+                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.year,
+                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.year,
+                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
+                                                            replanning_iteration_number)
+        else:
+            logging.warning(f"Warning: Directory {asim_output_data_dir} does not exist. Cannot copy ASIM output files.")
+
 
     return
