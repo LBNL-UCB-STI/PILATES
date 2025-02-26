@@ -37,7 +37,7 @@ from pilates.atlas import postprocessor as atlas_post  ##
 from pilates.utils.io import parse_args_and_settings
 from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
 
-from pilates.polaris.travel_model import run_polaris
+# from pilates.polaris.travel_model import run_polaris
 
 logging.basicConfig(
     stream=sys.stdout, level=logging.INFO,
@@ -218,7 +218,8 @@ def warm_start_activities(settings, year, client):
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
-        run_polaris(None, settings, warm_start=True)
+        # run_polaris(None, settings, warm_start=True)
+        logger.info("POLARIS module is not activated due to missing polarisruntime library")
 
     elif activity_demand_model == 'activitysim':
         # 1. PARSE SETTINGS
