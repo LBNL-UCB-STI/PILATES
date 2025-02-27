@@ -72,13 +72,6 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
             output_store.close()
         else:
             logger.error(f"Input store path {input_store_path} does not exist")
-            # Maybe list contents of parent directory to help debug
-            parent_dir = os.path.dirname(input_store_path)
-            if os.path.exists(parent_dir):
-                logger.info(f"Contents of {parent_dir}:")
-                logger.info(str(os.listdir(parent_dir)))
-            else:
-                logger.error(f"Parent directory {parent_dir} does not exist")
             return  # or handle this case appropriately
     else:
         # If urbansim is not activated, just log an info message and continue

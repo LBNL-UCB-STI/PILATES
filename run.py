@@ -557,28 +557,15 @@ def run_traffic_assignment(
         # 1. PARSE SETTINGS
         beam_config = settings['beam_config']
         region = settings['region']
-        logger.info(f"BEAM Configuration: {beam_config}, Region: {region}")
-
         path_to_beam_config = '/app/input/{0}/{1}'.format(region, beam_config)
-        logger.info(f"Container path to BEAM config: {path_to_beam_config}")
-
         run_path = state.full_path
-        logger.info(f"Run path (state.full_path): {run_path}")
-
         beam_local_mutable_data_folder = os.path.join(run_path, settings['beam_local_mutable_data_folder'])
-        logger.info(f"BEAM local mutable data folder: {beam_local_mutable_data_folder}")
-        logger.info(
-            f"Setting from config - beam_local_mutable_data_folder: {settings['beam_local_mutable_data_folder']}")
-
         abs_beam_input = os.path.abspath(str(beam_local_mutable_data_folder))
-        logger.info(f"Absolute path to BEAM input: {abs_beam_input}")
+        logger.info(f"Absolute path to BEAM input: {abs_beam_input} -> Container: /app/input (rw)")
 
         beam_local_output_folder = os.path.join(run_path, settings['beam_local_output_folder'])
-        logger.info(f"BEAM local output folder: {beam_local_output_folder}")
-        logger.info(f"Setting from config - beam_local_output_folder: {settings['beam_local_output_folder']}")
-
         abs_beam_output = os.path.abspath(str(beam_local_output_folder))
-        logger.info(f"Absolute path to BEAM output: {abs_beam_output}")
+        logger.info(f"Absolute path to BEAM output: {abs_beam_output} -> Container: /app/output (rw)")
 
         activity_demand_model = settings.get('activity_demand_model', False)
         logger.info(f"Activity demand model: {activity_demand_model}")
@@ -586,29 +573,8 @@ def run_traffic_assignment(
         docker_stdout = settings['docker_stdout']
         skims_fname = settings['skims_fname']
         origin_skims_fname = settings['origin_skims_fname']
-        logger.info(f"Skims filename: {skims_fname}")
-        logger.info(f"Origin skims filename: {origin_skims_fname}")
-
         beam_memory = settings.get('beam_memory', str(int(psutil.virtual_memory().total / (1024. ** 3)) - 2) + 'g')
         logger.info(f"BEAM memory allocation: {beam_memory}")
-
-        # Log directory contents for debugging
-        logger.info(f"Listing contents of BEAM input directory: {abs_beam_input}")
-        if os.path.exists(abs_beam_input):
-            for root, dirs, files in os.walk(abs_beam_input):
-                logger.info(f"Directory: {root}")
-                for dir in dirs:
-                    logger.info(f"  Subdirectory: {dir}")
-                for file in files:
-                    if file.endswith('.conf'):
-                        logger.info(f"  Config file: {file}")
-        else:
-            logger.warning(f"BEAM input directory does not exist: {abs_beam_input}")
-
-        # Log the container mapping
-        logger.info("Container volume mapping:")
-        logger.info(f"  Host: {abs_beam_input} -> Container: /app/input (rw)")
-        logger.info(f"  Host: {abs_beam_output} -> Container: /app/output (rw)")
 
         # remember the last produced skims in order to detect that
         # beam didn't work properly during this run
@@ -620,7 +586,8 @@ def run_traffic_assignment(
             logger.error("Invalid skim format {0}".format(skims_fname))
         previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, skimFormat)
         previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder)
-        logger.info(f"Found skims from the previous BEAM run: {previous_od_skims}")
+        if previous_origin_skims:
+            logger.info(f"Found skims from the previous BEAM run: {previous_od_skims}")
 
         # 2. COPY ACTIVITY DEMAND OUTPUTS --> TRAFFIC ASSIGNMENT INPUTS
         if settings['traffic_assignment_enabled']:
@@ -634,14 +601,7 @@ def run_traffic_assignment(
                 settings, state, replanning_iteration_number)
 
         # 3. RUN BEAM
-        logger.info(
-            "Starting BEAM container, input: %s, output: %s, config: %s",
-            abs_beam_input, abs_beam_output, beam_config)
-
-        # Log the final command that will be executed
-        command_str = "--config={0}".format(path_to_beam_config)
-        logger.info(f"BEAM container command: {command_str}")
-        logger.info(f"BEAM container working directory: /app")
+        logger.info("Starting BEAM container, input: %s, output: %s, config: %s", abs_beam_input, abs_beam_output, beam_config)
 
         # Check if the beam config file exists
         expected_config_path = os.path.join(abs_beam_input, region, beam_config)
@@ -712,6 +672,7 @@ def run_traffic_assignment(
         logger.info("===== COMPLETED TRAFFIC ASSIGNMENT =====")
 
     return
+
 
 def initialize_docker_client(settings):
     land_use_model = settings.get('land_use_model', False)
