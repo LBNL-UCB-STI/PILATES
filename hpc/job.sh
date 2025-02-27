@@ -56,11 +56,6 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 #pip install --user docker
 #pip install --user sortedcontainers
 
-## Use the existing PROJ data from fiona
-#export PROJ_DATA="/global/home/users/hmlaarabi/.local/lib/python3.10/site-packages/fiona/proj_data"
-## Keeping this for backward compatibility with older PROJ versions
-#export PROJ_LIB="/global/home/users/hmlaarabi/.local/lib/python3.10/site-packages/fiona/proj_data"
-
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
 
