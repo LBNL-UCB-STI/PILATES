@@ -475,7 +475,8 @@ def generate_activity_plans(
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
     if activity_demand_model == 'polaris':
-        run_polaris(state.forecast_year, settings, warm_start=True)
+        # run_polaris(state.forecast_year, settings, warm_start=True)
+        logger.info("POLARIS module is not activated due to missing polarisruntime library")
 
     elif activity_demand_model == 'activitysim':
 
@@ -549,7 +550,8 @@ def run_traffic_assignment(
     logger.info(f"Travel model: {travel_model}, Image: {travel_model_image}")
 
     if travel_model == 'polaris':
-        run_polaris(state.forecast_year, settings, warm_start=False)
+        # run_polaris(state.forecast_year, settings, warm_start=False)
+        logger.info("POLARIS module is not activated due to missing polarisruntime library")
 
     elif travel_model == 'beam':
         # 1. PARSE SETTINGS
