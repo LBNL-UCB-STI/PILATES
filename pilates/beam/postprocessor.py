@@ -263,7 +263,24 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
 
-def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
+    """
+    Merge current OMX skims from BEAM into the main skims file.
+
+    Parameters
+    ----------
+    all_skims_path : str
+        Path to the main skims file
+    beam_output_dir : str
+        Path to the BEAM output directory
+    settings : dict
+        Settings dictionary
+
+    Returns
+    -------
+    str
+        Path to the current skims file
+    """
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')

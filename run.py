@@ -601,7 +601,8 @@ def run_traffic_assignment(
                 settings, state, replanning_iteration_number)
 
         # 3. RUN BEAM
-        logger.info("Starting BEAM container, input: %s, output: %s, config: %s", abs_beam_input, abs_beam_output, beam_config)
+        logger.info("Starting BEAM container, input: %s, output: %s, config: %s", abs_beam_input, abs_beam_output,
+                    beam_config)
 
         # Check if the beam config file exists
         expected_config_path = os.path.join(abs_beam_input, region, beam_config)
@@ -649,13 +650,32 @@ def run_traffic_assignment(
                 path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
         else:
             logger.info("Processing OMX format skims")
+
+            # Check if ActivitySim is enabled - only proceed with ActivitySim integration if it's enabled
+            asim_enabled = activity_demand_model and activity_demand_model == 'activitysim'
+
+            if not asim_enabled:
+                logger.info("ActivitySim is not enabled, skipping skim merging for ActivitySim")
+                # Still check if BEAM produced skims
+                current_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, "omx")
+                if current_od_skims == previous_od_skims:
+                    logger.error(
+                        "BEAM hasn't produced the new skims at {0} for some reason. "
+                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
+                    )
+                    sys.exit(1)
+
             asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-            asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
+            asim_skims_path = os.path.join(str(asim_data_dir), 'skims.omx')
             logger.info(f"ActivitySim data directory: {asim_data_dir}")
             logger.info(f"ActivitySim skims path: {asim_skims_path}")
 
-            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
-                                                                    beam_local_output_folder, settings)
+            current_od_skims = beam_post.merge_current_omx_od_skims(
+                asim_skims_path,
+                str(beam_local_output_folder),
+                settings
+            )
+
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
