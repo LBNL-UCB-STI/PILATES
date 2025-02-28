@@ -658,12 +658,12 @@ def run_traffic_assignment(
                 logger.info("ActivitySim is not enabled, skipping skim merging for ActivitySim")
                 # Still check if BEAM produced skims
                 current_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, "omx")
-                if current_od_skims == previous_od_skims:
+                if current_od_skims == previous_od_skims and replanning_iteration_number > 0:
                     logger.error(
                         "BEAM hasn't produced the new skims at {0} for some reason. "
                         "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
                     )
-                    sys.exit(1)
+                    return
 
             asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
             asim_skims_path = os.path.join(str(asim_data_dir), 'skims.omx')
