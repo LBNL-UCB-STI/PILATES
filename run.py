@@ -269,16 +269,6 @@ def warm_start_activities(settings, year, client):
 
 
 def forecast_land_use(settings, year, workflow_state: WorkflowState, client, container_manager):
-    # Skip if land use model is not enabled
-    if not settings.get('land_use_enabled', False):
-        logger.info("Skipping land use forecasting: land use model not enabled")
-        return
-
-    land_use_model = settings.get('land_use_model', False)
-    if not land_use_model:
-        logger.info("Skipping land use forecasting: no land use model specified")
-        return
-
     run_land_use(settings, year, workflow_state, client)
 
     # check for outputs, exit if none
@@ -727,15 +717,8 @@ def initialize_docker_client(settings):
 
 
 def initialize_asim_for_replanning(settings, forecast_year):
-    activity_demand_model = settings.get('activity_demand_model', False)
-
-    # Skip if activity demand model isn't enabled or isn't activitysim
-    if not activity_demand_model or activity_demand_model != 'activitysim':
-        logger.info("Skipping asim initialization for replanning: activity demand model not enabled or not activitysim")
-        return
-
     replan_hh_samp_size = settings['replan_hh_samp_size']
-    _, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
+    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
