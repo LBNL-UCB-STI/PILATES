@@ -269,6 +269,16 @@ def warm_start_activities(settings, year, client):
 
 
 def forecast_land_use(settings, year, workflow_state: WorkflowState, client, container_manager):
+    # Skip if land use model is not enabled
+    if not settings.get('land_use_enabled', False):
+        logger.info("Skipping land use forecasting: land use model not enabled")
+        return
+
+    land_use_model = settings.get('land_use_model', False)
+    if not land_use_model:
+        logger.info("Skipping land use forecasting: no land use model specified")
+        return
+
     run_land_use(settings, year, workflow_state, client)
 
     # check for outputs, exit if none
@@ -717,8 +727,15 @@ def initialize_docker_client(settings):
 
 
 def initialize_asim_for_replanning(settings, forecast_year):
+    activity_demand_model = settings.get('activity_demand_model', False)
+
+    # Skip if activity demand model isn't enabled or isn't activitysim
+    if not activity_demand_model or activity_demand_model != 'activitysim':
+        logger.info("Skipping asim initialization for replanning: activity demand model not enabled or not activitysim")
+        return
+
     replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
+    _, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
     asim_workdir = os.path.join('/activitysim', asim_subdir)
@@ -959,26 +976,31 @@ if __name__ == '__main__':
     for year in state:
         # 1. FORECAST LAND USE
         if state.should_do(WorkflowState.Stage.land_use):
-            # hack: make sure that the usim datastore isn't open
-            usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
-                                          settings['usim_formattable_input_file_name'].format(
-                                              region_id=settings['region_to_region_id'][settings['region']]))
-            if is_already_opened_in_write_mode(usim_data_path):
-                logger.warning(
-                    "Closing h5 files {0} because they were left open. You should really "
-                    "figure out where this happened".format(tables.file._open_files.filenames))
-                tables.file._open_files.close_all()
+            # Skip if land use model is not enabled
+            if not land_use_enabled:
+                logger.info("Skipping land use stage: land use model not enabled")
+                state.complete(WorkflowState.Stage.land_use)
+            else:
+                # hack: make sure that the usim datastore isn't open
+                usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
+                                              settings['usim_formattable_input_file_name'].format(
+                                                  region_id=settings['region_to_region_id'][settings['region']]))
+                if is_already_opened_in_write_mode(usim_data_path):
+                    logger.warning(
+                        "Closing h5 files {0} because they were left open. You should really "
+                        "figure out where this happened".format(tables.file._open_files.filenames))
+                    tables.file._open_files.close_all()
 
-            # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
-            if (state.is_start_year()) and warm_start_activities_enabled:
-                # IF ATLAS ENABLED, UPDATE USIM INPUT H5
-                if vehicle_ownership_model_enabled:
-                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                warm_start_activities(settings, year, client)
+                # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
+                if (state.is_start_year()) and warm_start_activities_enabled:
+                    # IF ATLAS ENABLED, UPDATE USIM INPUT H5
+                    if vehicle_ownership_model_enabled:
+                        run_atlas_auto(settings, state, client, warm_start_atlas=True)
+                    warm_start_activities(settings, year, client)
 
-            # 1b. RUN LAND USE SIMULATION
-            forecast_land_use(settings, year, state, client, container_manager)
-            state.complete(WorkflowState.Stage.land_use)
+                # 1b. RUN LAND USE SIMULATION
+                forecast_land_use(settings, year, state, client, container_manager)
+                state.complete(WorkflowState.Stage.land_use)
 
         # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
         if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
@@ -1003,28 +1025,41 @@ if __name__ == '__main__':
 
         # 3. GENERATE ACTIVITIES
         if state.should_do(WorkflowState.Stage.activity_demand):
-            # If the forecast year is the same as the base year of this
-            # iteration, then land use forecasting has not been run. In this
-            # case we have to read from the land use *inputs* because no
-            # *outputs* have been generated yet. This is usually only the case
-            # for generating "warm start" skims, so we treat it the same even
-            # if the "warm_start_skims" setting was not set to True at runtime
-            generate_activity_plans(
-                settings, year, state, client, warm_start=warm_start_skims or not land_use_enabled)
+            activity_demand_model = settings.get('activity_demand_model', False)
+            if activity_demand_model and activity_demand_enabled:
+                # If the forecast year is the same as the base year of this
+                # iteration, then land use forecasting has not been run. In this
+                # case we have to read from the land use *inputs* because no
+                # *outputs* have been generated yet. This is usually only the case
+                # for generating "warm start" skims, so we treat it the same even
+                # if the "warm_start_skims" setting was not set to True at runtime
+                generate_activity_plans(
+                    settings, year, state, client, warm_start=warm_start_skims or not land_use_enabled)
+            else:
+                logger.info("Skipping activity demand generation: activity demand model not enabled")
             state.complete(WorkflowState.Stage.activity_demand)
 
             # 5. INITIALIZE ASIM LITE IF BEAM REPLANNING ENABLED
             # have to re-run asim all the way through on sample to shrink the
             # cache for use in re-planning, otherwise cache will use entire pop
         if state.should_do(WorkflowState.Stage.initialize_asim_for_replanning):
-            initialize_asim_for_replanning(settings, state.forecast_year)
+            activity_demand_model = settings.get('activity_demand_model', False)
+            if activity_demand_model == 'activitysim' and activity_demand_enabled and replanning_enabled:
+                initialize_asim_for_replanning(settings, state.forecast_year)
+            else:
+                logger.info("Skipping asim initialization for replanning: conditions not met")
             state.complete(WorkflowState.Stage.initialize_asim_for_replanning)
 
         if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
-            # If not generating activities with a separate ABM (e.g.
-            # ActivitySim), then we need to create the next iteration of land
-            # use data directly from the last set of land use outputs.
-            usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
+            # Skip if land use model is not enabled
+            land_use_model = settings.get('land_use_model', False)
+            if not settings.get('land_use_enabled', False) or not land_use_model:
+                logger.info("Skipping direct activity generation from land use: land use model not enabled")
+            else:
+                # If not generating activities with a separate ABM (e.g.
+                # ActivitySim), then we need to create the next iteration of land
+                # use data directly from the last set of land use outputs.
+                usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
             state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
 
         # DO traffic assignment - but skip if using polaris as this is done along
@@ -1044,7 +1079,8 @@ if __name__ == '__main__':
 
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
-            if replanning_enabled > 0:
+            activity_demand_model = settings.get('activity_demand_model', False)
+            if replanning_enabled > 0 and activity_demand_model and activity_demand_model == 'activitysim':
                 run_replanning_loop(state)
                 try:
                     process_event_file(settings, year, settings['replan_iters'])
@@ -1052,6 +1088,8 @@ if __name__ == '__main__':
                 except:
                     print("Skipping post")
             else:
+                if replanning_enabled > 0 and not (activity_demand_model and activity_demand_model == 'activitysim'):
+                    logger.info("Skipping replanning: activity demand model not enabled or not activitysim")
                 try:
                     process_event_file(settings, year, -1)
                     copy_outputs_to_mep(settings, year, -1)
