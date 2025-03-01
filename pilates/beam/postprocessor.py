@@ -318,7 +318,7 @@ def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
 def trim_inaccessible_ods(settings, working_dir):
     all_skims_path = os.path.join(working_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
     order = zone_order(settings, settings['start_year'])
-    skims = omx.open_file(all_skims_path, "a")
+    skims = omx.open_file(str(all_skims_path), "a")
     all_mats = skims.list_matrices()
     totalTrips = dict()
     for period in settings["periods"]:

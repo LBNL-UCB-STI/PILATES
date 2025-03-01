@@ -1063,22 +1063,21 @@ if __name__ == '__main__':
         # 5. REPLAN
         if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
             activity_demand_model = settings.get('activity_demand_model', False)
-            if replanning_enabled > 0 and activity_demand_model and activity_demand_model == 'activitysim':
-                run_replanning_loop(state)
-                try:
-                    process_event_file(settings, year, settings['replan_iters'])
-                    copy_outputs_to_mep(settings, year, settings['replan_iters'])
-                except:
-                    print("Skipping post")
-            else:
-                if replanning_enabled > 0 and not (activity_demand_model and activity_demand_model == 'activitysim'):
-                    logger.info("Skipping replanning: activity demand model not enabled or not activitysim")
-                try:
-                    process_event_file(settings, year, -1)
-                    copy_outputs_to_mep(settings, year, -1)
-                except:
-                    print("Skipping post")
-            beam_post.trim_inaccessible_ods(settings, working_dir)
+            if activity_demand_model and activity_demand_model == 'activitysim':
+                if replanning_enabled > 0:
+                    run_replanning_loop(state)
+                    try:
+                        process_event_file(settings, year, settings['replan_iters'])
+                        copy_outputs_to_mep(settings, year, settings['replan_iters'])
+                    except:
+                        print("Skipping post")
+                else:
+                    try:
+                        process_event_file(settings, year, -1)
+                        copy_outputs_to_mep(settings, year, -1)
+                    except:
+                        print("Skipping post")
+                beam_post.trim_inaccessible_ods(settings, working_dir)
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
 
     logger.info("Finished")
