@@ -663,7 +663,7 @@ def run_traffic_assignment(
                         "BEAM hasn't produced the new skims at {0} for some reason. "
                         "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
                     )
-                    return
+                return
 
             asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
             asim_skims_path = os.path.join(str(asim_data_dir), 'skims.omx')
