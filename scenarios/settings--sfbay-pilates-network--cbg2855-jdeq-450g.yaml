@@ -60,7 +60,7 @@ geoms_index_col: taz1454
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: sfbay-pilates-network--cbg2855-jdeq
+output_run_name: sfbay-pilates-network--cbg2855-jdeq-450g
 
 # URBANSIM
 region_to_region_id:
