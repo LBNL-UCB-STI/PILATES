@@ -20,10 +20,10 @@ do
 done
 
 
-PARTITION="lr7"
+PARTITION="lr8"
 QOS="lr_normal"
-NUM_CPUS=50
-MEMORY_LIMIT="250"
+NUM_CPUS=128
+MEMORY_LIMIT="768"
 ACCOUNT="pc_beamcore"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 EXPECTED_EXECUTION_DURATION="2-00:00:00"
