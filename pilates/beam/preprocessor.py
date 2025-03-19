@@ -145,7 +145,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
                 #         beam_file_path, 'wb') as f_out:
                 #     f_out.writelines(f_in)
         elif file_format == "parquet":
-            if asim_file_name == "plans"
+            if asim_file_name == "plans":
                 a_n = "beam_plans"
             else:
                 a_n = asim_file_name
