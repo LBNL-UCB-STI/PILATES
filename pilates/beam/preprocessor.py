@@ -103,25 +103,55 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         settings['region'],
         settings['beam_scenario_folder'])
 
-    def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name):
-        asim_file_path = os.path.join(asim_output_data_dir, asim_file_name)
-        beam_file_path = os.path.join(beam_scenario_folder, beam_file_name)
-        logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
+    def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name, file_format):
+        """
+        TODO: Switch this to polars for better performance
+        def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name):
+            import polars as pl
+            asim_file_path = os.path.join(asim_output_data_dir, asim_file_name)
+            beam_file_path = os.path.join(beam_scenario_folder, beam_file_name)
+            logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
 
-        if os.path.exists(asim_file_path):
-            df = pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
-                                                    "person_id": pd.Int64Dtype(),
-                                                    "trip_id": pd.Int64Dtype(),
-                                                    "cars": pd.Int64Dtype(),
-                                                    "VEHICL": pd.Int64Dtype(),
-                                                    "age": pd.Int64Dtype(),
-                                                    "sex": pd.Int64Dtype()}
-                             ).rename(columns={"VEHICL": "cars"}).rename(columns={"auto_ownership": "cars"})
-            df = df.loc[:, ~df.columns.duplicated()].copy()
-            df.to_csv(beam_file_path, compression="gzip")
-            # with open(asim_file_path, 'rb') as f_in, gzip.open(
-            #         beam_file_path, 'wb') as f_out:
-            #     f_out.writelines(f_in)
+            if os.path.exists(asim_file_path):
+                df = pl.scan_csv(asim_file_path).with_columns([
+                    pl.col("household_id").cast(pl.Int64),
+                    pl.col("person_id").cast(pl.Int64),
+                    pl.col("trip_id").cast(pl.Int64),
+                    pl.col("cars").cast(pl.Int64),
+                    pl.col("VEHICL").cast(pl.Int64).alias("cars"),
+                    pl.col("auto_ownership").cast(pl.Int64).alias("cars"),
+                    pl.col("age").cast(pl.Int64),
+                    pl.col("sex").cast(pl.Int64)
+                ]).select(pl.col("*").exclude_duplicates()).collect()
+                df.write_csv(beam_file_path, compression="gzip")
+        """
+        if file_format == "csv":
+            asim_file_path = os.path.join(asim_output_data_dir, "final_" + asim_file_name + ".csv")
+            beam_file_path = os.path.join(beam_scenario_folder, beam_file_name + ".csv.gz")
+            logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
+
+            if os.path.exists(asim_file_path):
+                df = pd.read_csv(asim_file_path, dtype={"household_id": pd.Int64Dtype(),
+                                                        "person_id": pd.Int64Dtype(),
+                                                        "trip_id": pd.Int64Dtype(),
+                                                        "cars": pd.Int64Dtype(),
+                                                        "VEHICL": pd.Int64Dtype(),
+                                                        "age": pd.Int64Dtype(),
+                                                        "sex": pd.Int64Dtype()}
+                                 ).rename(columns={"VEHICL": "cars"}).rename(columns={"auto_ownership": "cars"})
+                df = df.loc[:, ~df.columns.duplicated()].copy()
+                df.to_csv(beam_file_path, compression="gzip")
+                # with open(asim_file_path, 'rb') as f_in, gzip.open(
+                #         beam_file_path, 'wb') as f_out:
+                #     f_out.writelines(f_in)
+        elif file_format == "parquet":
+            if asim_file_name == "plans"
+                a_n = "beam_plans"
+            else:
+                a_n = asim_file_name
+            asim_file_path = os.path.join(asim_output_data_dir, "final_pipeline", a_n, "final.parquet")
+            beam_file_path = os.path.join(beam_scenario_folder, beam_file_name + "parquet")
+            shutil.copyfile(asim_file_path, beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
         iteration_folder_name = "year-{0}-iteration-{1}".format(year, replanning_iteration_number)
@@ -210,9 +240,10 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression='gzip')
 
     if replanning_iteration_number < 0:
-        copy_with_compression_asim_file_to_beam('final_plans.csv', 'plans.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_households.csv', 'households.csv.gz')
-        copy_with_compression_asim_file_to_beam('final_persons.csv', 'persons.csv.gz')
+        file_format = settings.get("asim_output_format","csv")
+        copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
+        copy_with_compression_asim_file_to_beam('households', 'households', file_format)
+        copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
         # copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
         # copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
         # copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
