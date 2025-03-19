@@ -1260,7 +1260,7 @@ def _update_persons_table(persons, households, unassigned_households, blocks, as
     logger.info(f"Dropping {unassigned_mask.sum()} people from {unassigned_households.shape[0]} unassigned households")
     persons = persons.loc[~unassigned_mask]
 
-    household_zone_map = households.set_index('household_id')['block_id'].map(blocks[asim_zone_id_col])
+    household_zone_map = households['block_id'].map(blocks[asim_zone_id_col])
     persons[asim_zone_id_col] = persons['household_id'].map(household_zone_map).astype(str)
 
     # Precalculate age ranges and worker/student status
