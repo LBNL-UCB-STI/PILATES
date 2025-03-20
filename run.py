@@ -144,7 +144,7 @@ def get_asim_docker_vols(settings, working_dir=None):
         asim_local_configs_folder = os.path.abspath(
             os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], "configs"))
         asim_local_configs_compile_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_configs_compile_folder'], "configs_sh_compile"))
+            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], "configs_sh_compile"))
     else:
         asim_local_mutable_data_folder = os.path.abspath(
             settings['asim_local_mutable_data_folder'])
