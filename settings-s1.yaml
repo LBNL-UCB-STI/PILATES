@@ -8,7 +8,7 @@
 region: sfbay
 scenario: base
 start_year: 2017
-end_year: 2035
+end_year: 2050
 land_use_freq: 1
 travel_model_freq: 6
 vehicle_ownership_freq: 6
@@ -26,7 +26,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://zaneedell/beam:0.9.13-beta-v4
-  activitysim: docker://zaneedell/activitysim:0.1.4
+  activitysim: docker://zaneedell/activitysim:0.1.11
   polaris:
 
 # docker settings

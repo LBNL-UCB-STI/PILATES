@@ -10,8 +10,8 @@ scenario: base
 start_year: 2010
 end_year: 2024
 land_use_freq: 1
-travel_model_freq: 1
-vehicle_ownership_freq: 1
+travel_model_freq: 2
+vehicle_ownership_freq: 2
 
 # simulation platforms (leave blank to turn off)
 land_use_model:
@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:0.9.13-beta-v2
-  activitysim: docker://zaneedell/activitysim:0.1.5
+  beam: docker://zaneedell/beam:1.0.1
+  activitysim: docker://zaneedell/activitysim:0.1.12
   polaris:
 
 # docker settings
@@ -44,7 +44,7 @@ skims_zone_type: block_group # one of [taz, block_group, block]
 skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
-beam_router_directory: r5-dense
+beam_router_directory: r5/r5-residential-partiallysimplified-ferry
 beam_geoms_fname: clipped_tazs.csv
 geoms_index_col: GEOID
 
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: null-run
+output_run_name: baseline-tourmode-null
 
 # URBANSIM
 region_to_region_id:
@@ -99,18 +99,18 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 # BEAM 
 beam_config: seattle.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
-beam_replanning_portion: 1.0
+beam_replanning_portion: 0.25
 beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: 480g
+beam_memory: 225g
 skim_zone_source_id_col: objectid
-replan_iters: 0
+replan_iters: 2
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
-discard_plans_every_year: False
-max_plans_memory: 3
+discard_plans_every_year: True
+max_plans_memory: 1
 final_asim_plans_folder: pilates/activitysim/output/final_plans
 beam_simulated_hwy_paths:
   - SOV
@@ -134,6 +134,7 @@ household_sample_size: 226950  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
+asim_local_mutable_configs_folder: activitysim/configs/
 asim_local_mutable_data_folder: activitysim/data/
 asim_local_output_folder: activitysim/output/
 asim_local_configs_folder: pilates/activitysim/configs/
