@@ -118,7 +118,7 @@ def get_base_asim_cmd(settings, household_sample_size=None):
 
 def get_asim_additional_args(asim_docker_vols, compile):
     additional_args = []
-    if settings.file_format == "parquet":
+    if settings.get("file_format", "parquet") == "parquet":
         additional_args.append("--persist-sharrow-cache")
         for local, d in asim_docker_vols.items():
             if "input" in d['bind']:
