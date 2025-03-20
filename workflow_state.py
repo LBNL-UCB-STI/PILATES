@@ -31,6 +31,7 @@ class WorkflowState:
         self.folder_name = folder_name
         self.output_path = output_path
         self.file_loc = file_loc
+        self.__asim_compiled = False
         if year == 2010:
             self.initial_step = 7
         else:
@@ -52,6 +53,18 @@ class WorkflowState:
     @property
     def full_path(self):
         return os.path.join(self.output_path, self.folder_name)
+
+    @property
+    def asim_compiled(self):
+        if self.__asim_compiled:
+            logger.info("ActivitySim already compiled in year %s", self.year)
+        else:
+            logger.info("ActivitySim not compiled in year %s, so running compilation (this will take longer)", self.year)
+        return self.__asim_compiled
+
+    def compile_asim(self):
+        self.__asim_compiled = True
+        logger.info("Completed compiling activitysim in year %s", self.year)
 
     def _create_output_dir(self, settings: dict):
         dt = datetime.now().strftime("%Y%m%d-%H%M%S")

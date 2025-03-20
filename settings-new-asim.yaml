@@ -8,10 +8,10 @@
 region: sfbay
 scenario: base
 start_year: 2017
-end_year: 2050
+end_year: 2021
 land_use_freq: 1
-travel_model_freq: 6
-vehicle_ownership_freq: 6
+travel_model_freq: 1
+vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
 land_use_model: # urbansim
@@ -145,12 +145,12 @@ asim_local_output_folder: activitysim/output/
 asim_local_configs_folder: pilates/activitysim/configs/
 asim_local_mutable_configs_folder: activitysim/configs/
 asim_validation_folder: pilates/activitysim/validation
-asim_formattable_command: "-h {0} -n {1} -c {2}"
+asim_formattable_command: "--households_sample_size {0} -m {1} -g {2}"
 region_to_asim_subdir:
   austin: austin
   detroit: detroit
-  sfbay: bay_area
-  seattle: seattle
+  sfbay: activitysim/examples/prototype_mtc
+  seattle: activitysim/examples/prototype_mtc
 region_to_asim_bucket:
   austin: austin-activitysim
   detroit: detroit-activitysim

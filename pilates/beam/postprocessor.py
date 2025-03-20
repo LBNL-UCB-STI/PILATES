@@ -262,8 +262,16 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 skims[toKey][:] = skims[skimKey][:]
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
+def clear_skim_cache(asim_local_output_dir):
+    skims_path = os.path.join(asim_local_output_dir, "cache")
+    if os.path.exists(skims_path):
+        logger.info("Deleting skims cache at {0}. Eventually we should modify it in place".format(skims_path))
+        os.rmdir(skims_path)
+    else:
+        logger.warning("Did not find skim cache to delete")
 
 def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+    # TODO: Swith to using ds = zarr.load("data/skims.zarr") and concurrently iterating through keys
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')

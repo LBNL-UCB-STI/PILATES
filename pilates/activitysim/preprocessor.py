@@ -1380,6 +1380,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     # create new column variables
     s = households.persons
     households.loc[:, 'HHT'] = s.where(s == 1, 4)
+    households["cars"] = households["cars"].astype(int)
 
     # clean up dataframe structure
     # TODO: move this to annotate_households.yaml in asim settings

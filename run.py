@@ -116,6 +116,21 @@ def get_base_asim_cmd(settings, household_sample_size=None):
         household_sample_size, num_processes, chunk_size)
     return base_asim_cmd
 
+def get_asim_additional_args(asim_docker_vols, compile):
+    additional_args = []
+    if settings.file_format == "parquet":
+        additional_args.append("--persist-sharrow-cache")
+        for local, d in asim_docker_vols.items():
+            if "input" in d['bind']:
+                additional_args.append("-d {0}".format(d['bind']))
+            elif "output" in d['bind']:
+                additional_args.append("-o {0}".format(d['bind']))
+            elif "compile" in d['bind']:
+                if compile:
+                    additional_args.append("-c {0}".format(d['bind']))
+            elif "configs" in d['bind']:
+                additional_args.append("-c {0}".format(d['bind']))
+    return additional_args
 
 def get_asim_docker_vols(settings, working_dir=None):
     region = settings['region']
@@ -127,20 +142,26 @@ def get_asim_docker_vols(settings, working_dir=None):
         asim_local_output_folder = os.path.abspath(
             os.path.join(working_dir, settings['asim_local_output_folder']))
         asim_local_configs_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_configs_folder']))
+            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], "configs"))
+        asim_local_configs_compile_folder = os.path.abspath(
+            os.path.join(working_dir, settings['asim_local_mutable_configs_compile_folder'], "configs_sh_compile"))
     else:
         asim_local_mutable_data_folder = os.path.abspath(
             settings['asim_local_mutable_data_folder'])
         asim_local_output_folder = os.path.abspath(
             settings['asim_local_output_folder'])
         asim_local_configs_folder = os.path.abspath(
-            os.path.join(settings['asim_local_configs_folder'], region))
+            os.path.join(settings['asim_local_configs_folder'], region, "configs"))
+        asim_local_configs_compile_folder = os.path.abspath(
+            os.path.join(settings['asim_local_configs_folder'], region, "configs_sh_compile"))
     asim_remote_input_folder = os.path.join(
         asim_remote_workdir, 'data')
     asim_remote_output_folder = os.path.join(
         asim_remote_workdir, 'output')
     asim_remote_configs_folder = os.path.join(
         asim_remote_workdir, 'configs')
+    asim_remote_configs_compile_folder = os.path.join(
+        asim_remote_workdir, 'configs_sh_compile')
     asim_docker_vols = {
         asim_local_mutable_data_folder: {
             'bind': asim_remote_input_folder,
@@ -150,7 +171,11 @@ def get_asim_docker_vols(settings, working_dir=None):
             'mode': 'rw'},
         asim_local_configs_folder: {
             'bind': asim_remote_configs_folder,
-            'mode': 'rw'}}
+            'mode': 'rw'},
+        asim_local_configs_compile_folder: {
+            'bind': asim_remote_configs_compile_folder,
+            'mode': 'rw'}
+    }
     return asim_docker_vols
 
 
@@ -514,11 +539,24 @@ def generate_activity_plans(
             print_str += ". Picking up after {0}".format(resume_after)
         formatted_print(print_str)
 
+        if not state.asim_compiled:
+            additional_args = get_asim_additional_args(asim_docker_vols, True)
+            run_container(client, settings,
+                          activity_demand_image,
+                          working_dir=asim_workdir,
+                          volumes=asim_docker_vols,
+                          command=asim_cmd,
+                          args=additional_args)
+            state.compile_asim()
+
+        additional_args = get_asim_additional_args(asim_docker_vols, False)
+
         run_container(client, settings,
                       activity_demand_image,
                       working_dir=asim_workdir,
                       volumes=asim_docker_vols,
-                      command=asim_cmd)
+                      command=asim_cmd,
+                      args=additional_args)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -629,6 +667,8 @@ def run_traffic_assignment(
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
             current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
                                                                     beam_local_output_folder, settings)
+            beam_post.clear_skim_cache(os.path.join(state.full_path, settings['asim_local_output_folder']))
+
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
@@ -768,7 +808,7 @@ def to_singularity_env(env):
 
 
 def run_container(client, settings: dict, image: str, volumes: dict, command: str,
-                  working_dir=None, environment=None):
+                  working_dir=None, environment=None, args=None):
     """
     Executes container using docker or singularity
     :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
@@ -783,6 +823,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
      (or image layers at the docker hub) and find the last WORKDIR instruction or by issuing a command:
       docker run -it --entrypoint /bin/bash ghcr.io/lbnl-science-it/atlas:v1.0.7 -c "env | grep PWD"
     :param environment: a dictionary that contains environment variables that needs to be set to the container
+    :param args: additional arguments to the command
     """
     if client:
         docker_stdout = settings.get('docker_stdout', False)
@@ -812,7 +853,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
                + (["--env", to_singularity_env(environment)] if environment else []) \
                + (["--pwd", working_dir] if working_dir else []) \
                + ["-B", singularity_volumes, image] \
-               + command.split()
+               + command.split() + (args if args else [])
         logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
         logger.info("Finished command: %s", " ".join(proc))
