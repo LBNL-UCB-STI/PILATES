@@ -13,8 +13,13 @@ logger = logging.getLogger(__name__)
 
 class WorkflowState:
     Stage = Enum('WorkflowStage',
-                 ['land_use', 'vehicle_ownership_model', 'activity_demand', 'initialize_asim_for_replanning',
-                  'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
+                 ['land_use_pre', 'land_use', 'land_use_post',
+                  'vehicle_ownership_model_pre', 'vehicle_ownership_model', 'vehicle_ownership_model_post',
+                  'activity_demand_pre', 'activity_demand', 'activity_demand_post',
+                  'initialize_asim_for_replanning_pre', 'initialize_asim_for_replanning', 'initialize_asim_for_replanning_post',
+                  'activity_demand_directly_from_land_use_pre', 'activity_demand_directly_from_land_use', 'activity_demand_directly_from_land_use_post',
+                  'traffic_assignment_pre', 'traffic_assignment', 'traffic_assignment_post',
+                  'traffic_assignment_replan_pre', 'traffic_assignment_replan', 'traffic_assignment_replan_post'])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                  activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iteration,
@@ -37,18 +42,32 @@ class WorkflowState:
         else:
             self.initial_step = None
         if land_use_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.land_use_pre)
             self.enabled_stages.add(WorkflowState.Stage.land_use)
+            self.enabled_stages.add(WorkflowState.Stage.land_use_post)
         if vehicle_ownership_model_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.vehicle_ownership_model_pre)
             self.enabled_stages.add(WorkflowState.Stage.vehicle_ownership_model)
+            self.enabled_stages.add(WorkflowState.Stage.vehicle_ownership_model_post)
         if activity_demand_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.activity_demand_pre)
             self.enabled_stages.add(WorkflowState.Stage.activity_demand)
+            self.enabled_stages.add(WorkflowState.Stage.activity_demand_post)
             if replanning_enabled:
+                self.enabled_stages.add(WorkflowState.Stage.initialize_asim_for_replanning_pre)
                 self.enabled_stages.add(WorkflowState.Stage.initialize_asim_for_replanning)
+                self.enabled_stages.add(WorkflowState.Stage.initialize_asim_for_replanning_post)
         else:
+            self.enabled_stages.add(WorkflowState.Stage.activity_demand_directly_from_land_use_pre)
             self.enabled_stages.add(WorkflowState.Stage.activity_demand_directly_from_land_use)
+            self.enabled_stages.add(WorkflowState.Stage.activity_demand_directly_from_land_use_post)
         if traffic_assignment_enabled:
+            self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_pre)
             self.enabled_stages.add(WorkflowState.Stage.traffic_assignment)
+            self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_post)
+            self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_replan_pre)
             self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_replan)
+            self.enabled_stages.add(WorkflowState.Stage.traffic_assignment_replan_post)
 
     @property
     def full_path(self):
@@ -188,11 +207,60 @@ class WorkflowState:
             return True
         return self.stage.value <= stage.value
 
+    def get_pre_stage(self, stage: Stage) -> Stage:
+        """Get the pre-processing stage for a given stage"""
+        stage_name = stage.name
+        if stage_name.endswith('_post'):
+            return None
+        elif stage_name.endswith('_pre'):
+            return stage
+        else:
+            return WorkflowState.Stage[stage_name + '_pre']
+
+    def get_post_stage(self, stage: Stage) -> Stage:
+        """Get the post-processing stage for a given stage"""
+        stage_name = stage.name
+        if stage_name.endswith('_pre'):
+            return WorkflowState.Stage[stage_name[:-4] + '_post']
+        elif stage_name.endswith('_post'):
+            return None
+        else:
+            return WorkflowState.Stage[stage_name + '_post']
+
+    def get_main_stage(self, stage: Stage) -> Stage:
+        """Get the main stage (without pre/post) for a given stage"""
+        stage_name = stage.name
+        if stage_name.endswith('_pre') or stage_name.endswith('_post'):
+            return WorkflowState.Stage[stage_name[:-4]]
+        return stage
+
     def complete(self, stage):
+        """Complete a stage and move to the next appropriate stage"""
         logger.info("Completed %s of %d", stage, self.year)
+        
+        # If this is a pre stage, move to main stage
+        if stage.name.endswith('_pre'):
+            self.stage = self.get_main_stage(stage)
+            WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name, self.iteration)
+            return
+            
+        # If this is a main stage, move to post stage if it exists
+        if not stage.name.endswith('_post'):
+            post_stage = self.get_post_stage(stage)
+            if post_stage in self.enabled_stages:
+                self.stage = post_stage
+                WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name, self.iteration)
+                return
+        
+        # If this is a post stage or there is no post stage, move to next main stage
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
+            # If there's a next stage, start with its pre stage if it exists
+            if next_stage:
+                pre_stage = self.get_pre_stage(next_stage)
+                if pre_stage in self.enabled_stages:
+                    next_stage = pre_stage
             WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0)
         else:
             os.remove(self.file_loc)
@@ -204,6 +272,7 @@ class WorkflowState:
                                   self.iteration)
 
     def next_stage(self, year: int, stage: Stage):
+        """Get the next stage to run, skipping pre/post stages if they're not enabled"""
         next_enabled_stage = next(filter(self.enabled, list(WorkflowState.Stage)[stage.value:]), None)
         if not next_enabled_stage:
             year = year + 1
