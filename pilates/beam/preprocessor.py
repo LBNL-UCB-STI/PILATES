@@ -166,6 +166,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         elif file_format == "parquet":
             asim_file_path = locate_asim_file(asim_file_name, file_format)
             beam_file_path = locate_beam_file(beam_file_name, file_format)
+            logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
             shutil.copyfile(asim_file_path, beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
