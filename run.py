@@ -121,7 +121,7 @@ def get_asim_additional_args(asim_docker_vols, compile):
     if settings.get("file_format", "parquet") == "parquet":
         additional_args.append("--persist-sharrow-cache")
         for local, d in asim_docker_vols.items():
-            if "input" in d['bind']:
+            if "data" in d['bind']:
                 additional_args.append("-d {0}".format(d['bind']))
             elif "output" in d['bind']:
                 additional_args.append("-o {0}".format(d['bind']))
@@ -508,7 +508,7 @@ def generate_activity_plans(
         land_use_model = settings['land_use_model']
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
-        asim_workdir = os.path.join('/activitysim', asim_subdir)
+        asim_workdir = os.path.join('activitysim', asim_subdir)
         asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
         asim_cmd = get_base_asim_cmd(settings)
         docker_stdout = settings.get('docker_stdout', False)
