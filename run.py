@@ -173,11 +173,11 @@ def get_asim_docker_vols(settings, working_dir=None):
         asim_local_output_folder: {
             'bind': asim_remote_output_folder,
             'mode': 'rw'},
-        asim_local_configs_folder: {
-            'bind': asim_remote_configs_folder,
-            'mode': 'rw'},
         asim_local_configs_compile_folder: {
             'bind': asim_remote_configs_compile_folder,
+            'mode': 'rw'},
+        asim_local_configs_folder: {
+            'bind': asim_remote_configs_folder,
             'mode': 'rw'}
     }
     return asim_docker_vols
