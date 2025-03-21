@@ -122,14 +122,14 @@ def get_asim_additional_args(asim_docker_vols, compile):
         additional_args.append("--persist-sharrow-cache")
         for local, d in asim_docker_vols.items():
             if "data" in d['bind']:
-                additional_args.append("-d {0}".format(d['bind']))
+                additional_args.append('-d "{0}"'.format(d['bind']))
             elif "output" in d['bind']:
-                additional_args.append("-o {0}".format(d['bind']))
+                additional_args.append('-o "{0}"'.format(d['bind']))
             elif "compile" in d['bind']:
                 if compile:
-                    additional_args.append("-c {0}".format(d['bind']))
+                    additional_args.append('-c "{0}"'.format(d['bind']))
             elif "configs" in d['bind']:
-                additional_args.append("-c {0}".format(d['bind']))
+                additional_args.append('-c "{0}"'.format(d['bind']))
     return additional_args
 
 def get_asim_docker_vols(settings, working_dir=None):
@@ -851,9 +851,9 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
         singularity_volumes = to_singularity_volumes(volumes)
         proc = ["singularity", "run", "--cleanenv", "--writable-tmpfs"] \
                + (["--env", to_singularity_env(environment)] if environment else []) \
-               + (["--pwd", working_dir] if working_dir else []) \
-               + ["-B", singularity_volumes, image] \
-               + command.split() + (args if args else [])
+               + (["--pwd", working_dir] if working_dir else []) + (args if args else [])  \
+               + ["-B", singularity_volumes, image]\
+               + command.split()
         logger.info("Running command: %s", " ".join(proc))
         subprocess.run(proc)
         logger.info("Finished command: %s", " ".join(proc))
