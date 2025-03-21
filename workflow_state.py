@@ -18,7 +18,7 @@ class WorkflowState:
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                  activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iteration,
-                 output_path, folder_name, file_loc):
+                 output_path, folder_name, file_loc, asim_compiled=False):
         self.iteration_started = False
         self.start_year = start_year
         self.end_year = end_year
@@ -31,7 +31,7 @@ class WorkflowState:
         self.folder_name = folder_name
         self.output_path = output_path
         self.file_loc = file_loc
-        self.__asim_compiled = False
+        self.__asim_compiled = asim_compiled
         if year == 2010:
             self.initial_step = 7
         else:
@@ -65,6 +65,7 @@ class WorkflowState:
     def compile_asim(self):
         self.__asim_compiled = True
         logger.info("Completed compiling activitysim in year %s", self.year)
+        WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name, self.iteration)
 
     def _create_output_dir(self, settings: dict):
         dt = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -108,6 +109,30 @@ class WorkflowState:
         print('STOP')
 
     @classmethod
+    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration):
+        to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
+                   "folder_name": folder_name, "iteration": iteration, "asim_compiled": False}
+        with open(file_loc, mode="w", encoding="utf-8") as f:
+            yaml.dump(to_save, f)
+
+    @classmethod
+    def read_current_stage(cls, file_loc):
+        if not os.path.exists(file_loc):
+            logger.info("Creating new stage info at {}".format(file_loc))
+            return [None, None, None, None, None, False]
+        with open(file_loc, encoding="utf-8") as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+            data = data if data is not None else {}
+            year = data.get('year', None)
+            stage_str = data.get('stage', 'null')
+            stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
+            path = data.get('path', None)
+            folder_name = data.get('folder_name', None)
+            iteration = data.get('iteration', 0)
+            asim_compiled = data.get('asim_compiled', False)
+            return [year, stage, iteration, path, folder_name, asim_compiled]
+
+    @classmethod
     def from_settings(cls, settings):
         start_year = settings['start_year']
         end_year = settings['end_year']
@@ -118,42 +143,19 @@ class WorkflowState:
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
         file_loc = settings['state_file_loc']
-        [year, stage, iteration, path, folder_name] = cls.read_current_stage(file_loc)
+        [year, stage, iteration, path, folder_name, asim_compiled] = cls.read_current_stage(file_loc)
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s, filename=%s)", year, stage, file_loc)
         year = year or start_year
         out = WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                             activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage,
-                            iteration, path, folder_name, file_loc)
+                            iteration, path, folder_name, file_loc, asim_compiled)
         if (path is None) | (folder_name is None):
             out._create_output_dir(settings)
         if year:
             out.forecast_year = min(year + (out.initial_step or travel_model_freq),
                                     end_year) if land_use_enabled else start_year
         return out
-
-    @classmethod
-    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration):
-        to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
-                   "folder_name": folder_name, "iteration": iteration}
-        with open(file_loc, mode="w", encoding="utf-8") as f:
-            yaml.dump(to_save, f)
-
-    @classmethod
-    def read_current_stage(cls, file_loc):
-        if not os.path.exists(file_loc):
-            logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, None, None, None]
-        with open(file_loc, encoding="utf-8") as f:
-            data = yaml.load(f, Loader=yaml.FullLoader)
-            data = data if data is not None else {}
-            year = data.get('year', None)
-            stage_str = data.get('stage', 'null')
-            stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
-            path = data.get('path', None)
-            folder_name = data.get('folder_name', None)
-            iteration = data.get('iteration', 0)
-            return [year, stage, iteration, path, folder_name]
 
     def enabled(self, stage) -> bool:
         return stage in self.enabled_stages

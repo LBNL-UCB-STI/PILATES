@@ -514,7 +514,7 @@ def generate_activity_plans(
         asim_subdir = settings['region_to_asim_subdir'][region]
         asim_workdir = os.path.join('activitysim', asim_subdir)
         asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-        asim_cmd = get_base_asim_cmd(settings)
+
         docker_stdout = settings.get('docker_stdout', False)
 
         # If this is the first iteration, skims should only exist because
@@ -538,12 +538,12 @@ def generate_activity_plans(
             "Generating activity plans for the year "
             "{0} with {1}".format(
                 state.forecast_year, activity_demand_model))
-        if resume_after:
-            asim_cmd += ' -r {0}'.format(resume_after)
-            print_str += ". Picking up after {0}".format(resume_after)
-        formatted_print(print_str)
 
         if not state.asim_compiled:
+            asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500)
+            if resume_after:
+                asim_cmd += ' -r {0}'.format(resume_after)
+
             additional_args = get_asim_additional_args(asim_docker_vols, True)
             run_container(client, settings,
                           activity_demand_image,
@@ -552,6 +552,11 @@ def generate_activity_plans(
                           command=asim_cmd,
                           args=additional_args)
             state.compile_asim()
+        asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500)
+        if resume_after:
+            asim_cmd += ' -r {0}'.format(resume_after)
+            print_str += ". Picking up after {0}".format(resume_after)
+        formatted_print(print_str)
 
         additional_args = get_asim_additional_args(asim_docker_vols, False)
 
