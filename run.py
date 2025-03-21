@@ -552,7 +552,7 @@ def generate_activity_plans(
                           command=asim_cmd,
                           args=additional_args)
             state.compile_asim()
-        asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500)
+        asim_cmd = get_base_asim_cmd(settings)
         if resume_after:
             asim_cmd += ' -r {0}'.format(resume_after)
             print_str += ". Picking up after {0}".format(resume_after)
