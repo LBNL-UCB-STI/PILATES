@@ -106,11 +106,11 @@ def find_latest_beam_iteration(beam_output_dir):
     print(iter_dirs)
 
 
-def get_base_asim_cmd(settings, household_sample_size=None):
+def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
     formattable_asim_cmd = settings['asim_formattable_command']
     if not household_sample_size:
         household_sample_size = settings.get('household_sample_size', 0)
-    num_processes = settings.get('num_processes', multiprocessing.cpu_count() - 1)
+    num_processes = num_processes or settings.get('num_processes', multiprocessing.cpu_count() - 1)
     chunk_size = settings.get('chunk_size', 0)  # default no chunking
     base_asim_cmd = formattable_asim_cmd.format(
         household_sample_size, num_processes, chunk_size)
@@ -540,7 +540,7 @@ def generate_activity_plans(
                 state.forecast_year, activity_demand_model))
 
         if not state.asim_compiled:
-            asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500)
+            asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500, num_processes=1)
             if resume_after:
                 asim_cmd += ' -r {0}'.format(resume_after)
 
