@@ -140,6 +140,7 @@ asim_output_format: parquet
 #num_processes: 90 # 94
 asim_subdir: configs
 file_format: parquet
+asim_main_configs_dir: configs_extended
 asim_local_input_folder: pilates/activitysim/data/
 asim_local_mutable_data_folder: activitysim/data/
 asim_local_output_folder: activitysim/output/
