@@ -60,7 +60,7 @@ geoms_index_col: taz1454
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: pilates-network--psimpl-sfres-jdeq-400g-hl
+output_run_name: pilates-network--psimpl-sfres-jdeq-400g-zn
 
 # URBANSIM
 region_to_region_id:
