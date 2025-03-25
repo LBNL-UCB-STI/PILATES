@@ -545,12 +545,14 @@ def generate_activity_plans(
                 asim_cmd += ' -r {0}'.format(resume_after)
 
             additional_args = get_asim_additional_args(asim_docker_vols, True)
-            run_container(client, settings,
+            success = run_container(client, settings,
                           activity_demand_image,
                           working_dir=asim_workdir,
                           volumes=asim_docker_vols,
                           command=asim_cmd,
                           args=additional_args)
+            if not success:
+                raise RuntimeError("ASim Compilation failed")
             state.compile_asim()
         asim_cmd = get_base_asim_cmd(settings)
         if resume_after:
@@ -817,7 +819,7 @@ def to_singularity_env(env):
 
 
 def run_container(client, settings: dict, image: str, volumes: dict, command: str,
-                  working_dir=None, environment=None, args=None):
+                  working_dir=None, environment=None, args=None) -> bool:
     """
     Executes container using docker or singularity
     :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
@@ -854,6 +856,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
             print(log)
         container.remove()
         logger.info("Finished docker container: %s, command: %s", image, command)
+        return True
     else:
         for local_folder in volumes:
             os.makedirs(local_folder, exist_ok=True)
@@ -864,8 +867,9 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
                + ["-B", singularity_volumes, image] + (args if args else []) \
                + command.split()
         logger.info("Running command: %s", " ".join(proc))
-        subprocess.run(proc)
-        logger.info("Finished command: %s", " ".join(proc))
+        result = subprocess.run(proc)
+        logger.info("Finished command: %s with exit code %s", " ".join(proc), result.returncode)
+        return result == 0
 
 
 def get_model_and_image(settings: dict, model_type: str):
