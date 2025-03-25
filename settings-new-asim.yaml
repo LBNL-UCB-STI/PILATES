@@ -136,7 +136,7 @@ mep_local_output_folder: pilates/postprocessing/MEP/
 # ACTIVITYSIM
 household_sample_size: 250000  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
-asim_output_format: parquet
+file_format: parquet
 #num_processes: 90 # 94
 asim_subdir: configs
 file_format: parquet
