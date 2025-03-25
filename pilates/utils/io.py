@@ -139,12 +139,13 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         usim_datastore = settings['usim_formattable_input_file_name'].format(
             region_id=region_id)
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
-        temp_ds = pd.HDFStore(usim_datastore_fpath, 'r')
-        if "households" not in temp_ds:
+        store = pd.HDFStore(usim_datastore_fpath)
+        if "households" not in store:
             table_prefix_yr = str(year)
-            if "{0}/households".format(table_prefix_yr) not in temp_ds:
-                raise KeyError("No households table of either format found in {0}. Tables: {1}".format(usim_datastore_fpath, temp_ds.keys()))
-            temp_ds.close()
+            if "{0}/households".format(table_prefix_yr) not in store:
+                raise KeyError("No households table of either format found in {0}. Tables: {1}".format(usim_datastore_fpath, store.keys()))
+            else:
+                logger.info("Using {0}/households table".format(table_prefix_yr))
 
     # Otherwise we read from the land use outputs
     else:
@@ -152,13 +153,12 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
             year=year)
         table_prefix_yr = str(year)
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
+        store = pd.HDFStore(usim_datastore_fpath)
 
     logger.info("Opening urbansim datastore at {0}".format(usim_datastore))
 
     if not os.path.exists(usim_datastore_fpath):
         raise ValueError('No land use data found at {0}!'.format(
             usim_datastore_fpath))
-
-    store = pd.HDFStore(usim_datastore_fpath)
 
     return store, table_prefix_yr
