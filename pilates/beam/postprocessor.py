@@ -4,6 +4,10 @@ import os
 import numpy as np
 import openmatrix as omx
 import pandas as pd
+try:
+    import xarray
+except:
+    print("FAILED TO LOAD XARRAY")
 
 # import pickle
 # import cloudpickle
@@ -270,8 +274,76 @@ def clear_skim_cache(asim_local_output_dir):
     else:
         logger.warning("Did not find skim cache to delete")
 
+def _accumulate_completed_failed_trips(partialSkims, timePeriods):
+    completed_failed_dict = {}
+
+    for tp in timePeriods:
+        for key in partialSkims.list_matrices():
+            if key.endswith(f"_TRIPS__{tp}"):
+                mode = key.rsplit('_', 3)[0]  # Extract mode from key (e.g., WLK_TRN_WLK)
+                if mode not in completed_failed_dict:
+                    completed_failed_dict[mode] = [np.zeros_like(partialSkims[key]), np.zeros_like(partialSkims[key])]
+                completed_failed_dict[mode][0] += partialSkims[key][:]
+            elif key.endswith(f"_FAILURES__{tp}"):
+                mode = key.rsplit('_', 3)[0]  # Extract mode from key (e.g., WLK_TRN_WLK)
+                if mode not in completed_failed_dict:
+                    completed_failed_dict[mode] = [np.zeros_like(partialSkims[key]), np.zeros_like(partialSkims[key])]
+                completed_failed_dict[mode][1] += partialSkims[key][:]
+
+    return completed_failed_dict
+
+
+def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
+    # Extract the path from the skims name
+    path = skims.name.rsplit('_', maxsplit=1)[0]  # Assuming the name is in the form 'WLK_TRN_WLK_XWAIT'
+
+    # Get the completed and failed trips for the current mode
+    completed, failed = completed_failed_dict.get(path, (None, None))
+
+    if completed is None or failed is None:
+        logger.info(f"No input skim for mode {path}")
+        return path, (completed, failed)
+
+    # Get the measure name from the skims name
+    measure_name = skims.name.rsplit('_', maxsplit=1)[1]
+
+    # Construct the key for the partial skims
+    partial_key = f"{path}_{measure_name}__"
+
+    # Find all relevant partial skim keys for the current measure
+    partial_keys = [k for k in partialSkims.keys() if k.startswith(partial_key)]
+
+    # Initialize the output array for the measure
+    output_vals = skims.values.copy()
+
+    for tp_idx, tp in enumerate(timePeriods):
+        partial_key_with_tp = f"{partial_key}{tp}"
+        if partial_key_with_tp in partialSkims:
+            input_vals = partialSkims[partial_key_with_tp][:]
+            mask = ~np.isnan(input_vals) & (completed > 0)
+            output_vals[:, :, tp_idx][mask] = input_vals[mask]
+
+    # Update the skim with the new values
+    skims[:] = output_vals
+
+    return path, (completed, failed)
+
+def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+    skims = xarray.open_zarr(all_skims_path)
+    # skims = zarr.load(all_skims_path)
+    current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+    partialSkims = omx.open_file(current_skims_path, mode='r')
+    partialSkimKeys = pd.Series(partialSkims.listMatrices())
+    partialSkimDataKeys = partialSkimKeys.loc[~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES") )]
+    iterable = [(
+        path + '_' +  measure, vals[3].to_list()) for (path, measure), vals
+        in
+        partialSkimDataKeys.str.rsplit('_', n=3, expand=True).groupby([0, 1])]
+    completed_failed_dict = _accumulate_completed_failed_trips(partialSkims, skims["time_period"].values)
+
+    result = [_merge_zarr_skim(partialSkims, skims[path], completed_failed_dict, timePeriods) for (path, timePeriods) in iterable if path in skims.keys()]
+
 def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
-    # TODO: Swith to using ds = zarr.load("data/skims.zarr") and concurrently iterating through keys
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')

@@ -143,6 +143,7 @@ class WorkflowState:
         traffic_assignment_enabled = settings['traffic_assignment_enabled']
         replanning_enabled = settings['replanning_enabled']
         file_loc = settings['state_file_loc']
+        copy_files = settings.get("copy_files", True)
         [year, stage, iteration, path, folder_name, asim_compiled] = cls.read_current_stage(file_loc)
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s, filename=%s)", year, stage, file_loc)
@@ -150,8 +151,11 @@ class WorkflowState:
         out = WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                             activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage,
                             iteration, path, folder_name, file_loc, asim_compiled)
-        if (path is None) | (folder_name is None):
+        if ((path is None) | (folder_name is None)) & copy_files:
             out._create_output_dir(settings)
+        if not copy_files:
+            out.output_path = ""
+            out.folder_name = "pilates"
         if year:
             out.forecast_year = min(year + (out.initial_step or travel_model_freq),
                                     end_year) if land_use_enabled else start_year

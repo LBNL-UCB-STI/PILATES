@@ -26,7 +26,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://zaneedell/beam:1.0.1
-  activitysim: docker://zaneedell/activitysim:0.2.1
+  activitysim: docker://zaneedell/activitysim:0.2.3
   polaris:
 
 # docker settings
@@ -150,8 +150,8 @@ asim_formattable_command: "--households_sample_size {0} -m {1} -g {2}"
 region_to_asim_subdir:
   austin: austin
   detroit: detroit
-  sfbay: activitysim/examples/prototype_mtc
-  seattle: activitysim/examples/prototype_mtc
+  sfbay: activitysim/examples/prototype_mtc_clean
+  seattle: activitysim/examples/prototype_mtc_clean
 region_to_asim_bucket:
   austin: austin-activitysim
   detroit: detroit-activitysim
