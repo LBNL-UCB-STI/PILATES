@@ -59,13 +59,15 @@ class WorkflowState:
         if self.__asim_compiled:
             logger.info("ActivitySim already compiled in year %s", self.year)
         else:
-            logger.info("ActivitySim not compiled in year %s, so running compilation (this will take longer)", self.year)
+            logger.info("ActivitySim not compiled in year %s, so running compilation (this will take longer)",
+                        self.year)
         return self.__asim_compiled
 
     def compile_asim(self):
         self.__asim_compiled = True
         logger.info("Completed compiling activitysim in year %s", self.year)
-        WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name, self.iteration)
+        WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name,
+                                  self.iteration, self.__asim_compiled)
 
     def _create_output_dir(self, settings: dict):
         dt = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -109,9 +111,9 @@ class WorkflowState:
         print('STOP')
 
     @classmethod
-    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration):
+    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration, asim_compiled):
         to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
-                   "folder_name": folder_name, "iteration": iteration, "asim_compiled": False}
+                   "folder_name": folder_name, "iteration": iteration, "asim_compiled": asim_compiled}
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -197,7 +199,8 @@ class WorkflowState:
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
-            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0)
+            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0,
+                                      self.__asim_compiled)
         else:
             os.remove(self.file_loc)
 
@@ -205,7 +208,7 @@ class WorkflowState:
         logger.info("Completed iteration %d of stage %s of %d", iteration, self.stage, self.year)
         self.iteration += 1
         WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name,
-                                  self.iteration)
+                                  self.iteration, self.__asim_compiled)
 
     def next_stage(self, year: int, stage: Stage):
         next_enabled_stage = next(filter(self.enabled, list(WorkflowState.Stage)[stage.value:]), None)
