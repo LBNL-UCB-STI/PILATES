@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:1.0.1
   activitysim: docker://zaneedell/activitysim:0.2.3
+  beam: docker://zaneedell/beam:1.0.2
   polaris:
 
 # docker settings
@@ -137,7 +137,7 @@ mep_local_output_folder: pilates/postprocessing/MEP/
 household_sample_size: 250000  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 file_format: parquet
-#num_processes: 90 # 94
+num_processes: 25 # 94
 asim_subdir: configs
 asim_main_configs_dir: configs_extended
 asim_local_input_folder: pilates/activitysim/data/
