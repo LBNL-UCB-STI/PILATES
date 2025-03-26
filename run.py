@@ -869,7 +869,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
         logger.info("Running command: %s", " ".join(proc))
         result = subprocess.run(proc)
         logger.info("Finished command: %s with exit code %s", " ".join(proc), result.returncode)
-        return result == 0
+        return str(result) == "0"
 
 
 def get_model_and_image(settings: dict, model_type: str):
