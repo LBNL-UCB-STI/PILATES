@@ -119,7 +119,6 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         elif fmt == "parquet":
             return os.path.join(beam_scenario_folder, file_name + ".parquet")
 
-
     def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name, file_format):
         """
         TODO: Switch this to polars for better performance
@@ -167,7 +166,10 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             asim_file_path = locate_asim_file(asim_file_name, file_format)
             beam_file_path = locate_beam_file(beam_file_name, file_format)
             logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
-            df = pd.read_parquet(asim_file_path).rename(columns={"VEHICL": "cars"}).rename(columns={"auto_ownership": "cars"}).rename(columns={"tripId": "trip_id"})
+            df = pd.read_parquet(asim_file_path).rename(columns={"VEHICL": "cars"}).rename(
+                columns={"auto_ownership": "cars"}).rename(columns={"tripId": "trip_id"})
+            if "household_id" in df.columns:
+                df = df.astype({"household_id": pd.Int64Dtype()})
             df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
@@ -253,8 +255,6 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             households_final = households_final.astype({"household_id": pd.Int64Dtype(),
                                                         "cars": pd.Int64Dtype()})
 
-
-
             unchanged_plans = original_plans.loc[~original_plans.person_id.isin(per_u), :]
             logger.info("Adding %s new plan elements after and keeping %s from previous iteration",
                         len(updated_plans), len(unchanged_plans))
@@ -275,7 +275,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression='gzip')
 
     if replanning_iteration_number < 0:
-        file_format = settings.get("file_format","parquet")
+        file_format = settings.get("file_format", "parquet")
         copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
         copy_with_compression_asim_file_to_beam('households', 'households', file_format)
         copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
@@ -307,6 +307,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
                                                             replanning_iteration_number)
         except FileNotFoundError:
-            logger.warning("Failed to archive ASim runs. If this is using parquet format that is because this isn't implemented yet. You should probably do that")
+            logger.warning(
+                "Failed to archive ASim runs. If this is using parquet format that is because this isn't implemented yet. You should probably do that")
 
     return
