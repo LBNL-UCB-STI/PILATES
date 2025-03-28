@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  activitysim: docker://zaneedell/activitysim:0.2.3
-  beam: docker://zaneedell/beam:1.0.2
+  activitysim: docker://zaneedell/activitysim:0.2.4
+  beam: docker://zaneedell/beam:1.0.4
   polaris:
 
 # docker settings
