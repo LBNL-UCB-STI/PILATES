@@ -1,11 +1,14 @@
+import concurrent.futures
 import logging
 import os
+import shutil
 
 import numpy as np
 import openmatrix as omx
 import pandas as pd
+
 try:
-    import xarray
+    import xarray as xr
 except:
     print("FAILED TO LOAD XARRAY")
 
@@ -101,42 +104,38 @@ def find_produced_origin_skims(beam_output_dir):
 
 
 def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
-    complete_key = '_'.join([path, 'TRIPS', '', timePeriod])
-    failed_key = '_'.join([path, 'FAILURES', '', timePeriod])
+    complete_key = f"{path}_TRIPS__{timePeriod}"
+    failed_key = f"{path}_FAILURES__{timePeriod}"
     completed, failed = None, None
+
     if complete_key in inputMats.keys():
         completed = np.array(inputMats[complete_key]).copy()
-        if '_'.join([path, 'TOTIVT', '', timePeriod]) in inputMats.keys():
-            shouldNotBeZero = (completed > 0) & (np.array(inputMats['_'.join([path, 'TOTIVT', '', timePeriod])]) == 0)
+        if f"{path}_TOTIVT__{timePeriod}" in inputMats.keys():
+            shouldNotBeZero = (completed > 0) & (np.array(inputMats[f"{path}_TOTIVT__{timePeriod}"]) == 0)
             if shouldNotBeZero.any():
                 logger.warning(
-                    "In BEAM outputs for {0} in {1} we have {2} completed trips with "
-                    "time = 0".format(path, timePeriod, shouldNotBeZero.sum()))
+                    f"In BEAM outputs for {path} in {timePeriod} we have {shouldNotBeZero.sum()} completed trips with time = 0"
+                )
                 completed[shouldNotBeZero] = 0
         failed = np.array(inputMats[failed_key])
-        try:
-            logger.info(
-                "Adding {0} valid trips and {1} impossible trips to skim {2}, where {3} had existed before".format(
-                    np.nan_to_num(completed).sum(),
-                    np.nan_to_num(failed).sum(),
-                    complete_key,
-                    np.nan_to_num(np.array(outputMats[complete_key])).sum()))
-            logger.info("Of the {0} completed trips, {1} were to a previously unobserved "
-                        "OD".format(np.nan_to_num(completed).sum(),
-                                    np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()))
-        except:
-            pass
-        toPenalize = np.array([0])
-        toCancel = np.array([0])
+
+        logger.info(
+            f"Adding {np.nan_to_num(completed).sum()} valid trips and {np.nan_to_num(failed).sum()} impossible trips to skim {complete_key}, where {np.nan_to_num(np.array(outputMats[complete_key])).sum()} had existed before"
+        )
+        logger.info(
+            f"Of the {np.nan_to_num(completed).sum()} completed trips, {np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()} were to a previously unobserved OD"
+        )
+
         for measure in measures:
-            inputKey = '_'.join([path, measure, '', timePeriod])
+            inputKey = f"{path}_{measure}__{timePeriod}"
             if path in ["WALK", "BIKE"]:
                 if measure == "DIST":
-                    outputKey = path + "DIST"
+                    outputKey = f"{path}DIST"
                 else:
-                    outputKey = '_'.join([path, measure])
+                    outputKey = f"{path}_{measure}"
             else:
                 outputKey = inputKey
+
             if (outputKey in outputMats) and (inputKey in inputMats):
                 if measure == "TRIPS":
                     outputMats[outputKey][completed > 0] += completed[completed > 0]
@@ -144,15 +143,14 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputMats[outputKey][failed > 0] += failed[failed > 0]
                 elif measure == "DIST":
                     outputMats[outputKey][completed > 0] = 0.5 * (
-                            outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0])
+                            outputMats[outputKey][completed > 0] + inputMats[inputKey][completed > 0]
+                    )
                 elif measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
-                    # NOTE: remember the mtc asim implementation has scaled units for these variables
                     valid = ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][(completed > 0) & valid] = inputMats[inputKey][
                                                                          (completed > 0) & valid] * 100.0
                 elif measure in ["TOTIVT", "IVT"]:
-
-                    inputKeyKEYIVT = '_'.join([path, 'KEYIVT', '', timePeriod])
+                    inputKeyKEYIVT = f"{path}_KEYIVT__{timePeriod}"
                     outputKeyKEYIVT = inputKeyKEYIVT
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
                         additionalFilter = (outputMats[outputKeyKEYIVT][:] > 0)
@@ -161,63 +159,53 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
                     outputTravelTime = np.array(outputMats[outputKey])
                     toCancel = (failed > 3) & (failed > (6 * completed))
                     previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
-                    # save this for later so it doesn't get overwritten
                     toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
                     if toCancel.sum() > 0:
                         logger.info(
-                            "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
-                            " failed trips in these ODs. Previously, {5} were nonzero".format(
-                                toCancel.sum(), path, timePeriod, completed[toCancel].sum(), failed[toCancel].sum(),
-                                previouslyNonZero.sum()))
-                        logger.info("There are now {0} observed ODs, {1} impossible ODs, and {2} default ODs".format(
-                            ((completed > 0) & (outputTravelTime > 0)).sum(),
-                            (outputTravelTime == 0).sum(),
-                            ((completed == 0) & (outputTravelTime > 0)).sum()
-                        ))
+                            f"Marking {toCancel.sum()} {path} trips completely impossible in {timePeriod}. There were {completed[toCancel].sum()} completed trips but {failed[toCancel].sum()} failed trips in these ODs. Previously, {previouslyNonZero.sum()} were nonzero"
+                        )
+                        logger.info(
+                            f"There are now {((completed > 0) & (outputTravelTime > 0)).sum()} observed ODs, {(outputTravelTime == 0).sum()} impossible ODs, and {((completed == 0) & (outputTravelTime > 0)).sum()} default ODs"
+                        )
                     toAllow = ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
                     outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
-                    # outputMats[outputKey][toCancel] = 0.0
                     if (inputKeyKEYIVT in inputMats.keys()) & (outputKeyKEYIVT in outputMats.keys()):
-                        # outputMats[outputKeyKEYIVT][toCancel] = 0.0
                         outputMats[outputKeyKEYIVT][toAllow] = inputMats[inputKeyKEYIVT][toAllow] * 100
-                elif not measure.endswith("TOLL"):  # hack to avoid overwriting initial tolls
+                elif not measure.endswith("TOLL"):
                     outputMats[outputKey][completed > 0] = inputMats[inputKey][completed > 0]
                     if path.startswith('SOV_'):
                         for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
-                            newKey = '_'.join([path, measure.replace('SOV_', sub), '', timePeriod])
+                            newKey = f"{path}_{measure.replace('SOV_', sub)}__{timePeriod}"
                             outputMats[newKey][completed > 0] = inputMats[inputKey][completed > 0]
-                            logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}".format(
-                                np.nan_to_num(completed).sum(),
-                                np.nan_to_num(failed).sum(),
-                                newKey))
+                            logger.info(
+                                f"Adding {np.nan_to_num(completed).sum()} valid trips and {np.nan_to_num(failed).sum()} impossible trips to skim {newKey}")
+
                 badVals = np.sum(np.isnan(outputMats[outputKey][:]))
                 if badVals > 0:
-                    logger.warning("Total number of {0} skim values are NaN for skim {1}".format(badVals, outputKey))
+                    logger.warning(f"Total number of {badVals} skim values are NaN for skim {outputKey}")
             elif outputKey in outputMats:
-                logger.warning("Target skims are missing key {0}".format(outputKey))
+                logger.warning(f"Target skims are missing key {outputKey}")
             else:
-                logger.warning("BEAM skims are missing key {0}".format(outputKey))
+                logger.warning(f"BEAM skims are missing key {outputKey}")
 
         if toCancel.sum() > 0:
             for measure in measures:
-                if measure not in ["TRIPS, FAILURES"]:
-                    key = '_'.join([path, measure, '', timePeriod])
+                if measure not in ["TRIPS", "FAILURES"]:
+                    key = f"{path}_{measure}__{timePeriod}"
                     try:
                         outputMats[key][toCancel] = 0.0
                     except:
-                        logger.warning(
-                            "Tried to cancel {0} trips for key {1} but couldn't find key".format(toCancel.sum(), key))
+                        logger.warning(f"Tried to cancel {toCancel.sum()} trips for key {key} but couldn't find key")
 
         if ("TOTIVT" in measures) & ("IWAIT" in measures) & ("KEYIVT" in measures):
             if toPenalize.sum() > 0:
-                inputKey = '_'.join([path, 'IWAIT', '', timePeriod])
+                inputKey = f"{path}_IWAIT__{timePeriod}"
                 outputMats[inputKey][toPenalize] = inputMats[inputKey][toPenalize] * (failed[toPenalize] + 1) / (
-                        completed[toPenalize] + 1)
-    # outputSkim.close()
-    # inputSkim.close()
+                        completed[toPenalize] + 1
+                )
     else:
-        logger.info(
-            "No input skim for mode {0} and time period {1}, with key {2}".format(path, timePeriod, complete_key))
+        logger.info(f"No input skim for mode {path} and time period {timePeriod}, with key {complete_key}")
+
     return (path, timePeriod), (completed, failed)
 
 
@@ -256,9 +244,9 @@ def simplify(input, timePeriod, mode, utf=False, expand=False):
     return originalDict
 
 
-def copy_skims_for_unobserved_modes(mapping, skims):
+def copy_skims_for_unobserved_modes(mapping, skims, mats):
     for fromMode, toModes in mapping.items():
-        relevantSkimKeys = [key for key in skims.list_matrices() if
+        relevantSkimKeys = [key for key in mats if
                             key.startswith(fromMode + "_") and not ("TOLL" in key)]
         for skimKey in relevantSkimKeys:
             for toMode in toModes:
@@ -266,13 +254,15 @@ def copy_skims_for_unobserved_modes(mapping, skims):
                 skims[toKey][:] = skims[skimKey][:]
                 print("Copying values from {0} to {1}".format(skimKey, toKey))
 
+
 def clear_skim_cache(asim_local_output_dir):
     skims_path = os.path.join(asim_local_output_dir, "cache")
     if os.path.exists(skims_path):
         logger.info("Deleting skims cache at {0}. Eventually we should modify it in place".format(skims_path))
-        os.rmdir(skims_path)
+        shutil.rmtree(skims_path)
     else:
         logger.warning("Did not find skim cache to delete")
+
 
 def _accumulate_completed_failed_trips(partialSkims, timePeriods):
     completed_failed_dict = {}
@@ -292,7 +282,6 @@ def _accumulate_completed_failed_trips(partialSkims, timePeriods):
 
     return completed_failed_dict
 
-
 def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
     # Extract the path from the skims name
     path = skims.name.rsplit('_', maxsplit=1)[0]  # Assuming the name is in the form 'WLK_TRN_WLK_XWAIT'
@@ -310,38 +299,123 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
     # Construct the key for the partial skims
     partial_key = f"{path}_{measure_name}__"
 
-    # Find all relevant partial skim keys for the current measure
-    partial_keys = [k for k in partialSkims.keys() if k.startswith(partial_key)]
-
     # Initialize the output array for the measure
     output_vals = skims.values.copy()
 
-    for tp_idx, tp in enumerate(timePeriods):
+    for tp in timePeriods:
         partial_key_with_tp = f"{partial_key}{tp}"
         if partial_key_with_tp in partialSkims:
             input_vals = partialSkims[partial_key_with_tp][:]
             mask = ~np.isnan(input_vals) & (completed > 0)
-            output_vals[:, :, tp_idx][mask] = input_vals[mask]
+            output_vals[:, :, timePeriods.index(tp)] = np.where(mask, input_vals, output_vals[:, :, timePeriods.index(tp)])
+
+    # Handle special cases for certain measures
+    if measure_name in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
+        valid = ~np.isnan(input_vals)
+        output_vals[:, :, timePeriods.index(tp)] = np.where(
+            (completed > 0) & valid,
+            input_vals * 100.0,
+            output_vals[:, :, timePeriods.index(tp)]
+        )
+    elif measure_name in ["TOTIVT", "IVT"]:
+        inputKeyKEYIVT = f"{path}_KEYIVT__{tp}"
+        outputKeyKEYIVT = inputKeyKEYIVT
+        if (inputKeyKEYIVT in partialSkims.keys()) & (outputKeyKEYIVT in skims.keys()):
+            additionalFilter = (skims[outputKeyKEYIVT][:] > 0)
+        else:
+            additionalFilter = False
+        outputTravelTime = np.array(skims[skims.name])
+        toCancel = (failed > 3) & (failed > (6 * completed))
+        previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
+        toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
+        if toCancel.sum() > 0:
+            logger.info(
+                "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
+                " failed trips in these ODs. Previously, {5} were nonzero".format(
+                    toCancel.sum(), path, tp, completed[toCancel].sum(), failed[toCancel].sum(),
+                    previouslyNonZero.sum()))
+            logger.info("There are now {0} observed ODs, {1} impossible ODs, and {2} default ODs".format(
+                ((completed > 0) & (outputTravelTime > 0)).sum(),
+                (outputTravelTime == 0).sum(),
+                ((completed == 0) & (outputTravelTime > 0)).sum()
+            ))
+        toAllow = ~toCancel & ~toPenalize & ~np.isnan(input_vals)
+        output_vals[:, :, timePeriods.index(tp)] = np.where(
+            toAllow,
+            input_vals * 100,
+            output_vals[:, :, timePeriods.index(tp)]
+        )
+        if (inputKeyKEYIVT in partialSkims.keys()) & (outputKeyKEYIVT in skims.keys()):
+            skims[outputKeyKEYIVT][:, :, timePeriods.index(tp)] = np.where(
+                toAllow,
+                partialSkims[inputKeyKEYIVT][:] * 100,
+                skims[outputKeyKEYIVT][:, :, timePeriods.index(tp)]
+            )
+    elif not measure_name.endswith("TOLL"):
+        output_vals[:, :, timePeriods.index(tp)] = np.where(
+            completed > 0,
+            input_vals,
+            output_vals[:, :, timePeriods.index(tp)]
+        )
+        if path.startswith('SOV_'):
+            for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
+                newKey = f"{path}_{measure_name.replace('SOV_', sub)}__{tp}"
+                if newKey in skims.keys():
+                    skims[newKey][:, :, timePeriodS.index(tp)] = np.where(
+                        completed > 0,
+                        input_vals,
+                        skims[newKey][:, :, timePeriods.index(tp)]
+                    )
+                    logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}".format(
+                        np.nan_to_num(completed).sum(),
+                        np.nan_to_num(failed).sum(),
+                        newKey))
 
     # Update the skim with the new values
     skims[:] = output_vals
 
     return path, (completed, failed)
 
+
 def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
-    skims = xarray.open_zarr(all_skims_path)
-    # skims = zarr.load(all_skims_path)
+    skims = xr.open_zarr(all_skims_path)
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
-    partialSkimKeys = pd.Series(partialSkims.listMatrices())
-    partialSkimDataKeys = partialSkimKeys.loc[~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES") )]
+    partialSkimKeys = pd.Series(partialSkims.list_matrices())
+    partialSkimDataKeys = partialSkimKeys.loc[~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES"))]
     iterable = [(
-        path + '_' +  measure, vals[3].to_list()) for (path, measure), vals
+        path + '_' + measure, vals[3].to_list()) for (path, measure), vals
         in
         partialSkimDataKeys.str.rsplit('_', n=3, expand=True).groupby([0, 1])]
-    completed_failed_dict = _accumulate_completed_failed_trips(partialSkims, skims["time_period"].values)
+    timePeriods = settings["periods"]
+    completed_failed_dict = _accumulate_completed_failed_trips(partialSkims, timePeriods)
 
-    result = [_merge_zarr_skim(partialSkims, skims[path], completed_failed_dict, timePeriods) for (path, timePeriods) in iterable if path in skims.keys()]
+    # Parallelize the merging process
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {executor.submit(_merge_zarr_skim, partialSkims, skims[path], completed_failed_dict, timePeriods): path for path, _ in iterable}
+        for future in concurrent.futures.as_completed(futures):
+            path = futures[future]
+            try:
+                result = future.result()
+                logger.info(f"Merged skim for mode {result[0]}")
+            except Exception as e:
+                logger.error(f"Error merging skim for mode {path}: {e}")
+
+    discover_impossible_ods([(path, tp) for path, tp in iterable], skims, skims.keys())
+    mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
+    copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
+
+    order = zone_order(settings, settings['start_year'])
+    zone_id = np.arange(1, len(order) + 1)
+
+    # Generating offset
+    skims.coords['zone_id'] = ('zone_id', zone_id)
+    skims.to_zarr(all_skims_path, mode='a')
+
+    skims.close()
+    partialSkims.close()
+    return current_skims_path
+
 
 def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     skims = omx.open_file(all_skims_path, 'a')
@@ -363,9 +437,9 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
                           simplify(skims, timePeriod, path, False), path,
                           timePeriod, vals) for (path, timePeriod, vals) in iterable]
 
-    discover_impossible_ods(result, skims)
+    discover_impossible_ods(result, skims, skims.list_matrices())
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
-    copy_skims_for_unobserved_modes(mapping, skims)
+    copy_skims_for_unobserved_modes(mapping, skims, skims.list_matrices())
 
     order = zone_order(settings, settings['start_year'])
     zone_id = np.arange(1, len(order) + 1)
@@ -411,9 +485,9 @@ def trim_inaccessible_ods(settings, working_dir):
     skims.close()
 
 
-def discover_impossible_ods(result, skims):
+def discover_impossible_ods(result, skims, mats):
     # return (path, timePeriod), (completed, failed)
-    allMats = skims.list_matrices()
+    allMats = mats
     metricsPerPath = dict()
     for (path, tp), _ in result:
         if path not in metricsPerPath.keys():

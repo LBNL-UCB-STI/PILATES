@@ -112,6 +112,8 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             else:
                 a_n = file_name
             return os.path.join(asim_output_data_dir, "final_pipeline", a_n, "final.parquet")
+        elif fmt is None:
+            return os.path.join(asim_output_data_dir, file_name)
 
     def locate_beam_file(file_name, fmt):
         if fmt == "csv":
@@ -172,12 +174,12 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
                 df = df.astype({"household_id": pd.Int64Dtype()})
             df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
-    def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number):
+    def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number, fmt):
         iteration_folder_name = "year-{0}-iteration-{1}".format(year, replanning_iteration_number)
         iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
         if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
-        input_file_path = os.path.join(file_path, file_name)
+        input_file_path = locate_asim_file(file_name, fmt)
         target_file_path = os.path.join(iteration_folder_path, file_name)
         if target_file_path.endswith('.csv'):
             target_file_path += '.gz'
@@ -291,23 +293,23 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         # This first one not currently necessary when asim-lite is replanning all households
         # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
         #                                                 replanning_iteration_number)
+        file_format = settings.get("file_format", "parquet")
         try:
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans.csv.gz', state.year,
-                                                            replanning_iteration_number)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households.csv.gz', state.year,
-                                                            replanning_iteration_number)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons.csv.gz', state.year,
-                                                            replanning_iteration_number)
-            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_land_use.csv', state.year,
-                                                            replanning_iteration_number)
-            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_tours.csv', state.year,
-                                                            replanning_iteration_number)
-            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_trips.csv', state.year,
-                                                            replanning_iteration_number)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans', state.year,
+                                                            replanning_iteration_number, file_format)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households', state.year,
+                                                            replanning_iteration_number, file_format)
+            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons', state.year,
+                                                            replanning_iteration_number, file_format)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'land_use', state.year,
+                                                            replanning_iteration_number, file_format)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'tours', state.year,
+                                                            replanning_iteration_number, file_format)
+            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trips', state.year,
+                                                            replanning_iteration_number, file_format)
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
-                                                            replanning_iteration_number)
-        except FileNotFoundError:
-            logger.warning(
-                "Failed to archive ASim runs. If this is using parquet format that is because this isn't implemented yet. You should probably do that")
+                                                            replanning_iteration_number, None)
+        except:
+            logger.error("Error copying asim files to asim archive")
 
     return
