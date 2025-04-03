@@ -677,20 +677,24 @@ def run_traffic_assignment(
         else:
             asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
             asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
-            current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
-                                                                    beam_local_output_folder, settings)
-            beam_post.clear_skim_cache(os.path.join(state.full_path, settings['asim_local_output_folder']))
+            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
+            if settings["file_format"] == "parquet":
+                current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path, previous_od_skims,
+                                                                        beam_local_output_folder, settings)
+                logger.warning("RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES")
+            else:
+                current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
+                                                                         beam_local_output_folder, settings)
+                beam_post.merge_current_omx_origin_skims(
+                    asim_skims_path, previous_origin_skims, beam_local_output_folder,
+                    beam_asim_ridehail_measure_map)
 
             if current_od_skims == previous_od_skims:
                 logger.error(
                     "BEAM hasn't produced the new skims at {0} for some reason. "
                     "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
                 )
-                sys.exit(1)
-            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
-            beam_post.merge_current_omx_origin_skims(
-                asim_skims_path, previous_origin_skims, beam_local_output_folder,
-                beam_asim_ridehail_measure_map)
+
         beam_post.rename_beam_output_directory(abs_beam_output, settings, year, replanning_iteration_number)
 
     return

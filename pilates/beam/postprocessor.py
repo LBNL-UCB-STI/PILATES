@@ -29,7 +29,23 @@ except:
 
 from pilates.activitysim.preprocessor import zone_order
 
-logger = logging.getLogger(__name__)
+if True:
+    # Configure the logger to print to stdout
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)  # Set to DEBUG for even more output
+
+    # Create a handler for stdout
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+
+    # Add the handler to the logger
+    logger.addHandler(handler)
+
+    # Make sure the logger propagates messages to the root logger
+    logger.propagate = True
+else:
+    logger = logging.getLogger(__name__)
 
 
 def find_latest_beam_iteration(beam_output_dir):
@@ -125,6 +141,8 @@ def _merge_skim(inputMats, outputMats, path, timePeriod, measures):
         logger.info(
             f"Of the {np.nan_to_num(completed).sum()} completed trips, {np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()} were to a previously unobserved OD"
         )
+        toCancel = []
+        toPenalize = []
 
         for measure in measures:
             inputKey = f"{path}_{measure}__{timePeriod}"
@@ -266,25 +284,95 @@ def clear_skim_cache(asim_local_output_dir):
 
 def _accumulate_completed_failed_trips(partialSkims, timePeriods):
     completed_failed_dict = {}
+    out_array_shape = list(partialSkims.shape()) + [len(timePeriods)]
 
-    for tp in timePeriods:
+    for tpIdx, tp in enumerate(timePeriods):
         for key in partialSkims.list_matrices():
             if key.endswith(f"_TRIPS__{tp}"):
                 mode = key.rsplit('_', 3)[0]  # Extract mode from key (e.g., WLK_TRN_WLK)
                 if mode not in completed_failed_dict:
-                    completed_failed_dict[mode] = [np.zeros_like(partialSkims[key]), np.zeros_like(partialSkims[key])]
-                completed_failed_dict[mode][0] += partialSkims[key][:]
+                    completed_failed_dict[mode] = [np.zeros(out_array_shape, dtype=np.float32),
+                                                   np.zeros(out_array_shape, dtype=np.float32)]
+                completed_failed_dict[mode][0][:, :, tpIdx] = partialSkims[key][:]
             elif key.endswith(f"_FAILURES__{tp}"):
                 mode = key.rsplit('_', 3)[0]  # Extract mode from key (e.g., WLK_TRN_WLK)
                 if mode not in completed_failed_dict:
-                    completed_failed_dict[mode] = [np.zeros_like(partialSkims[key]), np.zeros_like(partialSkims[key])]
-                completed_failed_dict[mode][1] += partialSkims[key][:]
+                    completed_failed_dict[mode] = [np.zeros(out_array_shape, dtype=np.float32),
+                                                   np.zeros(out_array_shape, dtype=np.float32)]
+                completed_failed_dict[mode][1][:, :, tpIdx] = partialSkims[key][:]
 
     return completed_failed_dict
 
+
+def _transform_measure(input_vals, completed, failed, measure):
+    """
+    Transforms skim values based on measure type and trip completion statistics.
+
+    Parameters:
+    -----------
+    input_vals : ndarray
+        The new observed values
+    completed : ndarray
+        Count of completed trips for each OD pair for current time period
+    failed : ndarray
+        Count of failed trips for each OD pair for current time period
+    measure : str
+        The measure name (e.g., "IWAIT", "TOTIVT")
+
+    Returns:
+    --------
+    tuple (mask, vals)
+        mask: Boolean array indicating which cells to update
+        vals: Values to assign to those cells
+    """
+    # Basic mask - where there are completed trips and valid input values
+    valid = ~np.isnan(input_vals)
+    completed_mask = (completed > 0)
+    basic_mask = valid & completed_mask
+
+    # Handle measures that need scaling by 100
+    if measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
+        return basic_mask, input_vals[basic_mask] * 100.0
+
+    # Handle travel time measures with penalty logic
+    elif measure in ["TOTIVT", "IVT"]:
+        # Create masks for different conditions
+        to_cancel = (failed > 3) & (failed > (6 * completed))
+        to_penalize = (failed > completed) & ~to_cancel & valid & completed_mask
+        to_allow = valid & completed_mask & ~to_cancel & ~to_penalize
+
+        # Prepare values based on condition
+        result_vals = np.zeros_like(input_vals)
+
+        # Apply penalty where needed
+        if to_penalize.any():
+            penalty_factor = (failed + 1) / (completed + 1)
+            indices = np.where(to_penalize)
+            result_vals[indices] = input_vals[indices] * penalty_factor[indices]
+
+        # Use regular values where allowed (with scaling)
+        if to_allow.any():
+            indices = np.where(to_allow)
+            result_vals[indices] = input_vals[indices] * 100.0
+
+        # Combined mask for cells to update
+        update_mask = to_penalize | to_allow
+
+        # Also return the to_cancel mask for use in post-processing
+        return update_mask, result_vals[update_mask], to_cancel
+
+    # Handle non-TOLL measures
+    elif not measure.endswith("TOLL"):
+        return basic_mask, input_vals[basic_mask]
+
+    # Default case (for TOLL measures)
+    return np.zeros_like(input_vals, dtype=bool), np.array([])
+
+
 def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
+    source_skims = partialSkims.list_matrices()
     # Extract the path from the skims name
-    path = skims.name.rsplit('_', maxsplit=1)[0]  # Assuming the name is in the form 'WLK_TRN_WLK_XWAIT'
+    path = skims.name.rsplit('_', maxsplit=1)[0]
 
     # Get the completed and failed trips for the current mode
     completed, failed = completed_failed_dict.get(path, (None, None))
@@ -299,90 +387,222 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
     # Construct the key for the partial skims
     partial_key = f"{path}_{measure_name}__"
 
-    # Initialize the output array for the measure
-    output_vals = skims.values.copy()
+    # Store cancel masks for KEYIVT post-processing
+    cancel_masks = {}
 
-    for tp in timePeriods:
+    for tpIdx, tp in enumerate(timePeriods):
         partial_key_with_tp = f"{partial_key}{tp}"
         if partial_key_with_tp in partialSkims:
             input_vals = partialSkims[partial_key_with_tp][:]
-            mask = ~np.isnan(input_vals) & (completed > 0)
-            output_vals[:, :, timePeriods.index(tp)] = np.where(mask, input_vals, output_vals[:, :, timePeriods.index(tp)])
 
-    # Handle special cases for certain measures
-    if measure_name in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
-        valid = ~np.isnan(input_vals)
-        output_vals[:, :, timePeriods.index(tp)] = np.where(
-            (completed > 0) & valid,
-            input_vals * 100.0,
-            output_vals[:, :, timePeriods.index(tp)]
-        )
-    elif measure_name in ["TOTIVT", "IVT"]:
-        inputKeyKEYIVT = f"{path}_KEYIVT__{tp}"
-        outputKeyKEYIVT = inputKeyKEYIVT
-        if (inputKeyKEYIVT in partialSkims.keys()) & (outputKeyKEYIVT in skims.keys()):
-            additionalFilter = (skims[outputKeyKEYIVT][:] > 0)
-        else:
-            additionalFilter = False
-        outputTravelTime = np.array(skims[skims.name])
-        toCancel = (failed > 3) & (failed > (6 * completed))
-        previouslyNonZero = ((outputTravelTime > 0) | additionalFilter) & toCancel
-        toPenalize = (failed > completed) & ~toCancel & ((outputTravelTime > 0) | additionalFilter)
-        if toCancel.sum() > 0:
-            logger.info(
-                "Marking {0} {1} trips completely impossible in {2}. There were {3} completed trips but {4}"
-                " failed trips in these ODs. Previously, {5} were nonzero".format(
-                    toCancel.sum(), path, tp, completed[toCancel].sum(), failed[toCancel].sum(),
-                    previouslyNonZero.sum()))
-            logger.info("There are now {0} observed ODs, {1} impossible ODs, and {2} default ODs".format(
-                ((completed > 0) & (outputTravelTime > 0)).sum(),
-                (outputTravelTime == 0).sum(),
-                ((completed == 0) & (outputTravelTime > 0)).sum()
-            ))
-        toAllow = ~toCancel & ~toPenalize & ~np.isnan(input_vals)
-        output_vals[:, :, timePeriods.index(tp)] = np.where(
-            toAllow,
-            input_vals * 100,
-            output_vals[:, :, timePeriods.index(tp)]
-        )
-        if (inputKeyKEYIVT in partialSkims.keys()) & (outputKeyKEYIVT in skims.keys()):
-            skims[outputKeyKEYIVT][:, :, timePeriods.index(tp)] = np.where(
-                toAllow,
-                partialSkims[inputKeyKEYIVT][:] * 100,
-                skims[outputKeyKEYIVT][:, :, timePeriods.index(tp)]
-            )
-    elif not measure_name.endswith("TOLL"):
-        output_vals[:, :, timePeriods.index(tp)] = np.where(
-            completed > 0,
-            input_vals,
-            output_vals[:, :, timePeriods.index(tp)]
-        )
-        if path.startswith('SOV_'):
-            for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
-                newKey = f"{path}_{measure_name.replace('SOV_', sub)}__{tp}"
-                if newKey in skims.keys():
-                    skims[newKey][:, :, timePeriodS.index(tp)] = np.where(
-                        completed > 0,
-                        input_vals,
-                        skims[newKey][:, :, timePeriods.index(tp)]
+            # Apply transformations directly to the skims array
+            if measure_name in ["TOTIVT", "IVT"]:
+                # For these measures, we need a bit more preprocessing
+                mask, vals, to_cancel = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx],
+                                                           measure_name)
+
+                # Log cancellations if needed (simplified)
+                if to_cancel.sum() > 0:
+                    logger.info(
+                        f"Marking {to_cancel.sum()} {path} trips completely impossible in {tp}. "
+                        f"There were {completed[:, :, tpIdx][to_cancel].sum()} completed trips but "
+                        f"{failed[:, :, tpIdx][to_cancel].sum()} failed trips in these ODs."
                     )
-                    logger.info("Adding {0} valid trips and {1} impossible trips to skim {2}".format(
-                        np.nan_to_num(completed).sum(),
-                        np.nan_to_num(failed).sum(),
-                        newKey))
 
-    # Update the skim with the new values
-    skims[:] = output_vals
+                # Update values directly with mask
+                if mask.any():
+                    skims.values[:, :, tpIdx][mask] = vals
+
+                # Zero out canceled ODs directly
+                if to_cancel.any():
+                    skims.values[:, :, tpIdx][to_cancel] = 0
+
+                # Store to_cancel mask for later KEYIVT processing
+                cancel_masks[tp] = to_cancel
+
+            else:
+                # For other measures, just apply mask directly
+                mask, vals = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx], measure_name)
+                if mask.any():
+                    skims.values[:, :, tpIdx][mask] = vals
+
+            # Handle SOV special case immediately
+            if path.startswith('SOV_') and not measure_name.endswith("TOLL"):
+                for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
+                    new_key = f"{path}_{measure_name.replace('SOV_', sub)}__{tp}"
+                    if new_key in skims:
+                        # Direct masked update
+                        completed_mask = completed[:, :, tpIdx] > 0
+                        if completed_mask.any():
+                            skims[new_key].values[:, :, tpIdx][completed_mask] = input_vals[completed_mask]
+
+                        # Simplify logging to avoid any calculations on the skims
+                        logger.info(
+                            f"Updated HOV skims for {path}: added values for {completed_mask.sum()} valid OD pairs in {tp}")
+
+    # Handle KEYIVT post-processing for this skim
+    if measure_name in ["TOTIVT", "IVT"]:
+        for tp, to_cancel in cancel_masks.items():
+            tp_idx = timePeriods.index(tp)
+            keyivt_path = f"{path}_KEYIVT__{tp}"
+
+            if keyivt_path in skims:
+                # Compute masks for different operations
+                if keyivt_path in partialSkims:
+                    keyivt_vals = partialSkims[keyivt_path][:]
+                    valid = ~np.isnan(keyivt_vals)
+                    to_penalize = (failed[:, :, tp_idx] > completed[:, :, tp_idx]) & ~to_cancel
+                    to_allow = ~to_cancel & ~to_penalize & valid & (completed[:, :, tp_idx] > 0)
+
+                    # Direct masked updates
+                    if to_allow.any():
+                        skims[keyivt_path].values[:, :, tp_idx][to_allow] = keyivt_vals[to_allow] * 100.0
+                        logger.info(f"Updated {to_allow.sum()} KEYIVT values for {path} in {tp}")
+
+                # Zero out canceled ODs directly
+                if to_cancel.any():
+                    skims[keyivt_path].values[:, :, tp_idx][to_cancel] = 0
+                    logger.info(f"Zeroed out {to_cancel.sum()} KEYIVT values for {path} in {tp}")
+
+    if measure_name in ["TIME", "TOTIVT"]:
+        # Create a clean, tabular format
+        logger.info(f"{'-' * 60}")
+        logger.info(f"Summary for {path}_{measure_name}:")
+        logger.info(f"{'-' * 60}")
+        logger.info(f"{'Period':<6} | {'Completed':<10} | {'Failed':<10} | {'Success Rate':<12}")
+        logger.info(f"{'-' * 6}-+-{'-' * 10}-+-{'-' * 10}-+-{'-' * 12}")
+
+        for tpIdx, tp in enumerate(timePeriods):
+            # Calculate total completed and failed trips for this time period
+            completed_count = np.sum(completed[:, :, tpIdx] > 0)
+            failed_count = np.sum(failed[:, :, tpIdx] > 0)
+
+            # Calculate success rate
+            total = completed_count + failed_count
+            success_rate = (completed_count / total) * 100 if total > 0 else 0
+
+            # Format as aligned columns with separators
+            logger.info(f"{tp:<6} | {completed_count:<10} | {failed_count:<10} | {success_rate:>6.1f}%")
+
+        logger.info(f"{'-' * 60}")
 
     return path, (completed, failed)
 
 
+def _handle_transit_mode_availability(skims, timePeriods):
+    """
+    Handles transit mode availability by checking specific transit modes.
+
+    For OD pairs with 50+ successful transit trips, any specific transit mode
+    with 0 successful trips will be marked as unavailable (TOTIVT = 0).
+    Only marks OD pairs where TOTIVT is currently > 0 or np.nan.
+    """
+    # General transit mode
+    general_transit_path = "WLK_TRN_WLK"
+
+    # List of specific transit modes to check
+    specific_transit_modes = [
+        "WLK_LOC_WLK",  # Local bus
+        "WLK_HVY_WLK",  # Heavy rail
+        "WLK_COM_WLK",  # Commuter rail
+        "WLK_EXP_WLK",  # Express bus
+        # Add any other specific transit modes as needed
+    ]
+
+    # Create a summary table header
+    logger.info(f"{'=' * 80}")
+    logger.info(f"Transit Mode Availability Analysis")
+    logger.info(f"{'=' * 80}")
+    logger.info(
+        f"{'Period':<6} | {'Mode':<12} | {'ODs w/50+ Transit':<18} | {'ODs w/0 Mode Trips':<18} | {'Changed':<10} | {'% Changed':<10}")
+    logger.info(f"{'-' * 6}-+-{'-' * 12}-+-{'-' * 18}-+-{'-' * 18}-+-{'-' * 10}-+-{'-' * 10}")
+
+    # Process each time period
+    for tp in timePeriods:
+        # Check if general transit trip counts exist
+        general_trips_key = f"{general_transit_path}_TRIPS__{tp}"
+        if general_trips_key not in skims:
+            logger.info(
+                f"{tp:<6} | {'ALL MODES':<12} | {'NO DATA':<18} | {'NO DATA':<18} | {'NO DATA':<10} | {'N/A':<10}")
+            continue
+
+        # Find OD pairs with at least 50 successful transit trips
+        general_transit_trips = skims[general_trips_key].values[:, :, 0]  # Assuming it's a 3D array with one time slice
+        mask_significant_transit = general_transit_trips >= 50
+
+        if not np.any(mask_significant_transit):
+            logger.info(f"{tp:<6} | {'ALL MODES':<12} | {0:<18} | {0:<18} | {0:<10} | {0:<10.1f}")
+            continue
+
+        significant_count = np.sum(mask_significant_transit)
+
+        # Check each specific transit mode
+        for mode in specific_transit_modes:
+            # Get trip counts for this mode
+            mode_trips_key = f"{mode}_TRIPS__{tp}"
+
+            if mode_trips_key not in skims:
+                logger.info(
+                    f"{tp:<6} | {mode:<12} | {significant_count:<18} | {'NO DATA':<18} | {'NO DATA':<10} | {'N/A':<10}")
+                continue
+
+            mode_trips = skims[mode_trips_key].values[:, :, 0]  # Assuming it's a 3D array with one time slice
+
+            # Find OD pairs where general transit has 50+ trips but this mode has 0
+            mask_mode_unused = mask_significant_transit & (mode_trips == 0)
+
+            unused_count = np.sum(mask_mode_unused)
+
+            # Mark this mode as unavailable for these OD pairs by setting TOTIVT = 0
+            totivt_key = f"{mode}_TOTIVT"
+            changed_count = 0
+
+            if totivt_key in skims and unused_count > 0:
+                # Check dimension of the data
+                if len(skims[totivt_key].dims) == 3:
+                    # Get time period index
+                    tp_idx = timePeriods.index(tp)
+
+                    # Get current TOTIVT values
+                    current_totivt = skims[totivt_key].values[:, :, tp_idx]
+
+                    # Only mark as unavailable if current TOTIVT is > 0 or np.nan
+                    mask_to_change = mask_mode_unused & ((current_totivt > 0) | np.isnan(current_totivt))
+                    changed_count = np.sum(mask_to_change)
+
+                    # Update values
+                    if changed_count > 0:
+                        skims[totivt_key].values[:, :, tp_idx][mask_to_change] = 0
+                else:
+                    # If it's 2D (just one time period), apply directly
+                    current_totivt = skims[totivt_key].values
+
+                    # Only mark as unavailable if current TOTIVT is > 0 or np.nan
+                    mask_to_change = mask_mode_unused & ((current_totivt > 0) | np.isnan(current_totivt))
+                    changed_count = np.sum(mask_to_change)
+
+                    # Update values
+                    if changed_count > 0:
+                        skims[totivt_key].values[mask_to_change] = 0
+
+            percent_changed = (changed_count / significant_count) * 100 if significant_count > 0 else 0
+
+            logger.info(
+                f"{tp:<6} | {mode:<12} | {significant_count:<18} | {unused_count:<18} | {changed_count:<10} | {percent_changed:<10.1f}")
+
+    logger.info(f"{'=' * 80}")
+
+
 def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+    # Set parallel to False explicitly
+    parallel = False
+
     skims = xr.open_zarr(all_skims_path)
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
     partialSkimKeys = pd.Series(partialSkims.list_matrices())
-    partialSkimDataKeys = partialSkimKeys.loc[~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES"))]
+    partialSkimDataKeys = partialSkimKeys.loc[
+        ~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES"))]
     iterable = [(
         path + '_' + measure, vals[3].to_list()) for (path, measure), vals
         in
@@ -390,30 +610,28 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     timePeriods = settings["periods"]
     completed_failed_dict = _accumulate_completed_failed_trips(partialSkims, timePeriods)
 
-    # Parallelize the merging process
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {executor.submit(_merge_zarr_skim, partialSkims, skims[path], completed_failed_dict, timePeriods): path for path, _ in iterable}
-        for future in concurrent.futures.as_completed(futures):
-            path = futures[future]
+    # Process all skims sequentially
+    logger.info(f"Processing {len(iterable)} skim groups sequentially")
+    processed_count = 0
+
+    for path, tps in iterable:
+        if path in skims:
             try:
-                result = future.result()
-                logger.info(f"Merged skim for mode {result[0]}")
+                result_path, _ = _merge_zarr_skim(partialSkims, skims[path], completed_failed_dict, timePeriods)
+                processed_count += 1
             except Exception as e:
                 logger.error(f"Error merging skim for mode {path}: {e}")
 
-    discover_impossible_ods([(path, tp) for path, tp in iterable], skims, skims.keys())
+    # After all skims are processed, handle transit mode availability
+    logger.info("Processing transit mode availability...")
+    _handle_transit_mode_availability(skims, timePeriods)
+
+    logger.info(f"Completed processing {processed_count} skims")
+
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
 
-    order = zone_order(settings, settings['start_year'])
-    zone_id = np.arange(1, len(order) + 1)
-
-    # Generating offset
-    skims.coords['zone_id'] = ('zone_id', zone_id)
-    skims.to_zarr(all_skims_path, mode='a')
-
     skims.close()
-    partialSkims.close()
     return current_skims_path
 
 
