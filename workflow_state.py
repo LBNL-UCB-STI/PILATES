@@ -130,7 +130,7 @@ class WorkflowState:
             stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
             path = data.get('path', None)
             folder_name = data.get('folder_name', None)
-            iteration = data.get('iteration', 0)
+            iteration = data.get('iteration', 0) or 0
             asim_compiled = data.get('asim_compiled', False)
             return [year, stage, iteration, path, folder_name, asim_compiled]
 
