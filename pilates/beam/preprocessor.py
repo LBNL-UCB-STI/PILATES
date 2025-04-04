@@ -276,8 +276,8 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             logger.info("No plans existed already so copying them directly. THIS IS BAD")
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression='gzip')
 
+    file_format = settings.get("file_format", "parquet")
     if replanning_iteration_number < 0:
-        file_format = settings.get("file_format", "parquet")
         copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
         copy_with_compression_asim_file_to_beam('households', 'households', file_format)
         copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
