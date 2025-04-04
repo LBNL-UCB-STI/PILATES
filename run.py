@@ -675,14 +675,16 @@ def run_traffic_assignment(
             beam_post.merge_current_origin_skims(
                 path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
         else:
-            asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-            asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
             beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             if settings["file_format"] == "parquet":
+                asim_data_dir = os.path.join(run_path, settings['asim_local_output_folder'], "cache")
+                asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
                 current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path, previous_od_skims,
                                                                         beam_local_output_folder, settings)
                 logger.warning("RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES")
             else:
+                asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
+                asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
                 current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
                                                                          beam_local_output_folder, settings)
                 beam_post.merge_current_omx_origin_skims(
