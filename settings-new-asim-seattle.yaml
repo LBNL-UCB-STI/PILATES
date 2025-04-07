@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  activitysim: docker://zaneedell/activitysim:0.2.4
-  beam: docker://zaneedell/beam:1.0.4
+  activitysim: docker://zaneedell/activitysim:0.2.5
+  beam: docker://zaneedell/beam:1.0.6
   polaris:
 
 # docker settings
@@ -110,7 +110,7 @@ beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
 beam_memory: "200g"
 skim_zone_source_id_col: objectid
-replan_iters: 2
+replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False
