@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: seattle-freight-teste
+output_run_name: seattle-freight-test-parquet
 
 # URBANSIM
 region_to_region_id:
