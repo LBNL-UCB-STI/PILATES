@@ -115,7 +115,7 @@ replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False
 max_plans_memory: 4
-use_final_asim_plans: False
+copy_plans_from_asim_outputs: False
 beam_simulated_hwy_paths:
   - SOV
   - HOV2
