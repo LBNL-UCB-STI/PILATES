@@ -297,13 +297,15 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         # Files from beam_scenario_folder
         if os.path.exists(beam_scenario_folder):
             file_format = settings.get("file_format", "parquet")
-        try:
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans', state.year,
-                                                            replanning_iteration_number, file_format)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households', state.year,
-                                                            replanning_iteration_number, file_format)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons', state.year,
-                                                            replanning_iteration_number, file_format)
+            try:
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans', state.year,
+                                                                replanning_iteration_number, file_format)
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households', state.year,
+                                                                replanning_iteration_number, file_format)
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons', state.year,
+                                                                replanning_iteration_number, file_format)
+            except:
+                logger.error("Error copying asim files to asim archive")
         else:
             logging.warning(
                 f"Warning: Directory {beam_scenario_folder} does not exist. Cannot copy beam scenario files.")
@@ -318,8 +320,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
                                                             replanning_iteration_number, file_format)
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
                                                             replanning_iteration_number, None)
-        except:
-            logger.error("Error copying asim files to asim archive")
+
         else:
             logging.warning(f"Warning: Directory {asim_output_data_dir} does not exist. Cannot copy ASIM output files.")
 
