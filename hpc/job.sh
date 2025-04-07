@@ -5,6 +5,7 @@
 #conda activate PILATES
 #conda install -c conda-forge geopandas h5py openmatrix pytables numpy docker-py tqdm pyyaml psutil cloudpickle
 module load python/3.10.12
+export PYTHONPATH=/global/home/groups-sw/pc_beamcore/python_packages:$PYTHONPATH
 #python -m pip uninstall --user shapely
 #python -m pip install --user shapely
 #python -m pip install --user openmatrix
