@@ -8,7 +8,7 @@
 region: sfbay
 scenario: base
 start_year: 2017
-end_year: 2035
+end_year: 2050
 land_use_freq: 1
 travel_model_freq: 6
 vehicle_ownership_freq: 6
@@ -25,8 +25,8 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:0.9.13-beta-v4
-  activitysim: docker://zaneedell/activitysim:0.1.4
+  beam: docker://zaneedell/beam:0.9.14-v5
+  activitysim: docker://zaneedell/activitysim:0.1.13
   polaris:
 
 # docker settings
@@ -34,7 +34,7 @@ docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: zaneedell/beam:0.9.10
-  activitysim: zaneedell/activitysim:0.1.4
+  activitysim: zaneedell/activitysim:0.1.7
   polaris: tbd
 docker_stdout: False
 pull_latest: False
@@ -91,6 +91,7 @@ atlas_sample_size: 0     # zero means no sampling, whole pop.
 atlas_num_processes: 40  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
 atlas_mod: 2 # 1 (static) or 2 (dynamic)
+atlas_scenario: evMandForced2 # ess_cons; zev_mandate; baseline
 atlas_adscen: zev_mandate # ess_cons; zev_mandate; baseline
 atlas_rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
 atlas_taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
@@ -100,19 +101,19 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-network--simp-jdeq-07-storage-5-s2.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-network--simp-jdeq-07-storage-5-atlas-s2.conf # OR austin-pilates-base.conf
 beam_sample: 0.1
-beam_replanning_portion: 0.4
+beam_replanning_portion: 1.0
 beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-#beam_memory: "650g"
+beam_memory: "210g"
 skim_zone_source_id_col: objectid
 replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
-discard_plans_every_year: False
+discard_plans_every_year: True
 max_plans_memory: 3
 final_asim_plans_folder: pilates/activitysim/output/final_plans
 beam_simulated_hwy_paths:
