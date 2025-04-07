@@ -711,7 +711,8 @@ def run_traffic_assignment(
                 if current_od_skims == previous_od_skims and replanning_iteration_number > 0:
                     logger.error(
                         "BEAM hasn't produced the new skims at {0} for some reason. "
-                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
+                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims,
+                                                                                          abs_beam_output)
                     )
                 return
             elif settings["file_format"] == "parquet":
