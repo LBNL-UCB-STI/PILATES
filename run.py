@@ -1113,7 +1113,7 @@ if __name__ == '__main__':
                 beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
             else:
                 beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
+            # beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
                 beam_pre.copy_vehicles_from_atlas(settings, state)
             run_traffic_assignment(settings, year, state, client, -1)
