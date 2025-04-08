@@ -635,7 +635,24 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     return current_skims_path
 
 
-def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
+    """
+    Merge current OMX skims from BEAM into the main skims file.
+
+    Parameters
+    ----------
+    all_skims_path : str
+        Path to the main skims file
+    beam_output_dir : str
+        Path to the BEAM output directory
+    settings : dict
+        Settings dictionary
+
+    Returns
+    -------
+    str
+        Path to the current skims file
+    """
     skims = omx.open_file(all_skims_path, 'a')
     current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     partialSkims = omx.open_file(current_skims_path, mode='r')
@@ -673,7 +690,7 @@ def merge_current_omx_od_skims(all_skims_path, previous_skims_path, beam_output_
 def trim_inaccessible_ods(settings, working_dir):
     all_skims_path = os.path.join(working_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
     order = zone_order(settings, settings['start_year'])
-    skims = omx.open_file(all_skims_path, "a")
+    skims = omx.open_file(str(all_skims_path), "a")
     all_mats = skims.list_matrices()
     totalTrips = dict()
     for period in settings["periods"]:

@@ -276,31 +276,37 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             logger.info("No plans existed already so copying them directly. THIS IS BAD")
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression='gzip')
 
-    file_format = settings.get("file_format", "parquet")
-    if replanning_iteration_number < 0:
-        copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
-        copy_with_compression_asim_file_to_beam('households', 'households', file_format)
-        copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
-        # copy_with_compression_asim_file_to_beam('final_land_use.csv', 'land_use.csv.gz')
-        # copy_with_compression_asim_file_to_beam('final_tours.csv', 'tours.csv.gz')
-        # copy_with_compression_asim_file_to_beam('final_trips.csv', 'trips.csv.gz')
-        # copy_with_compression_asim_file_to_beam('final_joint_tour_participants.csv',
-        #                                         'joint_tour_participants.csv.gz')
-    else:
-        merge_only_updated_households()
 
-    if settings.get('final_asim_plans_folder', False):
-        # This first one not currently necessary when asim-lite is replanning all households
-        # copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'final_plans.csv', year,
-        #                                                 replanning_iteration_number)
+    if settings.get('copy_plans_from_asim_outputs', True):
+        logging.info("You have chosen to use final ASIM plans. Will attempt to read files from:")
+        logging.info(f"- Beam scenario folder: {beam_scenario_folder}")
+        logging.info(f"- ASIM output data directory: {asim_output_data_dir}")
         file_format = settings.get("file_format", "parquet")
-        try:
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans', state.year,
-                                                            replanning_iteration_number, file_format)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households', state.year,
-                                                            replanning_iteration_number, file_format)
-            copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons', state.year,
-                                                            replanning_iteration_number, file_format)
+        if replanning_iteration_number < 0:
+            copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
+            copy_with_compression_asim_file_to_beam('households', 'households', file_format)
+            copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
+        else:
+            merge_only_updated_households()
+
+        # Files from beam_scenario_folder
+        if os.path.exists(beam_scenario_folder):
+            file_format = settings.get("file_format", "parquet")
+            try:
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'plans', state.year,
+                                                                replanning_iteration_number, file_format)
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'households', state.year,
+                                                                replanning_iteration_number, file_format)
+                copy_with_compression_asim_file_to_asim_archive(beam_scenario_folder, 'persons', state.year,
+                                                                replanning_iteration_number, file_format)
+            except:
+                logger.error("Error copying asim files to asim archive")
+        else:
+            logging.warning(
+                f"Warning: Directory {beam_scenario_folder} does not exist. Cannot copy beam scenario files.")
+
+        # Files from asim_output_data_dir
+        if os.path.exists(asim_output_data_dir):
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'land_use', state.year,
                                                             replanning_iteration_number, file_format)
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'tours', state.year,
@@ -309,7 +315,8 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
                                                             replanning_iteration_number, file_format)
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
                                                             replanning_iteration_number, None)
-        except:
-            logger.error("Error copying asim files to asim archive")
+
+        else:
+            logging.warning(f"Assuming that asim plans have already been generated and are stored in the beam input data")
 
     return
