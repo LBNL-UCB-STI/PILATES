@@ -5,7 +5,7 @@ RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
 
-settings_file="settings-seattle.yaml"
+settings_file="settings.yaml"
 stage_file="current_stage_${JOB_NAME}.yaml"
 while getopts :c:s: name
 do
