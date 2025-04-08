@@ -60,7 +60,7 @@ geoms_index_col: taz1454
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: atlas-baseline
+output_run_name: atlas-ESS
 
 # URBANSIM
 region_to_region_id:
@@ -91,8 +91,8 @@ atlas_sample_size: 0     # zero means no sampling, whole pop.
 atlas_num_processes: 40  # suggested <9 for hima
 atlas_beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
 atlas_mod: 2 # 1 (static) or 2 (dynamic)
-atlas_scenario: baseline # ess_cons; zev_mandate; baseline
-atlas_adscen: baseline # ess_cons; zev_mandate; baseline
+atlas_scenario: ESS_const_220_price # ess_cons; zev_mandate; baseline
+atlas_adscen: ess_cons # ess_cons; zev_mandate; baseline
 atlas_rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
 atlas_taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
 atlas_discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
@@ -101,7 +101,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-network--simp-jdeq-07-storage-5.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-network--simp-jdeq-07-storage-5-atlas-s1.conf # OR austin-pilates-base.conf
 beam_sample: 0.1
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/

@@ -1,9 +1,5 @@
 #!/bin/bash
 
-#module load anaconda3
-#conda init
-#conda activate PILATES
-#conda install -c conda-forge geopandas h5py openmatrix pytables numpy docker-py tqdm pyyaml psutil cloudpickle
 module load python/3.10.12
 #source pilatesEnv/bin/activate
 #export PYTHONPATH=/global/home/groups-sw/pc_beamcore/python_packages:$PYTHONPATH
