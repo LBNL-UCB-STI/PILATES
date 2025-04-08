@@ -313,8 +313,11 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
                                                             replanning_iteration_number, file_format)
             copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trips', state.year,
                                                             replanning_iteration_number, file_format)
-            copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
-                                                            replanning_iteration_number, None)
+            try:
+                copy_with_compression_asim_file_to_asim_archive(asim_output_data_dir, 'trip_mode_choice', state.year,
+                                                                replanning_iteration_number, None)
+            except FileNotFoundError:
+                logger.info("Note: trip_mode_choice utilities not found. Skipping.")
 
         else:
             logging.warning(f"Assuming that asim plans have already been generated and are stored in the beam input data")
