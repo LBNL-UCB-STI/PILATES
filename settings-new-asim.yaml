@@ -108,7 +108,7 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "200g"
+beam_memory: "240g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
