@@ -22,8 +22,8 @@ done
 
 PARTITION="lr7"
 QOS="lr_normal"
-NUM_CPUS=50
-MEMORY_LIMIT="200"
+NUM_CPUS=56
+MEMORY_LIMIT="256"
 ACCOUNT="pc_beamcore"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 EXPECTED_EXECUTION_DURATION="3-00:00:00"
