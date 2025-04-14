@@ -593,6 +593,50 @@ def _handle_transit_mode_availability(skims, timePeriods):
     logger.info(f"{'=' * 80}")
 
 
+def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name):
+    """
+    Write the skims from the Zarr format to an OMX format.
+
+    Parameters
+    ----------
+    all_skims_path : str
+        Path to the main skims file
+    settings : dict
+        Settings dictionary
+    new_skim_name : str
+        Name of the new skim to be created
+
+    Returns
+    -------
+    None
+    """
+    region = settings['region']
+    beam_input_dir = settings['beam_local_input_folder']
+    skims_fname = settings['skims_fname']
+
+    target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
+    skims = xr.open_zarr(all_skims_path)
+    logger.info(f"Deleting current skims file {target_skims_path} and replacing them with new omx skims")
+    if os.path.exists(target_skims_path):
+        os.remove(target_skims_path)
+    new_omx_file = omx.open_file(target_skims_path, 'a')
+    time_periods = [s for s in skims.time_period.values]
+    for key in skims.keys():
+        # Get the data for this key
+        data = skims[key].values
+        logger.info(f"Writing {key} with shape {data.shape} to {target_skims_path}")
+        if len(data.shape) == 2:
+            new_omx_file[key] = data
+        elif len(data.shape) == 3:
+            for t_idx, tp in enumerate(time_periods):
+                new_key = f"{key}__{tp}"
+                new_omx_file[new_key] = data[:, :, t_idx]
+    logger.info(f"Done writing skims to {target_skims_path} with shape {new_omx_file.shape()}")
+    new_omx_file.close()
+    skims.close()
+
+
+
 def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
     # Set parallel to False explicitly
     parallel = False
