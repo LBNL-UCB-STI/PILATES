@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: new-asim-old-map-fast
+output_run_name: new-asim-new-map-fast
 
 # URBANSIM
 region_to_region_id:
@@ -101,7 +101,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: seattle-pilates.conf # OR austin-pilates-base.conf
+beam_config: seattle-pilates-base.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
