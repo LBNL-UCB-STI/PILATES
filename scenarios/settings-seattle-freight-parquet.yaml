@@ -8,7 +8,7 @@
 region: seattle
 scenario: base
 start_year: 2017
-end_year: 2023
+end_year: 2021
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 6
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:1.0.6
+  beam: zaneedell/beam:1.0.8
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -100,7 +100,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: seattle-base-pilates-parquet.conf # OR austin-pilates-base.conf
+beam_config: seattle-base-pilates-parquet-freight.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
