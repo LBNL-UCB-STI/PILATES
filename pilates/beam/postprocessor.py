@@ -593,7 +593,7 @@ def _handle_transit_mode_availability(skims, timePeriods):
     logger.info(f"{'=' * 80}")
 
 
-def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name):
+def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tables=None):
     """
     Write the skims from the Zarr format to an OMX format.
 
@@ -613,6 +613,8 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name):
     region = settings['region']
     beam_input_dir = settings['beam_local_input_folder']
     skims_fname = settings['skims_fname']
+    if exclude_tables is None:
+        exclude_tables = []
 
     target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
     skims = xr.open_zarr(all_skims_path)
@@ -623,6 +625,8 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name):
     time_periods = [s for s in skims.time_period.values]
     for key in skims.keys():
         # Get the data for this key
+        if key in exclude_tables:
+            continue
         data = skims[key].values
         logger.info(f"Writing {key} with shape {data.shape} to {target_skims_path}")
         if len(data.shape) == 2:
