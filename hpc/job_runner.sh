@@ -1,5 +1,15 @@
 #!/bin/bash
 
+echo "=== MEMORY INFORMATION ==="
+free -h
+grep MemTotal /proc/meminfo
+grep -i numa /proc/cpuinfo
+echo "=========================="
+
+echo "=== NODE USAGE INFORMATION ==="
+squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep $(hostname)
+echo "=========================="
+
 
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
@@ -23,7 +33,7 @@ done
 PARTITION="lr7"
 QOS="lr_normal"
 NUM_CPUS=56
-MEMORY_LIMIT="255"
+MEMORY_LIMIT="230"
 ACCOUNT="pc_beamcore"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 EXPECTED_EXECUTION_DURATION="3-00:00:00"
