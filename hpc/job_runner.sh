@@ -1,16 +1,5 @@
 #!/bin/bash
 
-echo "=== MEMORY INFORMATION ==="
-free -h
-grep MemTotal /proc/meminfo
-grep -i numa /proc/cpuinfo
-echo "=========================="
-
-echo "=== NODE USAGE INFORMATION ==="
-squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep $(hostname)
-echo "=========================="
-
-
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
