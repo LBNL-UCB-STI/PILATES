@@ -637,6 +637,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                 new_omx_file[new_key] = data[:, :, t_idx]
     logger.info(f"Done writing skims to {target_skims_path} with shape {new_omx_file.shape()}")
     new_omx_file.close()
+    skims.to_zarr(all_skims_path, mode='w')
     skims.close()
 
 
