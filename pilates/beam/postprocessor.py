@@ -637,7 +637,6 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                 new_omx_file[new_key] = data[:, :, t_idx]
     logger.info(f"Done writing skims to {target_skims_path} with shape {new_omx_file.shape()}")
     new_omx_file.close()
-    skims.to_zarr(all_skims_path, mode='w')
     skims.close()
 
 
@@ -679,8 +678,12 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
 
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
     copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
+    logger.info(f"Started writing zarr skims to {all_skims_path}")
 
+    skims.to_zarr(all_skims_path, mode='w')
+    logger.info("Completed writing zarr skims")
     skims.close()
+
     return current_skims_path
 
 
