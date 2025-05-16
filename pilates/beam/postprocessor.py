@@ -29,23 +29,7 @@ except:
 
 from pilates.activitysim.preprocessor import zone_order
 
-if True:
-    # Configure the logger to print to stdout
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)  # Set to DEBUG for even more output
-
-    # Create a handler for stdout
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-
-    # Add the handler to the logger
-    logger.addHandler(handler)
-
-    # Make sure the logger propagates messages to the root logger
-    logger.propagate = True
-else:
-    logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def find_latest_beam_iteration(beam_output_dir):
@@ -738,6 +722,47 @@ def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
     partialSkims.close()
     return current_skims_path
 
+def trim_inaccessible_ods_zarr(all_skims_path, settings):
+    """
+    Zero out inaccessible ODs in Zarr-format skims, similar to trim_inaccessible_ods for OMX.
+    Uses direct .data access for in-place modification.
+    """
+    order = zone_order(settings, settings['start_year'])
+    skims = xr.open_zarr(all_skims_path)
+    periods = settings["periods"]
+    transit_paths = settings['transit_paths']
+
+    # Precompute total completed trips for all ODs by period index
+    totalTrips = [np.zeros((len(order), len(order))) for _ in periods]
+    period_idx = {p: i for i, p in enumerate(periods)}
+    for var in skims.data_vars:
+        if ('TRIPS__' in var) and ('RH_' not in var):
+            tp = var.split('__')[-1]
+            if tp in period_idx:
+                tpIdx = period_idx[tp]
+                totalTrips[tpIdx] += np.nan_to_num(skims[var].data[:, :, tpIdx])
+
+    for path, metrics in transit_paths.items():
+        for tpIdx, period in enumerate(periods):
+            completedAllTripsByOandD = totalTrips[tpIdx].sum(axis=0) + totalTrips[tpIdx].sum(axis=1)
+            trip_name = f"{path}_TRIPS"
+            fail_name = f"{path}_FAILURES"
+            if trip_name in skims and fail_name in skims:
+                completedTransitTrips = np.nan_to_num(skims[trip_name].data[:, :, tpIdx])
+                failedTransitTrips = np.nan_to_num(skims[fail_name].data[:, :, tpIdx])
+                completedTransitTripsByOandD = completedTransitTrips.sum(axis=0) + completedTransitTrips.sum(axis=1)
+                failedTransitTripsByOandD = failedTransitTrips.sum(axis=0) + failedTransitTrips.sum(axis=1)
+                toDelete = (completedAllTripsByOandD > 1000) & (failedTransitTripsByOandD > 200) & (completedTransitTripsByOandD == 0)
+                toDelete = np.squeeze(toDelete)
+                logger.info(f"Deleting all {path} service for {np.sum(toDelete)} zones in {period} because no trips were observed")
+                for metric in metrics:
+                    name = f"{path}_{metric}"
+                    if name in skims:
+                        arr = skims[name].data[:, :, tpIdx]
+                        arr[toDelete[:, None] | toDelete[None, :]] = 0.0
+                        skims[name].data[:, :, tpIdx] = arr
+    skims.to_zarr(all_skims_path, mode='w')
+    skims.close()
 
 def trim_inaccessible_ods(settings, working_dir):
     all_skims_path = os.path.join(working_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
