@@ -411,11 +411,11 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
 
                 # Update values directly with mask
                 if mask.any():
-                    skims.values[:, :, tpIdx][mask] = vals
+                    skims.data[:, :, tpIdx][mask] = vals
 
                 # Zero out canceled ODs directly
                 if to_cancel.any():
-                    skims.values[:, :, tpIdx][to_cancel] = 0
+                    skims.data[:, :, tpIdx][to_cancel] = 0
 
                 # Store to_cancel mask for later KEYIVT processing
                 cancel_masks[tp] = to_cancel
@@ -424,7 +424,7 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
                 # For other measures, just apply mask directly
                 mask, vals = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx], measure_name)
                 if mask.any():
-                    skims.values[:, :, tpIdx][mask] = vals
+                    skims.data[:, :, tpIdx][mask] = vals
 
             # Handle SOV special case immediately
             if path.startswith('SOV_') and not measure_name.endswith("TOLL"):
@@ -434,7 +434,7 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
                         # Direct masked update
                         completed_mask = completed[:, :, tpIdx] > 0
                         if completed_mask.any():
-                            skims[new_key].values[:, :, tpIdx][completed_mask] = input_vals[completed_mask]
+                            skims[new_key].data[:, :, tpIdx][completed_mask] = input_vals[completed_mask]
 
                         # Simplify logging to avoid any calculations on the skims
                         logger.info(
