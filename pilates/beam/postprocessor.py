@@ -652,12 +652,15 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
 
 
 
-def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings):
+def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings, override=None):
     # Set parallel to False explicitly
     parallel = False
 
     skims = xr.open_zarr(all_skims_path)
-    current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+    if override is None:
+        current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+    else:
+        current_skims_path = override
     partialSkims = omx.open_file(current_skims_path, mode='r')
     partialSkimKeys = pd.Series(partialSkims.list_matrices())
     partialSkimDataKeys = partialSkimKeys.loc[
