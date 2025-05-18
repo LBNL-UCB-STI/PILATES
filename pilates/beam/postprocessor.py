@@ -385,6 +385,7 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
                 # For these measures, we need a bit more preprocessing
                 mask, vals, to_cancel = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx],
                                                            measure_name)
+                vals = np.clip(vals, 0.0, None)
 
                 # Log cancellations if needed (simplified)
                 if to_cancel.sum() > 0:
@@ -417,6 +418,7 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
             else:
                 # For other measures, just apply mask directly
                 mask, vals = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx], measure_name)
+                vals = np.clip(vals, 0.0, None)
                 if mask.any():
                     weights = completed[:, :, tpIdx][mask]
                     before_vals = skims.data[:, :, tpIdx][mask]
