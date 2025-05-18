@@ -790,7 +790,7 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
                         arr = skims[name].data[:, :, tpIdx]
                         arr[toDelete[:, None] | toDelete[None, :]] = 0.0
                         skims[name].data[:, :, tpIdx] = arr
-    skims.to_zarr(all_skims_path, mode='w')
+    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2, zarr_format=2)
     skims.close()
 
 def trim_inaccessible_ods(settings, working_dir):
