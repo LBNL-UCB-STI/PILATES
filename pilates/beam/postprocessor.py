@@ -373,6 +373,7 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
 
     # Store cancel masks for KEYIVT post-processing
     cancel_masks = {}
+    weighted_avgs = {}
 
     for tpIdx, tp in enumerate(timePeriods):
         partial_key_with_tp = f"{partial_key}{tp}"
@@ -395,6 +396,15 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
 
                 # Update values directly with mask
                 if mask.any():
+                    weights = completed[:, :, tpIdx][mask]
+                    before_vals = skims.data[:, :, tpIdx][mask]
+                    if np.sum(weights) > 0:
+                        weighted_avg_before = np.average(before_vals, weights=weights)
+                        weighted_avg_after = np.average(vals, weights=weights)
+                    else:
+                        weighted_avg_before = np.nan
+                        weighted_avg_after = np.nan
+                    weighted_avgs[tp] = (weighted_avg_before, weighted_avg_after)
                     skims.data[:, :, tpIdx][mask] = vals
 
                 # Zero out canceled ODs directly
@@ -408,6 +418,15 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
                 # For other measures, just apply mask directly
                 mask, vals = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx], measure_name)
                 if mask.any():
+                    weights = completed[:, :, tpIdx][mask]
+                    before_vals = skims.data[:, :, tpIdx][mask]
+                    if np.sum(weights) > 0:
+                        weighted_avg_before = np.average(before_vals, weights=weights)
+                        weighted_avg_after = np.average(vals, weights=weights)
+                    else:
+                        weighted_avg_before = np.nan
+                        weighted_avg_after = np.nan
+                    weighted_avgs[tp] = (weighted_avg_before, weighted_avg_after)
                     skims.data[:, :, tpIdx][mask] = vals
 
             # Handle SOV special case immediately
@@ -423,6 +442,14 @@ def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
                         # Simplify logging to avoid any calculations on the skims
                         logger.info(
                             f"Updated HOV skims for {path}: added values for {completed_mask.sum()} valid OD pairs in {tp}")
+    if weighted_avgs:
+        summary = "; ".join(
+            f"{tp}: before={before:.2f}, after={after:.2f}"
+            for tp, (before, after) in weighted_avgs.items()
+        )
+        logger.info(
+            f"Weighted averages for {skims.name} (by completed trips): {summary}"
+        )
 
     # Handle KEYIVT post-processing for this skim
     if measure_name in ["TOTIVT", "IVT"]:
@@ -653,6 +680,8 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
                 processed_count += 1
             except Exception as e:
                 logger.error(f"Error merging skim for mode {path}: {e}")
+        else:
+            logger.warning(f"Skipping skim {path} as it does not exist in the target skims file")
 
     # After all skims are processed, handle transit mode availability
     logger.info("Processing transit mode availability...")
@@ -664,7 +693,7 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
     logger.info(f"Started writing zarr skims to {all_skims_path}")
 
-    skims.to_zarr(all_skims_path, mode='w')
+    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2, zarr_format=2)
     logger.info("Completed writing zarr skims")
     skims.close()
 
