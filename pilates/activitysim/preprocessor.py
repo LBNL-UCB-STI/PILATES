@@ -195,16 +195,16 @@ def read_zone_geoms(settings, year,
 asim_param_map = {'random_seed': 'rng_base_seed'}
 
 
-def update_asim_config(settings, param, valueOverride=None):
+def update_asim_config(settings, full_path, param, valueOverride=None):
     config_header = asim_param_map[param]
     if valueOverride is None:
         config_value = settings[param]
     else:
         config_value = valueOverride
-    path_list = [settings['asim_local_configs_folder'], settings['region']]
-    if 'asim_subdir' in settings:
-        path_list.append(settings['asim_subdir'])
-    path_list.append('settings.yaml')
+
+    path_list = [full_path, settings['asim_local_mutable_configs_folder'],
+                 settings.get('asim_main_configs_dir', "configs"), 'settings.yaml']
+
     asim_config_path = os.path.join(*path_list)
     modified = False
     with open(asim_config_path, 'r') as file:

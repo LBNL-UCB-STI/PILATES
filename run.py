@@ -499,7 +499,7 @@ def generate_activity_plans(
     if settings.get('regenerate_seed', True):
         new_seed = random.randint(0, int(1e9))
         logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-        asim_pre.update_asim_config(settings, "random_seed", new_seed)
+        asim_pre.update_asim_config(settings, state.full_path, "random_seed", new_seed)
 
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
@@ -810,7 +810,7 @@ def run_replanning_loop(state: WorkflowState):
         if settings.get('regenerate_seed', True):
             new_seed = random.randint(0, int(1e9))
             logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-            asim_pre.update_asim_config(settings, "random_seed", new_seed)
+            asim_pre.update_asim_config(settings, state.full_path,"random_seed", new_seed)
 
         # a) format new skims for asim
         asim_pre.create_skims_from_beam(settings, state, overwrite=False)
