@@ -277,13 +277,13 @@ def _accumulate_completed_failed_trips(partialSkims, timePeriods):
                 if mode not in completed_failed_dict:
                     completed_failed_dict[mode] = [np.zeros(out_array_shape, dtype=np.float32),
                                                    np.zeros(out_array_shape, dtype=np.float32)]
-                completed_failed_dict[mode][0][:, :, tpIdx] = partialSkims[key][:]
+                completed_failed_dict[mode][0][:, :, tpIdx] = np.nan_to_num(partialSkims[key][:])
             elif key.endswith(f"_FAILURES__{tp}"):
                 mode = key.rsplit('_', 3)[0]  # Extract mode from key (e.g., WLK_TRN_WLK)
                 if mode not in completed_failed_dict:
                     completed_failed_dict[mode] = [np.zeros(out_array_shape, dtype=np.float32),
                                                    np.zeros(out_array_shape, dtype=np.float32)]
-                completed_failed_dict[mode][1][:, :, tpIdx] = partialSkims[key][:]
+                completed_failed_dict[mode][1][:, :, tpIdx] = np.nan_to_num(partialSkims[key][:])
 
     return completed_failed_dict
 
@@ -351,6 +351,20 @@ def _transform_measure(input_vals, completed, failed, measure):
 
     # Default case (for TOLL measures)
     return np.zeros_like(input_vals, dtype=bool), np.array([])
+
+
+def _merge_zarr_trip_counts(allSkims, path, completed, failed):
+    key_completed = f"{path}_TRIPS"
+    key_failed = f"{path}_FAILURES"
+    prev_completed = np.nan_to_num(allSkims[key_completed].data)
+    prev_failed = np.nan_to_num(allSkims[key_failed].data)
+    logger.info(f"For {path} previously had {prev_completed.sum()} completed trips and {prev_failed.sum()} failed trips")
+    prev_completed += completed
+    prev_failed += failed
+    allSkims[key_completed].data = prev_completed
+    allSkims[key_failed].data = prev_failed
+    logger.info(f"Now we have {prev_completed.sum()} completed trips and {prev_failed.sum()} failed trips")
+
 
 
 def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
@@ -678,6 +692,13 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     logger.info(f"Processing {len(iterable)} skim groups sequentially")
     processed_count = 0
 
+    for path, (completed, failed) in completed_failed_dict.items():
+        if f"{path}_TRIPS" in skims:
+            # Merge completed and failed trips into the Zarr skims
+            _merge_zarr_trip_counts(skims, path, completed, failed)
+        else:
+            logger.warning(f"Skipping trip counts for {path}_TRIPS as it does not exist in the target skims file")
+
     for path, tps in iterable:
         if path in skims:
             try:
@@ -698,7 +719,7 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
     logger.info(f"Started writing zarr skims to {all_skims_path}")
 
-    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2, zarr_format=2)
+    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2)
     logger.info("Completed writing zarr skims")
     skims.close()
 

@@ -39,8 +39,8 @@ def validate_skim(path, dry_run):
             sz_valid = sz - ignore.sum().sum()
             print("Finding {:0.2%} of speeds are 0, leaving them alone".format(ignore.sum().sum() / sz))
             print("Finding {:0.2%} of ODs have valid observations, leaving them alone".format(nonzero.sum().sum() / sz))
-            print("Finding {:0.2%} of remaining speeds are nan, replacing them with 30 mph".format(
-                np.isnan(spd_raw[~ignore]).sum() / sz_valid))
+            print("Finding {:0.2%} of remaining {:} speeds are nan, replacing them with 30 mph".format(
+                np.isnan(spd_raw[~ignore]).sum() / sz_valid, sz_valid))
             spd_raw[np.isnan(spd_raw)] = 30.0
             print("Finding {0:0.2%} of remaining speeds are too fast, replacing them with {1} mph".format(
                 (spd_raw[~ignore] > modeMaxSpeed).sum() / sz_valid, modeMaxSpeed))
