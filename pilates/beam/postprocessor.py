@@ -246,15 +246,326 @@ def simplify(input, timePeriod, mode, utf=False, expand=False):
     return originalDict
 
 
-def copy_skims_for_unobserved_modes(mapping, skims, mats):
+def copy_skims_for_unobserved_modes(mapping, skims_ds):
+    """
+    Copy skim data from one mode to others based on a mapping.
+    Operates on the Zarr dataset directly.
+
+    Parameters
+    ----------
+    mapping : dict
+        Mapping from source mode to list of target modes (e.g., {"SOV": ["SOVTOLL", ...]}).
+    skims_ds : xarray.Dataset
+        The target Zarr dataset containing all skims.
+    """
+    logger.info("Copying skims for unobserved modes...")
     for fromMode, toModes in mapping.items():
-        relevantSkimKeys = [key for key in mats if
-                            key.startswith(fromMode + "_") and not ("TOLL" in key)]
-        for skimKey in relevantSkimKeys:
-            for toMode in toModes:
-                toKey = skimKey.replace(fromMode + "_", toMode + "_")
-                skims[toKey][:] = skims[skimKey][:]
-                print("Copying values from {0} to {1}".format(skimKey, toKey))
+        # Find all skim variables starting with the source mode
+        # Exclude TRIPS and FAILURES as these represent observed demand, not skim values
+        # Exclude measures that might have mode-specific meanings or are handled separately
+        # e.g., "TOLL" skims should not be copied onto non-toll modes, but the mapping is SOV -> SOVTOLL etc.
+        # The original code copied *all* relevant skim keys. Let's refine this.
+        # A better approach is to specify which measures should be copied.
+        # However, sticking to the original behavior of copying most things except TRIPS/FAILURES
+        # and assuming the measures list in settings covers what's needed.
+        # Let's copy based on the existence of the target key format in the dataset.
+
+        # Get all variable names in the dataset
+        all_vars = list(skims_ds.data_vars)
+
+        for var_name in all_vars:
+            # Check if the variable name starts with the source mode path
+            # and is not TRIPS, FAILURES, or TNC specific (handled elsewhere)
+            if var_name.startswith(fromMode + "_") and not any(m in var_name for m in ["_TRIPS", "_FAILURES"]):
+                 # Check if this measure should be copied (avoid copying e.g. SOV_TOLL to HOV)
+                 if "TOLL" in var_name.split('_')[0]: # Check if the mode itself contains TOLL
+                      continue # Don't use TOLL skims as sources to copy FROM
+
+                 # Extract the measure name (assuming format SOV_MEASURE or SOVTOLL_MEASURE)
+                 measure_parts = var_name.split('_', 1)
+                 if len(measure_parts) < 2:
+                     continue # Skip if not in expected format
+
+                 measure_name = measure_parts[1] # e.g., "TOTIVT"
+
+                 # For each target mode, construct the expected target variable name
+                 for toMode in toModes:
+                     target_var_name = f"{toMode}_{measure_name}"
+
+                     # Check if the target variable exists in the dataset
+                     if target_var_name in all_vars:
+                         # Perform the copy using .data
+                         # Check shape compatibility - they should be the same (zones, zones, periods)
+                         if skims_ds[var_name].shape == skims_ds[target_var_name].shape:
+                             skims_ds[target_var_name].data[:] = skims_ds[var_name].data[:]
+                             logger.info(f"Copied data from '{var_name}' to '{target_var_name}'")
+                         else:
+                             logger.warning(f"Shape mismatch when copying from '{var_name}' to '{target_var_name}'. Skipping.")
+                     else:
+                         logger.debug(f"Target variable '{target_var_name}' not found in dataset. Skipping copy.")
+
+    logger.info("Completed copying skims for unobserved modes.")
+
+def _postprocess_tnc_skims_zarr(skims_ds, timePeriods, settings):
+    """
+    Applies TNC-specific post-processing rules (REJECTIONPROB, IWAIT filling,
+    DDIST/TOTIVT interpolation, FAR assignment) to Zarr skims.
+
+    Parameters:
+    -----------
+    skims_ds : xarray.Dataset
+        The target Zarr dataset containing all skims.
+    timePeriods : list of str
+        List of time period names.
+    settings : dict
+        Settings dictionary, needed for SOV keys.
+    """
+    logger.info("Applying TNC-specific post-processing...")
+    tp_to_idx = {tp: idx for idx, tp in enumerate(timePeriods)}
+    tnc_modes = [k.rsplit('_', 1)[0] for k in skims_ds.data_vars if k.startswith("TNC_") and "_TRIPS" in k]
+    # Ensure unique TNC modes
+    tnc_modes = list(set(tnc_modes))
+
+    if not tnc_modes:
+        logger.info("No TNC modes found in skims dataset. Skipping TNC post-processing.")
+        return
+
+    # Get SOV skims needed for interpolation ratios
+    sov_dist_da = skims_ds.get("SOV_DIST")
+    sov_time_da = skims_ds.get("SOV_TIME")
+
+    for tnc_mode in tnc_modes:
+        logger.debug(f"Post-processing mode: {tnc_mode}")
+
+        # Get completed and failed trip data for this mode (3D arrays)
+        completed_key = f"{tnc_mode}_TRIPS"
+        failed_key = f"{tnc_mode}_FAILURES"
+
+        completed_da = skims_ds.get(completed_key)
+        failed_da = skims_ds.get(failed_key)
+
+        if completed_da is None or failed_da is None:
+            logger.warning(f"Missing {completed_key} or {failed_key} for TNC post-processing. Skipping {tnc_mode}.")
+            continue
+
+        completed_3d = completed_da.data
+        failed_3d = failed_da.data
+
+        # Get other relevant TNC data arrays
+        rejection_prob_da = skims_ds.get(f"{tnc_mode}_REJECTIONPROB")
+        iwait_da = skims_ds.get(f"{tnc_mode}_IWAIT")
+        ddist_da = skims_ds.get(f"{tnc_mode}_DDIST")
+        totivt_da = skims_ds.get(f"{tnc_mode}_TOTIVT")
+
+        for tp in timePeriods:
+            tp_idx = tp_to_idx[tp]
+
+            completed_tp = completed_3d[:, :, tp_idx]
+            failed_tp = failed_3d[:, :, tp_idx]
+            completed_tp_sum = completed_tp.sum()
+            failed_tp_sum = failed_tp.sum()
+
+            if completed_tp_sum == 0 and failed_tp_sum == 0:
+                 logger.debug(f"No trips for {tnc_mode} in {tp}. Skipping post-processing for this period.")
+                 continue # Skip post-processing for this period if no data
+
+            logger.debug(f"Processing {tnc_mode} for period {tp}")
+
+            # --- REJECTIONPROB ---
+            if rejection_prob_da is not None:
+                rejection_prob_slice = rejection_prob_da.data[:, :, tp_idx]
+                # Original logic:
+                # Calculate OD-level probability where total trips > 0
+                total_trips_od = completed_tp + failed_tp
+                valid_ods_mask = total_trips_od > 0
+                rejection_prob_slice[valid_ods_mask] = failed_tp[valid_ods_mask] / total_trips_od[valid_ods_mask]
+
+                # Calculate origin-level probability where origin total trips > 0
+                completed_sum_by_origin = completed_tp.sum(axis=1)
+                failed_sum_by_origin = failed_tp.sum(axis=1)
+                total_trips_origin = completed_sum_by_origin + failed_sum_by_origin
+                valid_origins_mask = total_trips_origin > 0
+
+                # Apply origin-level probability to rows where origin total > 0
+                # This overwrites the OD-level probability for these rows. This matches the original behavior.
+                origin_probs = failed_sum_by_origin[valid_origins_mask] / total_trips_origin[valid_origins_mask]
+                rejection_prob_slice[valid_origins_mask, :] = origin_probs[:, None]
+
+                rejection_prob_da.data[:, :, tp_idx] = rejection_prob_slice # Update Zarr slice
+                logger.debug(f"Updated REJECTIONPROB for {tnc_mode} in {tp}")
+
+
+            # --- IWAIT ---
+            if iwait_da is not None:
+                iwait_slice = iwait_da.data[:, :, tp_idx]
+
+                # Calculate weighted mean wait time by origin *only* for OD pairs with completed trips
+                # This seems incorrect - the weighted mean should be over all data points *used* to calculate it in BEAM.
+                # However, the original code calculates weighted mean based on `waitTimes * completed` where `waitTimes`
+                # comes from the input skim. Let's interpret this as "mean wait time experienced by completed trips originating from a zone".
+                # It then uses this mean to fill NaNs/zeros where `completed == 0`.
+
+                # Use the data from the partial skim for this calculation if available
+                partial_iwait_key = f"{tnc_mode}_IWAIT__{tp}"
+                if partial_iwait_key in partialSkims:
+                    input_iwait_tp = partialSkims[partial_iwait_key][:]
+
+                    # Calculate weighted mean by origin using the partial skim data
+                    # Sum waitTime * completed per origin, divide by sum completed per origin
+                    sum_weighted_wait = np.nansum(input_iwait_tp * completed_tp, axis=1)
+                    sum_completed_origin = np.nansum(completed_tp, axis=1)
+                    # Handle division by zero - origins with no completed trips will have NaN mean
+                    weighted_mean_by_origin = np.divide(sum_weighted_wait, sum_completed_origin,
+                                                         out=np.full_like(sum_weighted_wait, np.nan),
+                                                         where=sum_completed_origin != 0)
+
+                    # Identify cells in the Zarr slice to fill: where completed is 0 AND the origin had some completed trips
+                    origins_with_data = sum_completed_origin > 0
+                    mask_fill = (completed_tp == 0)[:, None] & origins_with_data[None, :] # Check origins column-wise, apply row-wise
+                    # Correct mask application: mask_fill should be 2D based on OD
+                    mask_fill = (completed_tp == 0) & (sum_completed_origin[:, None] > 0)
+
+                    # Identify cells to directly update (where completed > 0)
+                    mask_direct_update = completed_tp > 0
+
+                    # Apply updates
+                    if mask_direct_update.any():
+
+                        # Use the value already in the Zarr slice from _merge_zarr_skim (which applied scaling)
+                        # Cells where completed>0 and input was valid already have the scaled input value.
+                        # Cells where completed=0 and input was valid might have 0 or nan depending on initial state.
+                        # Cells where completed>0 and input was nan are unchanged.
+
+                        # Mask for cells where completed == 0 AND the origin has at least one completed trip
+                        mask_to_fill_with_average = (completed_tp == 0) & (sum_completed_origin[:, None] > 0)
+
+                        # Apply the weighted mean by origin
+                        if mask_to_fill_with_average.any():
+                             origin_indices_to_fill = np.where(mask_to_fill_with_average)[0] # Get row indices (origins)
+                             iwait_slice[mask_to_fill_with_average] = weighted_mean_by_origin[origin_indices_to_fill]
+
+                             logger.debug(f"Filled {mask_to_fill_with_average.sum()} TNC IWAIT values in {tp} with origin weighted average.")
+
+                    # Handle bad values (NaNs) that might still exist if an origin had no completed trips
+                    if np.isnan(iwait_slice).any():
+                         nan_count = np.isnan(iwait_slice).sum()
+                         # Decide how to handle remaining NaNs. Defaulting to 0 might be okay.
+                         iwait_slice[np.isnan(iwait_slice)] = 0.0
+                         logger.debug(f"Set {nan_count} remaining NaN TNC IWAIT values in {tp} to 0.")
+
+                    iwait_da.data[:, :, tp_idx] = iwait_slice # Update Zarr slice
+                    logger.debug(f"Updated IWAIT for {tnc_mode} in {tp}")
+
+                else:
+                    logger.debug(f"Missing partial skim {partial_iwait_key} for TNC IWAIT post-processing.")
+
+
+            # --- DDIST and TOTIVT (Interpolation using SOV) ---
+            # Requires SOV_DIST and SOV_TIME skims
+            # Assuming DDIST uses SOV_DIST and TOTIVT uses SOV_TIME as basis
+
+            # DDIST
+            if ddist_da is not None and sov_dist_da is not None:
+                ddist_slice = ddist_da.data[:, :, tp_idx]
+                sov_dist_slice = sov_dist_da.data[:, :, tp_idx]
+
+                # Cells where we can calculate the ratio: SOV_DIST > 0, TNC_TRIPS > 0, TNC_DDIST > 0
+                mask_for_ratio = (sov_dist_slice > 0) & (completed_tp > 0) & (ddist_slice > 0)
+
+                ratio = np.nan
+                if mask_for_ratio.any():
+                     # Calculate weighted average ratio: (TNC_DDIST * Completed).sum() / (SOV_DIST * Completed).sum()
+                     weighted_tnc_ddist = ddist_slice[mask_for_ratio] * completed_tp[mask_for_ratio]
+                     weighted_sov_dist = sov_dist_slice[mask_for_ratio] * completed_tp[mask_for_ratio]
+                     sum_weighted_sov = weighted_sov_dist.sum()
+                     if sum_weighted_sov > 0:
+                         ratio = weighted_tnc_ddist.sum() / sum_weighted_sov
+
+                     ratios_individual = ddist_slice[mask_for_ratio] / sov_dist_slice[mask_for_ratio]
+                     logger.info(
+                        f"Observed TNC DDIST/SOV DIST ratio of {ratio:2.3f} ({np.nanpercentile(ratios_individual, 10):2.3f} - {np.nanpercentile(ratios_individual, 90):2.3f}) for {tnc_mode} in {tp}. "
+                        f"Interpolating {np.sum(~mask_for_ratio):.0f} missing values."
+                     )
+                else:
+                     logger.info(f"No data points available to calculate TNC DDIST/SOV DIST ratio for {tnc_mode} in {tp}.")
+
+                # Apply minimum ratio check (from feature branch logic)
+                min_ratio = 0.8
+                if ratio is not np.nan and ratio < min_ratio:
+                     logger.warning(f"Calculated TNC DDIST/SOV DIST ratio ({ratio:2.3f}) is below {min_ratio}. Setting ratio to {min_ratio}.")
+                     ratio = min_ratio
+
+                # Interpolate where ratio was calculated and cells were NOT used for ratio calculation
+                mask_to_interpolate = ~mask_for_ratio
+                if ratio is not np.nan and mask_to_interpolate.any():
+                     # Interpolate using SOV_DIST where needed
+                     # Ensure we don't use SOV_DIST values that are zero for interpolation
+                     mask_interpolation_valid_sov = mask_to_interpolate & (sov_dist_slice > 0)
+                     ddist_slice[mask_interpolation_valid_sov] = sov_dist_slice[mask_interpolation_valid_sov] * ratio
+                     logger.debug(f"Interpolated {mask_interpolation_valid_sov.sum()} TNC DDIST values in {tp} using SOV_DIST ratio.")
+
+                # Handle remaining NaNs if any (e.g., where SOV_DIST was also 0 or ratio wasn't calculable)
+                if np.isnan(ddist_slice).any():
+                    nan_count = np.isnan(ddist_slice).sum()
+                    ddist_slice[np.isnan(ddist_slice)] = 0.0 # Default remaining NaNs to 0
+                    logger.debug(f"Set {nan_count} remaining NaN TNC DDIST values in {tp} to 0.")
+
+
+                ddist_da.data[:, :, tp_idx] = ddist_slice # Update Zarr slice
+                logger.debug(f"Updated DDIST for {tnc_mode} in {tp}")
+
+
+            # TOTIVT
+            if totivt_da is not None and sov_time_da is not None:
+                totivt_slice = totivt_da.data[:, :, tp_idx]
+                sov_time_slice = sov_time_da.data[:, :, tp_idx]
+
+                # Cells where we can calculate the ratio: SOV_TIME > 0, TNC_TRIPS > 0, TNC_TOTIVT > 0
+                mask_for_ratio = (sov_time_slice > 0) & (completed_tp > 0) & (totivt_slice > 0)
+
+                ratio = np.nan
+                if mask_for_ratio.any():
+                     # Calculate weighted average ratio: (TNC_TOTIVT * Completed).sum() / (SOV_TIME * Completed).sum()
+                     weighted_tnc_totivt = totivt_slice[mask_for_ratio] * completed_tp[mask_for_ratio]
+                     weighted_sov_time = sov_time_slice[mask_for_ratio] * completed_tp[mask_for_ratio]
+                     sum_weighted_sov = weighted_sov_time.sum()
+                     if sum_weighted_sov > 0:
+                         ratio = weighted_tnc_totivt.sum() / sum_weighted_sov
+
+                     ratios_individual = totivt_slice[mask_for_ratio] / sov_time_slice[mask_for_ratio]
+                     logger.info(
+                        f"Observed TNC TOTIVT/SOV TIME ratio of {ratio:2.3f} ({np.nanpercentile(ratios_individual, 10):2.3f} - {np.nanpercentile(ratios_individual, 90):2.3f}) for {tnc_mode} in {tp}. "
+                        f"Interpolating {np.sum(~mask_for_ratio):.0f} missing values."
+                     )
+                else:
+                     logger.info(f"No data points available to calculate TNC TOTIVT/SOV TIME ratio for {tnc_mode} in {tp}.")
+
+
+                # Apply minimum ratio check (from feature branch logic)
+                min_ratio = 0.8 # Same minimum as DDIST in feature branch
+                if ratio is not np.nan and ratio < min_ratio:
+                     logger.warning(f"Calculated TNC TOTIVT/SOV TIME ratio ({ratio:2.3f}) is below {min_ratio}. Setting ratio to {min_ratio}.")
+                     ratio = min_ratio
+
+                # Interpolate where ratio was calculated and cells were NOT used for ratio calculation
+                mask_to_interpolate = ~mask_for_ratio
+                if ratio is not np.nan and mask_to_interpolate.any():
+                     # Interpolate using SOV_TIME where needed
+                     # Ensure we don't use SOV_TIME values that are zero for interpolation
+                     mask_interpolation_valid_sov = mask_to_interpolate & (sov_time_slice > 0)
+                     totivt_slice[mask_interpolation_valid_sov] = sov_time_slice[mask_interpolation_valid_sov] * ratio
+                     logger.debug(f"Interpolated {mask_interpolation_valid_sov.sum()} TNC TOTIVT values in {tp} using SOV_TIME ratio.")
+
+                # Handle remaining NaNs if any (e.g., where SOV_TIME was also 0 or ratio wasn't calculable)
+                if np.isnan(totivt_slice).any():
+                    nan_count = np.isnan(totivt_slice).sum()
+                    totivt_slice[np.isnan(totivt_slice)] = 0.0 # Default remaining NaNs to 0
+                    logger.debug(f"Set {nan_count} remaining NaN TNC TOTIVT values in {tp} to 0.")
+
+                totivt_da.data[:, :, tp_idx] = totivt_slice # Update Zarr slice
+                logger.debug(f"Updated TOTIVT for {tnc_mode} in {tp}")
+
+    logger.info("Completed TNC-specific post-processing.")
 
 
 def clear_skim_cache(asim_local_output_dir):
@@ -288,241 +599,267 @@ def _accumulate_completed_failed_trips(partialSkims, timePeriods):
     return completed_failed_dict
 
 
-def _transform_measure(input_vals, completed, failed, measure):
+def _transform_measure(input_vals, completed, failed, measure, path):
     """
-    Transforms skim values based on measure type and trip completion statistics.
+    Transforms skim values based on measure type, path, and trip completion statistics.
 
     Parameters:
     -----------
     input_vals : ndarray
-        The new observed values
-    completed : ndarray
-        Count of completed trips for each OD pair for current time period
-    failed : ndarray
-        Count of failed trips for each OD pair for current time period
+        The new observed values from the partial skim for a single time period.
+    completed : ndarray (2D)
+        Count of completed trips for each OD pair for the current time period.
+    failed : ndarray (2D)
+        Count of failed trips for each OD pair for the current time period.
     measure : str
-        The measure name (e.g., "IWAIT", "TOTIVT")
+        The measure name (e.g., "IWAIT", "TOTIVT").
+    path : str
+        The mode path (e.g., "SOV", "WLK_TRN_WLK", "TNC_SINGLE").
 
     Returns:
     --------
-    tuple (mask, vals)
-        mask: Boolean array indicating which cells to update
-        vals: Values to assign to those cells
+    tuple (mask, vals, to_cancel)
+        mask: Boolean array (2D) indicating which cells to update with `vals`.
+        vals: Values (1D) to assign to the masked cells.
+        to_cancel: Boolean array (2D) indicating cells to zero out due to high failure rate (for IVT/TOTIVT).
+                   Returns None for other measures.
     """
     # Basic mask - where there are completed trips and valid input values
     valid = ~np.isnan(input_vals)
     completed_mask = (completed > 0)
     basic_mask = valid & completed_mask
 
-    # Handle measures that need scaling by 100
-    if measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "DDIST", "FERRYIVT"]:
-        return basic_mask, input_vals[basic_mask] * 100.0
+    # Determine scaling factor based on path (mode)
+    scaling = 100.0 if not path.startswith("TNC") else 1.0
+
+    # Handle measures that need scaling
+    if measure in ["IWAIT", "XWAIT", "WACC", "WAUX", "WEGR", "DTIM", "FERRYIVT"]:
+        # Note: DDIST and TOTIVT for TNC are handled in post-processing, not here
+        if path.startswith("TNC") and measure in ["DDIST", "TOTIVT"]:
+             # These are handled separately in post-processing
+             return np.zeros_like(input_vals, dtype=bool), np.array([]), None
+        if measure == "IWAIT" and path.startswith("TNC"):
+             # TNC IWAIT filling is handled separately in post-processing
+             return basic_mask, input_vals[basic_mask] * scaling, None # Still apply basic scaling if direct data used
+
+        return basic_mask, input_vals[basic_mask] * scaling, None
 
     # Handle travel time measures with penalty logic
     elif measure in ["TOTIVT", "IVT"]:
-        # Create masks for different conditions
-        to_cancel = (failed > 3) & (failed > (6 * completed))
+        # TNC TOTIVT interpolation is handled separately in post-processing
+        if path.startswith("TNC") and measure == "TOTIVT":
+             return np.zeros_like(input_vals, dtype=bool), np.array([]), None
+
+        # Feature branch cancellation condition: failed > 3 and failed > 1*completed
+        # Original cancellation condition: failed > 3 and failed > 6*completed
+        # Using the feature branch condition:
+        to_cancel = (failed > 3) & (failed > (1 * completed))
+
+        # To penalize: failed > completed, NOT canceled, valid input, and some completed trips
         to_penalize = (failed > completed) & ~to_cancel & valid & completed_mask
+
+        # To allow: NOT canceled, NOT penalized, valid input, and some completed trips
         to_allow = valid & completed_mask & ~to_cancel & ~to_penalize
 
-        # Prepare values based on condition
+        # Prepare result array
         result_vals = np.zeros_like(input_vals)
 
         # Apply penalty where needed
         if to_penalize.any():
-            penalty_factor = (failed + 1) / (completed + 1)
-            indices = np.where(to_penalize)
-            result_vals[indices] = input_vals[indices] * penalty_factor[indices]
+            penalty_factor = (failed[to_penalize] + 1) / (completed[to_penalize] + 1)
+            result_vals[to_penalize] = input_vals[to_penalize] * penalty_factor
 
         # Use regular values where allowed (with scaling)
         if to_allow.any():
-            indices = np.where(to_allow)
-            result_vals[indices] = input_vals[indices] * 100.0
+            result_vals[to_allow] = input_vals[to_allow] * scaling
 
         # Combined mask for cells to update
+        # Note: Canceled cells are explicitly set to 0 *after* this function returns
+        # by the caller (_merge_zarr_skim), so the update_mask only covers penalized and allowed cells.
         update_mask = to_penalize | to_allow
 
-        # Also return the to_cancel mask for use in post-processing
         return update_mask, result_vals[update_mask], to_cancel
 
-    # Handle non-TOLL measures
-    elif not measure.endswith("TOLL"):
-        return basic_mask, input_vals[basic_mask]
+    # Handle DIST (special averaging in old code, keep simple assignment for Zarr)
+    elif measure == "DIST":
+        return basic_mask, input_vals[basic_mask], None
 
-    # Default case (for TOLL measures)
-    return np.zeros_like(input_vals, dtype=bool), np.array([])
+    # Handle non-TOLL measures (simple assignment)
+    # Note: FAR for TNC is handled in post-processing
+    elif not measure.endswith("TOLL"):
+        # Simple assignment where completed > 0
+        return completed_mask, input_vals[completed_mask], None
+
+    # Default case (e.g., TOLL measures are copied later if SOV, or handled by other logic)
+    return np.zeros_like(input_vals, dtype=bool), np.array([]), None
 
 
 def _merge_zarr_trip_counts(allSkims, path, completed, failed):
     key_completed = f"{path}_TRIPS"
     key_failed = f"{path}_FAILURES"
-    prev_completed = np.nan_to_num(allSkims[key_completed].data)
-    prev_failed = np.nan_to_num(allSkims[key_failed].data)
-    logger.info(f"For {path} previously had {prev_completed.sum()} completed trips and {prev_failed.sum()} failed trips")
-    prev_completed += completed
-    prev_failed += failed
-    allSkims[key_completed].data = prev_completed
-    allSkims[key_failed].data = prev_failed
-    logger.info(f"Now we have {prev_completed.sum()} completed trips and {prev_failed.sum()} failed trips")
+    # Ensure keys exist before attempting to access .data
+    if key_completed in allSkims and key_failed in allSkims:
+        prev_completed = np.nan_to_num(allSkims[key_completed].data)
+        prev_failed = np.nan_to_num(allSkims[key_failed].data)
+        logger.info(f"For {path} previously had {prev_completed.sum():.0f} completed trips and {prev_failed.sum():.0f} failed trips")
+        prev_completed += completed
+        prev_failed += failed
+        allSkims[key_completed].data[:] = prev_completed # Use [:] to modify data in place
+        allSkims[key_failed].data[:] = prev_failed # Use [:] to modify data in place
+        logger.info(f"Now we have {prev_completed.sum():.0f} completed trips and {prev_failed.sum():.0f} failed trips")
+    else:
+        logger.warning(f"Skipping trip counts merge for {path} as {key_completed} or {key_failed} does not exist in target skims file")
 
 
 
-def _merge_zarr_skim(partialSkims, skims, completed_failed_dict, timePeriods):
-    source_skims = partialSkims.list_matrices()
-    # Extract the path from the skims name
-    path = skims.name.rsplit('_', maxsplit=1)[0]
+def _merge_zarr_skim(partialSkims, skims_da, completed_failed_dict, timePeriods):
+    """
+    Merges a single measure's data for all time periods from OMX partial skims
+    into a Zarr DataArray, applying measure-specific transformations.
 
-    # Get the completed and failed trips for the current mode
-    completed, failed = completed_failed_dict.get(path, (None, None))
+    Parameters:
+    -----------
+    partialSkims : omx.open_file object
+        The OMX file containing the partial skims from BEAM.
+    skims_da : xarray.DataArray
+        The target Zarr DataArray for the current measure (e.g., skims['SOV_TOTIVT']).
+        Expected dimensions: (origin, destination, time_period).
+    completed_failed_dict : dict
+        Dictionary containing completed and failed trip counts aggregated across
+        all time periods for each mode path. Keyed by mode path, values are
+        [completed_trips_3d_array, failed_trips_3d_array].
+    timePeriods : list of str
+        List of time period names.
 
-    if completed is None or failed is None:
-        logger.info(f"No input skim for mode {path}")
-        return path, (completed, failed)
+    Returns:
+    --------
+    tuple (path, measure_name)
+        The path and measure name of the skim that was processed.
+    """
+    # Extract path and measure name from the DataArray name
+    # Expected name format: "PATH_MEASURE" (e.g., "SOV_TOTIVT")
+    path_measure_name = skims_da.name
+    parts = path_measure_name.rsplit('_', 1)
+    if len(parts) != 2:
+        logger.warning(f"Skipping skim '{path_measure_name}' due to unexpected name format.")
+        return None, None # Indicate skipping
 
-    # Get the measure name from the skims name
-    measure_name = skims.name.rsplit('_', maxsplit=1)[1]
+    path, measure_name = parts
 
-    # Construct the key for the partial skims
-    partial_key = f"{path}_{measure_name}__"
+    # Skip TNC-specific measures that are handled in post-processing
+    if path.startswith("TNC") and measure_name in ["REJECTIONPROB", "IWAIT", "DDIST", "TOTIVT"]:
+        # These will be calculated in the post-processing step
+        return path, measure_name # Indicate processed, but no data merged here
 
-    # Store cancel masks for KEYIVT post-processing
-    cancel_masks = {}
+    # Get the completed and failed trips for the current mode path
+    # These are 3D arrays [zones, zones, time periods]
+    completed_3d, failed_3d = completed_failed_dict.get(path, (None, None))
+
+    if completed_3d is None or failed_3d is None:
+        logger.debug(f"No completed/failed trip data found for mode path {path}. Skipping merge for {path_measure_name}.")
+        return path, measure_name # Indicate processed, but no data merged
+
     weighted_avgs = {}
+    cancellation_counts = {}
 
+    # Iterate through each time period slice in the DataArray
     for tpIdx, tp in enumerate(timePeriods):
-        partial_key_with_tp = f"{partial_key}{tp}"
-        if partial_key_with_tp in partialSkims:
-            input_vals = partialSkims[partial_key_with_tp][:]
+        # Construct the key for the partial skims in OMX format
+        partial_key = f"{path}_{measure_name}__{tp}"
 
-            # Apply transformations directly to the skims array
-            if measure_name in ["TOTIVT", "IVT"]:
-                # For these measures, we need a bit more preprocessing
-                mask, vals, to_cancel = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx],
-                                                           measure_name)
-                vals = np.clip(vals, 0.0, None)
+        # Get the 2D completed/failed slices for the current time period
+        completed_tp = completed_3d[:, :, tpIdx]
+        failed_tp = failed_3d[:, :, tpIdx]
 
-                # Log cancellations if needed (simplified)
-                if to_cancel.sum() > 0:
-                    logger.info(
-                        f"Marking {to_cancel.sum()} {path} trips completely impossible in {tp}. "
-                        f"There were {completed[:, :, tpIdx][to_cancel].sum()} completed trips but "
-                        f"{failed[:, :, tpIdx][to_cancel].sum()} failed trips in these ODs."
-                    )
+        if partial_key in partialSkims:
+            try:
+                input_vals_tp = partialSkims[partial_key][:] # Get 2D numpy array for this period
 
-                # Update values directly with mask
-                if mask.any():
-                    weights = completed[:, :, tpIdx][mask]
-                    before_vals = skims.data[:, :, tpIdx][mask]
+                # Apply transformations using the helper function
+                # _transform_measure expects 2D completed/failed arrays
+                mask_update, vals_update, to_cancel_tp = _transform_measure(
+                    input_vals_tp, completed_tp, failed_tp, measure_name, path
+                )
+
+                # Apply updates to the Zarr DataArray slice using the mask
+                if mask_update.any():
+                    # Use .data for direct, in-place modification
+                    current_slice = skims_da.data[:, :, tpIdx]
+
+                    # Calculate weighted averages for logging *before* update
+                    # Use completed trips for the weight
+                    weights = completed_tp[mask_update]
+                    before_vals = current_slice[mask_update]
+                    after_vals = vals_update
+
                     if np.sum(weights) > 0:
-                        weighted_avg_before = np.average(before_vals, weights=weights)
-                        weighted_avg_after = np.average(vals, weights=weights)
+                         weighted_avg_before = np.average(before_vals, weights=weights)
+                         weighted_avg_after = np.average(after_vals, weights=weights)
                     else:
-                        weighted_avg_before = np.nan
-                        weighted_avg_after = np.nan
+                         weighted_avg_before = np.nan
+                         weighted_avg_after = np.nan
                     weighted_avgs[tp] = (weighted_avg_before, weighted_avg_after)
-                    skims.data[:, :, tpIdx][mask] = vals
 
-                # Zero out canceled ODs directly
-                if to_cancel.any():
-                    skims.data[:, :, tpIdx][to_cancel] = 0
+                    # Apply the updated values
+                    current_slice[mask_update] = after_vals
+                    skims_da.data[:, :, tpIdx] = current_slice # Ensure changes are reflected (might be redundant with [:] but safer)
 
-                # Store to_cancel mask for later KEYIVT processing
-                cancel_masks[tp] = to_cancel
 
-            else:
-                # For other measures, just apply mask directly
-                mask, vals = _transform_measure(input_vals, completed[:, :, tpIdx], failed[:, :, tpIdx], measure_name)
-                vals = np.clip(vals, 0.0, None)
-                if mask.any():
-                    weights = completed[:, :, tpIdx][mask]
-                    before_vals = skims.data[:, :, tpIdx][mask]
-                    if np.sum(weights) > 0:
-                        weighted_avg_before = np.average(before_vals, weights=weights)
-                        weighted_avg_after = np.average(vals, weights=weights)
-                    else:
-                        weighted_avg_before = np.nan
-                        weighted_avg_after = np.nan
-                    weighted_avgs[tp] = (weighted_avg_before, weighted_avg_after)
-                    skims.data[:, :, tpIdx][mask] = vals
+                # Handle cancellations for IVT/TOTIVT
+                if to_cancel_tp is not None and to_cancel_tp.any():
+                     cancellation_counts[tp] = to_cancel_tp.sum()
+                     current_slice = skims_da.data[:, :, tpIdx]
+                     current_slice[to_cancel_tp] = 0.0 # Set canceled values to 0
+                     skims_da.data[:, :, tpIdx] = current_slice # Ensure changes reflected
 
-            # Handle SOV special case immediately
-            if path.startswith('SOV_') and not measure_name.endswith("TOLL"):
-                for sub in ['SOVTOLL_', 'HOV2_', 'HOV2TOLL_', 'HOV3_', 'HOV3TOLL_']:
-                    new_key = f"{path}_{measure_name.replace('SOV_', sub)}__{tp}"
-                    if new_key in skims:
-                        # Direct masked update
-                        completed_mask = completed[:, :, tpIdx] > 0
-                        if completed_mask.any():
-                            skims[new_key].data[:, :, tpIdx][completed_mask] = input_vals[completed_mask]
+            except Exception as e:
+                logger.error(f"Error processing skim slice {partial_key}: {e}")
+                # Continue to the next time period
 
-                        # Simplify logging to avoid any calculations on the skims
-                        logger.info(
-                            f"Updated HOV skims for {path}: added values for {completed_mask.sum()} valid OD pairs in {tp}")
+        else:
+            logger.debug(f"Partial skims missing key {partial_key}. Skipping merge for this period.")
+
+    # Log weighted averages summary if any updates occurred
     if weighted_avgs:
         summary = "; ".join(
             f"{tp}: before={before:.2f}, after={after:.2f}"
             for tp, (before, after) in weighted_avgs.items()
+            if not np.isnan(before) or not np.isnan(after)
         )
-        logger.info(
-            f"Weighted averages for {skims.name} (by completed trips): {summary}"
+        if summary:
+             logger.info(f"Weighted average update for {path_measure_name} (by completed trips): {summary}")
+        else:
+             logger.debug(f"No weighted average updates for {path_measure_name} (no completed trips in updated cells).")
+
+    # Log cancellation summary if any occurred
+    if cancellation_counts:
+        summary = "; ".join(
+            f"{tp}: {count} ODs" for tp, count in cancellation_counts.items() if count > 0
         )
+        if summary:
+            logger.info(f"Canceled ODs for {path_measure_name}: {summary}")
 
-    # Handle KEYIVT post-processing for this skim
-    if measure_name in ["TOTIVT", "IVT"]:
-        for tp, to_cancel in cancel_masks.items():
-            tp_idx = timePeriods.index(tp)
-            keyivt_path = f"{path}_KEYIVT__{tp}"
+    # Note: SOV/HOV copying logic removed from here.
+    # Note: TNC specific logic removed from here.
 
-            if keyivt_path in skims:
-                # Compute masks for different operations
-                if keyivt_path in partialSkims:
-                    keyivt_vals = partialSkims[keyivt_path][:]
-                    valid = ~np.isnan(keyivt_vals)
-                    to_penalize = (failed[:, :, tp_idx] > completed[:, :, tp_idx]) & ~to_cancel
-                    to_allow = ~to_cancel & ~to_penalize & valid & (completed[:, :, tp_idx] > 0)
-
-                    # Direct masked updates
-                    if to_allow.any():
-                        skims[keyivt_path].values[:, :, tp_idx][to_allow] = keyivt_vals[to_allow] * 100.0
-                        logger.info(f"Updated {to_allow.sum()} KEYIVT values for {path} in {tp}")
-
-                # Zero out canceled ODs directly
-                if to_cancel.any():
-                    skims[keyivt_path].values[:, :, tp_idx][to_cancel] = 0
-                    logger.info(f"Zeroed out {to_cancel.sum()} KEYIVT values for {path} in {tp}")
-
-    if measure_name in ["TIME", "TOTIVT"]:
-        # Create a clean, tabular format
-        logger.info(f"{'-' * 60}")
-        logger.info(f"Summary for {path}_{measure_name}:")
-        logger.info(f"{'-' * 60}")
-        logger.info(f"{'Period':<6} | {'Completed':<10} | {'Failed':<10} | {'Success Rate':<12}")
-        logger.info(f"{'-' * 6}-+-{'-' * 10}-+-{'-' * 10}-+-{'-' * 12}")
-
-        for tpIdx, tp in enumerate(timePeriods):
-            # Calculate total completed and failed trips for this time period
-            completed_count = np.sum(completed[:, :, tpIdx] > 0)
-            failed_count = np.sum(failed[:, :, tpIdx] > 0)
-
-            # Calculate success rate
-            total = completed_count + failed_count
-            success_rate = (completed_count / total) * 100 if total > 0 else 0
-
-            # Format as aligned columns with separators
-            logger.info(f"{tp:<6} | {completed_count:<10} | {failed_count:<10} | {success_rate:>6.1f}%")
-
-        logger.info(f"{'-' * 60}")
-
-    return path, (completed, failed)
+    return path, measure_name
 
 
-def _handle_transit_mode_availability(skims, timePeriods):
+def _handle_transit_mode_availability(skims_ds, timePeriods):
     """
     Handles transit mode availability by checking specific transit modes.
 
-    For OD pairs with 50+ successful transit trips, any specific transit mode
+    For OD pairs with 50+ successful general transit trips, any specific transit mode
     with 0 successful trips will be marked as unavailable (TOTIVT = 0).
     Only marks OD pairs where TOTIVT is currently > 0 or np.nan.
+    Operates directly on the Zarr dataset.
+
+    Parameters:
+    -----------
+    skims_ds : xarray.Dataset
+        The target Zarr dataset containing all skims.
+    timePeriods : list of str
+        List of time period names.
     """
     # General transit mode
     general_transit_path = "WLK_TRN_WLK"
@@ -536,7 +873,7 @@ def _handle_transit_mode_availability(skims, timePeriods):
         # Add any other specific transit modes as needed
     ]
 
-    # Create a summary table header
+    # Create a summary table header using logger
     logger.info(f"{'=' * 80}")
     logger.info(f"Transit Mode Availability Analysis")
     logger.info(f"{'=' * 80}")
@@ -544,36 +881,44 @@ def _handle_transit_mode_availability(skims, timePeriods):
         f"{'Period':<6} | {'Mode':<12} | {'ODs w/50+ Transit':<18} | {'ODs w/0 Mode Trips':<18} | {'Changed':<10} | {'% Changed':<10}")
     logger.info(f"{'-' * 6}-+-{'-' * 12}-+-{'-' * 18}-+-{'-' * 18}-+-{'-' * 10}-+-{'-' * 10}")
 
+    tp_to_idx = {tp: idx for idx, tp in enumerate(timePeriods)}
+
     # Process each time period
     for tp in timePeriods:
+        tp_idx = tp_to_idx[tp]
+
         # Check if general transit trip counts exist
-        general_trips_key = f"{general_transit_path}_TRIPS__{tp}"
-        if general_trips_key not in skims:
+        general_trips_key = f"{general_transit_path}_TRIPS" # Zarr key format
+        general_trips_da = skims_ds.get(general_trips_key)
+
+        if general_trips_da is None:
             logger.info(
                 f"{tp:<6} | {'ALL MODES':<12} | {'NO DATA':<18} | {'NO DATA':<18} | {'NO DATA':<10} | {'N/A':<10}")
             continue
 
-        # Find OD pairs with at least 50 successful transit trips
-        general_transit_trips = skims[general_trips_key].values[:, :, 0]  # Assuming it's a 3D array with one time slice
+        # Find OD pairs with at least 50 successful transit trips for this period slice
+        general_transit_trips = general_trips_da.data[:, :, tp_idx] # Get 2D slice
         mask_significant_transit = general_transit_trips >= 50
-
-        if not np.any(mask_significant_transit):
-            logger.info(f"{tp:<6} | {'ALL MODES':<12} | {0:<18} | {0:<18} | {0:<10} | {0:<10.1f}")
-            continue
 
         significant_count = np.sum(mask_significant_transit)
 
+        if not np.any(mask_significant_transit):
+            # No significant transit trips for this period, nothing to check
+            logger.info(f"{tp:<6} | {'ALL MODES':<12} | {0:<18} | {0:<18} | {0:<10} | {0:<10.1f}")
+            continue
+
         # Check each specific transit mode
         for mode in specific_transit_modes:
-            # Get trip counts for this mode
-            mode_trips_key = f"{mode}_TRIPS__{tp}"
+            # Get trip counts for this mode for this period slice
+            mode_trips_key = f"{mode}_TRIPS" # Zarr key format
+            mode_trips_da = skims_ds.get(mode_trips_key)
 
-            if mode_trips_key not in skims:
+            if mode_trips_da is None:
                 logger.info(
                     f"{tp:<6} | {mode:<12} | {significant_count:<18} | {'NO DATA':<18} | {'NO DATA':<10} | {'N/A':<10}")
                 continue
 
-            mode_trips = skims[mode_trips_key].values[:, :, 0]  # Assuming it's a 3D array with one time slice
+            mode_trips = mode_trips_da.data[:, :, tp_idx] # Get 2D slice
 
             # Find OD pairs where general transit has 50+ trips but this mode has 0
             mask_mode_unused = mask_significant_transit & (mode_trips == 0)
@@ -581,36 +926,22 @@ def _handle_transit_mode_availability(skims, timePeriods):
             unused_count = np.sum(mask_mode_unused)
 
             # Mark this mode as unavailable for these OD pairs by setting TOTIVT = 0
-            totivt_key = f"{mode}_TOTIVT"
+            totivt_key = f"{mode}_TOTIVT" # Zarr key format
+            totivt_da = skims_ds.get(totivt_key)
             changed_count = 0
 
-            if totivt_key in skims and unused_count > 0:
-                # Check dimension of the data
-                if len(skims[totivt_key].dims) == 3:
-                    # Get time period index
-                    tp_idx = timePeriods.index(tp)
+            if totivt_da is not None and unused_count > 0:
+                # Get current TOTIVT values slice
+                current_totivt_slice = totivt_da.data[:, :, tp_idx]
 
-                    # Get current TOTIVT values
-                    current_totivt = skims[totivt_key].values[:, :, tp_idx]
+                # Only mark as unavailable if current TOTIVT is > 0 or np.nan within the mask_mode_unused area
+                mask_to_change = mask_mode_unused & ((current_totivt_slice > 0) | np.isnan(current_totivt_slice))
+                changed_count = np.sum(mask_to_change)
 
-                    # Only mark as unavailable if current TOTIVT is > 0 or np.nan
-                    mask_to_change = mask_mode_unused & ((current_totivt > 0) | np.isnan(current_totivt))
-                    changed_count = np.sum(mask_to_change)
-
-                    # Update values
-                    if changed_count > 0:
-                        skims[totivt_key].values[:, :, tp_idx][mask_to_change] = 0
-                else:
-                    # If it's 2D (just one time period), apply directly
-                    current_totivt = skims[totivt_key].values
-
-                    # Only mark as unavailable if current TOTIVT is > 0 or np.nan
-                    mask_to_change = mask_mode_unused & ((current_totivt > 0) | np.isnan(current_totivt))
-                    changed_count = np.sum(mask_to_change)
-
-                    # Update values
-                    if changed_count > 0:
-                        skims[totivt_key].values[mask_to_change] = 0
+                # Update values directly using .data slice
+                if changed_count > 0:
+                    current_totivt_slice[mask_to_change] = 0.0
+                    totivt_da.data[:, :, tp_idx] = current_totivt_slice # Ensure changes are reflected
 
             percent_changed = (changed_count / significant_count) * 100 if significant_count > 0 else 0
 
@@ -618,6 +949,7 @@ def _handle_transit_mode_availability(skims, timePeriods):
                 f"{tp:<6} | {mode:<12} | {significant_count:<18} | {unused_count:<18} | {changed_count:<10} | {percent_changed:<10.1f}")
 
     logger.info(f"{'=' * 80}")
+
 
 
 def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tables=None):
@@ -669,62 +1001,104 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
 
 
 def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output_dir, settings, override=None):
+    """
+    Merges current BEAM OMX skims into the main Zarr skims file.
+    """
     # Set parallel to False explicitly
     parallel = False
 
-    skims = xr.open_zarr(all_skims_path)
+    skims_ds = xr.open_zarr(all_skims_path, mode='a') # Open in append/write mode
+
     if override is None:
         current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
     else:
         current_skims_path = override
-    partialSkims = omx.open_file(current_skims_path, mode='r')
-    partialSkimKeys = pd.Series(partialSkims.list_matrices())
-    partialSkimDataKeys = partialSkimKeys.loc[
-        ~(partialSkimKeys.str.contains("TRIPS") | partialSkimKeys.str.contains("FAILURES"))]
-    iterable = [(
-        path + '_' + measure, vals[3].to_list()) for (path, measure), vals
-        in
-        partialSkimDataKeys.str.rsplit('_', n=3, expand=True).groupby([0, 1])]
+
+    if current_skims_path is None or not os.path.exists(current_skims_path):
+        logger.warning(f"No current OMX skims found at {current_skims_path}. Skipping merge.")
+        skims_ds.close()
+        return None # Indicate no merge happened
+
+    try:
+        partialSkims = omx.open_file(current_skims_path, mode='r')
+    except Exception as e:
+        logger.error(f"Failed to open partial skims file {current_skims_path}: {e}")
+        skims_ds.close()
+        return None # Indicate merge failed
+
     timePeriods = settings["periods"]
+
+    # Step 1: Accumulate completed and failed trips from partial skims
+    logger.info("Accumulating completed and failed trip counts from partial skims...")
     completed_failed_dict = _accumulate_completed_failed_trips(partialSkims, timePeriods)
 
-    # Process all skims sequentially
-    logger.info(f"Processing {len(iterable)} skim groups sequentially")
-    processed_count = 0
-
+    # Step 2: Merge completed and failed trips into the Zarr skims Dataset
+    # Iterate through modes found in the partial skims
+    logger.info("Merging trip counts into Zarr skims...")
     for path, (completed, failed) in completed_failed_dict.items():
-        if f"{path}_TRIPS" in skims:
-            # Merge completed and failed trips into the Zarr skims
-            _merge_zarr_trip_counts(skims, path, completed, failed)
+         # completed and failed here are 3D arrays [zones, zones, periods]
+        if f"{path}_TRIPS" in skims_ds and f"{path}_FAILURES" in skims_ds:
+            _merge_zarr_trip_counts(skims_ds, path, completed, failed)
         else:
-            logger.warning(f"Skipping trip counts for {path}_TRIPS as it does not exist in the target skims file")
+            logger.debug(f"Skipping trip counts merge for mode {path} as TRIPS or FAILURES variable does not exist in target skims.")
 
-    for path, tps in iterable:
-        if path in skims:
+
+    # Step 3: Merge other measures using _merge_zarr_skim
+    # _merge_zarr_skim processes one variable (measure) for all periods.
+    logger.info("Merging other skim measures into Zarr skims...")
+    processed_vars = set()
+    # Build a set of variables in partial skims (excluding time period suffix)
+    partial_skim_measures = set()
+    for key in partialSkims.list_matrices():
+         parts = key.rsplit('_', 3)
+         if len(parts) == 4:
+              path, measure, _, tp = parts
+              if measure not in ["TRIPS", "FAILURES"]:
+                   partial_skim_measures.add(f"{path}_{measure}")
+
+    for var_name in skims_ds.data_vars:
+        # Check if this variable corresponds to a measure present in the partial skims
+        # and is not TRIPS/FAILURES (already handled).
+        if var_name in partial_skim_measures:
+            logger.debug(f"Processing variable: {var_name}")
             try:
-                result_path, _ = _merge_zarr_skim(partialSkims, skims[path], completed_failed_dict, timePeriods)
-                processed_count += 1
+                # Pass the specific DataArray for this variable
+                path, measure_name = _merge_zarr_skim(partialSkims, skims_ds[var_name], completed_failed_dict, timePeriods)
+                if path is not None: # Check if processing wasn't skipped
+                    processed_vars.add(var_name)
             except Exception as e:
-                logger.error(f"Error merging skim for mode {path}: {e}")
-        else:
-            logger.warning(f"Skipping skim {path} as it does not exist in the target skims file")
+                logger.error(f"Error merging Zarr variable {var_name}: {e}")
 
-    # After all skims are processed, handle transit mode availability
+    logger.info(f"Completed processing {len(processed_vars)} skim variables.")
+
+    # Step 4: Apply TNC-specific post-processing rules
+    # This must happen *after* all base TNC and SOV skims (TRIPS, FAILURES, IWAIT, DDIST, TOTIVT, FAR, DIST, TIME)
+    # have been merged in the steps above.
+    _postprocess_tnc_skims_zarr(skims_ds, timePeriods, settings)
+
+
+    # Step 5: Handle transit mode availability
     logger.info("Processing transit mode availability...")
-    _handle_transit_mode_availability(skims, timePeriods)
+    _handle_transit_mode_availability(skims_ds, timePeriods)
 
-    logger.info(f"Completed processing {processed_count} skims")
 
+    # Step 6: Copy skims for unobserved modes (e.g., SOV -> HOV/SOVTOLL)
+    # This should happen after the base skims (like SOV) are finalized.
     mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
-    copy_skims_for_unobserved_modes(mapping, skims, skims.keys())
-    logger.info(f"Started writing zarr skims to {all_skims_path}")
+    copy_skims_for_unobserved_modes(mapping, skims_ds)
 
-    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2)
+    # Step 7: Save the updated Zarr dataset
+    logger.info(f"Started writing updated zarr skims to {all_skims_path}")
+    # Use mode='w' to overwrite with the updated data, consolidated=True for performance
+    # Ensure zarr_version=2 for compatibility
+    skims_ds.to_zarr(all_skims_path, mode='w', consolidated=True, zarr_version=2)
     logger.info("Completed writing zarr skims")
-    skims.close()
+
+    # Close the datasets
+    skims_ds.close()
+    partialSkims.close()
 
     return current_skims_path
-
 
 def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
     """
@@ -782,42 +1156,111 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
     Zero out inaccessible ODs in Zarr-format skims, similar to trim_inaccessible_ods for OMX.
     Uses direct .data access for in-place modification.
     """
+    try:
+        skims = xr.open_zarr(all_skims_path, mode='a') # Open in append/write mode
+    except Exception as e:
+        logger.error(f"Failed to open skims file {all_skims_path} for trimming inaccessible ODs: {e}")
+        return
+
     order = zone_order(settings, settings['start_year'])
-    skims = xr.open_zarr(all_skims_path)
     periods = settings["periods"]
-    transit_paths = settings['transit_paths']
+    transit_paths_settings = settings.get('transit_paths', {}) # Use .get for safety
 
-    # Precompute total completed trips for all ODs by period index
-    totalTrips = [np.zeros((len(order), len(order))) for _ in periods]
-    period_idx = {p: i for i, p in enumerate(periods)}
-    for var in skims.data_vars:
-        if ('TRIPS__' in var) and ('RH_' not in var):
-            tp = var.split('__')[-1]
-            if tp in period_idx:
-                tpIdx = period_idx[tp]
-                totalTrips[tpIdx] += np.nan_to_num(skims[var].data[:, :, tpIdx])
+    if not transit_paths_settings:
+         logger.warning("No 'transit_paths' defined in settings for trimming inaccessible ODs.")
+         skims.close()
+         return
 
-    for path, metrics in transit_paths.items():
+    tp_to_idx = {p: i for i, p in enumerate(periods)}
+
+    totalTrips = {tp: np.zeros((len(order), len(order))) for tp in periods}
+
+    for var_name in skims.data_vars:
+         parts = var_name.rsplit('__', 1)
+         if len(parts) == 2:
+              measure_part, tp = parts
+              if tp in totalTrips and not measure_part.startswith('RH_'): # Exclude Ridehail as in original
+                   if 'TRIPS__' in var_name:
+                        tp_idx = tp_to_idx[tp]
+                        # Need to add the 2D slice for this period to the 2D total trips array
+                        if skims[var_name].ndim == 3 and skims[var_name].shape[-1] > tp_idx:
+                             totalTrips[tp] += np.nan_to_num(skims[var_name].data[:, :, tp_idx])
+                        elif skims[var_name].ndim == 2 and len(periods) == 1 and periods[0] == tp:
+                              # Handle case where there's only one period and it's 2D
+                              totalTrips[tp] += np.nan_to_num(skims[var_name].data[:, :])
+                        else:
+                            logger.warning(f"Skipping '{var_name}' for total trips calculation due to unexpected shape or period mismatch.")
+
+    for path, metrics in transit_paths_settings.items():
+        trip_name_zarr = f"{path}_TRIPS"
+        fail_name_zarr = f"{path}_FAILURES"
+
+        trip_da = skims.get(trip_name_zarr)
+        fail_da = skims.get(fail_name_zarr)
+
+        if trip_da is None or fail_da is None:
+             logger.debug(f"Skipping trim for {path}: missing {trip_name_zarr} or {fail_name_zarr}")
+             continue
+
         for tpIdx, period in enumerate(periods):
-            completedAllTripsByOandD = totalTrips[tpIdx].sum(axis=0) + totalTrips[tpIdx].sum(axis=1)
-            trip_name = f"{path}_TRIPS"
-            fail_name = f"{path}_FAILURES"
-            if trip_name in skims and fail_name in skims:
-                completedTransitTrips = np.nan_to_num(skims[trip_name].data[:, :, tpIdx])
-                failedTransitTrips = np.nan_to_num(skims[fail_name].data[:, :, tpIdx])
-                completedTransitTripsByOandD = completedTransitTrips.sum(axis=0) + completedTransitTrips.sum(axis=1)
-                failedTransitTripsByOandD = failedTransitTrips.sum(axis=0) + failedTransitTrips.sum(axis=1)
-                toDelete = (completedAllTripsByOandD > 1000) & (failedTransitTripsByOandD > 200) & (completedTransitTripsByOandD == 0)
-                toDelete = np.squeeze(toDelete)
-                logger.info(f"Deleting all {path} service for {np.sum(toDelete)} zones in {period} because no trips were observed")
+            if period not in totalTrips:
+                 logger.warning(f"Skipping trim for {path} in {period}: total trip data missing for this period.")
+                 continue
+
+            completedAllTripsByOandD = totalTrips[period].sum(axis=0) + totalTrips[period].sum(axis=1)
+
+            # Get 2D slices for this period
+            if trip_da.ndim == 3 and trip_da.shape[-1] > tpIdx:
+                 completedTransitTrips = np.nan_to_num(trip_da.data[:, :, tpIdx])
+                 failedTransitTrips = np.nan_to_num(fail_da.data[:, :, tpIdx])
+            elif trip_da.ndim == 2 and len(periods) == 1 and periods[0] == period:
+                 completedTransitTrips = np.nan_to_num(trip_da.data[:, :])
+                 failedTransitTrips = np.nan_to_num(fail_da.data[:, :])
+            else:
+                 logger.warning(f"Skipping trim for {path} in {period}: trip data has unexpected shape or period mismatch.")
+                 continue
+
+
+            completedTransitTripsByOandD = completedTransitTrips.sum(axis=0) + completedTransitTrips.sum(axis=1)
+            failedTransitTripsByOandD = failedTransitTrips.sum(axis=0) + failedTransitTrips.sum(axis=1)
+
+            toDelete = np.squeeze((completedAllTripsByOandD > 1000) & (failedTransitTripsByOandD > 200) & (completedTransitTripsByOandD == 0))
+
+            num_zones_to_delete = np.sum(toDelete)
+            if num_zones_to_delete > 0:
+                logger.info(f"Trimming {path} service for {num_zones_to_delete} zones in {period} because no completed transit trips were observed for these zones (conditions met).")
                 for metric in metrics:
-                    name = f"{path}_{metric}"
-                    if name in skims:
-                        arr = skims[name].data[:, :, tpIdx]
-                        arr[toDelete[:, None] | toDelete[None, :]] = 0.0
-                        skims[name].data[:, :, tpIdx] = arr
-    skims.to_zarr(all_skims_path, mode='w', consolidated=False, zarr_version=2, zarr_format=2)
+                    name_zarr = f"{path}_{metric}" # Zarr key format
+                    metric_da = skims.get(name_zarr)
+
+                    if metric_da is not None:
+                        # Ensure the DataArray has enough dimensions for the period
+                        if metric_da.ndim == 3 and metric_da.shape[-1] > tpIdx:
+                             # Get the 2D slice for this period
+                             arr_slice = metric_da.data[:, :, tpIdx]
+                             # Apply the deletion mask. This sets values to 0 where the origin OR destination zone is in `toDelete`.
+                             # This corresponds to setting the row AND the column corresponding to the zones in `toDelete` to 0.
+                             arr_slice[toDelete[:, None] | toDelete[None, :]] = 0.0
+                             # Update the data in the Zarr array
+                             metric_da.data[:, :, tpIdx] = arr_slice
+                             logger.debug(f"Trimmed {name_zarr} for {period} for {num_zones_to_delete} zones.")
+                        elif metric_da.ndim == 2 and len(periods) == 1 and periods[0] == period:
+                             # Handle 2D case (single period)
+                             arr_slice = metric_da.data[:, :]
+                             arr_slice[toDelete[:, None] | toDelete[None, :]] = 0.0
+                             metric_da.data[:, :] = arr_slice
+                             logger.debug(f"Trimmed {name_zarr} (2D) for {period} for {num_zones_to_delete} zones.")
+                        else:
+                             logger.warning(f"Skipping trim for metric {name_zarr} in {period} due to unexpected shape or period mismatch.")
+                    else:
+                        logger.debug(f"Skipping trim for metric {name_zarr} in {period}: variable not found in skims.")
+
+    # Save the updated Zarr dataset after trimming
+    logger.info(f"Started writing zarr skims after trimming inaccessible ODs to {all_skims_path}")
+    skims.to_zarr(all_skims_path, mode='w', consolidated=True, zarr_version=2) # Use mode='w' to overwrite
+    logger.info("Completed writing zarr skims after trimming.")
     skims.close()
+
 
 def trim_inaccessible_ods(settings, working_dir):
     all_skims_path = os.path.join(working_dir, settings['asim_local_mutable_data_folder'], "skims.omx")
