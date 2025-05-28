@@ -718,7 +718,7 @@ def run_traffic_assignment(
             elif settings["file_format"] == "parquet":
                 asim_data_dir = os.path.join(run_path, settings['asim_local_output_folder'], "cache")
                 asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
-                current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path, previous_od_skims,
+                current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path,
                                                                          beam_local_output_folder, settings)
                 logger.warning("RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES")
             else:
