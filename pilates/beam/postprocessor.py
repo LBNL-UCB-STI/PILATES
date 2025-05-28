@@ -1007,7 +1007,7 @@ def merge_current_zarr_od_skims(all_skims_path, previous_skims_path, beam_output
     # Set parallel to False explicitly
     parallel = False
 
-    skims_ds = xr.open_zarr(all_skims_path, mode='a') # Open in append/write mode
+    skims_ds = xr.open_zarr(all_skims_path)
 
     if override is None:
         current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
