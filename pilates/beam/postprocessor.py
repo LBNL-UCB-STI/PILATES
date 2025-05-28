@@ -628,6 +628,10 @@ def _transform_measure(input_vals, completed, failed, measure, path):
     valid = ~np.isnan(input_vals)
     completed_mask = (completed > 0)
     basic_mask = valid & completed_mask
+    negative = (input_vals < 0)
+    if np.any(negative):
+        logger.warning(f"Found {np.sum(negative)} negative values in input_vals for measure {measure} and path {path}. Setting them to 0.")
+        input_vals[negative] = 0.0  # Set negative values to 0
 
     # Determine scaling factor based on path (mode)
     scaling = 100.0 if not path.startswith("TNC") else 1.0
