@@ -794,13 +794,13 @@ def _transform_measure(input_vals, completed, failed, measure, path, transit_sca
         logger.debug(f"Found {np.sum(negative)} negative values in input_vals for measure {measure} and path {path} in one period. Setting them to 0.")
         input_vals[negative] = 0.0
 
-    measures_in_01_minutes = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT"}
+    measures_is_scaled_for_transit = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT", "FAR"}
     # Apply 100x scaling for specific measures only if the mode is NOT TNC/RH
-    scaling = transit_scale_factor if measure in measures_in_01_minutes and not (path.startswith("TNC_") or path.startswith("RH_")) else 1.0
+    scaling = transit_scale_factor if measure in measures_is_scaled_for_transit and not (path.startswith("TNC_") or path.startswith("RH_")) else 1.0
 
 
     # Handle measures that need scaling
-    if measure in measures_in_01_minutes:
+    if measure in measures_is_scaled_for_transit:
         # TNC IWAIT filling, DDIST, TOTIVT for TNC/RH are handled in post-processing, not here
         # This function is for the initial merge/transfer based on *observed* data.
         # The interpolation/filling logic is separate.
