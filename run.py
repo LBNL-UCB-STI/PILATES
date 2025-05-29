@@ -1132,15 +1132,19 @@ if __name__ == '__main__':
                         copy_outputs_to_mep(settings, year, -1)
                     except:
                         print("Skipping post")
-                if settings['file_format'] == "parquet":
-                    try:
-                        asim_data_dir = os.path.join(working_dir, settings['asim_local_output_folder'], "cache")
-                        asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
-                        current_od_skims = beam_post.trim_inaccessible_ods_zarr(asim_skims_path, settings)
-                    except Exception as e:
-                        logger.error(f"Error trimming inaccessible ODs: {e}")
-                else:
-                    beam_post.trim_inaccessible_ods(settings, working_dir)
+
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
+
+        activity_demand_model = settings.get('activity_demand_model', "")
+        if (activity_demand_model.lower() == "activitysim") and activity_demand_enabled:
+            if settings['file_format'] == "parquet":
+                try:
+                    asim_data_dir = os.path.join(working_dir, settings['asim_local_output_folder'], "cache")
+                    asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
+                    current_od_skims = beam_post.trim_inaccessible_ods_zarr(asim_skims_path, settings)
+                except Exception as e:
+                    logger.error(f"Error trimming inaccessible ODs: {e}")
+            else:
+                beam_post.trim_inaccessible_ods(settings, working_dir)
 
     logger.info("Finished")
