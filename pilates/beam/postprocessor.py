@@ -1746,7 +1746,7 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
             logger.error(f"Target Zarr skims file not found at {all_skims_path} and no new OMX skims available. Cannot proceed.")
             return None
         try:
-            skims_ds = xr.open_zarr(all_skims_path, mode='a') # Open existing for possible post-processing if it's a replan iteration
+            skims_ds = xr.open_zarr(all_skims_path) # Open existing for possible post-processing if it's a replan iteration
             skims_ds.close() # Just check if it's readable
         except Exception as e:
             logger.error(f"Failed to open existing Zarr skims file at {all_skims_path}: {e}. Cannot proceed.")
@@ -1775,7 +1775,7 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
 
     # Open the Zarr dataset in append mode to modify it in place
     try:
-        skims_ds = xr.open_zarr(all_skims_path, mode='a')
+        skims_ds = xr.open_zarr(all_skims_path)
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
     except Exception as e:
         logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}. Cannot proceed.")
@@ -2141,7 +2141,7 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
     """
     logger.info("Starting trim of inaccessible ODs in Zarr skims.")
     try:
-        skims = xr.open_zarr(all_skims_path, mode='a') # Open in append/write mode
+        skims = xr.open_zarr(all_skims_path) # Open in append/write mode
     except Exception as e:
         logger.error(f"Failed to open skims file {all_skims_path} for trimming inaccessible ODs: {e}")
         return
