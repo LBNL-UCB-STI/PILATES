@@ -1686,44 +1686,161 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
     Parameters
     ----------
     all_skims_path : str
-        Path to the main skims file
+        Path to the main skims Zarr store.
     settings : dict
-        Settings dictionary
+        Settings dictionary, needed for 'region' and 'beam_local_input_folder'.
     new_skim_name : str
-        Name of the new skim to be created
+        Name of the new OMX skim file to be created (e.g., 'skims.omx').
+    exclude_tables : list, optional
+        A list of variable names (strings) from the Zarr dataset
+        to exclude from being written to the OMX file. Defaults to None.
 
     Returns
     -------
-    None
+    str or None
+        The path to the newly created OMX file if successful, otherwise None.
     """
-    region = settings['region']
-    beam_input_dir = settings['beam_local_input_folder']
-    skims_fname = settings['skims_fname']
+    logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
+
+    region = settings.get('region')
+    beam_input_dir = settings.get('beam_local_input_folder')
+
+    if not region or not beam_input_dir:
+         logger.error("Settings 'region' or 'beam_local_input_folder' are not defined. Cannot determine output path.")
+         return None
+
+    target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
+
     if exclude_tables is None:
         exclude_tables = []
 
-    target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
-    skims = xr.open_zarr(all_skims_path)
-    logger.info(f"Deleting current skims file {target_skims_path} and replacing them with new omx skims")
-    if os.path.exists(target_skims_path):
-        os.remove(target_skims_path)
-    new_omx_file = omx.open_file(target_skims_path, 'a')
-    time_periods = [s for s in skims.time_period.values]
-    for key in skims.keys():
-        # Get the data for this key
-        if key in exclude_tables:
-            continue
-        data = skims[key].values
-        logger.info(f"Writing {key} with shape {data.shape} to {target_skims_path}")
-        if len(data.shape) == 2:
-            new_omx_file[key] = data
-        elif len(data.shape) == 3:
-            for t_idx, tp in enumerate(time_periods):
-                new_key = f"{key}__{tp}"
-                new_omx_file[new_key] = data[:, :, t_idx]
-    logger.info(f"Done writing skims to {target_skims_path} with shape {new_omx_file.shape()}")
-    new_omx_file.close()
-    skims.close()
+    skims_ds = None # Initialize Zarr dataset variable
+    new_omx_file = None # Initialize OMX file variable
+
+    try:
+        # Open the Zarr dataset
+        skims_ds = xr.open_zarr(all_skims_path)
+        logger.info(f"Opened Zarr skims file: {all_skims_path}")
+
+        # --- Get Zone IDs and Time Periods from Zarr coordinates ---
+        # ActivitySim Zarr skims typically have 'origin' and 'time_period' coordinates
+        zone_ids = None
+        if 'origin' in skims_ds.coords:
+             # Ensure zone_ids are integers compatible with OMX mapping
+             zone_ids = skims_ds.coords['origin'].values
+             # Convert to a basic list or array type that openmatrix likes, if necessary
+             # numpy array should be fine
+             logger.info(f"Retrieved {len(zone_ids)} zone IDs from Zarr coordinates.")
+        else:
+             logger.warning("Zarr skims file does not have 'origin' coordinate. Zone mapping will NOT be added to OMX.")
+
+        time_periods = []
+        if 'time_period' in skims_ds.coords:
+             # Ensure time periods are strings for OMX keys
+             time_periods = [str(s) for s in skims_ds.time_period.values]
+             logger.info(f"Found {len(time_periods)} time periods in Zarr: {time_periods}")
+        else:
+             logger.warning("Zarr skims file does not have 'time_period' coordinate. 3D variables cannot be written with period suffixes.")
+
+        # --- Prepare output file ---
+        logger.info(f"Target output OMX path: {target_skims_path}")
+        if os.path.exists(target_skims_path):
+            logger.info(f"Deleting existing file: {target_skims_path}")
+            try:
+                os.remove(target_skims_path)
+            except OSError as e:
+                logger.error(f"Error deleting existing file {target_skims_path}: {e}. Aborting.")
+                return None
+
+        # Create the new OMX file using 'w' mode as we just deleted it
+        new_omx_file = omx.open_file(target_skims_path, 'w')
+        logger.info(f"Created new OMX file: {target_skims_path}")
+
+        # --- Add Zone Mapping FIRST ---
+        if zone_ids is not None and len(zone_ids) > 0:
+             try:
+                  # Add the 'zone_id' mapping to the OMX file
+                  new_omx_file.create_mapping('zone_id', zone_ids, overwrite=True)
+                  logger.info(f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones.")
+             except Exception as e:
+                  logger.error(f"Error creating zone mapping in OMX file: {e}.")
+
+        # --- Write Matrices from Zarr to OMX ---
+        logger.info("Writing matrices to OMX file...")
+        written_count = 0
+        for key in skims_ds.data_vars: # Iterate through data variables
+            if key in exclude_tables:
+                logger.debug(f"Skipping excluded variable: {key}")
+                continue
+
+            try:
+                data_array = skims_ds[key]
+                data = data_array.values # Load data into memory
+                logger.debug(f"Processing variable '{key}' with shape {data.shape}, dtype {data.dtype}.")
+
+                if data_array.ndim == 2:
+                    # Ensure shape matches expected (zones, zones) if zones were found
+                    expected_shape_2d = (len(zone_ids), len(zone_ids)) if zone_ids is not None else None
+                    if expected_shape_2d and data_array.shape != expected_shape_2d:
+                         logger.warning(f"Shape mismatch for 2D variable '{key}': {data_array.shape} vs expected {expected_shape_2d}. Skipping.")
+                         continue
+
+                    # Write 2D matrix directly
+                    new_omx_file[key] = data
+                    logger.debug(f"  Wrote 2D matrix '{key}'")
+                    written_count += 1
+
+                elif data_array.ndim == 3:
+                     # Ensure shape matches expected (zones, zones, periods) if zones and periods were found
+                    expected_shape_3d_prefix = (len(zone_ids), len(zone_ids)) if zone_ids is not None else None
+                    if expected_shape_3d_prefix and data_array.shape[:2] != expected_shape_3d_prefix:
+                        logger.warning(f"Shape prefix mismatch for 3D variable '{key}': {data_array.shape[:2]} vs expected {expected_shape_3d_prefix}. Skipping.")
+                        continue
+
+                    if not time_periods or data_array.shape[-1] != len(time_periods):
+                        logger.warning(f"Period dimension mismatch for 3D variable '{key}': {data_array.shape[-1]} vs expected {len(time_periods)}. Cannot write as OMX slices. Skipping.")
+                        continue
+
+                    # Write slices for each time period
+                    for t_idx, tp in enumerate(time_periods):
+                        new_key = f"{key}__{tp}" # Standard OMX format for 3D -> 2D slices
+                        slice_data = data[:, :, t_idx]
+                        new_omx_file[new_key] = slice_data
+                        # logger.debug(f"  Wrote slice '{new_key}'") # Too verbose for debug
+                        written_count += 1
+                    logger.debug(f"  Wrote {len(time_periods)} slices for 3D variable '{key}'")
+
+                else:
+                    logger.warning(f"Skipping variable '{key}' with unexpected dimension count: {data_array.ndim}")
+
+            except Exception as e:
+                logger.error(f"Error writing variable '{key}' to OMX: {e}. Continuing with next variable.")
+
+        logger.info(f"Finished writing {written_count} matrices to OMX file {target_skims_path}.")
+
+        # Return the path on success
+        return target_skims_path
+
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred during Zarr to OMX conversion: {e}")
+        return None # Indicate failure
+
+    finally:
+        # Ensure files are closed
+        if new_omx_file:
+            try:
+                new_omx_file.close()
+                logger.info("Closed OMX file.")
+            except Exception as e:
+                logger.error(f"Error closing OMX file {target_skims_path}: {e}")
+
+        if skims_ds:
+             try:
+                  skims_ds.close()
+                  logger.info("Closed Zarr dataset.")
+             except Exception as e:
+                  logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
+
 
 
 def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, override=None):
