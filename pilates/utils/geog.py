@@ -65,7 +65,8 @@ def get_taz_geoms(settings, taz_id_col_in='taz1454', zone_id_col_out='zone_id',
 
         ## FIX ME: other regions taz should be here - only sfbay for now
         print(url)
-        gdf = gpd.read_file(url, crs="EPSG:4326")
+        gdf = gpd.read_file(url)
+        gdf = gdf.set_crs("EPSG:4326", allow_override=True)
         print(list(gdf))
         if region == 'austin':
             mapping = geoid_to_zone_map(settings)
