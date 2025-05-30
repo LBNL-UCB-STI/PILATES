@@ -8,7 +8,7 @@
 region: sfbay
 scenario: base
 start_year: 2018
-end_year: 2022
+end_year: 2025
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
@@ -101,7 +101,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: sfbay-pilates-network--simp-jdeq-07-storage-5.conf # OR austin-pilates-base.conf
+beam_config: sfbay-pilates-base-omx.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -114,7 +114,7 @@ replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False
-max_plans_memory: 3
+max_plans_memory: 5
 final_asim_plans_folder: pilates/activitysim/output/final_plans
 beam_simulated_hwy_paths:
   - SOV
@@ -137,9 +137,8 @@ mep_local_output_folder: pilates/postprocessing/MEP/
 household_sample_size: 250000  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 file_format: parquet
-num_processes: 20 # 94
+num_processes: 25 # 94
 asim_subdir: configs
-file_format: parquet
 asim_main_configs_dir: configs_extended
 asim_local_input_folder: pilates/activitysim/data/
 asim_local_mutable_data_folder: activitysim/data/
