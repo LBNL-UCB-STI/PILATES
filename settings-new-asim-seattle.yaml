@@ -8,7 +8,7 @@
 region: seattle
 scenario: base
 start_year: 2017
-end_year: 2021
+end_year: 2025
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
@@ -26,7 +26,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   activitysim: docker://zaneedell/activitysim:0.2.5
-  beam: docker://zaneedell/beam:1.0.8
+  beam: docker://zaneedell/beam:1.0.11
   polaris:
 
 # docker settings
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: new-asim-new-map-fast
+output_run_name: new-asim-new-map-v5
 
 # URBANSIM
 region_to_region_id:
@@ -108,13 +108,13 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "240g"
+beam_memory: "180g"
 skim_zone_source_id_col: objectid
 replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False
-max_plans_memory: 3
+max_plans_memory: 5
 final_asim_plans_folder: pilates/activitysim/output/final_plans
 beam_simulated_hwy_paths:
   - SOV
