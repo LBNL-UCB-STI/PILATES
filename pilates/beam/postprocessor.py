@@ -1776,6 +1776,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
             try:
                 data_array = skims_ds[key]
                 data = data_array.values # Load data into memory
+                data[np.isnan(data)] = 0
                 logger.debug(f"Processing variable '{key}' with shape {data.shape}, dtype {data.dtype}.")
 
                 if data_array.ndim == 2:
