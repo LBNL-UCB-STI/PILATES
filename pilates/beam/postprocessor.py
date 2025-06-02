@@ -1776,7 +1776,6 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
             try:
                 data_array = skims_ds[key]
                 data = data_array.values # Load data into memory
-                data[np.isnan(data)] = 0
                 logger.debug(f"Processing variable '{key}' with shape {data.shape}, dtype {data.dtype}.")
 
                 if data_array.ndim == 2:
@@ -1787,7 +1786,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                          continue
 
                     # Write 2D matrix directly
-                    new_omx_file[key] = data
+                    new_omx_file[key] = np.nan_to_num()
                     logger.debug(f"  Wrote 2D matrix '{key}'")
                     written_count += 1
 
@@ -1806,7 +1805,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                     for t_idx, tp in enumerate(time_periods):
                         new_key = f"{key}__{tp}" # Standard OMX format for 3D -> 2D slices
                         slice_data = data[:, :, t_idx]
-                        new_omx_file[new_key] = slice_data
+                        new_omx_file[new_key] = np.nan_to_num(slice_data)
                         # logger.debug(f"  Wrote slice '{new_key}'") # Too verbose for debug
                         strsplit = key.rsplit('_',1)
                         new_omx_file[new_key].attrs['measure'] = strsplit[-1]
