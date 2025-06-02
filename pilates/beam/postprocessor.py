@@ -1723,16 +1723,16 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
 
         # --- Get Zone IDs and Time Periods from Zarr coordinates ---
-        # ActivitySim Zarr skims typically have 'origin' and 'time_period' coordinates
+        # ActivitySim Zarr skims typically have 'otaz' and 'time_period' coordinates
         zone_ids = None
-        if 'origin' in skims_ds.coords:
+        if 'otaz' in skims_ds.coords:
              # Ensure zone_ids are integers compatible with OMX mapping
-             zone_ids = skims_ds.coords['origin'].values
+             zone_ids = skims_ds.coords['otaz'].values
              # Convert to a basic list or array type that openmatrix likes, if necessary
              # numpy array should be fine
              logger.info(f"Retrieved {len(zone_ids)} zone IDs from Zarr coordinates.")
         else:
-             logger.warning("Zarr skims file does not have 'origin' coordinate. Zone mapping will NOT be added to OMX.")
+             logger.warning("Zarr skims file does not have 'otaz' coordinate. Zone mapping will NOT be added to OMX.")
 
         time_periods = []
         if 'time_period' in skims_ds.coords:
@@ -1770,7 +1770,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
         written_count = 0
         for key in skims_ds.data_vars: # Iterate through data variables
             if key in exclude_tables:
-                logger.debug(f"Skipping excluded variable: {key}")
+                logger.info(f"Skipping excluded variable: {key}")
                 continue
 
             try:
