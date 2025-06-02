@@ -1786,7 +1786,7 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                          continue
 
                     # Write 2D matrix directly
-                    new_omx_file[key] = np.nan_to_num()
+                    new_omx_file[key] = np.nan_to_num(data)
                     logger.debug(f"  Wrote 2D matrix '{key}'")
                     written_count += 1
 
