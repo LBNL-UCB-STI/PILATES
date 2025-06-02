@@ -1807,6 +1807,11 @@ def write_zarr_skim_as_omx(all_skims_path, settings, new_skim_name, exclude_tabl
                         slice_data = data[:, :, t_idx]
                         new_omx_file[new_key] = slice_data
                         # logger.debug(f"  Wrote slice '{new_key}'") # Too verbose for debug
+                        strsplit = key.rsplit('_',1)
+                        new_omx_file[new_key].attrs['measure'] = strsplit[-1]
+                        new_omx_file[new_key].attrs['timePeriod'] = tp
+                        if len(strsplit) == 2:
+                            new_omx_file[new_key].attrs['mode'] = strsplit[0]
                         written_count += 1
                     logger.debug(f"  Wrote {len(time_periods)} slices for 3D variable '{key}'")
 
