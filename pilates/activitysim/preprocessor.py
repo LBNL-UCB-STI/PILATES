@@ -1889,7 +1889,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_sha
             settings['skim_zone_geoid_col'],
             settings['skim_zone_source_id_col']))
         zones = gpd.read_file(beam_shape_location)
-        zones[settings['skim_zone_source_id_col']] = zones[settings['skim_zone_geoid_col']].map(mapping)
+        zones[settings['skim_zone_source_id_col']] = zones[settings['skim_zone_geoid_col']].astype(str).map(mapping)
         logger.info("Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(beam_shape_location))
         zones.to_file(beam_shape_location)
 
@@ -1940,7 +1940,7 @@ def create_asim_data_from_h5(
     # update blocks
     blocks_cols = blocks.columns.tolist()
     blocks_to_taz_mapping_updated, blocks = _update_blocks_table(
-        settings, state.forecast_year, blocks, households, jobs, input_zone_id_col)
+        settings, state.forecast_year, blocks, households, jobs, 'zone_id')
     input_zone_id_col = "{0}_zone_id".format(zone_type)
     if blocks_to_taz_mapping_updated:
         logger.info(
