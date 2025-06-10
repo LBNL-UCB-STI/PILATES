@@ -39,7 +39,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     if 'beam_skims_shapefile' in settings:
         logger.info("Updating beam config to use zone id of {0}".format(settings['skim_zone_geoid_col']))
         update_beam_config(settings,
-                           os.path.split(output_dir)[0],
+                           os.path.split(os.path.split(os.path.split(output_dir)[0])[0])[0], # Sorry...
                            'skim_zone_geoid_col',
                            settings['skim_zone_geoid_col'])
 
