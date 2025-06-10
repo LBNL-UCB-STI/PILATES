@@ -103,7 +103,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 # BEAM 
 beam_config: seattle-pilates.conf # OR austin-pilates-base.conf
 beam_skims_shapefile: shape/block-groups-32048.shp
-skim_zone_source_id_col: mapped_zone
+skim_zone_source_id_col: sk_zone
 skim_zone_geoid_col: geoid10
 beam_sample: 1.0
 beam_replanning_portion: 0.4

@@ -1890,6 +1890,7 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_sha
             settings['skim_zone_source_id_col']))
         zones = gpd.read_file(beam_shape_location)
         zones[settings['skim_zone_source_id_col']] = zones[settings['skim_zone_geoid_col']].map(mapping)
+        logger.info("Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(beam_shape_location))
         zones.to_file(beam_shape_location)
 
 
