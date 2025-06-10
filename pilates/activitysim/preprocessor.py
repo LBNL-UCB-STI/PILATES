@@ -1808,6 +1808,11 @@ def copy_data_to_mutable_location(settings, folder_path):
     mutable_skims_location = os.path.join(input_dir, "skims.omx")
 
     beam_geoms_location = os.path.join(beam_input_dir, region, beam_router_directory, beam_geoms_fname)
+    if 'beam_skims_shapefile' in settings:
+        beam_shape_location = os.path.join(beam_input_dir, region, settings['beam_skims_shapefile'])
+    else:
+        logger.warning("Not updating zone_id in beam shapefile, make sure it is correct")
+        beam_shape_location = None
 
     # TODO: Handle exception when these dont exist
 
@@ -1849,18 +1854,17 @@ def copy_data_to_mutable_location(settings, folder_path):
     logger.info("Moving asim configs from {0} to {1}".format(configs_source_dir, configs_dest_dir))
     shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
 
-    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
+    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_shape_location)
 
 
-def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
+def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_shape_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
     zone_type = settings['skims_zone_type'].lower()
     zone_id_col = zone_type_column[zone_type]
+    mapping = geoid_to_zone_map(settings, settings['start_year'])
 
     if zone_id_col not in beam_geoms_file.columns:
-
-        mapping = geoid_to_zone_map(settings, settings['start_year'])
 
         if zone_type == 'block':
             logger.info("Mapping block IDs")
@@ -1879,6 +1883,14 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
             logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
 
     beam_geoms_file.to_csv(asim_geoms_location)
+
+    if beam_shape_location is not None:
+        logger.info("Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
+            settings['skim_zone_geoid_col'],
+            settings['skim_zone_source_id_col']))
+        zones = gpd.read_file(beam_shape_location)
+        zones[settings['skim_zone_source_id_col']] = zones[settings['skim_zone_geoid_col']].map(mapping)
+        zones.to_file(beam_shape_location)
 
 
 def create_asim_data_from_h5(

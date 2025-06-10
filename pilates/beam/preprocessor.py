@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 beam_param_map = {'beam_sample': 'beam.agentsim.agentSampleSizeAsFractionOfPopulation',
                   'beam_replanning_portion': 'beam.agentsim.agents.plans.merge.fraction',
-                  'max_plans_memory': 'beam.replanning.maxAgentPlanMemorySize'
+                  'max_plans_memory': 'beam.replanning.maxAgentPlanMemorySize',
+                  'gdf_zone_column': 'beam.agentsim.taz.tazIdFieldName',
                   }
 
 
@@ -35,6 +36,12 @@ def copy_data_to_mutable_location(settings, output_dir):
     shutil.copytree(beam_config_path, dest)
     common_config_path = os.path.join(settings['beam_local_input_folder'], 'common')
     shutil.copytree(common_config_path, os.path.join(output_dir, 'common'))
+    if 'beam_skims_shapefile' in settings:
+        logger.info("Updating beam config to use zone id of {0}".format(settings['skim_zone_geoid_col']))
+        update_beam_config(settings,
+                           os.path.split(output_dir)[0],
+                           'gdf_zone_column',
+                           settings['skim_zone_geoid_col'])
 
 
 def update_beam_config(settings, working_dir, param, valueOverride=None):
