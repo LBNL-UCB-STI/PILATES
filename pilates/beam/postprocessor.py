@@ -801,10 +801,6 @@ def _transform_measure(input_vals, completed, failed, measure, path, transit_sca
 
     # Handle measures that need scaling
     if measure in measures_is_scaled_for_transit:
-        # TNC IWAIT filling, DDIST, TOTIVT for TNC/RH are handled in post-processing, not here
-        # This function is for the initial merge/transfer based on *observed* data.
-        # The interpolation/filling logic is separate.
-        # So, apply basic scaled assignment where completed > 0 and input is valid.
         return basic_mask, input_vals[basic_mask] * scaling, None
 
     # Handle travel time measures with penalty logic (only TOTIVT/IVT) for NON-TNC/RH
@@ -822,20 +818,11 @@ def _transform_measure(input_vals, completed, failed, measure, path, transit_sca
                  # Apply penalty logic for non-TNC/RH modes (like transit)
                  to_cancel = (failed > 5) & (failed > (1 * completed))
 
-                 # To penalize: failed > completed, NOT canceled, valid input, and some completed trips
-                 to_penalize = (failed > completed) & ~to_cancel & valid & completed_mask
-
                  # To allow: NOT canceled, NOT penalized, valid input, and some completed trips
-                 to_allow = valid & completed_mask & ~to_cancel & ~to_penalize
+                 to_allow = valid & completed_mask & ~to_cancel
 
                  # Prepare result values for cells to update
                  result_vals = np.zeros_like(input_vals[basic_mask]) # Only allocate for cells covered by basic_mask
-
-                 # Apply penalty where needed (within the basic_mask)
-                 mask_penalize_subset = to_penalize[basic_mask] # Subset of basic_mask that is also to_penalize
-                 if mask_penalize_subset.any():
-                     penalty_factor = (failed[basic_mask][mask_penalize_subset] + 1) / (completed[basic_mask][mask_penalize_subset] + 1)
-                     result_vals[mask_penalize_subset] = input_vals[basic_mask][mask_penalize_subset] * penalty_factor * scaling
 
                  # Use regular values where allowed (within the basic_mask)
                  mask_allow_subset = to_allow[basic_mask] # Subset of basic_mask that is also to_allow
@@ -862,9 +849,6 @@ def _transform_measure(input_vals, completed, failed, measure, path, transit_sca
     # TNC FAR and REJECTIONPROB are handled in post-processing
     elif measure not in ["REJECTIONPROB", "FAR"]: # Exclude measures handled in post-processing
          if path.startswith("TNC_") or path.startswith("RH_"):
-             # For TNC/RH, these are either interpolated (DDIST/TOTIVT handled above)
-             # or just assigned directly if observed (COST, non-interpolated DDIST/TOTIVT).
-             # Let's include COST here for TNC/RH - it's a direct transfer where observed.
              if measure == "COST":
                   # For TNC/RH COST, simple assignment where completed > 0
                   return basic_mask, input_vals[basic_mask], None
@@ -964,14 +948,6 @@ def _merge_one_zarr_measure(partialSkims, skims_ds, path, measure, timePeriods, 
                 current_slice = target_da.data[:, :, tpIdx]
                 if mask_update.any():
                     current_slice[mask_update] = vals_update
-                    # Optional: Log weighted average change for this slice/period
-                    # weights = completed_tp[mask_update]
-                    # if weights.sum() > 0:
-                    #      before_vals = current_slice[mask_update]
-                    #      after_vals = vals_update
-                    #      weighted_avg_before = np.average(before_vals, weights=weights)
-                    #      weighted_avg_after = np.average(after_vals, weights=weights)
-                    #      logger.debug(f"  {tp}: Wtd Avg Change for {target_var_name}: {weighted_avg_before:.2f} -> {weighted_avg_after:.2f}")
 
 
                 # Handle cancellations for IVT/TOTIVT
@@ -998,16 +974,17 @@ def _merge_one_zarr_measure(partialSkims, skims_ds, path, measure, timePeriods, 
 def _merge_zarr_trip_counts(allSkims, path, completed, failed):
     key_completed = f"{path}_TRIPS"
     key_failed = f"{path}_FAILURES"
+    any_observed = (completed + failed) > 0
     # Ensure keys exist before attempting to access .data
     if key_completed in allSkims and key_failed in allSkims:
         prev_completed = np.nan_to_num(allSkims[key_completed].data)
         prev_failed = np.nan_to_num(allSkims[key_failed].data)
-        logger.info(f"For {path} previously had {prev_completed.sum():.0f} completed trips and {prev_failed.sum():.0f} failed trips")
-        prev_completed += completed
-        prev_failed += failed
+        logger.info(f"For {path} previously had {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips")
+        prev_completed[any_observed] = 0.5 * prev_completed[any_observed] + completed[any_observed]
+        prev_failed[any_observed] = 0.5 * prev_completed[any_observed] + failed[any_observed]
         allSkims[key_completed].data[:] = prev_completed # Use [:] to modify data in place
         allSkims[key_failed].data[:] = prev_failed # Use [:] to modify data in place
-        logger.info(f"Now we have {prev_completed.sum():.0f} completed trips and {prev_failed.sum():.0f} failed trips")
+        logger.info(f"Now we have {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips")
     else:
         logger.warning(f"Skipping trip counts merge for {path} as {key_completed} or {key_failed} does not exist in target skims file")
 
@@ -1875,13 +1852,6 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
             return None
 
         logger.info("Existing Zarr skims file found, but no new OMX skims to merge. Proceeding with post-processing on existing Zarr if needed.")
-        # Need to decide if post-processing should run even without new skims. Yes, probably.
-        # We still need to run TNC postprocessing, transit availability, etc.
-        # The rest of this function handles that.
-
-        # The completed_failed_dict and grouped_partial_sources will be empty/None,
-        # so the merging loops will be skipped, but post-processing steps will run
-        # on the existing data in skims_ds.
         partialSkims = None # Ensure partialSkims is None if file not found
 
     else:
@@ -1914,6 +1884,10 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
     if partialSkims:
         completed_failed_dict_all = _accumulate_all_completed_failed_trips(partialSkims, timePeriods)
 
+    for path, (completed, failed) in completed_failed_dict_all.items():
+        _merge_zarr_trip_counts(skims_ds, path, completed, failed)
+
+
 
     # Step 2: Process TNC/RH skims (either consolidate or transfer) and run their specific post-processing
     # This step handles creating/updating TNC_* or RH_* variables in skims_ds and running their post-processing.
@@ -1924,14 +1898,11 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
          # and run postprocessing on consolidated RH modes.
          # If not consolidating, it will transfer provider data and run postprocessing
          # on TNC_* provider modes.
-         tnc_modes_processed = _process_all_tnc_logic(partialSkims, skims_ds, timePeriods, settings, completed_failed_dict_all)
+         try:
+            tnc_modes_processed = _process_all_tnc_logic(partialSkims, skims_ds, timePeriods, settings, completed_failed_dict_all)
+         except AttributeError as e:
+            logger.error(f"Failed to process TNC logic at {all_skims_path}: {e}")
     else:
-         # If no new partial skims, still need to run TNC post-processing on existing Zarr data
-         # This requires completed/failed counts to be available in the Zarr.
-         # This is complex - ideally, trip counts are always merged first.
-         # Let's assume trip counts for TNC/RH are already in skims_ds if partialSkims is None
-         # (e.g., from a previous iteration). We need to reconstruct the completed_failed_dict
-         # from the Zarr data itself in this case.
          logger.warning("No new OMX skims found. Reconstructing TNC/RH trip counts from existing Zarr data for post-processing.")
          tnc_modes_for_postprocess = set()
          all_zarr_vars = list(skims_ds.data_vars)
@@ -1996,7 +1967,7 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
                   # Check if the potential measure is a common one
                   if potential_measure in ["TRIPS", "FAILURES", "REJECTIONPROB", "IWAIT", "XWAIT", "WACC",
                                            "WAUX", "WEGR", "DTIM", "DDIST", "TOTIVT", "FAR", "COST", "DIST", "TIME",
-                                           "TOLL", "KTOLL", "HTOLL", "LTTOLL", "FTTOLL", "VTOLL", "KEYIVT", "FERRYIVT", # Added common measures
+                                           "BTOLL", "VTOLL", "KEYIVT", "FERRYIVT",
                                            ]:
                        measure = potential_measure
                        path = potential_path
@@ -2011,9 +1982,6 @@ def merge_current_zarr_od_skims(all_skims_path, beam_output_dir, settings, overr
                  # If consolidation was on, TNC_* and RH_* were handled by _process_all_tnc_logic
                  # If consolidation was off, TNC_* were handled by _process_all_tnc_logic
                  # In either case, skip them here.
-                 # Unless it's a consolidated RH_ mode created *in this step* and needs standard merge?
-                 # No, the RH_ modes created by consolidate should *not* go through the generic merge.
-                 # The post-processing function handles RH_ specific calculations *after* consolidation.
                  if consolidate_tnc_fleets:
                       # If consolidating, skip original TNC provider paths and the new RH paths
                       # Need to check if 'path' is an original provider path or a consolidated RH path
