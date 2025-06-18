@@ -17,7 +17,7 @@ class WorkflowState:
                   'activity_demand_directly_from_land_use', 'traffic_assignment', 'traffic_assignment_replan'])
 
     def __init__(self, start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
-                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iteration,
+                 activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage, iteration, sub_iteration,
                  output_path, folder_name, file_loc, asim_compiled=False):
         self.iteration_started = False
         self.start_year = start_year
@@ -26,6 +26,7 @@ class WorkflowState:
         self.year = year
         self.stage = stage
         self.iteration = iteration
+        self.sub_iteration = sub_iteration # Added sub_iteration tracking
         self.forecast_year = None
         self.enabled_stages = set([])
         self.folder_name = folder_name
@@ -111,9 +112,9 @@ class WorkflowState:
         print('STOP')
 
     @classmethod
-    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration, asim_compiled):
+    def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration, sub_iteration, asim_compiled):
         to_save = {"year": year, "stage": current_stage.name if current_stage else None, "path": path,
-                   "folder_name": folder_name, "iteration": iteration, "asim_compiled": asim_compiled}
+                   "folder_name": folder_name, "iteration": iteration, "sub_iteration": sub_iteration, "asim_compiled": asim_compiled} # Added sub_iteration to save
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -121,18 +122,19 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, None, None, None, False]
+            return [None, None, 0, None, None, 0, False] # Added default sub_iteration
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
             year = data.get('year', None)
             stage_str = data.get('stage', 'null')
-            stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
-            path = data.get('path', None)
-            folder_name = data.get('folder_name', None)
-            iteration = data.get('iteration', 0) or 0
-            asim_compiled = data.get('asim_compiled', False)
-            return [year, stage, iteration, path, folder_name, asim_compiled]
+        stage = None if stage_str == 'null' else WorkflowState.Stage[stage_str]
+        path = data.get('path', None)
+        folder_name = data.get('folder_name', None)
+        iteration = data.get('iteration', 0) or 0
+        sub_iteration = data.get('sub_iteration', 0) or 0 # Added reading sub_iteration
+        asim_compiled = data.get('asim_compiled', False)
+        return [year, stage, iteration, path, folder_name, sub_iteration, asim_compiled] # Added sub_iteration to return
 
     @classmethod
     def from_settings(cls, settings):
@@ -146,13 +148,13 @@ class WorkflowState:
         replanning_enabled = settings['replanning_enabled']
         file_loc = settings['state_file_loc']
         copy_files = settings.get("copy_files", True)
-        [year, stage, iteration, path, folder_name, asim_compiled] = cls.read_current_stage(file_loc)
+        [year, stage, iteration, path, folder_name, sub_iteration, asim_compiled] = cls.read_current_stage(file_loc) # Added sub_iteration
         if year:
             logger.info("Found unfinished run: year=%s, stage=%s, filename=%s)", year, stage, file_loc)
         year = year or start_year
         out = WorkflowState(start_year, end_year, travel_model_freq, land_use_enabled, vehicle_ownership_model_enabled,
                             activity_demand_enabled, traffic_assignment_enabled, replanning_enabled, year, stage,
-                            iteration, path, folder_name, file_loc, asim_compiled)
+                            iteration, sub_iteration, path, folder_name, file_loc, asim_compiled) # Added sub_iteration
         if ((path is None) | (folder_name is None)) & copy_files:
             out._create_output_dir(settings)
         if not copy_files:
@@ -199,16 +201,18 @@ class WorkflowState:
         self.stage = None
         [year, next_stage] = self.next_stage(self.year, stage)
         if year:
-            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0,
-                                      self.__asim_compiled)
+            # When moving to the next stage/year, reset iteration and sub_iteration
+            WorkflowState.write_stage(year, next_stage, self.file_loc, self.output_path, self.folder_name, 0, 0,
+                                      self.__asim_compiled) # Reset iteration and sub_iteration
         else:
             os.remove(self.file_loc)
 
     def complete_iteration(self, iteration):
         logger.info("Completed iteration %d of stage %s of %d", iteration, self.stage, self.year)
         self.iteration += 1
+        # When completing an iteration, reset sub_iteration
         WorkflowState.write_stage(self.year, self.stage, self.file_loc, self.output_path, self.folder_name,
-                                  self.iteration, self.__asim_compiled)
+                                  self.iteration, 0, self.__asim_compiled) # Reset sub_iteration
 
     def next_stage(self, year: int, stage: Stage):
         next_enabled_stage = next(filter(self.enabled, list(WorkflowState.Stage)[stage.value:]), None)

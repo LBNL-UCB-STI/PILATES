@@ -111,6 +111,7 @@ beam_scenario_folder: urbansim/
 beam_memory: "200g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
+supply_demand_iters: 5 # Added setting for supply-demand iterations
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False

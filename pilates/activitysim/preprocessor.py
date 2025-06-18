@@ -1793,10 +1793,12 @@ def _create_land_use_table(
 
 
 def copy_data_to_mutable_location(settings, folder_path):
-    input_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
-    os.makedirs(input_dir, exist_ok=True)
-    region = settings['region']
-    beam_input_dir = settings['beam_local_input_folder']
+    if not settings.get('use_stubs'):
+    if not settings.get('use_stubs'):
+        input_dir = os.path.join(folder_path, settings['asim_local_mutable_data_folder'])
+        os.makedirs(input_dir, exist_ok=True)
+        region = settings['region']
+        beam_input_dir = settings['beam_local_input_folder']
     beam_output_dir = settings['beam_local_output_folder']
     skims_fname = settings['skims_fname']
     origin_skims_fname = settings['origin_skims_fname']
@@ -1858,6 +1860,7 @@ def copy_data_to_mutable_location(settings, folder_path):
 
 
 def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_shape_location):
+    endif
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
     zone_type = settings['skims_zone_type'].lower()
