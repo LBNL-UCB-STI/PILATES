@@ -285,7 +285,7 @@ def warm_start_activities(settings, year, client):
             activity_demand_model).upper())
         ws_asim_cmd = base_asim_cmd + ' -w'  # warm start flag
 
-        run_container(client, settings, activity_demand_image, asim_docker_vols, ws_asim_cmd, working_dir=asim_workdir)
+        run_container(client, settings, activity_demand_image, asim_docker_vols, ws_asim_cmd, working_dir=asim_workdir, model_name=activity_demand_model)
 
         # 4. UPDATE URBANSIM BASE YEAR INPUT DATA
         logger.info((
@@ -349,7 +349,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
             year, forecast_year, land_use_model))
     formatted_print(print_str)
     run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd,
-                  working_dir=settings['usim_client_base_folder'])
+                  working_dir=settings['usim_client_base_folder'], model_name=land_use_model)
     logger.info('Done!')
 
     return
@@ -426,7 +426,7 @@ def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast
         "with frequency {1}, npe {2} nsample {3} beamac {4}".format(
             yr, freq, npe, nsample, beamac))
     formatted_print(print_str)
-    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/')
+    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/', model_name=vehicle_ownership_model)
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
     atlas_post.atlas_update_h5_vehicle(settings, yr, state, warm_start=warm_start_atlas)
@@ -552,7 +552,8 @@ def generate_activity_plans(
                           working_dir=asim_workdir,
                           volumes=asim_docker_vols,
                           command=asim_cmd,
-                          args=additional_args)
+                          args=additional_args,
+                          model_name=activity_demand_model)
             logger.info("ASIM Compilation success: {0}".format(success))
             # if not success:
             #     raise RuntimeError("ASim Compilation failed")
@@ -570,7 +571,8 @@ def generate_activity_plans(
                       working_dir=asim_workdir,
                       volumes=asim_docker_vols,
                       command=asim_cmd,
-                      args=additional_args)
+                      args=additional_args,
+                      model_name=activity_demand_model)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -676,7 +678,8 @@ def run_traffic_assignment(
                 'JAVA_OPTS': (
                     '-Xmx{0}'.format(beam_memory))},
             working_dir='/app',
-            command="--config={0}".format(path_to_beam_config)
+            command="--config={0}".format(path_to_beam_config),
+            model_name="beam"
         )
 
         # 4. POSTPROCESS
@@ -786,7 +789,8 @@ def initialize_asim_for_replanning(settings, forecast_year):
         run_container(client, settings,
                       activity_demand_image, working_dir=asim_workdir,
                       volumes=asim_docker_vols,
-                      command=base_asim_cmd)
+                      command=base_asim_cmd,
+                      model_name= activity_demand_model)
 
 
 def run_replanning_loop(state: WorkflowState):
@@ -825,7 +829,8 @@ def run_replanning_loop(state: WorkflowState):
             settings,
             activity_demand_image, working_dir=asim_workdir,
             volumes=asim_docker_vols,
-            command=base_asim_cmd + ' -r ' + last_asim_step)
+            command=base_asim_cmd + ' -r ' + last_asim_step,
+            model_name=activity_demand_model)
 
         # e) run BEAM
         if replanning_iteration_number < replan_iters:
@@ -870,7 +875,7 @@ def to_singularity_env(env):
 
 
 def run_container(client, settings: dict, image: str, volumes: dict, command: str,
-                  working_dir=None, environment=None, args=None) -> bool:
+                  working_dir=None, environment=None, args=None, model_name=None) -> bool:
     """
     Executes container using docker or singularity
     :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
@@ -924,14 +929,14 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
                 'python',
                 'tests/stubs/run_stub.py',
                 '--model_name', model_name,
-                '--cwd', cwd,
-                '--config_name', config_name
+                '--cwd', os.getcwd(),
+                '--config_name', command
             ]
-            logger.info(f"Using stub for {model_name}. Running stub command: {' '.join(stub_cmd)}")
+            logger.info(f"Using stub for {image}. Running stub command: {' '.join(stub_cmd)}")
             result = subprocess.run(stub_cmd, check=True)
         else:
             result = subprocess.run(proc)
-        logger.info(f"Finished running {container_name}")
+        logger.info(f"Finished running {image}")
         return str(result) == "0"
 
 

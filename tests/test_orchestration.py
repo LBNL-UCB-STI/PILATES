@@ -25,6 +25,8 @@ EXPECTED_STUB_OUTPUTS = {
     'beam': 'beam_output.csv.gz',
 }
 
+os.chdir("../")
+
 def run_pilates_with_settings(settings_file):
     """Runs the pilates run.py script with the given settings file."""
     print(f"\nRunning run.py with settings: {settings_file}")

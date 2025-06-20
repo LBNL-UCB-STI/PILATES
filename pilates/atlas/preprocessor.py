@@ -9,8 +9,8 @@ import openmatrix as omx
 import pandas as pd
 import yaml
 
-with open('settings.yaml') as file:
-    settings = yaml.load(file, Loader=yaml.FullLoader)
+# with open('settings.yaml') as file:
+#     settings = yaml.load(file, Loader=yaml.FullLoader)
 
 logger = logging.getLogger(__name__)
 
