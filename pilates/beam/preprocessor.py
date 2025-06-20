@@ -289,7 +289,7 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
         logging.info(f"- Beam scenario folder: {beam_scenario_folder}")
         logging.info(f"- ASIM output data directory: {asim_output_data_dir}")
         file_format = settings.get("file_format", "parquet")
-        if replanning_iteration_number < 0:
+        if replanning_iteration_number <= 0:
             copy_with_compression_asim_file_to_beam('plans', 'plans', file_format)
             copy_with_compression_asim_file_to_beam('households', 'households', file_format)
             copy_with_compression_asim_file_to_beam('persons', 'persons', file_format)
