@@ -238,11 +238,12 @@ def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen
     return atlas_cmd
 
 
-def warm_start_activities(settings, year, client):
+def warm_start_activities(settings, state: WorkflowState, client):
     """
     Run activity demand models to update UrbanSim inputs with long-term
     choices it needs: workplace location, school location, and
     auto ownership.
+    This runs only in the first year as part of the Land Use stage.
     """
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
@@ -336,6 +337,9 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
                                    settings['asim_local_mutable_data_folder'])
     usim_pre.add_skims_to_model_data(settings, output_dir, asim_output_dir)
 
+    usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
+                                  settings['usim_formattable_input_file_name'].format(
+                                      region_id=settings['region_to_region_id'][settings['region']]))
     if is_already_opened_in_write_mode(usim_data_path):
         logger.warning(
             "Closing h5 files {0} because they were left open. You should really "
@@ -478,12 +482,7 @@ def run_atlas_auto(settings, state: WorkflowState, client, warm_start_atlas, for
     return
 
 
-def generate_activity_plans(
-        settings, year, state: WorkflowState, client,
-        resume_after=None,
-        warm_start=False,
-        overwrite_skims=True,
-        demand_model=None):
+def generate_activity_plans(settings, year, state: WorkflowState, client, resume_after=None, warm_start=False):
     """
     Parameters
 
@@ -494,6 +493,9 @@ def generate_activity_plans(
         is the start year of the whole simulation, then we are probably
         generating warm start activities based on the base year input data in
         order to generate "warm start" skims.
+
+    Note: For the main supply-demand loop (not warm start), this should read
+    data for `state.current_year` (the year the LU model just output)
     """
 
     if settings.get('regenerate_seed', True):
@@ -511,7 +513,6 @@ def generate_activity_plans(
 
         # 1. PARSE SETTINGS
 
-        land_use_model = settings['land_use_model']
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
         asim_workdir = os.path.join('activitysim', asim_subdir)
@@ -524,15 +525,15 @@ def generate_activity_plans(
         # haven't been updated since then so we don't need to re-create them.
         # if year == settings['start_year']:
         #     overwrite_skims = False
-        overwrite_skims = False
+        overwrite_skims_arg = False
 
         # 2. PREPROCESS DATA FOR ACTIVITY DEMAND MODEL
         print_str = "Creating {0} input data from {1} outputs".format(
             activity_demand_model,
-            land_use_model)
+            settings.get('land_use_model', 'UrbanSim Inputs if Land Use Disabled'))
         formatted_print(print_str)
         asim_pre.create_skims_from_beam(
-            settings, state=state, overwrite=overwrite_skims)
+            settings, state=state, overwrite=overwrite_skims_arg)
         asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
 
         # 3. GENERATE ACTIVITY PLANS
@@ -575,10 +576,13 @@ def generate_activity_plans(
                       model_name=activity_demand_model)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
+        # This step is only needed if Land Use model is enabled AND we are not in warm start mode.
+        # It prepares the Urbansim inputs for the *next* LU run.
         # If generating activities for the base year (i.e. warm start),
         # then we don't want to overwrite urbansim input data. Otherwise
         # we want to set up urbansim for the next simulation iteration
-        if (settings['land_use_enabled']) and (not warm_start):
+        if (settings.get('land_use_model') is not None) and (not warm_start):
+            land_use_model = settings.get('land_use_model', 'UrbanSim')
             print_str = (
                 "Generating {0} {1} input data from "
                 "{2} outputs".format(
@@ -592,7 +596,7 @@ def generate_activity_plans(
 
 
 def run_traffic_assignment(
-        settings, year, state: WorkflowState, client, replanning_iteration_number=0):
+        settings, state: WorkflowState, client, iteration_number=0): # Use iteration_number for BEAM
     """
     This step will run the traffic simulation platform and
     generate new skims with updated congested travel times.
@@ -608,6 +612,7 @@ def run_traffic_assignment(
     elif travel_model == 'beam':
         # 1. PARSE SETTINGS
         beam_config = settings['beam_config']
+        year = state.current_year  # Use year from state
         region = settings['region']
         path_to_beam_config = '/app/input/{0}/{1}'.format(region, beam_config)
         run_path = state.full_path
@@ -650,7 +655,7 @@ def run_traffic_assignment(
             formatted_print(print_str)
             logger.info("Copying plans from ActivitySim to BEAM")
             beam_pre.copy_plans_from_asim(
-                settings, state, replanning_iteration_number)
+                settings, state, iteration_number)
 
         # 3. RUN BEAM
         logger.info("Starting BEAM container, input: %s, output: %s, config: %s", abs_beam_input, abs_beam_output,
@@ -711,7 +716,7 @@ def run_traffic_assignment(
                 logger.info("ActivitySim is not enabled, skipping skim merging for ActivitySim")
                 # Still check if BEAM produced skims
                 current_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, "omx")
-                if current_od_skims == previous_od_skims and replanning_iteration_number > 0:
+                if current_od_skims == previous_od_skims and iteration_number > 0: # Check for failure in non-first iter
                     logger.error(
                         "BEAM hasn't produced the new skims at {0} for some reason. "
                         "Please check beamLog.out for errors in the directory {1}".format(current_od_skims,
@@ -742,8 +747,8 @@ def run_traffic_assignment(
                 )
                 sys.exit(1)
 
-        logger.info(f"Renaming BEAM output directory for year {year}, iteration {replanning_iteration_number}")
-        beam_post.rename_beam_output_directory(abs_beam_output, settings, year, replanning_iteration_number)
+        logger.info(f"Renaming BEAM output directory for year {year}, iteration {iteration_number}")
+        beam_post.rename_beam_output_directory(abs_beam_output, settings, year, iteration_number)
         logger.info("===== COMPLETED TRAFFIC ASSIGNMENT =====")
 
     return
@@ -771,8 +776,8 @@ def initialize_docker_client(settings):
     return client
 
 
-def initialize_asim_for_replanning(settings, forecast_year):
-    replan_hh_samp_size = settings['replan_hh_samp_size']
+def initialize_asim_for_replanning(settings, state, client, forecast_year):
+    replan_hh_samp_size = settings.get('replan_hh_samp_size', 0)
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
     region = settings['region']
     asim_subdir = settings['region_to_asim_subdir'][region]
@@ -793,7 +798,7 @@ def initialize_asim_for_replanning(settings, forecast_year):
                       model_name= activity_demand_model)
 
 
-def run_replanning_loop(state: WorkflowState):
+def run_replanning_loop(settings, state: WorkflowState, client):
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
@@ -804,6 +809,8 @@ def run_replanning_loop(state: WorkflowState):
     base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
     docker_stdout = settings.get('docker_stdout', False)
     last_asim_step = settings['replan_after']
+    working_dir = state.full_path
+    year = state.current_year
 
     for i in range(state.iteration, replan_iters):
         replanning_iteration_number = i + 1
@@ -1029,12 +1036,16 @@ if __name__ == '__main__':
     #################################
 
     for year in state:
+        logger.info(f"=== Starting workflow for year {year} ===")
+        logger.info(
+            f"Current state: major_stage={state.current_major_stage}, inner_iter={state.current_inner_iter}, sub_stage={state.current_sub_stage}")
+        logger.info(f"Enabled stages: {[s.name for s in state.enabled_individual_stages]}")
         # 1. FORECAST LAND USE
-        if state.should_do(WorkflowState.Stage.land_use):
+        if state.should_run(WorkflowState.Stage.land_use):
             # Skip if land use model is not enabled
             if not land_use_enabled:
                 logger.info("Skipping land use stage: land use model not enabled")
-                state.complete(WorkflowState.Stage.land_use)
+                state.complete_step(WorkflowState.Stage.land_use)
             else:
                 # hack: make sure that the usim datastore isn't open
                 usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
@@ -1051,89 +1062,87 @@ if __name__ == '__main__':
                     # IF ATLAS ENABLED, UPDATE USIM INPUT H5
                     if vehicle_ownership_model_enabled:
                         run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                    warm_start_activities(settings, year, client)
+                    warm_start_activities(settings, state, client)  # Fixed: pass state instead of year
 
                 # 1b. RUN LAND USE SIMULATION
                 forecast_land_use(settings, year, state, client, container_manager)
-                state.complete(WorkflowState.Stage.land_use)
+                state.complete_step(WorkflowState.Stage.land_use)
 
-        # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
-        for iteration in range(settings.get('supply_demand_iters', 1)):
-            # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
-            if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
-                if state.forecast_year > 2017:
-                    # If the forecast year is the same as the base year of this
-                    # iteration, then land use forecasting has not been run. In this
-                    # case, atlas need to update urbansim *inputs* before activitysim
-                    # reads it in the next step.
-                    if state.forecast_year == year:
-                        run_atlas_auto(settings, state, client, warm_start_atlas=True)
+        # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP) - Outside supply-demand loop
+        if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
+            if not vehicle_ownership_model_enabled:
+                logger.info("Skipping vehicle ownership model: not enabled in settings")
+                state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+            elif state.forecast_year > 2017:
+                # If the forecast year is the same as the base year of this
+                # iteration, then land use forecasting has not been run. In this
+                # case, atlas need to update urbansim *inputs* before activitysim
+                # reads it in the next step.
+                if state.forecast_year == year:
+                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
 
-                    # If urbansim has been called, ATLAS will read, run, and update
-                    # vehicle ownership info in urbansim *outputs* h5 datastore.
-                    elif state.is_start_year():
-                        run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                        run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+                # If urbansim has been called, ATLAS will read, run, and update
+                # vehicle ownership info in urbansim *outputs* h5 datastore.
+                elif state.is_start_year():
+                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
+                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+                else:
+                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
+            else:
+                logger.info("Skipping atlas in year {0} because we can't start until 2017".format(state.year))
+            state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+
+        # 3. SUPPLY-DEMAND LOOP - Run multiple iterations for the same year
+        if state.should_run(WorkflowState.Stage.supply_demand_loop):
+            for iteration in range(settings.get('supply_demand_iters', 1)):
+                logger.info(
+                    f"Starting supply-demand iteration {iteration + 1} of {settings.get('supply_demand_iters', 1)} for year {year}")
+
+                # 3a. GENERATE ACTIVITIES
+                if state.should_run(WorkflowState.Stage.activity_demand, iteration,
+                                    WorkflowState.Stage.activity_demand):
+                    activity_demand_model = settings.get('activity_demand_model', None)
+                    if activity_demand_model and activity_demand_enabled:
+                        generate_activity_plans(settings, year, state, client,
+                                                warm_start=warm_start_skims or not land_use_enabled)
                     else:
-                        run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
-                else:
-                    logger.info("Skipping atlas in year {0} because we can't start until 2017".format(state.year))
-                state.complete(WorkflowState.Stage.vehicle_ownership_model)
+                        logger.info("Skipping activity demand generation: activity demand model not enabled")
 
-            # 3. GENERATE ACTIVITIES
-            if state.should_do(WorkflowState.Stage.activity_demand):
-                activity_demand_model = settings.get('activity_demand_model', None)
-                if activity_demand_model and activity_demand_enabled:
-                    # If the forecast year is the same as the base year of this
-                    # iteration, then land use forecasting has not been run. In this
-                    # case we have to read from the land use *inputs* because no
-                    # *outputs* have been generated yet. This is usually only the case
-                    # for generating "warm start" skims, so we treat it the same even
-                    # if the "warm_start_skims" setting was not set to True at runtime
-                    generate_activity_plans(
-                        settings, year, state, client, warm_start=warm_start_skims or not land_use_enabled)
-                else:
-                    logger.info("Skipping activity demand generation: activity demand model not enabled or ActivitySim not enabled")
-                # state.complete(WorkflowState.Stage.activity_demand)
+                # 3b. INITIALIZE ASIM FOR REPLANNING IF ENABLED
+                if state.should_run(WorkflowState.Stage.initialize_asim_for_replanning, iteration,
+                                    WorkflowState.Stage.initialize_asim_for_replanning):
+                    activity_demand_model = settings.get('activity_demand_model', None)
+                    if activity_demand_model == 'activitysim' and activity_demand_enabled and replanning_enabled:
+                        initialize_asim_for_replanning(settings, state, client, state.forecast_year)
+                    else:
+                        logger.info("Skipping asim initialization for replanning: conditions not met")
 
-            # 5. INITIALIZE ASIM FOR REPLANNING IF ENABLED
-            # have to re-run asim all the way through on sample to shrink the
-            # cache for use in re-planning, otherwise cache will use entire pop
-            if state.should_do(WorkflowState.Stage.initialize_asim_for_replanning):
-                activity_demand_model = settings.get('activity_demand_model', None)
-                if activity_demand_model == 'activitysim' and activity_demand_enabled and replanning_enabled:
-                    initialize_asim_for_replanning(settings, state.forecast_year)
-                elif not activity_demand_enabled:  # Only run this if activity demand model is disabled
-                    logger.info("Skipping asim initialization for replanning: conditions not met")
-                state.complete(WorkflowState.Stage.initialize_asim_for_replanning, year, iteration)
+                # 3c. DIRECT ACTIVITY FROM LAND USE (alternative to activity_demand)
+                if state.should_run(WorkflowState.Stage.activity_demand_directly_from_land_use, iteration,
+                                    WorkflowState.Stage.activity_demand_directly_from_land_use):
+                    land_use_model = settings.get('land_use_model', False)
+                    if not settings.get('land_use_enabled', False) or not land_use_model:
+                        logger.info("Skipping direct activity generation from land use: land use model not enabled")
+                    else:
+                        usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
 
-            if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
-                # Skip if land use model is not enabled
-                land_use_model = settings.get('land_use_model', False)
-                if not settings.get('land_use_enabled', False) or not land_use_model:
-                    logger.info("Skipping direct activity generation from land use: land use model not enabled")
-                else:
-                    # If not generating activities with a separate ABM (e.g.
-                    # ActivitySim), then we need to create the next iteration of land
-                    # use data directly from the last set of land use outputs.
-                    usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
-            # state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use, year, iteration)
+                # 3d. RUN TRAFFIC ASSIGNMENT
+                if state.should_run(WorkflowState.Stage.traffic_assignment, iteration,
+                                    WorkflowState.Stage.traffic_assignment):
+                    if settings['discard_plans_every_year']:
+                        beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
+                    else:
+                        beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
 
-            # DO traffic assignment - but skip if using polaris as this is done along
-            # with activity_demand generation
-            if state.should_do(WorkflowState.Stage.traffic_assignment):
+                    if vehicle_ownership_model_enabled:
+                        beam_pre.copy_vehicles_from_atlas(settings, state)
 
-                # 4. RUN TRAFFIC ASSIGNMENT
-                if settings['discard_plans_every_year']:
-                    beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
-                else:
-                    beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-                # beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
-                if vehicle_ownership_model_enabled:
-                    beam_pre.copy_vehicles_from_atlas(settings, state)
-                run_traffic_assignment(settings, year, state, client, iteration) # Pass the inner loop iteration
-            state.complete(WorkflowState.Stage.traffic_assignment, year, iteration)
+                    run_traffic_assignment(settings, state, client, iteration)
 
+            # Complete the supply-demand loop after all iterations
+            state.complete_step(WorkflowState.Stage.supply_demand_loop)
+
+        # Post-processing after all iterations
         activity_demand_model = settings.get('activity_demand_model', "")
         if (activity_demand_model.lower() == "activitysim") and activity_demand_enabled:
             if settings['file_format'] == "parquet":
@@ -1143,14 +1152,6 @@ if __name__ == '__main__':
                     current_od_skims = beam_post.trim_inaccessible_ods_zarr(asim_skims_path, settings)
                 except Exception as e:
                     logger.error(f"Error trimming inaccessible ODs: {e}")
-            else:
-                # Also need to complete the stage group after the loop finishes.
-                # The last stage run in the loop group for this config is traffic_assignment.
-                # If traffic_assignment was enabled and run, complete traffic_assignment.
-                if traffic_assignment_enabled:
-                    state.complete(WorkflowState.Stage.traffic_assignment)  # Complete the group for the year
-
-                pass # original code had this pass, keeping it here
 
         beam_post.trim_inaccessible_ods(settings, working_dir)
 
