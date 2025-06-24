@@ -799,6 +799,11 @@ def initialize_asim_for_replanning(settings, state, client, forecast_year):
 
 
 def run_replanning_loop(settings, state: WorkflowState, client):
+    """
+    NOTE: This is currently not supported because it 1) isn't possible to reliably only run ASim on a sample of
+    households, and 2) doesn't save much time or computation. Leaving it in here for now in case we want to revisit
+    """
+    raise NotImplementedError
     replan_iters = settings['replan_iters']
     replan_hh_samp_size = settings['replan_hh_samp_size']
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
@@ -846,7 +851,7 @@ def run_replanning_loop(settings, state: WorkflowState, client):
         # else:
         #    beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
         run_traffic_assignment(
-            settings, year, state, client, replanning_iteration_number)
+            settings, state, client, replanning_iteration_number)
 
     return
 
