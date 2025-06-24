@@ -45,28 +45,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def clean_and_init_data():
-    usim_path = os.path.abspath('pilates/urbansim/data')
-    if os.path.isdir(Path(usim_path) / 'backup'):
-        clean_data(usim_path, '*.h5')
-        clean_data(usim_path, '*.txt')
-        init_data(usim_path, '*.h5')
-
-    polaris_path = os.path.abspath('pilates/polaris/data')
-    if os.path.isdir(Path(polaris_path) / 'backup'):
-        clean_data(polaris_path, '*.hdf5')
-        init_data(polaris_path, '*.hdf5')
-
-
-def clean_data(path, wildcard):
-    search_path = Path(path) / wildcard
-    filelist = glob.glob(str(search_path))
-    for filepath in filelist:
-        try:
-            os.remove(filepath)
-        except:
-            logger.error("Error whie deleting file : {0}".format(filepath))
-
 
 def is_already_opened_in_write_mode(filename):
     if os.path.exists(filename):
@@ -79,12 +57,6 @@ def is_already_opened_in_write_mode(filename):
             logger.warning(str(e))
             return True
     return False
-
-
-def init_data(dest, wildcard):
-    backup_dir = Path(dest) / 'backup' / wildcard
-    for filepath in glob.glob(str(backup_dir)):
-        shutil.copy(filepath, dest)
 
 
 def formatted_print(string, width=50, fill_char='#'):
@@ -768,11 +740,6 @@ def generate_activity_plans(settings, year, state: WorkflowState, client, resume
 
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
-        # This step is only needed if Land Use model is enabled AND we are not in warm start mode.
-        # It prepares the Urbansim inputs for the *next* LU run.
-        # If generating activities for the base year (i.e. warm start),
-        # then we don't want to overwrite urbansim input data. Otherwise
-        # we want to set up urbansim for the next simulation iteration
         if (settings.get('land_use_model') is not None) and (not warm_start):
             land_use_model = settings.get('land_use_model', 'UrbanSim')
             print_str = (
@@ -1074,146 +1041,6 @@ def initialize_docker_client(settings):
     return client
 
 
-def initialize_asim_for_replanning(settings, state, client, forecast_year):
-    replan_hh_samp_size = settings.get('replan_hh_samp_size', 0)
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
-    region = settings['region']
-    asim_subdir = settings['region_to_asim_subdir'][region]
-    asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-    base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
-    docker_stdout = settings.get('docker_stdout', False)
-
-    if replan_hh_samp_size > 0:
-        print_str = (
-            "Re-running ActivitySim on smaller sample size to "
-            "prepare cache for re-planning with BEAM.")
-        formatted_print(print_str)
-
-        # Record ASim replanning init run start
-        asim_init_run_index = state.record_model_start(activity_demand_model, year=state.forecast_year, iteration=0, description="ActivitySim Replanning Initialization")
-
-        success = run_container(client, settings,
-                      activity_demand_image, working_dir=asim_workdir,
-                      volumes=asim_docker_vols,
-                      command=base_asim_cmd,
-                      model_name= activity_demand_model)
-
-        # Record ASim replanning init run completion
-        state.record_model_completion(asim_init_run_index, status="completed" if success else "failed")
-        if not success:
-             logger.error("ActivitySim replanning initialization failed.")
-             sys.exit(1) # Exit if initialization fails
-
-
-def run_replanning_loop(settings, state: WorkflowState, client):
-    """
-    NOTE: This is currently not supported because it 1) isn't possible to reliably only run ASim on a sample of
-    households, and 2) doesn't save much time or computation. Leaving it in here for now in case we want to revisit
-    """
-    raise NotImplementedError
-    replan_iters = settings['replan_iters']
-    replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
-    region = settings['region']
-    asim_subdir = settings['region_to_asim_subdir'][region]
-    asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-    base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
-    docker_stdout = settings.get('docker_stdout', False)
-    last_asim_step = settings['replan_after']
-    working_dir = state.full_path
-    year = state.current_year
-
-    for i in range(state.iteration, replan_iters):
-        replanning_iteration_number = i + 1
-        print_str = (
-            'Replanning Iteration {0}'.format(replanning_iteration_number))
-        formatted_print(print_str)
-
-        if settings.get('regenerate_seed', True):
-            new_seed = random.randint(0, int(1e9))
-            logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-            # Record config input/output for seed update
-            asim_config_path = os.path.join(state.full_path, settings['asim_local_mutable_configs_folder'], settings.get('asim_main_configs_dir', "configs"), 'settings.yaml') # Assuming settings.yaml
-            state.record_input_file(activity_demand_model, asim_config_path, description=f"ActivitySim settings file before seed update (Replanning Iter {replanning_iteration_number})")
-            asim_pre.update_asim_config(settings, state.full_path,"random_seed", new_seed)
-            state.record_output_file(activity_demand_model, asim_config_path, description=f"ActivitySim settings file after seed update (Replanning Iter {replanning_iteration_number})")
-
-
-        # a) format new skims for asim
-        # Record inputs to skims creation (BEAM skims)
-        beam_output_dir = os.path.join(state.full_path, settings['beam_local_output_folder'])
-        # Find the skims from the *previous* BEAM run (which just finished)
-        # This requires finding the specific output folder for the previous iteration (i-1)
-        # Skipping detailed path finding for this example, assuming a known location
-        # For a real implementation, you'd find the actual file path here
-        # For now, just record the expected output location as the input source
-        prev_iter_beam_output_dir = os.path.join(beam_output_dir, f"{settings['region']}-year{state.year}-iter{i}") # Assuming this naming convention
-        prev_iter_beam_skims_path = os.path.join(prev_iter_beam_output_dir, settings['skims_fname'])
-        state.record_input_file(activity_demand_model, prev_iter_beam_skims_path, description=f"BEAM skims from previous iteration ({i}) for ASim replanning skims")
-
-        asim_pre.create_skims_from_beam(settings, state, overwrite=False)
-
-        # Record outputs from skims creation (ASim skims)
-        asim_mutable_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-        asim_skims_path = os.path.join(asim_mutable_data_dir, settings['skims_fname'])
-        if os.path.exists(asim_skims_path):
-             state.record_output_file(activity_demand_model, asim_skims_path, year=state.forecast_year, description=f"ActivitySim skims input file updated for replanning iteration {replanning_iteration_number}")
-
-
-        # b) replan with asim
-        print_str = (
-            "Replanning {0} households with ActivitySim".format(
-                replan_hh_samp_size))
-        formatted_print(print_str)
-
-        # Record ASim replanning run start
-        asim_replan_run_index = state.record_model_start(activity_demand_model, year=state.forecast_year, iteration=replanning_iteration_number, description="ActivitySim Replanning Run")
-
-        success = run_container(
-            client,
-            settings,
-            activity_demand_image, working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=base_asim_cmd + ' -r ' + last_asim_step,
-            model_name=activity_demand_model)
-
-        # Record ASim replanning run completion
-        state.record_model_completion(asim_replan_run_index, status="completed" if success else "failed")
-        if not success:
-             logger.error(f"ActivitySim replanning run {replanning_iteration_number} failed.")
-             sys.exit(1) # Exit if replanning fails
-
-        # Record outputs from ASim replanning run (updated plans, households, persons)
-        asim_output_data_dir = os.path.join(state.full_path, settings['asim_local_output_folder'])
-        file_format = settings.get("file_format", "parquet")
-        asim_plans_path = os.path.join(asim_output_data_dir, "final_pipeline", "beam_plans", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_plans.csv")
-        asim_households_path = os.path.join(asim_output_data_dir, "final_pipeline", "households", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_households.csv")
-        asim_persons_path = os.path.join(asim_output_data_dir, "final_pipeline", "persons", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_persons.csv")
-
-        if os.path.exists(asim_plans_path):
-             state.record_output_file(activity_demand_model, asim_plans_path, year=state.forecast_year, description=f"ActivitySim replanned plans output (Iter {replanning_iteration_number})")
-        if os.path.exists(asim_households_path):
-             state.record_output_file(activity_demand_model, asim_households_path, year=state.forecast_year, description=f"ActivitySim replanned households output (Iter {replanning_iteration_number})")
-        if os.path.exists(asim_persons_path):
-             state.record_output_file(activity_demand_model, asim_persons_path, year=state.forecast_year, description=f"ActivitySim replanned persons output (Iter {replanning_iteration_number})")
-
-
-        # e) run BEAM
-        if replanning_iteration_number < replan_iters:
-            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion')
-            beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-        # else:
-        #    beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
-
-        # run_traffic_assignment call is now wrapped in the main loop for provenance
-        run_traffic_assignment(
-            settings, state, client, replanning_iteration_number)
-
-    return
-
-
 def postprocess_all(settings, state: WorkflowState):
     logger.info("===== STARTING POSTPROCESSING =====")
     # Record Postprocessing stage start
@@ -1464,12 +1291,6 @@ if __name__ == '__main__':
 
 
     logger = logging.getLogger(__name__)
-
-    # Note: clean_and_init_data operates on hardcoded paths relative to run.py location
-    # This might conflict with provenance tracking if output_directory is used.
-    # Consider if this step is necessary or should be conditional/integrated with output_directory logic.
-    # logger.info("Initializing data...")
-    # clean_and_init_data() # Commenting out for now to avoid conflicts with output_directory logic
 
     logger.info("Preparing runtime environment...")
 
