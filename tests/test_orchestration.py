@@ -12,9 +12,9 @@ STUBS_DIR = os.path.join(TEST_DIR, 'stubs')
 
 # Define the paths to the test configuration files
 SETTINGS_FILES = {
+    'landuse_off_replanning_on': os.path.join(os.path.dirname(RUN_SCRIPT), 'settings_test_landuse_off_replanning_on.yaml'),
     'landuse_on_replanning_on': os.path.join(os.path.dirname(RUN_SCRIPT), 'settings_test_landuse_on_replanning_on.yaml'),
     'landuse_on_replanning_off': os.path.join(os.path.dirname(RUN_SCRIPT), 'settings_test_landuse_on_replanning_off.yaml'),
-    'landuse_off_replanning_on': os.path.join(os.path.dirname(RUN_SCRIPT), 'settings_test_landuse_off_replanning_on.yaml'),
 }
 
 # Define expected dummy output files for each model stub
