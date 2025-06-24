@@ -3,17 +3,17 @@ import os
 
 WARM_START_ACTIVITIES = True
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
-    os.chdir('../..')
+    os.chdir("../..")
     from run import warm_start_activities, initialize_docker_client
     from pilates.urbansim import preprocessor as usim_pre
 
-    with open('settings.yaml') as f:
+    with open("settings.yaml") as f:
         settings = yaml.load(f, Loader=yaml.FullLoader)
 
-    settings.update({'docker_stdout': True})
-    year = settings['start_year']
+    settings.update({"docker_stdout": True})
+    year = settings["start_year"]
 
     client = initialize_docker_client(settings)
 

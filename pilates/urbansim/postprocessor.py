@@ -6,36 +6,43 @@ from pilates.utils.io import read_datastore
 logger = logging.getLogger(__name__)
 
 
-def _get_usim_datastore_fname(settings, io, year=None):
-    if io == 'output':
-        datastore_name = settings['usim_formattable_output_file_name'].format(
-            year=year)
-    elif io == 'input':
-        region = settings['region']
-        region_id = settings['region_to_region_id'][region]
-        usim_base_fname = settings['usim_formattable_input_file_name']
+def get_usim_datastore_fname(settings, io, year=None):
+    if io == "output":
+        datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
+    elif io == "input":
+        region = settings["region"]
+        region_id = settings["region_to_region_id"][region]
+        usim_base_fname = settings["usim_formattable_input_file_name"]
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
-        raise ValueError(f"Invalid io parameter: {io}. Must be either 'input' or 'output'")
+        raise ValueError(
+            f"Invalid io parameter: {io}. Must be either 'input' or 'output'"
+        )
 
     return datastore_name
 
 
 def create_next_iter_usim_data(settings, year, forecast_year, full_path):
-    data_dir = settings['usim_local_mutable_data_folder']
+    data_dir = settings["usim_local_mutable_data_folder"]
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
     # it will be overwritten in the next step.
-    input_datastore_name = _get_usim_datastore_fname(settings, io='input')
+    input_datastore_name = get_usim_datastore_fname(settings, io="input")
     input_store_path = os.path.join(data_dir, input_datastore_name)
 
     # First check if urbansim model is activated
-    if settings.get('land_use_model') == 'urbansim':
+    if settings.get("land_use_model") == "urbansim":
         if os.path.exists(input_store_path):
-            archive_fname = 'input_data_for_{0}_outputs.h5'.format(forecast_year)
-            logger.info("Moving urbansim inputs from the previous iteration to {0}".format(archive_fname))
-            new_input_store_path = input_store_path.replace(input_datastore_name, archive_fname)
+            archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
+            logger.info(
+                "Moving urbansim inputs from the previous iteration to {0}".format(
+                    archive_fname
+                )
+            )
+            new_input_store_path = input_store_path.replace(
+                input_datastore_name, archive_fname
+            )
             os.rename(input_store_path, new_input_store_path)
             og_input_store = pd.HDFStore(str(new_input_store_path))
             new_input_store = pd.HDFStore(str(input_store_path))
@@ -47,23 +54,24 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
             # output_store_path = os.path.join(data_dir, output_datastore_name)
 
             # copy usim outputs into new input data store
-            logger.info(
-                'Merging results back into UrbanSim and storing as .h5!')
-            output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=full_path)
+            logger.info("Merging results back into UrbanSim and storing as .h5!")
+            output_store, table_prefix_year = read_datastore(
+                settings, forecast_year, mutable_data_dir=full_path
+            )
 
             for h5_key in output_store.keys():
-                table_name = h5_key.split('/')[-1]
-                if os.path.join('/', table_prefix_year, table_name) == h5_key:
+                table_name = h5_key.split("/")[-1]
+                if os.path.join("/", table_prefix_year, table_name) == h5_key:
                     updated_tables.append(table_name)
                     new_input_store[table_name] = output_store[h5_key]
 
             # copy missing tables from original usim inputs into new input data store
             for h5_key in og_input_store.keys():
-                table_name = h5_key.split('/')[-1]
+                table_name = h5_key.split("/")[-1]
                 if table_name not in updated_tables:
                     logger.info(
-                        "Copying {0} input table to output store!".format(
-                            table_name))
+                        "Copying {0} input table to output store!".format(table_name)
+                    )
                     new_input_store[table_name] = og_input_store[h5_key]
 
             assert new_input_store.keys() == og_input_store.keys()
