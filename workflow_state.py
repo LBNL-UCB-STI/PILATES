@@ -203,13 +203,13 @@ class WorkflowState:
                 if model_name == "beam":
                     input_dir = os.path.join(base_folder_path, settings['beam_local_mutable_data_folder'])
                     os.makedirs(input_dir, exist_ok=True)
-                    beam_pre.copy_data_to_mutable_location(settings, base_folder_path)
+                    beam_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(base_folder_path, settings['beam_local_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                 if model_name == "atlas":
                     input_dir = os.path.join(base_folder_path, settings['atlas_host_mutable_input_folder'])
                     os.makedirs(input_dir, exist_ok=True)
-                    atlas_pre.copy_data_to_mutable_location(settings, base_folder_path)
+                    atlas_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(base_folder_path, settings['atlas_host_output_folder'])
                     os.makedirs(output_dir, exist_ok=True)
                 if model_name == "activitysim":

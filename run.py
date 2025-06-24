@@ -501,7 +501,10 @@ def generate_activity_plans(settings, year, state: WorkflowState, client, resume
     if settings.get('regenerate_seed', True):
         new_seed = random.randint(0, int(1e9))
         logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-        asim_pre.update_asim_config(settings, state.full_path, "random_seed", new_seed)
+        try:
+            asim_pre.update_asim_config(settings, state.full_path, "random_seed", new_seed)
+        except FileNotFoundError:
+            logger.error("Error updating random seed in ASim config. Please check your settings.")
 
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
@@ -1021,7 +1024,10 @@ if __name__ == '__main__':
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
 
     if traffic_assignment_enabled:
-        beam_pre.update_beam_config(settings, state.full_path, 'beam_sample')
+        try:
+            beam_pre.update_beam_config(settings, state.full_path, 'beam_sample')
+        except FileNotFoundError:
+            logger.error("Failed to update beam_config")
 
     if warm_start_skims:
         formatted_print('"WARM START SKIMS" MODE ENABLED')
@@ -1108,30 +1114,23 @@ if __name__ == '__main__':
                                     WorkflowState.Stage.activity_demand):
                     activity_demand_model = settings.get('activity_demand_model', None)
                     if activity_demand_model and activity_demand_enabled:
+                        logger.info(f"Starting activity demand iteration {iteration + 1} for year {year}")
                         generate_activity_plans(settings, year, state, client,
                                                 warm_start=warm_start_skims or not land_use_enabled)
                     else:
                         logger.info("Skipping activity demand generation: activity demand model not enabled")
 
-                # 3b. INITIALIZE ASIM FOR REPLANNING IF ENABLED
-                if state.should_run(WorkflowState.Stage.initialize_asim_for_replanning, iteration,
-                                    WorkflowState.Stage.initialize_asim_for_replanning):
-                    activity_demand_model = settings.get('activity_demand_model', None)
-                    if activity_demand_model == 'activitysim' and activity_demand_enabled and replanning_enabled:
-                        initialize_asim_for_replanning(settings, state, client, state.forecast_year)
-                    else:
-                        logger.info("Skipping asim initialization for replanning: conditions not met")
-
-                # 3c. DIRECT ACTIVITY FROM LAND USE (alternative to activity_demand)
+                # 3b. DIRECT ACTIVITY FROM LAND USE (alternative to activity_demand)
                 if state.should_run(WorkflowState.Stage.activity_demand_directly_from_land_use, iteration,
                                     WorkflowState.Stage.activity_demand_directly_from_land_use):
                     land_use_model = settings.get('land_use_model', False)
                     if not settings.get('land_use_enabled', False) or not land_use_model:
                         logger.info("Skipping direct activity generation from land use: land use model not enabled")
                     else:
+                        logger.info(f"Starting direct activity generation from land use: {land_use_model}")
                         usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
 
-                # 3d. RUN TRAFFIC ASSIGNMENT
+                # 3c. RUN TRAFFIC ASSIGNMENT
                 if state.should_run(WorkflowState.Stage.traffic_assignment, iteration,
                                     WorkflowState.Stage.traffic_assignment):
                     if settings['discard_plans_every_year']:
@@ -1141,7 +1140,7 @@ if __name__ == '__main__':
 
                     if vehicle_ownership_model_enabled:
                         beam_pre.copy_vehicles_from_atlas(settings, state)
-
+                    logger.info(f"Running traffic assignment for iteration {iteration + 1} of year {year}")
                     run_traffic_assignment(settings, state, client, iteration)
 
             # Complete the supply-demand loop after all iterations
