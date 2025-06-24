@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 import os
 import yaml
 import json
@@ -46,7 +46,7 @@ class WorkflowState:
         self.current_sub_stage = sub_stage
 
         self.forecast_year = None
-        self.output_path = output_path
+        self.output_path = os.path.abspath(output_path) if output_path else None
         self.folder_name = folder_name
         self.file_loc = file_loc
         self.run_id = run_id
@@ -298,14 +298,26 @@ class WorkflowState:
         if self.provenance_tracker:
             # Ensure file_path is absolute before passing to tracker
             abs_file_path = os.path.abspath(file_path)
-            self.provenance_tracker.record_input_file(model, abs_file_path, source_run_id, description)
+            if os.path.exists(abs_file_path):
+                self.provenance_tracker.record_input_file(model, abs_file_path, source_run_id, description)
+            else:
+                logger.warning(f"Input file not found: {abs_file_path}")
 
+    def record_model_io_batch(self, model: str, inputs: List[str] = None, outputs: List[str] = None,
+                              year: int = None, input_descriptions: List[str] = None,
+                              output_descriptions: List[str] = None):
+        """Record multiple input and output files for a model in batch."""
+        if self.provenance_tracker:
+            self.provenance_tracker.record_model_io_batch(model, inputs, outputs, year, input_descriptions, output_descriptions)
     def record_output_file(self, model: str, file_path: str, year: int = None, description: str = None):
         """Record an output file for provenance tracking."""
         if self.provenance_tracker:
             # Ensure file_path is absolute before passing to tracker
             abs_file_path = os.path.abspath(file_path)
-            self.provenance_tracker.record_output_file(model, abs_file_path, year, description)
+            if os.path.exists(abs_file_path):
+                self.provenance_tracker.record_output_file(model, abs_file_path, year, description)
+            else:
+                logger.warning(f"Output file not found: {abs_file_path}")
 
     @classmethod
     def write_stage(cls, year: int, current_stage: Stage, file_loc, path, folder_name, iteration, asim_compiled, run_id: str | None):

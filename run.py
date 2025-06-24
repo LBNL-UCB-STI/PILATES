@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_already_opened_in_write_mode(filename):
+    """Check if a file is already opened in write mode."""
     if os.path.exists(filename):
         try:
             f = pd.HDFStore(filename, 'a')
@@ -57,6 +58,22 @@ def is_already_opened_in_write_mode(filename):
             logger.warning(str(e))
             return True
     return False
+
+def record_inputs_and_outputs(state, model, inputs=None, outputs=None, year=None):
+    """Helper function to record inputs and outputs for provenance tracking."""
+    if inputs:
+        for file_path, description in inputs:
+            if os.path.exists(file_path):
+                state.record_input_file(model, file_path, description=description)
+            else:
+                logger.warning(f"Input file not found: {file_path}")
+
+    if outputs:
+        for file_path, description in outputs:
+            if os.path.exists(file_path):
+                state.record_output_file(model, file_path, year=year, description=description)
+            else:
+                logger.warning(f"Output file not found: {file_path}")
 
 
 def formatted_print(string, width=50, fill_char='#'):
@@ -249,30 +266,28 @@ def warm_start_activities(settings, state: WorkflowState, client):
             activity_demand_model,
             land_use_model).upper())
 
-        # Record inputs to ActivitySim warm start preprocessing
+        # Record inputs and outputs for ActivitySim warm start preprocessing
         usim_output_store_name = usim_post.get_usim_datastore_fname(settings, io='output', year=state.forecast_year)
         usim_output_store_path = os.path.join(state.full_path, settings['usim_local_mutable_data_folder'], usim_output_store_name)
-        state.record_input_file(activity_demand_model, usim_output_store_path, description="UrbanSim output for warm start")
+        expected_beam_skims_path = os.path.join(state.full_path, settings['beam_local_output_folder'], settings['skims_fname'])
+
+        record_inputs_and_outputs(state, activity_demand_model, inputs=[
+            (usim_output_store_path, "UrbanSim output for warm start"),
+            (expected_beam_skims_path, "BEAM skims for warm start")
+        ])
 
         if not os.path.exists(os.path.join(state.full_path, settings['asim_local_mutable_data_folder'], 'skims.omx')):
-            # This creates skims from BEAM output, which is an input to ASim
-            beam_output_dir = os.path.join(state.full_path, settings['beam_local_output_folder'])
-            # Need to find the latest BEAM skims file path - this is complex,
-            # skipping detailed path finding for this example, assuming a known location
-            # For a real implementation, you'd find the actual file path here
-            # For now, just record the expected output location as the input source
-            expected_beam_skims_path = os.path.join(beam_output_dir, settings['skims_fname'])
-            state.record_input_file(activity_demand_model, expected_beam_skims_path, description="BEAM skims for warm start")
-
             asim_pre.create_skims_from_beam(settings, state, overwrite=False)
 
         asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
 
-        # Record outputs from ActivitySim warm start preprocessing
         asim_warm_start_persons_path = os.path.join(state.full_path, settings['asim_local_output_folder'], "warm_start_persons.csv")
         asim_warm_start_households_path = os.path.join(state.full_path, settings['asim_local_output_folder'], "warm_start_households.csv")
-        state.record_output_file(activity_demand_model, asim_warm_start_persons_path, year=state.current_year, description="ActivitySim warm start persons output")
-        state.record_output_file(activity_demand_model, asim_warm_start_households_path, year=state.current_year, description="ActivitySim warm start households output")
+
+        record_inputs_and_outputs(state, activity_demand_model, outputs=[
+            (asim_warm_start_persons_path, "ActivitySim warm start persons output"),
+            (asim_warm_start_households_path, "ActivitySim warm start households output")
+        ], year=state.current_year)
 
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
@@ -627,33 +642,31 @@ def generate_activity_plans(settings, year, state: WorkflowState, client, resume
             settings.get('land_use_model', 'UrbanSim Inputs if Land Use Disabled'))
         formatted_print(print_str)
 
-        # Record inputs to ActivitySim preprocessing (UrbanSim output H5 and BEAM skims)
+        # Record inputs and outputs for ActivitySim preprocessing
         usim_output_store_name = usim_post.get_usim_datastore_fname(settings, io='output', year=state.forecast_year)
         usim_output_store_path = os.path.join(state.full_path, settings['usim_local_mutable_data_folder'], usim_output_store_name)
-        state.record_input_file(activity_demand_model, usim_output_store_path, description="UrbanSim output for ActivitySim input preparation")
+        expected_beam_skims_path = os.path.join(state.full_path, settings['beam_local_output_folder'], settings['skims_fname'])
 
-        beam_output_dir = os.path.join(state.full_path, settings['beam_local_output_folder'])
-        # Again, finding the exact skim file path is complex, record the expected location
-        expected_beam_skims_path = os.path.join(beam_output_dir, settings['skims_fname'])
-        state.record_input_file(activity_demand_model, expected_beam_skims_path, description="BEAM skims for ActivitySim input preparation")
+        record_inputs_and_outputs(state, activity_demand_model, inputs=[
+            (usim_output_store_path, "UrbanSim output for ActivitySim input preparation"),
+            (expected_beam_skims_path, "BEAM skims for ActivitySim input preparation")
+        ])
 
 
         asim_pre.create_skims_from_beam(
             settings, state=state, overwrite=overwrite_skims_arg)
         asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
 
-        # Record outputs from ActivitySim preprocessing (ASim input files like persons.csv, households.csv, etc.)
+        # Record outputs from ActivitySim preprocessing
         asim_mutable_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-        asim_input_tables = settings['asim_output_tables']['tables'] # Assuming these are also the input tables created
-        for table_name in asim_input_tables:
-             file_name = f"{settings['asim_output_tables']['prefix']}{table_name}.csv" # Assuming CSV format for inputs
-             file_path = os.path.join(asim_mutable_data_dir, file_name)
-             if os.path.exists(file_path):
-                  state.record_output_file(activity_demand_model, file_path, year=state.forecast_year, description=f"ActivitySim preprocessed input table: {table_name}")
-        # Also record the skims file created/updated
-        asim_skims_path = os.path.join(asim_mutable_data_dir, settings['skims_fname'])
-        if os.path.exists(asim_skims_path):
-             state.record_output_file(activity_demand_model, asim_skims_path, year=state.forecast_year, description="ActivitySim skims input file")
+        asim_input_tables = settings['asim_output_tables']['tables']
+        outputs = [
+            (os.path.join(asim_mutable_data_dir, f"{settings['asim_output_tables']['prefix']}{table_name}.csv"), f"ActivitySim preprocessed input table: {table_name}")
+            for table_name in asim_input_tables
+        ]
+        outputs.append((os.path.join(asim_mutable_data_dir, settings['skims_fname']), "ActivitySim skims input file"))
+
+        record_inputs_and_outputs(state, activity_demand_model, outputs=outputs, year=state.forecast_year)
 
 
         # 3. GENERATE ACTIVITY PLANS
@@ -830,46 +843,44 @@ def run_traffic_assignment(
             formatted_print(print_str)
             logger.info("Copying plans from ActivitySim to BEAM")
 
-            # Record inputs to BEAM input preparation (ASim outputs)
+            # Record inputs for BEAM input preparation
             asim_output_data_dir = os.path.join(state.full_path, settings['asim_local_output_folder'])
             file_format = settings.get("file_format", "parquet")
             asim_plans_path = os.path.join(asim_output_data_dir, "final_pipeline", "beam_plans", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_plans.csv")
             asim_households_path = os.path.join(asim_output_data_dir, "final_pipeline", "households", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_households.csv")
             asim_persons_path = os.path.join(asim_output_data_dir, "final_pipeline", "persons", "final.parquet") if file_format == "parquet" else os.path.join(asim_output_data_dir, "final_persons.csv")
+            atlas_vehicles_file = os.path.join(state.full_path, settings['atlas_host_output_folder'], f'vehicles_{state.forecast_year}.csv.gz')
 
-            if os.path.exists(asim_plans_path):
-                 state.record_input_file(travel_model, asim_plans_path, description="ActivitySim plans for BEAM input")
-            if os.path.exists(asim_households_path):
-                 state.record_input_file(travel_model, asim_households_path, description="ActivitySim households for BEAM input")
-            if os.path.exists(asim_persons_path):
-                 state.record_input_file(travel_model, asim_persons_path, description="ActivitySim persons for BEAM input")
+            inputs = [
+                (asim_plans_path, "ActivitySim plans for BEAM input"),
+                (asim_households_path, "ActivitySim households for BEAM input"),
+                (asim_persons_path, "ActivitySim persons for BEAM input")
+            ]
 
-            # Record inputs to BEAM input preparation (Atlas vehicles if enabled)
             if settings.get('vehicle_ownership_model_enabled'):
-                 atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
-                 atlas_vehicles_file = os.path.join(atlas_output_path, f'vehicles_{state.forecast_year}.csv.gz') # Assuming gzipped output
-                 if os.path.exists(atlas_vehicles_file):
-                      state.record_input_file(travel_model, atlas_vehicles_file, description="Atlas vehicles output for BEAM input")
+                inputs.append((atlas_vehicles_file, "Atlas vehicles output for BEAM input"))
+
+            record_inputs_and_outputs(state, travel_model, inputs=inputs)
 
 
             beam_pre.copy_plans_from_asim(
                 settings, state, iteration_number)
 
-            # Record outputs from BEAM input preparation (BEAM scenario files)
+            # Record outputs from BEAM input preparation
             beam_scenario_folder = os.path.join(state.full_path, settings['beam_local_mutable_data_folder'], settings['region'], settings['beam_scenario_folder'])
-            beam_plans_path = os.path.join(beam_scenario_folder, f'plans.{file_format}') # Assuming file_format extension
+            beam_plans_path = os.path.join(beam_scenario_folder, f'plans.{file_format}')
             beam_households_path = os.path.join(beam_scenario_folder, f'households.{file_format}')
             beam_persons_path = os.path.join(beam_scenario_folder, f'persons.{file_format}')
-            beam_vehicles_path = os.path.join(beam_scenario_folder, 'vehicles.csv.gz') # Vehicles is always csv.gz? Check preprocessor
+            beam_vehicles_path = os.path.join(beam_scenario_folder, 'vehicles.csv.gz')
 
-            if os.path.exists(beam_plans_path):
-                 state.record_output_file(travel_model, beam_plans_path, year=state.forecast_year, description="BEAM scenario plans file")
-            if os.path.exists(beam_households_path):
-                 state.record_output_file(travel_model, beam_households_path, year=state.forecast_year, description="BEAM scenario households file")
-            if os.path.exists(beam_persons_path):
-                 state.record_output_file(travel_model, beam_persons_path, year=state.forecast_year, description="BEAM scenario persons file")
-            if os.path.exists(beam_vehicles_path): # Check if vehicles file was copied/created
-                 state.record_output_file(travel_model, beam_vehicles_path, year=state.forecast_year, description="BEAM scenario vehicles file")
+            outputs = [
+                (beam_plans_path, "BEAM scenario plans file"),
+                (beam_households_path, "BEAM scenario households file"),
+                (beam_persons_path, "BEAM scenario persons file"),
+                (beam_vehicles_path, "BEAM scenario vehicles file")
+            ]
+
+            record_inputs_and_outputs(state, travel_model, outputs=outputs, year=state.forecast_year)
 
 
         # 3. RUN BEAM
