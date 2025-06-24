@@ -480,6 +480,9 @@ class WorkflowState:
                 return result
             except ValueError:
                 logger.warning(f"Target major stage {target_major.name} not found in order, allowing run")
+                logger.debug(f"Current major stage: {self.current_major_stage.name if self.current_major_stage else 'None'}")
+                logger.debug(f"Major stage order: {[stage.name for stage in self.major_stage_order]}")
+                logger.debug(f"Enabled stages: {[stage.name for stage in self.enabled_stages]}")
                 return True
 
 

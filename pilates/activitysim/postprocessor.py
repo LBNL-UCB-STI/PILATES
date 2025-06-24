@@ -15,15 +15,21 @@ def _load_asim_outputs(settings, output_path):
     output_tables = output_tables_settings['tables']
     asim_output_dict = {}
     for table_name in output_tables:
-        file_name = "%s%s.csv" % (prefix, table_name)
-        file_path = os.path.join(output_path, settings['asim_local_output_folder'], file_name)
-        if table_name == 'persons':
-            index_col = 'person_id'
-        elif table_name == 'households':
-            index_col = 'household_id'
+        file_format = settings.get("file_format", "csv")
+        if file_format == "parquet":
+            file_name = "%s%s.parquet" % (prefix, table_name)
+            file_path = os.path.join(output_path, "final_pipeline", table_name, "final.parquet")
+            table = pd.read_parquet(file_path)
         else:
-            index_col = None
-        table = pd.read_csv(file_path, index_col=index_col)
+            file_name = "%s%s.csv" % (prefix, table_name)
+            file_path = os.path.join(output_path, settings['asim_local_output_folder'], file_name)
+            if table_name == 'persons':
+                index_col = 'person_id'
+            elif table_name == 'households':
+                index_col = 'household_id'
+            else:
+                index_col = None
+            table = pd.read_csv(file_path, index_col=index_col)
 
         if 'block_id' in table.columns:
             table['block_id'] = table['block_id'].astype(str).str.zfill(15)
@@ -206,6 +212,9 @@ def create_usim_input_data(
     elif not os.path.exists(archive_fname):
         raise ValueError('No input data found at {0} or {1}.'.format(
             input_store_path, archive_path))
+
+    # Log the ActivitySim output tables
+    logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
     # load last iter UrbanSim input data
     og_input_store = pd.HDFStore(archive_path)

@@ -1,4 +1,4 @@
-import subprocess
+import sys
 import os
 import pytest
 import yaml
@@ -7,6 +7,8 @@ import yaml
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 # Get the path to the run.py script (assuming it's in the parent directory)
 RUN_SCRIPT = os.path.abspath(os.path.join(TEST_DIR, '..', 'run.py'))
+sys.path.insert(0, os.path.abspath(os.path.join(TEST_DIR, '..')))
+import run  # Import the run module
 # Get the path to the stubs directory
 STUBS_DIR = os.path.join(TEST_DIR, 'stubs')
 
@@ -30,17 +32,12 @@ os.chdir("../")
 def run_pilates_with_settings(settings_file):
     """Runs the pilates run.py script with the given settings file."""
     print(f"\nRunning run.py with settings: {settings_file}")
-    result = subprocess.run(
-        ['python', RUN_SCRIPT, '-c', settings_file],
-        capture_output=True,
-        text=True,
-        check=False # Don't raise exception on non-zero exit code yet
-    )
-    print("Stdout:")
-    print(result.stdout)
-    print("Stderr:")
-    print(result.stderr)
-    return result
+    sys.argv = ['run.py', '-c', settings_file]  # Simulate command-line arguments
+    try:
+        run.main()  # Call the main function from run.py
+        return 0  # Return 0 to indicate success
+    except SystemExit as e:
+        return e.code  # Return the exit code from the SystemExit exception
 
 def check_dummy_outputs(output_dir, enabled_models):
     """Checks for the existence of expected dummy output files."""

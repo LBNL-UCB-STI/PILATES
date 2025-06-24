@@ -1288,7 +1288,7 @@ def get_model_and_image(settings: dict, model_type: str):
     return model_name, image_name
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", help="Path to the config file to be used",
                         action="store_true") # This action='store_true' seems incorrect for a path
@@ -1300,6 +1300,8 @@ if __name__ == '__main__':
     parser.add_argument("-c", "--config", help="Path to the config file to be used", type=str)
     parser.add_argument("-s", "--state", help="Path to the current_state file to be used", type=str)
 
+
+    logger = logging.getLogger(__name__)
 
     logger = logging.getLogger(__name__)
 
@@ -1543,3 +1545,6 @@ if __name__ == '__main__':
 
 
     logger.info("Workflow finished.")
+
+if __name__ == '__main__':
+    main()
