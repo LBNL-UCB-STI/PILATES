@@ -341,14 +341,14 @@ def warm_start_activities(settings, state: WorkflowState, client):
             settings["skims_fname"],
         )
 
-        record_inputs_and_outputs(
-            state,
-            activity_demand_model,
-            inputs=[
-                (usim_output_store_path, "UrbanSim output for warm start"),
-                (expected_beam_skims_path, "BEAM skims for warm start"),
-            ],
-        )
+        # record_inputs_and_outputs(
+        #     state,
+        #     activity_demand_model,
+        #     inputs=[
+        #         (usim_output_store_path, "UrbanSim output for warm start"),
+        #         (expected_beam_skims_path, "BEAM skims for warm start"),
+        #     ],
+        # )
 
         if not os.path.exists(
             os.path.join(
