@@ -238,6 +238,16 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
+        # Update provenance record for the input file path
+        if hasattr(settings, "workflow_state") and settings.workflow_state and hasattr(settings.workflow_state, "provenance_tracker") and settings.workflow_state.provenance_tracker:
+            # Try to update the provenance record for the input file
+            try:
+                model_name = "urbansim"
+                settings.workflow_state.provenance_tracker.update_file_path(
+                    model_name, input_store_path, archive_path
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update provenance file path from {input_store_path} to {archive_path}: {e}")
     elif not os.path.exists(archive_fname):
         raise ValueError(
             "No input data found at {0} or {1}.".format(input_store_path, archive_path)
