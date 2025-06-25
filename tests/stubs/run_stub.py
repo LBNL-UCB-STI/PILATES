@@ -46,12 +46,13 @@ def main():
             f.write("Dummy BEAM Output")
         print(f"Created dummy BEAM output file: {output_path}")
     elif args.model_name == "activitysim":
-        output_dir = os.path.join(args.cwd, "output", "final_pipeline", "beam_plans")
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, "final.parquet")
-        with open(output_path, "w") as f:
-            f.write("Dummy ActivitySim Output")
-        print(f"Created dummy ActivitySim output file: {output_path}")
+        for output_type in ["beam_plans", "person", "trips", "households", "tours"]:
+            output_dir = os.path.join(args.cwd, "output", "final_pipeline", output_type)
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, "final.parquet")
+            with open(output_path, "w") as f:
+                f.write("Dummy ActivitySim Output")
+            print(f"Created dummy ActivitySim output file: {output_path}")
     else:
         print(f"Unknown model_name for stub: {args.model_name}")
 
