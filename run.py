@@ -1072,7 +1072,6 @@ def generate_activity_plans(
                 activity_demand_model,
                 year=state.forecast_year,
                 iteration=state.current_inner_iter,
-                description="ActivitySim Compilation Run",
             )
 
             success = run_container(
@@ -1100,7 +1099,6 @@ def generate_activity_plans(
             activity_demand_model,
             year=state.forecast_year,
             iteration=state.current_inner_iter,
-            description="ActivitySim Main Run",
         )
 
         asim_cmd = get_base_asim_cmd(settings)

@@ -340,7 +340,7 @@ class WorkflowState:
                                     )
 
                     # Check if the ActivitySim configs folder is a git repository
-                    asim_config_dir = os.path.join(settings.get("asim_local_configs_folder"), settings["region"])
+                    asim_config_dir = os.path.join(settings['asim_local_configs_folder'], settings['region'])
                     if os.path.exists(asim_config_dir):
                         if self.provenance_tracker.is_git_repo(asim_config_dir):
                             repo_name = os.path.basename(asim_config_dir)
