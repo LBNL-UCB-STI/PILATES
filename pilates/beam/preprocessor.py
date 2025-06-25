@@ -3,6 +3,7 @@ import logging
 import gzip
 import shutil
 import pandas as pd
+from workflow_state import WorkflowState
 import numpy as np
 import glob
 
@@ -185,40 +186,72 @@ def copy_plans_from_asim(
                 ]).select(pl.col("*").exclude_duplicates()).collect()
                 df.write_csv(beam_file_path, compression="gzip")
         """
-        from workflow_state import (
-            WorkflowState,
-        )  # Import WorkflowState to access the provenance tracker
+        from workflow_state import WorkflowState  # Import WorkflowState to access the provenance tracker
 
-        if file_format == "csv":
-            asim_file_path = locate_asim_file(asim_file_name, file_format)
-            beam_file_path = locate_beam_file(beam_file_name, file_format)
-            # asim_file_path = os.path.join(asim_output_data_dir, "final_" + asim_file_name + ".csv")
-            # beam_file_path = os.path.join(beam_scenario_folder, beam_file_name + ".csv.gz")
-            logger.info(
-                "Copying asim file %s to beam input scenario file %s",
-                asim_file_path,
-                beam_file_path,
+        if state.provenance_tracker.is_git_repo(asim_output_data_dir):
+            repo_name = os.path.basename(asim_output_data_dir)
+            git_hash = state.provenance_tracker.get_git_hash(asim_output_data_dir)
+            state.record_input_file(
+                "beam",
+                asim_output_data_dir,
+                description=f"Git repo {repo_name} at {git_hash}",
             )
+        else:
+            if file_format == "csv":
+                asim_file_path = locate_asim_file(asim_file_name, file_format)
+                beam_file_path = locate_beam_file(beam_file_name, file_format)
+                logger.info(
+                    "Copying asim file %s to beam input scenario file %s",
+                    asim_file_path,
+                    beam_file_path,
+                )
 
-            if os.path.exists(asim_file_path):
-                df = (
-                    pd.read_csv(
-                        asim_file_path,
-                        dtype={
-                            "household_id": pd.Int64Dtype(),
-                            "person_id": pd.Int64Dtype(),
-                            "trip_id": pd.Int64Dtype(),
-                            "cars": pd.Int64Dtype(),
-                            "VEHICL": pd.Int64Dtype(),
-                            "age": pd.Int64Dtype(),
-                            "sex": pd.Int64Dtype(),
-                        },
+                if os.path.exists(asim_file_path):
+                    df = (
+                        pd.read_csv(
+                            asim_file_path,
+                            dtype={
+                                "household_id": pd.Int64Dtype(),
+                                "person_id": pd.Int64Dtype(),
+                                "trip_id": pd.Int64Dtype(),
+                                "cars": pd.Int64Dtype(),
+                                "VEHICL": pd.Int64Dtype(),
+                                "age": pd.Int64Dtype(),
+                                "sex": pd.Int64Dtype(),
+                            },
+                        )
+                        .rename(columns={"VEHICL": "cars"})
+                        .rename(columns={"auto_ownership": "cars"})
                     )
+                    df = df.loc[:, ~df.columns.duplicated()].copy()
+                    df.to_csv(beam_file_path, compression="gzip")
+
+                    # Record the copied file as an input to BEAM
+                    state.record_input_file(
+                        "beam",
+                        beam_file_path,
+                        description=f"Copied from ActivitySim output: {asim_file_name}",
+                    )
+                    # with open(asim_file_path, 'rb') as f_in, gzip.open(
+                    #         beam_file_path, 'wb') as f_out:
+                    #     f_out.writelines(f_in)
+            elif file_format == "parquet":
+                asim_file_path = locate_asim_file(asim_file_name, file_format)
+                beam_file_path = locate_beam_file(beam_file_name, file_format)
+                logger.info(
+                    "Copying asim file %s to beam input scenario file %s",
+                    asim_file_path,
+                    beam_file_path,
+                )
+                df = (
+                    pd.read_parquet(asim_file_path)
                     .rename(columns={"VEHICL": "cars"})
                     .rename(columns={"auto_ownership": "cars"})
+                    .rename(columns={"tripId": "trip_id"})
                 )
-                df = df.loc[:, ~df.columns.duplicated()].copy()
-                df.to_csv(beam_file_path, compression="gzip")
+                if "household_id" in df.columns:
+                    df = df.astype({"household_id": pd.Int64Dtype()})
+                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
                 # Record the copied file as an input to BEAM
                 state.record_input_file(
@@ -226,36 +259,9 @@ def copy_plans_from_asim(
                     beam_file_path,
                     description=f"Copied from ActivitySim output: {asim_file_name}",
                 )
-                # with open(asim_file_path, 'rb') as f_in, gzip.open(
-                #         beam_file_path, 'wb') as f_out:
-                #     f_out.writelines(f_in)
-        elif file_format == "parquet":
-            asim_file_path = locate_asim_file(asim_file_name, file_format)
-            beam_file_path = locate_beam_file(beam_file_name, file_format)
-            logger.info(
-                "Copying asim file %s to beam input scenario file %s",
-                asim_file_path,
-                beam_file_path,
-            )
-            df = (
-                pd.read_parquet(asim_file_path)
-                .rename(columns={"VEHICL": "cars"})
-                .rename(columns={"auto_ownership": "cars"})
-                .rename(columns={"tripId": "trip_id"})
-            )
-            if "household_id" in df.columns:
-                df = df.astype({"household_id": pd.Int64Dtype()})
-            df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
-
-            # Record the copied file as an input to BEAM
-            state.record_input_file(
-                "beam",
-                beam_file_path,
-                description=f"Copied from ActivitySim output: {asim_file_name}",
-            )
-            if "household_id" in df.columns:
-                df = df.astype({"household_id": pd.Int64Dtype()})
-            df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
+                if "household_id" in df.columns:
+                    df = df.astype({"household_id": pd.Int64Dtype()})
+                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(
         file_path, file_name, year, replanning_iteration_number, fmt
