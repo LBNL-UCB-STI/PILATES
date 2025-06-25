@@ -114,6 +114,9 @@ class WorkflowState:
         # If we have activity demand OR traffic assignment, we need the supply-demand loop
         if activity_demand_enabled or traffic_assignment_enabled:
             self.enabled_stages.add(self.Stage.supply_demand_loop)
+            if self.Stage.supply_demand_loop not in self.major_stage_order:
+                self.major_stage_order.append(self.Stage.supply_demand_loop)
+                logger.debug("Added supply_demand_loop to major_stage_order")
 
         # Define the order of major stages
         self.major_stage_order = [
@@ -615,6 +618,15 @@ class WorkflowState:
             except ValueError:
                 logger.warning(
                     f"Target major stage {target_major.name} not found in order, allowing run"
+                )
+                logger.debug(
+                    f"Current major stage: {self.current_major_stage.name if self.current_major_stage else 'None'}"
+                )
+                logger.debug(
+                    f"Major stage order: {[stage.name for stage in self.major_stage_order]}"
+                )
+                logger.debug(
+                    f"Enabled stages: {[stage.name for stage in self.enabled_stages]}"
                 )
                 logger.debug(
                     f"Current major stage: {self.current_major_stage.name if self.current_major_stage else 'None'}"
