@@ -120,27 +120,32 @@ class ProvenanceTracker:
 
     def is_git_repo(self, path: str) -> bool:
         """Check if a directory is a git repository."""
-        return os.path.isdir(os.path.join(path, '.git'))
+        abs_path = os.path.abspath(path)
+        git_dir = os.path.join(abs_path, '.git')
+        is_repo = os.path.isdir(git_dir)
+        logger.debug(f"Checking if path {abs_path} is a git repo: {is_repo}")
+        return is_repo
 
     def get_git_hash(self, repo_path: str = None) -> Optional[str]:
         """Get the current git commit hash."""
         try:
-            # Assumes script is run from within the git repository
+            abs_repo_path = os.path.abspath(repo_path) if repo_path else os.path.dirname(__file__)
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,
                 check=True,
-                cwd=os.path.dirname(__file__),
+                cwd=abs_repo_path,
                 timeout=5,
             )
+            logger.debug(f"Git hash for repo at {abs_repo_path}: {result.stdout.strip()}")
             return result.stdout.strip()
         except (
             subprocess.CalledProcessError,
             FileNotFoundError,
             subprocess.TimeoutExpired,
-        ):
-            logger.warning("Could not determine git hash")
+        ) as e:
+            logger.warning(f"Could not determine git hash for repo at {repo_path}: {e}")
             return None
 
     def _validate_file_path(self, file_path: str) -> Optional[str]:
