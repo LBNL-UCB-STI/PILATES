@@ -147,7 +147,11 @@ class ProvenanceTracker:
         self._save_run_info(new_run_info)  # Save immediately on creation
         return new_run_info
 
-    def _get_git_hash(self) -> Optional[str]:
+    def _is_git_repo(self, path: str) -> bool:
+        """Check if a directory is a git repository."""
+        return os.path.isdir(os.path.join(path, '.git'))
+
+    def _get_git_hash(self, repo_path: str = None) -> Optional[str]:
         """Get the current git commit hash."""
         try:
             # Assumes script is run from within the git repository
@@ -363,6 +367,13 @@ class ProvenanceTracker:
         """
         import glob
 
+        if self._is_git_repo(input_dir):
+            repo_name = os.path.basename(input_dir)
+            git_hash = self._get_git_hash(input_dir)
+            logger.info(f"Recording git repo {repo_name} with hash {git_hash} as input")
+            self.record_input_file(model, input_dir, description=f"Git repo {repo_name} at {git_hash}")
+            return
+
         if not os.path.exists(input_dir):
             logger.warning(f"Input directory does not exist: {input_dir}")
             return
@@ -406,6 +417,13 @@ class ProvenanceTracker:
             recursive: Whether to search recursively
         """
         import glob
+
+        if self._is_git_repo(output_dir):
+            repo_name = os.path.basename(output_dir)
+            git_hash = self._get_git_hash(output_dir)
+            logger.info(f"Recording git repo {repo_name} with hash {git_hash} as output")
+            self.record_output_file(model, output_dir, year=year, description=f"Git repo {repo_name} at {git_hash}")
+            return
 
         if not os.path.exists(output_dir):
             logger.warning(f"Output directory does not exist: {output_dir}")
