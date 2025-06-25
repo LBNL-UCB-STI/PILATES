@@ -1,6 +1,5 @@
 import os
 import logging
-from workflow_state import WorkflowState
 import gzip
 import shutil
 import pandas as pd

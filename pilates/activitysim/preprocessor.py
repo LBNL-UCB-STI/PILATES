@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import openmatrix as omx
 import pandas as pd
-from workflow_state import WorkflowState
 import requests
 from pandas.api.types import is_string_dtype
 from shapely import wkt

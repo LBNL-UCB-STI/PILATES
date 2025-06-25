@@ -310,7 +310,7 @@ def get_zone_from_points(df, zones_gdf, local_crs):
     zones_gdf = zones_gdf.to_crs(local_crs)
 
     # Spatial join
-    intx = gpd.sjoin(gdf, zones_gdf.reset_index(), how="left", op="intersects")
+    intx = gpd.sjoin(gdf, zones_gdf.reset_index(), how="left", predicate="intersects")
 
     assert len(intx) == len(gdf)
 
