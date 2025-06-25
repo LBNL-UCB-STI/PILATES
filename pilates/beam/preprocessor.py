@@ -3,7 +3,6 @@ import logging
 import gzip
 import shutil
 import pandas as pd
-from workflow_state import WorkflowState
 import numpy as np
 import glob
 
