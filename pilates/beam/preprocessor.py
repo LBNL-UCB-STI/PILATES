@@ -3,6 +3,7 @@ import logging
 import gzip
 import shutil
 import pandas as pd
+from workflow_state import WorkflowState
 import numpy as np
 import glob
 
@@ -34,7 +35,7 @@ def copy_data_to_mutable_location(settings, output_dir):
     #     elif file == "urbansim":
     #         shutil.copytree(pathname, os.path.join(output_subdir, file))
 
-    shutil.copytree(beam_config_path, dest)
+    shutil.copytree(beam_config_path, dest, dirs_exist_ok=True)
     common_config_path = os.path.join(settings["beam_local_input_folder"], "common")
     shutil.copytree(common_config_path, os.path.join(output_dir, "common"))
     if "beam_skims_shapefile" in settings:

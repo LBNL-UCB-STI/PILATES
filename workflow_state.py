@@ -295,8 +295,6 @@ class WorkflowState:
                             )
                         # Always copy data to mutable location
                         beam_pre.copy_data_to_mutable_location(settings, input_dir)
-
-                    beam_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(
                         base_folder_path, settings["beam_local_output_folder"]
                     )
