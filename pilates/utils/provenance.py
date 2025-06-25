@@ -306,6 +306,7 @@ class ProvenanceTracker:
             self.run_info["inputs"]["files"][model] = []
 
         input_record = {
+            "run_id": [self.run_id],  # Associate the current run_id
             "file_path": relative_path,
             "source_run_id": source_run_id,
             "source_file_paths": [],  # New field to store source file paths
@@ -326,13 +327,20 @@ class ProvenanceTracker:
             ]
             # Lookup hash for source files if they have been logged
             source_hashes = []
+            source_run_ids = []
             for path in source_file_paths:
+                found = False
                 for model_inputs in self.run_info["inputs"]["files"].values():
                     for record in model_inputs:
                         if record["file_path"] == self._get_relative_path(path):
                             source_hashes.append(record["file_hash"])
+                            source_run_ids.append(record.get("source_run_id"))
+                            found = True
                             break
+                    if found:
+                        break
             input_record["source_file_hashes"] = source_hashes
+            input_record["source_run_id"] = source_run_ids
 
         self.run_info["inputs"]["files"][model].append(input_record)
         self._save_run_info()
@@ -397,6 +405,7 @@ class ProvenanceTracker:
             self.run_info["outputs"][model] = []
 
         output_record = {
+            "run_id": self.run_id,
             "file_path": relative_path,
             "file_hash": self._calculate_file_hash(path_to_use) if abs_path else None,
             "created_at": datetime.now().isoformat(),
@@ -555,7 +564,15 @@ class ProvenanceTracker:
         description: str = None,
     ) -> int:
         """Record the start of a model run."""
+        run_id = f"{model}_{datetime.now().strftime('%Y-%m-%d')}_{uuid.uuid4().hex[:8]}"
+        logger.info(f"Starting model run with ID: {run_id}")
+
+        run_id = f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
+        logger.info(f"Starting model run with ID: {run_id}")
+
         run_record = {
+            "run_id": run_id,
+            "run_id": run_id,
             "model": model,
             "year": year,
             "iteration": iteration,

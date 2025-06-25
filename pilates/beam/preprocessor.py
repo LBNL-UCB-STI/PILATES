@@ -1,4 +1,5 @@
 import os
+from workflow_state import WorkflowState
 import logging
 import gzip
 import shutil
@@ -231,6 +232,8 @@ def copy_plans_from_asim(
                         "beam",
                         beam_file_path,
                         description=f"Copied from ActivitySim output: {asim_file_name}",
+                        source_file_paths=[asim_file_path],
+                        source_run_id=state.run_id
                     )
                     # with open(asim_file_path, 'rb') as f_in, gzip.open(
                     #         beam_file_path, 'wb') as f_out:
@@ -283,10 +286,31 @@ def copy_plans_from_asim(
                     target_file_path, "wb"
                 ) as f_out:
                     f_out.writelines(f_in)
+                # Record the archived file path
+                state.record_output_file(
+                    "activitysim",
+                    target_file_path,
+                    year=year,
+                    description=f"Archived ActivitySim output: {file_name}",
+                )
         elif os.path.isdir(os.path.abspath(input_file_path)):
             make_archive(input_file_path, target_file_path + ".zip")
+            # Record the archived file path
+            state.record_output_file(
+                "activitysim",
+                target_file_path + ".zip",
+                year=year,
+                description=f"Archived ActivitySim output: {file_name}",
+            )
         else:
-            shutil.copy(input_file_path, target_file_path)
+            shutil.copy(input_file_path, target_file_path + ".parquet")
+            # Record the archived file path
+            state.record_output_file(
+                "activitysim",
+                target_file_path + ".parquet",
+                year=year,
+                description=f"Archived ActivitySim output: {file_name}",
+            )
 
     def merge_only_updated_households():
         asim_plans_path = locate_asim_file("plans", file_format)
