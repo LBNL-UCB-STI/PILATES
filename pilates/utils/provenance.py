@@ -169,7 +169,43 @@ class ProvenanceTracker:
 
         return abs_path
 
+    def _get_validated_paths(self, file_path: str, skip_missing: bool) -> (Optional[str], Optional[str]):
+        """
+        Validate file path and get both absolute and relative paths.
+
+        Args:
+            file_path: Path to validate
+            skip_missing: Whether to skip missing files
+
+        Returns:
+            Tuple of absolute path and relative path if valid, otherwise (None, None)
+        """
+        abs_path = self._validate_file_path(file_path)
+        if not abs_path and skip_missing:
+            logger.debug(f"Skipping missing file: {file_path}")
+            return None, None
+
+        # Use original path if validation failed but skip_missing is False
+        path_to_use = abs_path or file_path
+        relative_path = self._get_relative_path(path_to_use)
+        return path_to_use, relative_path
+
     def _calculate_file_hash(self, file_path: str) -> Optional[str]:
+        """Calculate SHA256 hash of a file with improved error handling."""
+        abs_file_path = self._validate_file_path(file_path)
+        if not abs_file_path:
+            return None
+
+        try:
+            sha256_hash = hashlib.sha256()
+            with open(abs_file_path, "rb") as f:
+                # Read and update hash string value in blocks of 4K
+                for chunk in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
+        except (IOError, OSError) as e:
+            logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
+            return None
         """Calculate SHA256 hash of a file with improved error handling."""
         abs_file_path = self._validate_file_path(file_path)
         if not abs_file_path:
@@ -264,7 +300,7 @@ class ProvenanceTracker:
             "git_hash": git_hash,
             "created_at": datetime.now().isoformat(),
             "description": description,
-            "exists": abs_path is not None,
+            "exists": relative_path is not None,
         }
 
         self.run_info["inputs"]["repos"][model].append(repo_record)
@@ -293,14 +329,9 @@ class ProvenanceTracker:
         """
         # Load metadata and apply it to the input record
         metadata = self._load_metadata(file_path)
-        abs_path = self._validate_file_path(file_path)
-        if not abs_path and skip_missing:
-            logger.debug(f"Skipping missing input file for {model}: {file_path}")
+        path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
+        if not path_to_use:
             return
-
-        # Use original path if validation failed but skip_missing is False
-        path_to_use = abs_path or file_path
-        relative_path = self._get_relative_path(path_to_use)
 
         if model not in self.run_info["inputs"]["files"]:
             self.run_info["inputs"]["files"][model] = []
@@ -310,10 +341,10 @@ class ProvenanceTracker:
             "file_path": relative_path,
             "source_run_id": source_run_id,
             "source_file_paths": [],  # New field to store source file paths
-            "file_hash": self._calculate_file_hash(path_to_use) if abs_path else None,
+            "file_hash": self._calculate_file_hash(path_to_use) if path_to_use else None,
             "created_at": datetime.now().isoformat(),
             "description": description,
-            "exists": abs_path is not None,
+            "exists": path_to_use is not None,
         }
 
         # Integrate metadata into the main file's record
@@ -345,7 +376,7 @@ class ProvenanceTracker:
         self.run_info["inputs"]["files"][model].append(input_record)
         self._save_run_info()
         logger.debug(
-            f"Recorded input for {model}: {input_record['file_path']} (exists: {abs_path is not None})"
+            f"Recorded input for {model}: {input_record['file_path']} (exists: {path_to_use is not None})"
         )
 
     def update_file_path(self, model: str, old_path: str, new_path: str):
@@ -392,14 +423,9 @@ class ProvenanceTracker:
             description: Description of the output file
             skip_missing: If True, skip recording missing files; if False, record anyway
         """
-        abs_path = self._validate_file_path(file_path)
-        if not abs_path and skip_missing:
-            logger.debug(f"Skipping missing output file for {model}: {file_path}")
+        path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
+        if not path_to_use:
             return
-
-        # Use original path if validation failed but skip_missing is False
-        path_to_use = abs_path or file_path
-        relative_path = self._get_relative_path(path_to_use)
 
         if model not in self.run_info["outputs"]:
             self.run_info["outputs"][model] = []
@@ -407,17 +433,17 @@ class ProvenanceTracker:
         output_record = {
             "run_id": self.run_id,
             "file_path": relative_path,
-            "file_hash": self._calculate_file_hash(path_to_use) if abs_path else None,
+            "file_hash": self._calculate_file_hash(path_to_use) if path_to_use else None,
             "created_at": datetime.now().isoformat(),
             "year": year,
             "description": description,
-            "exists": abs_path is not None,
+            "exists": path_to_use is not None,
         }
 
         self.run_info["outputs"][model].append(output_record)
         self._save_run_info()
         logger.debug(
-            f"Recorded output for {model}: {relative_path} (exists: {abs_path is not None})"
+            f"Recorded output for {model}: {relative_path} (exists: {path_to_use is not None})"
         )
 
     def record_directory_inputs(
