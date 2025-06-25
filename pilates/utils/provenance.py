@@ -263,6 +263,7 @@ class ProvenanceTracker:
         file_path: str,
         source_run_id: str = None,
         description: str = None,
+        source_file_paths: List[str] = None,  # New parameter for source file paths
         skip_missing: bool = True,
     ):
         """
@@ -290,17 +291,49 @@ class ProvenanceTracker:
         input_record = {
             "file_path": relative_path,
             "source_run_id": source_run_id,
+            "source_file_paths": [],  # New field to store source file paths
             "file_hash": self._calculate_file_hash(path_to_use) if abs_path else None,
             "created_at": datetime.now().isoformat(),
             "description": description,
             "exists": abs_path is not None,
         }
 
+        if source_file_paths:
+            input_record["source_file_paths"] = [
+                self._get_relative_path(path) for path in source_file_paths
+            ]
+
         self.run_info["inputs"][model].append(input_record)
         self._save_run_info()
         logger.debug(
             f"Recorded input for {model}: {relative_path} (exists: {abs_path is not None})"
         )
+
+    def update_file_path(self, model: str, old_path: str, new_path: str):
+        """
+        Update the file path for a recorded file when it is archived or moved.
+
+        Args:
+            model: Name of the model associated with the file.
+            old_path: The old file path.
+            new_path: The new file path.
+        """
+        relative_old_path = self._get_relative_path(old_path)
+        relative_new_path = self._get_relative_path(new_path)
+
+        # Update input file paths
+        if model in self.run_info["inputs"]:
+            for input_record in self.run_info["inputs"][model]:
+                if input_record["file_path"] == relative_old_path:
+                    input_record["file_path"] = relative_new_path
+
+        # Update output file paths
+        if model in self.run_info["outputs"]:
+            for output_record in self.run_info["outputs"][model]:
+                if output_record["file_path"] == relative_old_path:
+                    output_record["file_path"] = relative_new_path
+
+        self._save_run_info()
 
     def record_output_file(
         self,
