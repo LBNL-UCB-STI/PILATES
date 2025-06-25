@@ -1856,7 +1856,7 @@ def run_container(
                 "--cwd",
                 os.getcwd(),  # Pass current working directory of run.py
                 "--config_name",
-                command,  # Pass the original command string
+                " ".join(command),  # Pass the original command string
             ]
             logger.info(
                 f"Using stub for {model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
