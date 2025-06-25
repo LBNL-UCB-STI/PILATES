@@ -370,18 +370,18 @@ def warm_start_activities(settings, state: WorkflowState, client):
             "warm_start_households.csv",
         )
 
-        record_inputs_and_outputs(
-            state,
-            activity_demand_model,
-            outputs=[
-                (asim_warm_start_persons_path, "ActivitySim warm start persons output"),
-                (
-                    asim_warm_start_households_path,
-                    "ActivitySim warm start households output",
-                ),
-            ],
-            year=state.current_year,
-        )
+        # record_inputs_and_outputs(
+        #     state,
+        #     activity_demand_model,
+        #     outputs=[
+        #         (asim_warm_start_persons_path, "ActivitySim warm start persons output"),
+        #         (
+        #             asim_warm_start_households_path,
+        #             "ActivitySim warm start households output",
+        #         ),
+        #     ],
+        #     year=state.current_year,
+        # )
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
         logger.info(
@@ -1006,20 +1006,20 @@ def generate_activity_plans(
             settings["skims_fname"],
         )
 
-        record_inputs_and_outputs(
-            state,
-            activity_demand_model,
-            inputs=[
-                (
-                    usim_output_store_path,
-                    "UrbanSim output for ActivitySim input preparation",
-                ),
-                (
-                    expected_beam_skims_path,
-                    "BEAM skims for ActivitySim input preparation",
-                ),
-            ],
-        )
+        # record_inputs_and_outputs(
+        #     state,
+        #     activity_demand_model,
+        #     inputs=[
+        #         (
+        #             usim_output_store_path,
+        #             "UrbanSim output for ActivitySim input preparation",
+        #         ),
+        #         (
+        #             expected_beam_skims_path,
+        #             "BEAM skims for ActivitySim input preparation",
+        #         ),
+        #     ],
+        # )
 
         asim_pre.create_skims_from_beam(
             settings, state=state, overwrite=overwrite_skims_arg
@@ -1048,9 +1048,9 @@ def generate_activity_plans(
             )
         )
 
-        record_inputs_and_outputs(
-            state, activity_demand_model, outputs=outputs, year=state.forecast_year
-        )
+        # record_inputs_and_outputs(
+        #     state, activity_demand_model, outputs=outputs, year=state.forecast_year
+        # )
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = "Generating activity plans for the year " "{0} with {1}".format(
@@ -1351,7 +1351,7 @@ def run_traffic_assignment(
                     (atlas_vehicles_file, "Atlas vehicles output for BEAM input")
                 )
 
-            record_inputs_and_outputs(state, travel_model, inputs=inputs)
+            # record_inputs_and_outputs(state, travel_model, inputs=inputs)
 
             beam_pre.copy_plans_from_asim(settings, state, iteration_number)
 
@@ -1378,9 +1378,9 @@ def run_traffic_assignment(
                 (beam_vehicles_path, "BEAM scenario vehicles file"),
             ]
 
-            record_inputs_and_outputs(
-                state, travel_model, outputs=outputs, year=state.forecast_year
-            )
+            # record_inputs_and_outputs(
+            #     state, travel_model, outputs=outputs, year=state.forecast_year
+            # )
 
         # 3. RUN BEAM
         logger.info(
