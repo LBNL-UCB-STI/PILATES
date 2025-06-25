@@ -41,7 +41,7 @@ from pilates.postprocessing.postprocessor import process_event_file, copy_output
 
 logging.basicConfig(
     stream=sys.stdout,
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)

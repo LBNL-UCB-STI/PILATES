@@ -111,13 +111,6 @@ class WorkflowState:
         if traffic_assignment_enabled:
             self.enabled_stages.add(self.Stage.traffic_assignment)
 
-        # If we have activity demand OR traffic assignment, we need the supply-demand loop
-        if activity_demand_enabled or traffic_assignment_enabled:
-            self.enabled_stages.add(self.Stage.supply_demand_loop)
-            if self.Stage.supply_demand_loop not in self.major_stage_order:
-                self.major_stage_order.append(self.Stage.supply_demand_loop)
-                logger.debug("Added supply_demand_loop to major_stage_order")
-
         # Define the order of major stages
         self.major_stage_order = [
             self.Stage.land_use,
@@ -125,6 +118,13 @@ class WorkflowState:
             self.Stage.supply_demand_loop,
             self.Stage.postprocessing,  # Added postprocessing as a major stage
         ]
+
+        # If we have activity demand OR traffic assignment, we need the supply-demand loop
+        if activity_demand_enabled or traffic_assignment_enabled:
+            self.enabled_stages.add(self.Stage.supply_demand_loop)
+            if self.Stage.supply_demand_loop not in self.major_stage_order:
+                self.major_stage_order.append(self.Stage.supply_demand_loop)
+                logger.debug("Added supply_demand_loop to major_stage_order")
 
         # Define what happens inside the supply-demand loop
         self.loop_substages = []
