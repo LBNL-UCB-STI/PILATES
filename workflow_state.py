@@ -265,15 +265,16 @@ class WorkflowState:
                     input_dir = settings["usim_local_data_input_folder"]
                     if os.path.exists(input_dir):
                         for file in os.listdir(input_dir):
-                            input_path = os.path.join(input_dir, file)
+                            input_path = os.path.join(self.full_path, input_dir, file)
                             if os.path.isfile(input_path):
+                                logger.info(f"Recording input file for {model_name}: {input_path}")
                                 self.record_input_file(
                                     model_name,
                                     input_path,
                                     description="Base UrbanSim input data",
                                 )
 
-                    usim_pre.copy_data_to_mutable_location(settings, output_dir)
+                    usim_pre.copy_data_to_mutable_location(settings, output_dir, self)
                     have_not_copied_usim_data = False
 
                 if model_name == "beam":
@@ -283,7 +284,7 @@ class WorkflowState:
                     os.makedirs(input_dir, exist_ok=True)
 
                     # Record BEAM input files before copying
-                    beam_input_dir = os.path.join(settings["beam_local_input_folder"], settings["region"])
+                    beam_input_dir = os.path.join(self.full_path, settings["beam_local_input_folder"], settings["region"])
                     if os.path.exists(beam_input_dir):
                         if self.provenance_tracker.is_git_repo(beam_input_dir):
                             repo_name = os.path.basename(beam_input_dir)
@@ -307,7 +308,7 @@ class WorkflowState:
                     os.makedirs(input_dir, exist_ok=True)
 
                     # Record Atlas input files before copying
-                    atlas_input_dir = settings.get("atlas_host_input_folder")
+                    atlas_input_dir = os.path.join(self.full_path, settings.get("atlas_host_input_folder"))
                     if atlas_input_dir and os.path.exists(atlas_input_dir):
                         for root, dirs, files in os.walk(atlas_input_dir):
                             for file in files:
@@ -382,7 +383,9 @@ class WorkflowState:
         if self.provenance_tracker:
             # Ensure file_path is absolute before passing to tracker
             abs_file_path = os.path.abspath(file_path)
+            logger.debug(f"Recording input file: {file_path}")
             if os.path.exists(abs_file_path):
+                logger.debug(f"File exists: {abs_file_path}")
                 self.provenance_tracker.record_input_file(
                     model, abs_file_path, source_run_id, description
                 )

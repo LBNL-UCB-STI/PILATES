@@ -163,6 +163,7 @@ class ProvenanceTracker:
             return None
 
         abs_path = os.path.abspath(file_path)
+        logger.debug(f"Validating file path: {abs_path}")
         if not os.path.exists(abs_path):
             logger.warning(f"File does not exist: {abs_path}")
             return None
@@ -232,16 +233,16 @@ class ProvenanceTracker:
     def _get_relative_path(self, file_path: str) -> str:
         """Get path relative to output directory for consistent storage."""
         abs_path = os.path.abspath(file_path)
-        if self.output_path:
-            try:
-                return os.path.relpath(abs_path, self.output_path)
-            except ValueError:
-                # Can happen on Windows with different drives
-                logger.warning(
-                    f"Could not create relative path for {abs_path} relative to {self.output_path}"
-                )
-                return abs_path
-        return abs_path
+        base_path = self.output_path or os.getcwd()
+        try:
+            # Ensure the path is relative to the base directory
+            return os.path.relpath(abs_path, base_path)
+        except ValueError:
+            # Can happen on Windows with different drives
+            logger.warning(
+                f"Could not create relative path for {abs_path} relative to {base_path}"
+            )
+            return abs_path
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
         """Initialize run info from settings."""
