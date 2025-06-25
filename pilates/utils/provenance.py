@@ -107,45 +107,16 @@ class ProvenanceTracker:
             # Fallback if no folder_name, though folder_name is expected with output_path
             return os.path.join(self.output_path, "run_info.json")
 
-    def _initialize_run_info(self) -> Dict[str, Any]:
-        """Initialize or load existing run_info structure."""
-        if os.path.exists(self.run_info_path):
+    def _load_metadata(self, file_path: str) -> Dict[str, Any]:
+        """Load metadata from a JSON file located in the same directory as the file."""
+        metadata_file = os.path.join(os.path.dirname(file_path), f"{os.path.basename(file_path)}.metadata.json")
+        if os.path.exists(metadata_file):
             try:
-                with open(self.run_info_path, "r") as f:
-                    run_info = json.load(f)
-                    # Ensure required keys exist for backward compatibility if needed
-                    run_info.setdefault("inputs", {"files": {}, "repos": {}})
-                    run_info.setdefault("outputs", {})
-                    run_info.setdefault("model_runs", [])
-                    run_info.setdefault("models_used", [])
-                    run_info.setdefault("settings_hash", None)
-                    run_info.setdefault("code_version", self.get_git_hash())
-                    run_info.setdefault(
-                        "hostname",
-                        os.uname().nodename if hasattr(os, "uname") else "unknown",
-                    )
-                    return run_info
+                with open(metadata_file, "r") as f:
+                    return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning(
-                    f"Could not load existing run_info.json: {e}. Creating new one."
-                )
-
-        # Create a new structure
-        new_run_info = {
-            "run_id": self.run_id,
-            "created_at": datetime.now().isoformat(),
-            "start_year": None,
-            "end_year": None,
-            "models_used": [],
-            "settings_hash": None,
-            "code_version": self.get_git_hash(),
-            "hostname": os.uname().nodename if hasattr(os, "uname") else "unknown",
-            "inputs": {"files": {}, "repos": {}},
-            "outputs": {},
-            "model_runs": [],
-        }
-        self._save_run_info(new_run_info)  # Save immediately on creation
-        return new_run_info
+                logger.warning(f"Could not load metadata from {metadata_file}: {e}")
+        return {}
 
     def is_git_repo(self, path: str) -> bool:
         """Check if a directory is a git repository."""
@@ -315,6 +286,8 @@ class ProvenanceTracker:
             description: Description of the input file
             skip_missing: If True, skip recording missing files; if False, record anyway
         """
+        # Load metadata and apply it to the input record
+        metadata = self._load_metadata(file_path)
         abs_path = self._validate_file_path(file_path)
         if not abs_path and skip_missing:
             logger.debug(f"Skipping missing input file for {model}: {file_path}")
@@ -337,22 +310,29 @@ class ProvenanceTracker:
             "exists": abs_path is not None,
         }
 
+        # Integrate metadata into the main file's record
+        if metadata:
+            input_record.update(metadata)
+
+
         if source_file_paths:
             input_record["source_file_paths"] = [
                 self._get_relative_path(path) for path in source_file_paths
             ]
             # Lookup hash for source files if they have been logged
+            source_hashes = []
             for path in source_file_paths:
-                for model_inputs in self.run_info["inputs"].values():
+                for model_inputs in self.run_info["inputs"]["files"].values():
                     for record in model_inputs:
                         if record["file_path"] == self._get_relative_path(path):
-                            input_record["file_hash"] = record["file_hash"]
+                            source_hashes.append(record["file_hash"])
                             break
+            input_record["source_file_hashes"] = source_hashes
 
         self.run_info["inputs"]["files"][model].append(input_record)
         self._save_run_info()
         logger.debug(
-            f"Recorded input for {model}: {relative_path} (exists: {abs_path is not None})"
+            f"Recorded input for {model}: {input_record['file_path']} (exists: {abs_path is not None})"
         )
 
     def update_file_path(self, model: str, old_path: str, new_path: str):
@@ -623,6 +603,46 @@ class ProvenanceTracker:
                 logger.warning(f"Could not reload run_info.json for get_run_info: {e}")
                 return self.run_info.copy()  # Return in-memory copy if reload fails
         return self.run_info.copy()  # Return in-memory copy if file doesn't exist
+
+    def _initialize_run_info(self) -> Dict[str, Any]:
+        """Initialize or load existing run_info structure."""
+        if os.path.exists(self.run_info_path):
+            try:
+                with open(self.run_info_path, "r") as f:
+                    run_info = json.load(f)
+                    # Ensure required keys exist for backward compatibility if needed
+                    run_info.setdefault("inputs", {"files": {}, "repos": {}})
+                    run_info.setdefault("outputs", {})
+                    run_info.setdefault("model_runs", [])
+                    run_info.setdefault("models_used", [])
+                    run_info.setdefault("settings_hash", None)
+                    run_info.setdefault("code_version", self.get_git_hash())
+                    run_info.setdefault(
+                        "hostname",
+                        os.uname().nodename if hasattr(os, "uname") else "unknown",
+                    )
+                    return run_info
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(
+                    f"Could not load existing run_info.json: {e}. Creating new one."
+                )
+
+        # Create a new structure
+        new_run_info = {
+            "run_id": self.run_id,
+            "created_at": datetime.now().isoformat(),
+            "start_year": None,
+            "end_year": None,
+            "models_used": [],
+            "settings_hash": None,
+            "code_version": self.get_git_hash(),
+            "hostname": os.uname().nodename if hasattr(os, "uname") else "unknown",
+            "inputs": {"files": {}, "repos": {}},
+            "outputs": {},
+            "model_runs": [],
+        }
+        self._save_run_info(new_run_info)  # Save immediately on creation
+        return new_run_info
 
     # Helper methods for postprocessing scripts (optional, but good for utility)
     def find_input_by_pattern(self, model: str, pattern: str) -> List[Dict[str, Any]]:
