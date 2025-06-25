@@ -285,15 +285,24 @@ class WorkflowState:
                     # Record BEAM input files before copying
                     beam_input_dir = settings["beam_local_input_folder"]
                     if os.path.exists(beam_input_dir):
-                        for root, dirs, files in os.walk(beam_input_dir):
-                            for file in files:
-                                input_path = os.path.join(root, file)
-                                if os.path.isfile(input_path):
-                                    self.record_input_file(
-                                        model_name,
-                                        input_path,
-                                        description="BEAM configuration/input file",
-                                    )
+                        if self.provenance_tracker._is_git_repo(beam_input_dir):
+                            repo_name = os.path.basename(beam_input_dir)
+                            git_hash = self.provenance_tracker._get_git_hash(beam_input_dir)
+                            self.record_input_file(
+                                model_name,
+                                beam_input_dir,
+                                description=f"Git repo {repo_name} at {git_hash}",
+                            )
+                        else:
+                            for root, dirs, files in os.walk(beam_input_dir):
+                                for file in files:
+                                    input_path = os.path.join(root, file)
+                                    if os.path.isfile(input_path):
+                                        self.record_input_file(
+                                            model_name,
+                                            input_path,
+                                            description="BEAM configuration/input file",
+                                        )
 
                     beam_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(
@@ -340,7 +349,19 @@ class WorkflowState:
                                         description="ActivitySim configuration file",
                                     )
 
-                    asim_pre.copy_data_to_mutable_location(settings, base_folder_path)
+                    # Check if the ActivitySim configs folder is a git repository
+                    asim_config_dir = settings.get("asim_local_configs_folder")
+                    if asim_config_dir and os.path.exists(asim_config_dir):
+                        if self.provenance_tracker._is_git_repo(asim_config_dir):
+                            repo_name = os.path.basename(asim_config_dir)
+                            git_hash = self.provenance_tracker._get_git_hash(asim_config_dir)
+                            self.record_input_file(
+                                model_name,
+                                asim_config_dir,
+                                description=f"Git repo {repo_name} at {git_hash}",
+                            )
+                        else:
+                            asim_pre.copy_data_to_mutable_location(settings, base_folder_path)
                     output_dir = os.path.join(
                         base_folder_path, settings["asim_local_output_folder"]
                     )
