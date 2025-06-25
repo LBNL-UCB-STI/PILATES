@@ -345,10 +345,11 @@ class WorkflowState:
                         if self.provenance_tracker.is_git_repo(asim_config_dir):
                             repo_name = os.path.basename(asim_config_dir)
                             git_hash = self.provenance_tracker.get_git_hash(asim_config_dir)
-                            self.record_input_file(
+                            self.provenance_tracker.record_repo_input(
                                 model_name,
                                 asim_config_dir,
-                                description=f"Git repo {repo_name} at {git_hash}",
+                                description=f"ActivitySim configuration repository",
+                                git_hash=git_hash,
                             )
                         # Always copy data to mutable location
                         asim_pre.copy_data_to_mutable_location(settings, base_folder_path)

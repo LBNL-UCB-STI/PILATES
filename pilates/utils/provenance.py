@@ -114,7 +114,7 @@ class ProvenanceTracker:
                 with open(self.run_info_path, "r") as f:
                     run_info = json.load(f)
                     # Ensure required keys exist for backward compatibility if needed
-                    run_info.setdefault("inputs", {})
+                    run_info.setdefault("inputs", {"files": {}, "repos": {}})
                     run_info.setdefault("outputs", {})
                     run_info.setdefault("model_runs", [])
                     run_info.setdefault("models_used", [])
@@ -140,7 +140,7 @@ class ProvenanceTracker:
             "settings_hash": None,
             "code_version": self.get_git_hash(),
             "hostname": os.uname().nodename if hasattr(os, "uname") else "unknown",
-            "inputs": {},
+            "inputs": {"files": {}, "repos": {}},
             "outputs": {},
             "model_runs": [],
         }
@@ -257,6 +257,45 @@ class ProvenanceTracker:
         self._save_run_info()
         logger.info("ProvenanceTracker initialized with settings.")
 
+    def record_repo_input(
+        self,
+        model: str,
+        repo_path: str,
+        description: str = None,
+        git_hash: str = None,
+    ):
+        """
+        Record a repository input for a model.
+
+        Args:
+            model: Name of the model using this input
+            repo_path: Path to the repository
+            description: Description of the repository
+            git_hash: Git hash of the repository
+        """
+        abs_path = self._validate_file_path(repo_path)
+        if not abs_path:
+            logger.warning(f"Skipping missing repository for {model}: {repo_path}")
+            return
+
+        relative_path = self._get_relative_path(abs_path)
+
+        if model not in self.run_info["inputs"]["repos"]:
+            self.run_info["inputs"]["repos"][model] = []
+
+        repo_record = {
+            "repo_path": relative_path,
+            "git_hash": git_hash,
+            "created_at": datetime.now().isoformat(),
+            "description": description,
+            "exists": abs_path is not None,
+        }
+
+        self.run_info["inputs"]["repos"][model].append(repo_record)
+        self._save_run_info()
+        logger.debug(
+            f"Recorded repository input for {model}: {relative_path} (exists: {abs_path is not None})"
+        )
     def record_input_file(
         self,
         model: str,
@@ -285,8 +324,8 @@ class ProvenanceTracker:
         path_to_use = abs_path or file_path
         relative_path = self._get_relative_path(path_to_use)
 
-        if model not in self.run_info["inputs"]:
-            self.run_info["inputs"][model] = []
+        if model not in self.run_info["inputs"]["files"]:
+            self.run_info["inputs"]["files"][model] = []
 
         input_record = {
             "file_path": relative_path,
@@ -302,8 +341,15 @@ class ProvenanceTracker:
             input_record["source_file_paths"] = [
                 self._get_relative_path(path) for path in source_file_paths
             ]
+            # Lookup hash for source files if they have been logged
+            for path in source_file_paths:
+                for model_inputs in self.run_info["inputs"].values():
+                    for record in model_inputs:
+                        if record["file_path"] == self._get_relative_path(path):
+                            input_record["file_hash"] = record["file_hash"]
+                            break
 
-        self.run_info["inputs"][model].append(input_record)
+        self.run_info["inputs"]["files"][model].append(input_record)
         self._save_run_info()
         logger.debug(
             f"Recorded input for {model}: {relative_path} (exists: {abs_path is not None})"

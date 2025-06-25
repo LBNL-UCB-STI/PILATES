@@ -1,5 +1,6 @@
 import os
 import logging
+from workflow_state import WorkflowState
 import gzip
 import shutil
 import pandas as pd
@@ -190,10 +191,11 @@ def copy_plans_from_asim(
         if state.provenance_tracker.is_git_repo(asim_output_data_dir):
             repo_name = os.path.basename(asim_output_data_dir)
             git_hash = state.provenance_tracker.get_git_hash(asim_output_data_dir)
-            state.record_input_file(
+            state.provenance_tracker.record_repo_input(
                 "beam",
                 asim_output_data_dir,
-                description=f"Git repo {repo_name} at {git_hash}",
+                description=f"ActivitySim output repository",
+                git_hash=git_hash,
             )
         else:
             if file_format == "csv":

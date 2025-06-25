@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import openmatrix as omx
 import pandas as pd
+from workflow_state import WorkflowState
 import requests
 from pandas.api.types import is_string_dtype
 from shapely import wkt
@@ -2426,5 +2427,20 @@ def create_asim_data_from_h5(
     )
 
     households.to_csv(os.path.join(output_dir, "households.csv"))
+    logger.info("Saved households data to households.csv")
+    state.provenance_tracker.record_input_file(
+        "ActivitySim", os.path.join(output_dir, "households.csv"), description="ActivitySim households input based on UrbanSim .h5",
+        source_file_paths=[store._path]
+    )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
+    logger.info("Saved persons data to persons.csv")
+    state.provenance_tracker.record_input_file(
+        "ActivitySim", os.path.join(output_dir, "persons.csv"), description="ActivitySim persons input based on UrbanSim .h5",
+        source_file_paths=[store._path]
+    )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
+    logger.info("Saved land use data to land_use.csv")
+    state.provenance_tracker.record_input_file(
+        "ActivitySim", os.path.join(output_dir, "land_use.csv"), description="ActivitySim land use input based on UrbanSim .h5",
+        source_file_paths=[store._path]
+    )
