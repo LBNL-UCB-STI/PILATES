@@ -10,6 +10,7 @@ from pilates.urbansim import preprocessor as usim_pre
 from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
 from pilates.utils.provenance import ProvenanceTracker  # Import the new class
+from pilates.utils.beam import get_beam_source_dir
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -253,7 +254,6 @@ class WorkflowState:
             logger.info(f"Preparing to copy BEAM configs: model_name={beam_model_name}, input_dir={input_dir}")
             # Record BEAM input files before copying
             # Source: pilates/beam/production/[region]
-            from pilates.utils.beam import get_beam_source_dir
             beam_source_dir = get_beam_source_dir(settings)
             logger.info(f"BEAM source dir resolved to: {beam_source_dir}")
             if os.path.exists(beam_source_dir):
