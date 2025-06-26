@@ -242,6 +242,60 @@ class WorkflowState:
         # Create subdirectories for models and copy input data to mutable locations
         # Record initial input files as they are copied
         have_not_copied_usim_data = True
+        # Always ensure BEAM configs are copied if BEAM is used as the traffic assignment model
+        beam_model_name = settings.get("travel_model")
+        if beam_model_name == "beam":
+            input_dir = os.path.join(
+                base_folder_path, settings["beam_local_mutable_data_folder"]
+            )
+            os.makedirs(input_dir, exist_ok=True)
+
+            logger.info(f"Preparing to copy BEAM configs: model_name={beam_model_name}, input_dir={input_dir}")
+            # Record BEAM input files before copying
+            # Source: pilates/beam/production/[region]
+            beam_source_dir = os.path.abspath(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    "pilates",
+                    "beam",
+                    "production",
+                    settings["region"],
+                )
+            )
+            logger.info(f"BEAM source dir resolved to: {beam_source_dir}")
+            if os.path.exists(beam_source_dir):
+                logger.info(f"BEAM source dir exists: {beam_source_dir}")
+                # If this is a git repo, record only the repo itself, not its contents
+                if self.provenance_tracker.is_git_repo(beam_source_dir):
+                    repo_name = os.path.basename(beam_source_dir)
+                    git_hash = self.provenance_tracker.get_git_hash(beam_source_dir)
+                    self.provenance_tracker.record_repo_input(
+                        beam_model_name,
+                        beam_source_dir,
+                        description=f"Git repo {repo_name} at {git_hash}",
+                        git_hash=git_hash,
+                    )
+                else:
+                    # Only log files under the region subdirectory
+                    for root, dirs, files in os.walk(beam_source_dir):
+                        for file in files:
+                            input_path = os.path.join(root, file)
+                            if os.path.isfile(input_path):
+                                self.record_input_file(
+                                    beam_model_name,
+                                    input_path,
+                                    description=f"BEAM input file for region {settings['region']}",
+                                )
+                # Always copy data to mutable location
+                logger.info(f"Calling beam_pre.copy_data_to_mutable_location(settings, input_dir={input_dir})")
+                beam_pre.copy_data_to_mutable_location(settings, input_dir)
+            else:
+                logger.warning(f"BEAM source dir does not exist: {beam_source_dir}")
+            output_dir = os.path.join(
+                base_folder_path, settings["beam_local_output_folder"]
+            )
+            os.makedirs(output_dir, exist_ok=True)
+
         for model_key in [
             "travel_model",
             "activity_demand_model",
@@ -249,7 +303,7 @@ class WorkflowState:
             "land_use_model",
         ]:
             model_name = settings.get(model_key)
-            if model_name:
+            if model_name and not (model_key == "travel_model" and model_name == "beam"):
                 model_output_base = os.path.join(base_folder_path, model_name)
                 os.makedirs(model_output_base, exist_ok=True)
 
