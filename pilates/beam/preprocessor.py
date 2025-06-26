@@ -24,9 +24,14 @@ def copy_data_to_mutable_location(settings, output_dir):
     # Dest:   [output_dir]/*
     region = settings["region"]
     # This is the *absolute* path to pilates/beam/production/[region]
+    # Use CWD as base if path is not absolute, else use as is
+    if os.path.isabs("pilates/beam/production"):
+        pilates_root = "/"
+    else:
+        pilates_root = os.getcwd()
     beam_production_path = os.path.abspath(
         os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            pilates_root,
             "pilates",
             "beam",
             "production",
