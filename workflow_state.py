@@ -284,21 +284,30 @@ class WorkflowState:
                     os.makedirs(input_dir, exist_ok=True)
 
                     # Record BEAM input files before copying
-                    beam_input_dir = os.path.join(self.full_path, settings["beam_local_input_folder"], settings["region"])
-                    if os.path.exists(beam_input_dir):
+                    # Source: pilates/beam/production/[region]
+                    beam_source_dir = os.path.abspath(
+                        os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                            "pilates",
+                            "beam",
+                            "production",
+                            settings["region"],
+                        )
+                    )
+                    if os.path.exists(beam_source_dir):
                         # If this is a git repo, record only the repo itself, not its contents
-                        if self.provenance_tracker.is_git_repo(beam_input_dir):
-                            repo_name = os.path.basename(beam_input_dir)
-                            git_hash = self.provenance_tracker.get_git_hash(beam_input_dir)
+                        if self.provenance_tracker.is_git_repo(beam_source_dir):
+                            repo_name = os.path.basename(beam_source_dir)
+                            git_hash = self.provenance_tracker.get_git_hash(beam_source_dir)
                             self.provenance_tracker.record_repo_input(
                                 model_name,
-                                beam_input_dir,
+                                beam_source_dir,
                                 description=f"Git repo {repo_name} at {git_hash}",
                                 git_hash=git_hash,
                             )
                         else:
                             # Only log files under the region subdirectory
-                            for root, dirs, files in os.walk(beam_input_dir):
+                            for root, dirs, files in os.walk(beam_source_dir):
                                 for file in files:
                                     input_path = os.path.join(root, file)
                                     if os.path.isfile(input_path):
