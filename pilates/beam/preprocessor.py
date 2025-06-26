@@ -16,17 +16,33 @@ beam_param_map = {
 }
 
 
+def find_project_root(start_path=None, markers=("pilates", ".git")):
+    """
+    Search upwards from start_path for a directory containing one of the marker directories/files.
+    Returns the absolute path to the project root, or None if not found.
+    """
+    if start_path is None:
+        start_path = os.getcwd()
+    current = os.path.abspath(start_path)
+    while True:
+        for marker in markers:
+            if os.path.exists(os.path.join(current, marker)):
+                return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
 def copy_data_to_mutable_location(settings, output_dir):
     """
     Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
     """
-    # Source: pilates/beam/production/[region]/*
-    # Dest:   [output_dir]/*
     region = settings["region"]
-    # This is the *absolute* path to pilates/beam/production/[region]
-    # Always resolve relative to the current working directory (where you launch run.py)
-    # Try to robustly resolve the project root, even if run from a symlink or subdir
-    pilates_root = os.path.realpath(os.getcwd())
+    # Find the project root by searching upwards for 'pilates' or '.git'
+    pilates_root = find_project_root()
+    if pilates_root is None:
+        pilates_root = os.path.realpath(os.getcwd())
     beam_production_path = os.path.abspath(
         os.path.join(
             pilates_root,
