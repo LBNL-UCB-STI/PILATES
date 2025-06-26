@@ -44,7 +44,7 @@ def main():
         os.remove(omx_path)
 
     logger.info(f"Opening Zarr skims: {zarr_path}")
-    ds = xr.open_zarr(zarr_path, engine="zarr")
+    ds = xr.open_zarr(zarr_path)
 
     # Get zone IDs and time periods
     zone_ids = None

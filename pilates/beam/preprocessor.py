@@ -1,5 +1,4 @@
 import os
-from workflow_state import WorkflowState
 import logging
 import gzip
 import shutil
