@@ -286,6 +286,16 @@ class WorkflowState:
                     # Record BEAM input files before copying
                     beam_input_dir = os.path.join(self.full_path, settings["beam_local_input_folder"], settings["region"])
                     if os.path.exists(beam_input_dir):
+                        # Only log files under the region subdirectory
+                        for root, dirs, files in os.walk(beam_input_dir):
+                            for file in files:
+                                input_path = os.path.join(root, file)
+                                if os.path.isfile(input_path):
+                                    self.record_input_file(
+                                        model_name,
+                                        input_path,
+                                        description=f"BEAM input file for region {settings['region']}",
+                                    )
                         if self.provenance_tracker.is_git_repo(beam_input_dir):
                             repo_name = os.path.basename(beam_input_dir)
                             git_hash = self.provenance_tracker.get_git_hash(beam_input_dir)
@@ -329,15 +339,17 @@ class WorkflowState:
                 if model_name == "activitysim":
                     # Record ActivitySim config files before copying
                     asim_config_dir = settings.get("asim_local_configs_folder")
-                    if asim_config_dir and os.path.exists(asim_config_dir):
-                        for root, dirs, files in os.walk(asim_config_dir):
+                    region = settings.get("region")
+                    region_config_dir = os.path.join(asim_config_dir, region) if asim_config_dir and region else None
+                    if region_config_dir and os.path.exists(region_config_dir):
+                        for root, dirs, files in os.walk(region_config_dir):
                             for file in files:
                                 input_path = os.path.join(root, file)
                                 if os.path.isfile(input_path):
                                     self.record_input_file(
                                         model_name,
                                         input_path,
-                                        description="ActivitySim configuration file",
+                                        description=f"ActivitySim configuration file for region {region}",
                                     )
 
                     # Check if the ActivitySim configs folder is a git repository
