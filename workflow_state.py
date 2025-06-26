@@ -246,6 +246,8 @@ class WorkflowState:
         # Always ensure BEAM configs are copied if BEAM is used as the traffic assignment model
         beam_model_name = settings.get("travel_model")
         if beam_model_name == "beam":
+            # Ensure we use the global get_beam_source_dir, not a local variable
+            from pilates.utils.beam import get_beam_source_dir
             input_dir = os.path.join(
                 base_folder_path, settings["beam_local_mutable_data_folder"]
             )
