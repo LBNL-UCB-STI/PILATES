@@ -377,8 +377,20 @@ def copy_plans_from_asim(
                 updated_plans = pd.read_parquet(asim_plans_path)
             else:
                 raise NotImplementedError
-            per_o = original_persons.person_id.unique()
-            per_u = updated_persons.person_id.unique()
+            if "person_id" in original_persons.columns:
+                original_persons.set_index("person_id", inplace=True, drop=True)
+                logger.warning("Setting index to person_id in original persons")
+            if "person_id" in updated_persons.columns:
+                updated_persons.set_index("person_id", inplace=True, drop=True)
+                logger.warning("Setting index to person_id in updated persons")
+            if "household_id" in original_households.columns:
+                original_households.set_index("household_id", inplace=True, drop=True)
+                logger.warning("Setting index to household_id in original households")
+            if "household_id" in updated_households.columns:
+                updated_households.set_index("household_id", inplace=True, drop=True)
+                logger.warning("Setting index to household_id in updated households")
+            per_o = original_persons.index.unique()
+            per_u = updated_persons.index.unique()
             overlap = np.in1d(per_u.astype(float), per_o.astype(float)).sum()
             logger.info(
                 "There were %s persons replanned out of %s originally, and %s of them existed before",
@@ -387,8 +399,8 @@ def copy_plans_from_asim(
                 overlap,
             )
 
-            hh_o = original_persons.household_id.unique()
-            hh_u = updated_persons.household_id.unique()
+            hh_o = original_persons.index.unique()
+            hh_u = updated_persons.index.unique()
             overlap = np.in1d(hh_u.astype(float), hh_o.astype(float)).sum()
             logger.info(
                 "There were %s households replanned out of %s originally, and %s of them existed before",
