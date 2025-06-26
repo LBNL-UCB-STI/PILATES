@@ -25,7 +25,8 @@ def copy_data_to_mutable_location(settings, output_dir):
     region = settings["region"]
     # This is the *absolute* path to pilates/beam/production/[region]
     # Always resolve relative to the current working directory (where you launch run.py)
-    pilates_root = os.getcwd()
+    # Try to robustly resolve the project root, even if run from a symlink or subdir
+    pilates_root = os.path.realpath(os.getcwd())
     beam_production_path = os.path.abspath(
         os.path.join(
             pilates_root,
@@ -35,6 +36,24 @@ def copy_data_to_mutable_location(settings, output_dir):
             region,
         )
     )
+    # If not found, try with "sources/PILATES" in the path (for symlinked or alternate layouts)
+    if not os.path.exists(beam_production_path):
+        alt_root = os.path.join(pilates_root, "sources", "PILATES")
+        alt_beam_production_path = os.path.abspath(
+            os.path.join(
+                alt_root,
+                "pilates",
+                "beam",
+                "production",
+                region,
+            )
+        )
+        if os.path.exists(alt_beam_production_path):
+            logger.info(f"Primary BEAM production path not found, using alternate: {alt_beam_production_path}")
+            beam_production_path = alt_beam_production_path
+        else:
+            logger.error(f"BEAM production input directory does not exist at either {beam_production_path} or {alt_beam_production_path}")
+            return
     dest = os.path.join(os.path.abspath(output_dir), region)
     logger.info("Copying BEAM production inputs from {0} to {1}".format(beam_production_path, dest))
 
