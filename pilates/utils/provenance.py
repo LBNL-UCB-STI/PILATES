@@ -119,10 +119,10 @@ class ProvenanceTracker:
         return {}
 
     def is_git_repo(self, path: str) -> bool:
-        """Check if a directory is a git repository."""
+        """Check if a directory is a git repository (accepts .git as file or directory)."""
         abs_path = os.path.abspath(path)
         git_dir = os.path.join(abs_path, '.git')
-        is_repo = os.path.isdir(git_dir)
+        is_repo = os.path.exists(git_dir)
         logger.debug(f"Checking if path {abs_path} is a git repo: {is_repo}")
         return is_repo
 
