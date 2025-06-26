@@ -283,6 +283,7 @@ class WorkflowState:
                     )
                     os.makedirs(input_dir, exist_ok=True)
 
+                    logger.info(f"Preparing to copy BEAM configs: model_name={model_name}, input_dir={input_dir}")
                     # Record BEAM input files before copying
                     # Source: pilates/beam/production/[region]
                     beam_source_dir = os.path.abspath(
@@ -294,7 +295,9 @@ class WorkflowState:
                             settings["region"],
                         )
                     )
+                    logger.info(f"BEAM source dir resolved to: {beam_source_dir}")
                     if os.path.exists(beam_source_dir):
+                        logger.info(f"BEAM source dir exists: {beam_source_dir}")
                         # If this is a git repo, record only the repo itself, not its contents
                         if self.provenance_tracker.is_git_repo(beam_source_dir):
                             repo_name = os.path.basename(beam_source_dir)
@@ -317,7 +320,10 @@ class WorkflowState:
                                             description=f"BEAM input file for region {settings['region']}",
                                         )
                         # Always copy data to mutable location
+                        logger.info(f"Calling beam_pre.copy_data_to_mutable_location(settings, input_dir={input_dir})")
                         beam_pre.copy_data_to_mutable_location(settings, input_dir)
+                    else:
+                        logger.warning(f"BEAM source dir does not exist: {beam_source_dir}")
                     output_dir = os.path.join(
                         base_folder_path, settings["beam_local_output_folder"]
                     )
