@@ -591,14 +591,10 @@ class ProvenanceTracker:
         description: str = None,
     ) -> int:
         """Record the start of a model run."""
-        run_id = f"{model}_{datetime.now().strftime('%Y-%m-%d')}_{uuid.uuid4().hex[:8]}"
-        logger.info(f"Starting model run with ID: {run_id}")
-
         run_id = f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
         logger.info(f"Starting model run with ID: {run_id}")
 
         run_record = {
-            "run_id": run_id,
             "run_id": run_id,
             "model": model,
             "year": year,
