@@ -21,12 +21,19 @@ def copy_data_to_mutable_location(settings, output_dir):
     Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
     """
     # Source: pilates/beam/production/[region]/*
-    # Dest:   [output_dir]/[region]/*
+    # Dest:   [output_dir]/*
     region = settings["region"]
-    beam_production_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "beam", "production", region
+    # This is the *absolute* path to pilates/beam/production/[region]
+    beam_production_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "pilates",
+            "beam",
+            "production",
+            region,
+        )
     )
-    dest = os.path.join(output_dir, region)
+    dest = os.path.abspath(output_dir)
     logger.info("Copying BEAM production inputs from {0} to {1}".format(beam_production_path, dest))
 
     if not os.path.exists(beam_production_path):
@@ -36,9 +43,9 @@ def copy_data_to_mutable_location(settings, output_dir):
     shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
 
     # Optionally copy 'common' configs if present
-    common_config_path = os.path.join(settings["beam_local_input_folder"], "common")
+    common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
     if os.path.exists(common_config_path):
-        shutil.copytree(common_config_path, os.path.join(output_dir, "common"), dirs_exist_ok=True)
+        shutil.copytree(common_config_path, os.path.join(dest, "common"), dirs_exist_ok=True)
 
     if "beam_skims_shapefile" in settings:
         logger.info(
