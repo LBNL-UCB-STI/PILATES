@@ -17,26 +17,29 @@ beam_param_map = {
 
 
 def copy_data_to_mutable_location(settings, output_dir):
-    beam_config_path = os.path.join(
-        settings["beam_local_input_folder"], settings["region"]
+    """
+    Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
+    """
+    # Source: pilates/beam/production/[region]/*
+    # Dest:   [output_dir]/[region]/*
+    region = settings["region"]
+    beam_production_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "beam", "production", region
     )
-    dest = os.path.join(output_dir, settings["region"])
-    logger.info("Copying beam inputs from {0} to {1}".format(beam_config_path, dest))
+    dest = os.path.join(output_dir, region)
+    logger.info("Copying BEAM production inputs from {0} to {1}".format(beam_production_path, dest))
 
-    ## TODO: Update configs not to rely on beam.inputDirectory or update BEAM to have it be relative to code location and/or configurable
+    if not os.path.exists(beam_production_path):
+        logger.error(f"BEAM production input directory does not exist: {beam_production_path}")
+        return
 
-    # for file in os.listdir(beam_config_path):
-    #     pathname = os.path.join(beam_config_path, file)
-    #     if file.endswith(".conf"):
-    #         shutil.copy(pathname, output_subdir)
-    #     elif file.startswith("r5") & os.path.isdir(pathname):
-    #         shutil.copytree(pathname, os.path.join(output_subdir, file))
-    #     elif file == "urbansim":
-    #         shutil.copytree(pathname, os.path.join(output_subdir, file))
+    shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
 
-    shutil.copytree(beam_config_path, dest, dirs_exist_ok=True)
+    # Optionally copy 'common' configs if present
     common_config_path = os.path.join(settings["beam_local_input_folder"], "common")
-    shutil.copytree(common_config_path, os.path.join(output_dir, "common"))
+    if os.path.exists(common_config_path):
+        shutil.copytree(common_config_path, os.path.join(output_dir, "common"), dirs_exist_ok=True)
+
     if "beam_skims_shapefile" in settings:
         logger.info(
             "Updating beam config to use zone id of {0}".format(
