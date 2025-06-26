@@ -42,6 +42,16 @@ def copy_data_to_mutable_location(settings, output_dir):
 
     shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
 
+    # Log the files that were copied for verification
+    if os.path.exists(dest):
+        copied_files = []
+        for root, dirs, files in os.walk(dest):
+            for file in files:
+                copied_files.append(os.path.relpath(os.path.join(root, file), dest))
+        logger.info(f"BEAM config copy complete. Files in {dest}: {copied_files}")
+    else:
+        logger.warning(f"Destination directory {dest} does not exist after copy!")
+
     # Optionally copy 'common' configs if present
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
     if os.path.exists(common_config_path):
