@@ -33,7 +33,7 @@ def copy_data_to_mutable_location(settings, output_dir):
             region,
         )
     )
-    dest = os.path.abspath(output_dir)
+    dest = os.path.join(os.path.abspath(output_dir), region)
     logger.info("Copying BEAM production inputs from {0} to {1}".format(beam_production_path, dest))
 
     if not os.path.exists(beam_production_path):
