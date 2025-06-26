@@ -286,24 +286,27 @@ class WorkflowState:
                     # Record BEAM input files before copying
                     beam_input_dir = os.path.join(self.full_path, settings["beam_local_input_folder"], settings["region"])
                     if os.path.exists(beam_input_dir):
-                        # Only log files under the region subdirectory
-                        for root, dirs, files in os.walk(beam_input_dir):
-                            for file in files:
-                                input_path = os.path.join(root, file)
-                                if os.path.isfile(input_path):
-                                    self.record_input_file(
-                                        model_name,
-                                        input_path,
-                                        description=f"BEAM input file for region {settings['region']}",
-                                    )
+                        # If this is a git repo, record only the repo itself, not its contents
                         if self.provenance_tracker.is_git_repo(beam_input_dir):
                             repo_name = os.path.basename(beam_input_dir)
                             git_hash = self.provenance_tracker.get_git_hash(beam_input_dir)
-                            self.record_input_file(
+                            self.provenance_tracker.record_repo_input(
                                 model_name,
                                 beam_input_dir,
                                 description=f"Git repo {repo_name} at {git_hash}",
+                                git_hash=git_hash,
                             )
+                        else:
+                            # Only log files under the region subdirectory
+                            for root, dirs, files in os.walk(beam_input_dir):
+                                for file in files:
+                                    input_path = os.path.join(root, file)
+                                    if os.path.isfile(input_path):
+                                        self.record_input_file(
+                                            model_name,
+                                            input_path,
+                                            description=f"BEAM input file for region {settings['region']}",
+                                        )
                         # Always copy data to mutable location
                         beam_pre.copy_data_to_mutable_location(settings, input_dir)
                     output_dir = os.path.join(
@@ -342,29 +345,29 @@ class WorkflowState:
                     region = settings.get("region")
                     region_config_dir = os.path.join(asim_config_dir, region) if asim_config_dir and region else None
                     if region_config_dir and os.path.exists(region_config_dir):
-                        for root, dirs, files in os.walk(region_config_dir):
-                            for file in files:
-                                input_path = os.path.join(root, file)
-                                if os.path.isfile(input_path):
-                                    self.record_input_file(
-                                        model_name,
-                                        input_path,
-                                        description=f"ActivitySim configuration file for region {region}",
-                                    )
-
-                    # Check if the ActivitySim configs folder is a git repository
-                    asim_config_dir = os.path.join(settings['asim_local_configs_folder'], settings['region'])
-                    if os.path.exists(asim_config_dir):
-                        if self.provenance_tracker.is_git_repo(asim_config_dir):
-                            repo_name = os.path.basename(asim_config_dir)
-                            git_hash = self.provenance_tracker.get_git_hash(asim_config_dir)
+                        # If this is a git repo, record only the repo itself, not its contents
+                        if self.provenance_tracker.is_git_repo(region_config_dir):
+                            repo_name = os.path.basename(region_config_dir)
+                            git_hash = self.provenance_tracker.get_git_hash(region_config_dir)
                             self.provenance_tracker.record_repo_input(
                                 model_name,
-                                asim_config_dir,
+                                region_config_dir,
                                 description=f"ActivitySim configuration repository",
                                 git_hash=git_hash,
                             )
-                        # Always copy data to mutable location
+                        else:
+                            for root, dirs, files in os.walk(region_config_dir):
+                                for file in files:
+                                    input_path = os.path.join(root, file)
+                                    if os.path.isfile(input_path):
+                                        self.record_input_file(
+                                            model_name,
+                                            input_path,
+                                            description=f"ActivitySim configuration file for region {region}",
+                                        )
+
+                    # Always copy data to mutable location
+                    if region_config_dir and os.path.exists(region_config_dir):
                         asim_pre.copy_data_to_mutable_location(settings, base_folder_path)
                     output_dir = os.path.join(
                         base_folder_path, settings["asim_local_output_folder"]

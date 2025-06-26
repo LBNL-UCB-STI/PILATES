@@ -467,11 +467,12 @@ class ProvenanceTracker:
         """
         import glob
 
+        # If this is a git repo, record only the repo itself, not its contents
         if self.is_git_repo(input_dir):
             repo_name = os.path.basename(input_dir)
             git_hash = self.get_git_hash(input_dir)
             logger.info(f"Recording git repo {repo_name} with hash {git_hash} as input")
-            self.record_input_file(model, input_dir, description=f"Git repo {repo_name} at {git_hash}")
+            self.record_repo_input(model, input_dir, description=f"Git repo {repo_name} at {git_hash}", git_hash=git_hash)
             return
 
         if not os.path.exists(input_dir):
