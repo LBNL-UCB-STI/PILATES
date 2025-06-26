@@ -102,7 +102,7 @@ def make_archive(source, destination):
     shutil.move("%s.%s" % (name, fmt), destination)
 
 
-def copy_vehicles_from_atlas(settings, state: "WorkflowState"):
+def copy_vehicles_from_atlas(settings, state):
     beam_scenario_folder = os.path.join(
         state.full_path,
         settings["beam_local_mutable_data_folder"],
@@ -129,7 +129,7 @@ def copy_vehicles_from_atlas(settings, state: "WorkflowState"):
 
 
 def copy_plans_from_asim(
-    settings, state: "WorkflowState", replanning_iteration_number=0
+    settings, state, replanning_iteration_number=0
 ):
     asim_output_data_dir = os.path.join(
         state.full_path, settings["asim_local_output_folder"]
