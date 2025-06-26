@@ -1,23 +1,6 @@
 # Robustly resolve the BEAM source directory, matching logic in pilates/beam/preprocessor.py
 import os
-
-def find_project_root(start_path=None, markers=("pilates", ".git")):
-    """
-    Search upwards from start_path for a directory containing one of the marker directories/files.
-    Returns the absolute path to the project root, or None if not found.
-    """
-    if start_path is None:
-        start_path = os.getcwd()
-    current = os.path.abspath(start_path)
-    while True:
-        for marker in markers:
-            if os.path.exists(os.path.join(current, marker)):
-                return current
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
-    return None
+from pilates.utils.provenance import find_project_root
 
 def get_beam_source_dir(settings):
     """
