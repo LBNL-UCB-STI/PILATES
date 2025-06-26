@@ -79,8 +79,8 @@ def main():
         logger.debug(f"Processing variable '{key}' with shape {data.shape}")
 
         if data_array.ndim == 2:
-            # Write 2D matrix directly
-            omx_file[key] = np.nan_to_num(data)
+            # Write 2D matrix directly as float32
+            omx_file[key] = np.nan_to_num(data).astype(np.float32)
             written_count += 1
             logger.info(f"Wrote 2D matrix '{key}'")
         elif data_array.ndim == 3:
@@ -92,7 +92,7 @@ def main():
             for t_idx, tp in enumerate(time_periods):
                 new_key = f"{key}__{tp}"
                 slice_data = data[:, :, t_idx]
-                omx_file[new_key] = np.nan_to_num(slice_data)
+                omx_file[new_key] = np.nan_to_num(slice_data).astype(np.float32)
                 # Add attributes for compatibility
                 strsplit = key.rsplit("_", 1)
                 omx_file[new_key].attrs["measure"] = strsplit[-1]
