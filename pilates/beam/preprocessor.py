@@ -24,8 +24,8 @@ def copy_data_to_mutable_location(settings, output_dir):
     # Dest:   [output_dir]/*
     region = settings["region"]
     # This is the *absolute* path to pilates/beam/production/[region]
-    # Always resolve relative to the project root (where run.py is), not CWD
-    pilates_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # Always resolve relative to the current working directory (where you launch run.py)
+    pilates_root = os.getcwd()
     beam_production_path = os.path.abspath(
         os.path.join(
             pilates_root,
