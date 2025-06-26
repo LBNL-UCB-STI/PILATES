@@ -1928,6 +1928,9 @@ def _transfer_tnc_provider_data_zarr(
     # Key: (mode, measure), Value: list of (period, omx_key)
     grouped_sources = {}
 
+    # Define TNC measures with underscores (if any)
+    TNC_MEASURES_WITH_UNDERSCORES = set()  # Add any such measures if needed
+
     for omx_key in all_partial_vars:
         # Split key into measure_part and period
         parts = omx_key.split("__")
@@ -2336,11 +2339,12 @@ def write_zarr_skim_as_omx(
 
 
 def merge_current_zarr_od_skims(
-    all_skims_path, beam_output_dir, settings, override=None
+    all_skims_path, beam_output_dir, settings, override=None, state=None
 ):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
     Handles TNC consolidation if enabled.
+    Records provenance for all skims lineage.
     """
     logger.info(
         f"Starting merge of current BEAM OMX skims into Zarr at {all_skims_path}"
@@ -2627,6 +2631,36 @@ def merge_current_zarr_od_skims(
     except Exception as e:
         logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
         merge_successful = False  # Indicate failure
+
+    # --- Provenance tracking for skims lineage ---
+    if state is not None:
+        # Record the input zarr skims before update (if it existed)
+        if os.path.exists(all_skims_path):
+            state.record_input_file(
+                "activitysim",
+                all_skims_path,
+                description="Previous zarr skims before merge"
+            )
+        # Record the BEAM partial skims file being merged in (if it existed)
+        if partialSkims and current_omx_skims_path and os.path.exists(current_omx_skims_path):
+            state.record_input_file(
+                "activitysim",
+                current_omx_skims_path,
+                description="BEAM partial skims for merge"
+            )
+        # Record the output zarr skims file after the update, with source_file_paths
+        source_files = []
+        if os.path.exists(all_skims_path):
+            source_files.append(all_skims_path)
+        if partialSkims and current_omx_skims_path and os.path.exists(current_omx_skims_path):
+            source_files.append(current_omx_skims_path)
+        if os.path.exists(all_skims_path):
+            state.record_output_file(
+                "activitysim",
+                all_skims_path,
+                description="Updated zarr skims after merge",
+                source_file_paths=source_files
+            )
 
     # Close the datasets
     skims_ds.close()

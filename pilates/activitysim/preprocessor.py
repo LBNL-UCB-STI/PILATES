@@ -1165,7 +1165,7 @@ def _create_offset(settings, order, data_dir=None):
 
 
 def create_skims_from_beam(
-    settings, state: "WorkflowState", output_dir=None, overwrite=True
+    settings, state, output_dir=None, overwrite=True
 ):
     if not output_dir:
         output_dir = os.path.join(
@@ -2150,7 +2150,7 @@ def _create_land_use_table(
     return zones
 
 
-def copy_data_to_mutable_location(settings, folder_path):
+def copy_data_to_mutable_location(settings, folder_path, state=None):
     input_dir = os.path.join(folder_path, settings["asim_local_mutable_data_folder"])
     os.makedirs(input_dir, exist_ok=True)
     region = settings["region"]
@@ -2187,6 +2187,13 @@ def copy_data_to_mutable_location(settings, folder_path):
             )
         )
         shutil.copyfile(input_skims_location, mutable_skims_location)
+        # Provenance: record initial default skims as input to ActivitySim
+        if state is not None:
+            state.record_input_file(
+                "activitysim",
+                input_skims_location,
+                description="Initial default skims copied from BEAM input directory"
+            )
     else:
         if os.path.exists(mutable_skims_location):
             logger.info(
@@ -2297,7 +2304,7 @@ def copy_beam_geoms(
 
 
 def create_asim_data_from_h5(
-    settings, state: "WorkflowState", warm_start=False, output_dir=None
+    settings, state, warm_start=False, output_dir=None
 ):
     # warm start: year = start_year
     # asim_no_usim: year = start_year
@@ -2428,18 +2435,18 @@ def create_asim_data_from_h5(
     households.to_csv(os.path.join(output_dir, "households.csv"))
     logger.info("Saved households data to households.csv")
     state.provenance_tracker.record_input_file(
-        "ActivitySim", os.path.join(output_dir, "households.csv"), description="ActivitySim households input based on UrbanSim .h5",
+        "activitysim", os.path.join(output_dir, "households.csv"), description="activitysim households input based on UrbanSim .h5",
         source_file_paths=[store._path]
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
     state.provenance_tracker.record_input_file(
-        "ActivitySim", os.path.join(output_dir, "persons.csv"), description="ActivitySim persons input based on UrbanSim .h5",
+        "activitysim", os.path.join(output_dir, "persons.csv"), description="activitysim persons input based on UrbanSim .h5",
         source_file_paths=[store._path]
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
     state.provenance_tracker.record_input_file(
-        "ActivitySim", os.path.join(output_dir, "land_use.csv"), description="ActivitySim land use input based on UrbanSim .h5",
+        "activitysim", os.path.join(output_dir, "land_use.csv"), description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path]
     )

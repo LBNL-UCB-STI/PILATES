@@ -109,6 +109,10 @@ class ProvenanceTracker:
     Enhanced provenance tracking that maintains comprehensive run_info.json files.
     """
 
+    def _normalize_model_name(self, model: str) -> str:
+        """Normalize model name to lowercase for consistency."""
+        return model.lower() if model else model
+
     def __init__(self, run_id: str, output_path: str, folder_name: str = None):
         self.run_id = run_id
         self.output_path = os.path.abspath(output_path) if output_path else None
@@ -225,21 +229,6 @@ class ProvenanceTracker:
         except (IOError, OSError) as e:
             logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
             return None
-        """Calculate SHA256 hash of a file with improved error handling."""
-        abs_file_path = self._validate_file_path(file_path)
-        if not abs_file_path:
-            return None
-
-        try:
-            sha256_hash = hashlib.sha256()
-            with open(abs_file_path, "rb") as f:
-                # Read and update hash string value in blocks of 4K
-                for chunk in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(chunk)
-            return sha256_hash.hexdigest()
-        except (IOError, OSError) as e:
-            logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
-            return None
 
     def _calculate_settings_hash(self, settings: Dict[str, Any]) -> str:
         """Calculate SHA256 hash of settings dictionary."""
@@ -304,6 +293,7 @@ class ProvenanceTracker:
             description: Description of the repository
             git_hash: Git hash of the repository
         """
+        model = self._normalize_model_name(model)
         abs_path = self._validate_file_path(repo_path)
         if not abs_path:
             logger.warning(f"Skipping missing repository for {model}: {repo_path}")
@@ -335,6 +325,7 @@ class ProvenanceTracker:
         description: str = None,
         source_file_paths: List[str] = None,  # New parameter for source file paths
         skip_missing: bool = True,
+        model_run_id: str = None,
     ):
         """
         Record an input file for a model with validation.
@@ -345,7 +336,13 @@ class ProvenanceTracker:
             source_run_id: Run ID that produced this file (if known)
             description: Description of the input file
             skip_missing: If True, skip recording missing files; if False, record anyway
+            model_run_id: The model run_id (from model_runs) that is using this file as input
         """
+        model = self._normalize_model_name(model)
+        # Use the current model_run_id if not explicitly provided
+        if model_run_id is None and hasattr(self, "current_model_run_id"):
+            model_run_id = self.current_model_run_id
+
         # Load metadata and apply it to the input record
         metadata = self._load_metadata(file_path)
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
@@ -355,8 +352,25 @@ class ProvenanceTracker:
         if model not in self.run_info["inputs"]["files"]:
             self.run_info["inputs"]["files"][model] = []
 
+        # Try to find an existing input record for this file_path
+        existing = None
+        for rec in self.run_info["inputs"]["files"][model]:
+            if rec["file_path"] == relative_path:
+                existing = rec
+                break
+
+        if existing:
+            # Overwrite model_run_id with the new one if provided
+            if model_run_id:
+                existing["model_run_id"] = str(model_run_id)
+            self._save_run_info()
+            logger.debug(
+                f"Updated input for {model}: {relative_path} (set model_run_id {model_run_id})"
+            )
+            return
+
         input_record = {
-            "run_id": [self.run_id],  # Associate the current run_id
+            "model_run_id": str(model_run_id) if model_run_id else None,
             "file_path": relative_path,
             "source_run_id": source_run_id,
             "source_file_paths": [],  # New field to store source file paths
@@ -369,7 +383,6 @@ class ProvenanceTracker:
         # Integrate metadata into the main file's record
         if metadata:
             input_record.update(metadata)
-
 
         if source_file_paths:
             input_record["source_file_paths"] = [
@@ -431,6 +444,8 @@ class ProvenanceTracker:
         year: int = None,
         description: str = None,
         skip_missing: bool = True,
+        model_run_id: str = None,
+        source_file_paths: list = None,
     ):
         """
         Record an output file for a model with validation.
@@ -441,7 +456,14 @@ class ProvenanceTracker:
             year: Simulation year the output corresponds to
             description: Description of the output file
             skip_missing: If True, skip recording missing files; if False, record anyway
+            model_run_id: The model run_id (from model_runs) that produced this output
+            source_file_paths: List of input file paths that produced this output (optional)
         """
+        model = self._normalize_model_name(model)
+        # Use the current model_run_id if not explicitly provided
+        if model_run_id is None and hasattr(self, "current_model_run_id"):
+            model_run_id = self.current_model_run_id
+
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return
@@ -450,7 +472,7 @@ class ProvenanceTracker:
             self.run_info["outputs"][model] = []
 
         output_record = {
-            "run_id": self.run_id,
+            "model_run_id": str(model_run_id) if model_run_id else None,
             "file_path": relative_path,
             "file_hash": self._calculate_file_hash(path_to_use) if path_to_use else None,
             "created_at": datetime.now().isoformat(),
@@ -458,6 +480,10 @@ class ProvenanceTracker:
             "description": description,
             "exists": path_to_use is not None,
         }
+        if source_file_paths:
+            output_record["source_file_paths"] = [
+                self._get_relative_path(path) for path in source_file_paths
+            ]
 
         self.run_info["outputs"][model].append(output_record)
         self._save_run_info()
@@ -610,11 +636,11 @@ class ProvenanceTracker:
         description: str = None,
     ) -> int:
         """Record the start of a model run."""
-        run_id = f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
-        logger.info(f"Starting model run with ID: {run_id}")
+        model_run_id = f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
+        logger.info(f"Starting model run with ID: {model_run_id}")
 
         run_record = {
-            "run_id": run_id,
+            "model_run_id": model_run_id,
             "model": model,
             "year": year,
             "iteration": iteration,
@@ -623,6 +649,8 @@ class ProvenanceTracker:
             "completed_at": None,
             "status": "running",
         }
+
+        self.current_model_run_id = model_run_id  # Store the current model_run_id for later use
 
         self.run_info["model_runs"].append(run_record)
         self._save_run_info()
@@ -713,11 +741,12 @@ class ProvenanceTracker:
         """Find input files matching a pattern for a specific model."""
         import fnmatch
 
-        if model not in self.run_info.get("inputs", {}):
+        model = self._normalize_model_name(model)
+        if model not in self.run_info.get("inputs", {}).get("files", {}):
             return []
 
         matching_inputs = []
-        for input_record in self.run_info["inputs"][model]:
+        for input_record in self.run_info["inputs"]["files"].get(model, []):
             if fnmatch.fnmatch(input_record["file_path"], pattern):
                 matching_inputs.append(input_record)
 
@@ -727,6 +756,7 @@ class ProvenanceTracker:
         """Find output files matching a pattern for a specific model."""
         import fnmatch
 
+        model = self._normalize_model_name(model)
         if model not in self.run_info.get("outputs", {}):
             return []
 

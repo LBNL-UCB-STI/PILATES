@@ -451,6 +451,7 @@ class WorkflowState:
         source_run_id: str = None,
         description: str = None,
         source_file_paths: list = None,
+        model_run_id: str = None,
     ):
         """Record an input file for provenance tracking."""
         if self.provenance_tracker:
@@ -460,7 +461,7 @@ class WorkflowState:
             if os.path.exists(abs_file_path):
                 logger.debug(f"File exists: {abs_file_path}")
                 self.provenance_tracker.record_input_file(
-                    model, abs_file_path, source_run_id, description, source_file_paths
+                    model, abs_file_path, source_run_id, description, source_file_paths, model_run_id=model_run_id
                 )
             else:
                 logger.warning(f"Input file not found: {abs_file_path}")
@@ -481,7 +482,7 @@ class WorkflowState:
             )
 
     def record_output_file(
-        self, model: str, file_path: str, year: int = None, description: str = None
+        self, model: str, file_path: str, year: int = None, description: str = None, model_run_id: str = None, source_file_paths: list = None
     ):
         """Record an output file for provenance tracking."""
         if self.provenance_tracker:
@@ -489,7 +490,7 @@ class WorkflowState:
             abs_file_path = os.path.abspath(file_path)
             if os.path.exists(abs_file_path):
                 self.provenance_tracker.record_output_file(
-                    model, abs_file_path, year, description
+                    model, abs_file_path, year, description, model_run_id=model_run_id, source_file_paths=source_file_paths
                 )
             else:
                 logger.warning(f"Output file not found: {abs_file_path}")

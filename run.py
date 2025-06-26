@@ -61,12 +61,12 @@ def is_already_opened_in_write_mode(filename):
     return False
 
 
-def record_inputs_and_outputs(state, model, inputs=None, outputs=None, year=None):
+def record_inputs_and_outputs(state, model, inputs=None, outputs=None, year=None, model_run_id=None):
     """Helper function to record inputs and outputs for provenance tracking."""
     if inputs:
         for file_path, description in inputs:
             if os.path.exists(file_path):
-                state.record_input_file(model, file_path, description=description)
+                state.record_input_file(model, file_path, description=description, model_run_id=model_run_id)
             else:
                 logger.warning(f"Input file not found: {file_path}")
 
@@ -74,7 +74,7 @@ def record_inputs_and_outputs(state, model, inputs=None, outputs=None, year=None
         for file_path, description in outputs:
             if os.path.exists(file_path):
                 state.record_output_file(
-                    model, file_path, year=year, description=description
+                    model, file_path, year=year, description=description, model_run_id=model_run_id
                 )
             else:
                 logger.warning(f"Output file not found: {file_path}")
@@ -348,6 +348,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
         #         (usim_output_store_path, "UrbanSim output for warm start"),
         #         (expected_beam_skims_path, "BEAM skims for warm start"),
         #     ],
+        #     model_run_id=asim_run_index
         # )
 
         if not os.path.exists(
@@ -381,6 +382,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
         #         ),
         #     ],
         #     year=state.current_year,
+        #     model_run_id=asim_run_index
         # )
 
         # 3. RUN ACTIVITYSIM IN WARM START MODE
@@ -428,11 +430,13 @@ def warm_start_activities(settings, state: WorkflowState, client):
             land_use_model,
             asim_warm_start_persons_path,
             description="ActivitySim warm start persons output for USim update",
+            model_run_id=asim_run_index
         )
         state.record_input_file(
             land_use_model,
             asim_warm_start_households_path,
             description="ActivitySim warm start households output for USim update",
+            model_run_id=asim_run_index
         )
         usim_input_store_path = os.path.join(
             state.full_path,
@@ -443,6 +447,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
             land_use_model,
             usim_input_store_path,
             description="UrbanSim input data before warm start update",
+            model_run_id=asim_run_index
         )
 
         asim_post.update_usim_inputs_after_warm_start(
@@ -461,6 +466,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
             usim_input_store_path,
             year=state.current_year,
             description="UrbanSim input data after warm start update",
+            model_run_id=asim_run_index
         )
 
     logger.info("Done!")
@@ -497,6 +503,7 @@ def forecast_land_use(
             usim_datastore_fpath,
             year=workflow_state.forecast_year,
             description="UrbanSim forecast output data",
+            model_run_id=usim_run_index
         )
     else:
         logger.critical(
@@ -536,10 +543,12 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
     asim_skims_path = os.path.join(
         asim_output_dir, settings["skims_fname"]
     )  # Assuming skims are here
+
+    # usim_run_index is not defined in this function, so do not pass model_run_id here
     workflow_state.record_input_file(
         land_use_model,
         asim_skims_path,
-        description="ActivitySim skims for UrbanSim input",
+        description="ActivitySim skims for UrbanSim input"
     )
 
     usim_pre.add_skims_to_model_data(settings, output_dir, asim_output_dir)
@@ -560,7 +569,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
     workflow_state.record_input_file(
         land_use_model,
         usim_input_in_run_dir,
-        description="UrbanSim input data for forecast",
+        description="UrbanSim input data for forecast"
     )
 
     if is_already_opened_in_write_mode(
@@ -690,7 +699,7 @@ def run_atlas(
                         vehicle_ownership_model,
                         os.path.join(atlas_input_csv_dir, file),
                         year=yr_it,
-                        description="Atlas preprocessed input CSV",
+                        description="Atlas preprocessed input CSV"
                     )
 
     # calculate accessibility if beamac != 0
@@ -731,7 +740,7 @@ def run_atlas(
             vehicle_ownership_model,
             atlas_acc_output_path,
             year=state.forecast_year,
-            description="Atlas accessibility output CSV",
+            description="Atlas accessibility output CSV"
         )
 
     # 3. RUN ATLAS via docker container client
@@ -779,6 +788,7 @@ def run_atlas(
         atlas_vehicle_output_file,
         year=yr,
         description="Atlas raw vehicle ownership output CSV",
+        model_run_id=atlas_run_index
     )
 
     # Record inputs to Atlas postprocessing (Atlas output CSV and UrbanSim output H5)
@@ -801,6 +811,7 @@ def run_atlas(
         usim_output_store_path,
         year=state.forecast_year,
         description="UrbanSim output data after Atlas update",
+        model_run_id=atlas_run_index
     )
 
     # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
@@ -832,6 +843,7 @@ def run_atlas(
         beam_vehicles_path,
         year=yr,
         description="BEAM vehicles input file generated from Atlas/UrbanSim",
+        model_run_id=atlas_run_index
     )
 
     logger.info("Atlas Done!")
@@ -868,6 +880,7 @@ def run_atlas_auto(
             os.path.join(atlas_output_path, gz_fname),
             year=yr,
             description="Atlas gzipped vehicle ownership output (skipped run)",
+            model_run_id=None
         )
         return
 
@@ -947,6 +960,7 @@ def generate_activity_plans(
                 activity_demand_model,
                 asim_config_path,
                 description="ActivitySim settings file before seed update",
+                model_run_id=None
             )
 
             asim_pre.update_asim_config(
@@ -958,6 +972,7 @@ def generate_activity_plans(
                 activity_demand_model,
                 asim_config_path,
                 description="ActivitySim settings file after seed update",
+                model_run_id=None
             )
 
         except FileNotFoundError:
@@ -1049,7 +1064,7 @@ def generate_activity_plans(
         )
 
         # record_inputs_and_outputs(
-        #     state, activity_demand_model, outputs=outputs, year=state.forecast_year
+        #     state, activity_demand_model, outputs=outputs, year=state.forecast_year, model_run_id=asim_main_run_index
         # )
 
         # 3. GENERATE ACTIVITY PLANS
@@ -1100,6 +1115,17 @@ def generate_activity_plans(
             year=state.forecast_year,
             iteration=state.current_inner_iter,
         )
+
+        # Update model_run_id for all activitysim inputs before launching the run
+        if state.provenance_tracker:
+            prov = state.provenance_tracker
+            # Use lowercase for model name
+            model_key = "activitysim"
+            if model_key in prov.run_info["inputs"]["files"]:
+                for rec in prov.run_info["inputs"]["files"][model_key]:
+                    if asim_main_run_index not in rec.get("model_run_id", []):
+                        rec.setdefault("model_run_id", []).append(asim_main_run_index)
+                prov._save_run_info()
 
         asim_cmd = get_base_asim_cmd(settings)
         if resume_after:
@@ -1214,6 +1240,7 @@ def generate_activity_plans(
                 usim_input_store_path_next,
                 year=state.forecast_year + settings.get("land_use_freq", 1),
                 description="UrbanSim input data for next iteration",
+                model_run_id=asim_main_run_index
             )
 
     logger.info("Done!")
@@ -1400,7 +1427,7 @@ def run_traffic_assignment(
             state.record_input_file(
                 travel_model,
                 expected_config_path_in_run_dir,
-                description="BEAM configuration file used for run",
+                description="BEAM configuration file used for run"
             )
         else:
             logger.warning(
@@ -1448,6 +1475,7 @@ def run_traffic_assignment(
                 path_to_mutable_od_skims,
                 year=state.forecast_year,
                 description="BEAM raw OD skims output",
+                model_run_id=beam_run_index
             )
         if os.path.exists(path_to_origin_skims):
             state.record_output_file(
@@ -1455,6 +1483,7 @@ def run_traffic_assignment(
                 path_to_origin_skims,
                 year=state.forecast_year,
                 description="BEAM raw origin skims output",
+                model_run_id=beam_run_index
             )
 
         if skimFormat == "csv.gz":
@@ -1491,6 +1520,7 @@ def run_traffic_assignment(
                     asim_skims_path,
                     year=state.forecast_year,
                     description="ActivitySim skims input file updated by BEAM postprocessing",
+                    model_run_id=beam_run_index
                 )
 
         else:  # OMX or Zarr
@@ -1558,6 +1588,7 @@ def run_traffic_assignment(
                         asim_skims_path,
                         year=state.forecast_year,
                         description=f"ActivitySim skims input file updated by BEAM postprocessing ({skimFormat})",
+                        model_run_id=beam_run_index
                     )
 
                 if current_od_skims == previous_od_skims and iteration_number > 0:
@@ -1696,6 +1727,7 @@ def postprocess_all(settings, state: WorkflowState):
                                 os.path.join(processed_output_dir, file),
                                 year=year,
                                 description=f"Processed BEAM output file: {file} (Year {year}, Iter {iter})",
+                                model_run_id=postprocess_run_index
                             )
 
                 processed_years.add(year)  # Mark year as processed (only latest iter)
@@ -2305,7 +2337,7 @@ def main():
                                     settings.get("travel_model", "beam"),
                                     beam_vehicles_path,
                                     year=state.forecast_year,
-                                    description=f"BEAM vehicles input file updated from Atlas (Iter {iteration+1})",
+                                    description=f"BEAM vehicles input file updated from Atlas (Iter {iteration+1})"
                                 )
 
                         logger.info(
