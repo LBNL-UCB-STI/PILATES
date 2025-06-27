@@ -2,6 +2,8 @@ import uuid
 import logging
 import json
 import os
+import subprocess
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
