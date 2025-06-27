@@ -73,8 +73,9 @@ def copy_data_to_mutable_location(settings, output_dir):
 
     # Optionally copy 'common' configs if present
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
+    dest = os.path.join(os.path.abspath(output_dir), "common")
     if os.path.exists(common_config_path):
-        shutil.copytree(common_config_path, os.path.join(dest, "common"), dirs_exist_ok=True)
+        shutil.copytree(common_config_path, dest, dirs_exist_ok=True)
 
     if "beam_skims_shapefile" in settings:
         logger.info(
