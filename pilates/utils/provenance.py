@@ -1,11 +1,17 @@
 import uuid
 import logging
-import hashlib
 import json
 import os
-import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+
+from pilates.utils.git_utils import is_git_repo, get_git_hash
+from pilates.utils.file_utils import (
+    _validate_file_path,
+    _get_relative_path,
+    _calculate_file_hash,
+    _load_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,14 @@ def find_project_root(start_path=None, markers=("pilates", ".git")):
             break
         current = parent
     return None
+
+# Re-export for backward compatibility
+is_git_repo = is_git_repo
+get_git_hash = get_git_hash
+_validate_file_path = _validate_file_path
+_get_relative_path = _get_relative_path
+_calculate_file_hash = _calculate_file_hash
+_load_metadata = _load_metadata
 
 
 class RunContext:
