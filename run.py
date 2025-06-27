@@ -1123,8 +1123,14 @@ def generate_activity_plans(
             model_key = "activitysim"
             if model_key in prov.run_info["inputs"]["files"]:
                 for rec in prov.run_info["inputs"]["files"][model_key]:
-                    if asim_main_run_index not in rec.get("model_run_id", []):
-                        rec.setdefault("model_run_id", []).append(asim_main_run_index)
+                    model_run_ids = rec.get("model_run_id")
+                    if model_run_ids is None:
+                        model_run_ids = []
+                    elif not isinstance(model_run_ids, list):
+                        model_run_ids = [model_run_ids]
+                    if asim_main_run_index not in model_run_ids:
+                        model_run_ids.append(asim_main_run_index)
+                        rec["model_run_id"] = model_run_ids
                 prov._save_run_info()
 
         asim_cmd = get_base_asim_cmd(settings)
