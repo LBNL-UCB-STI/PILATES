@@ -1,6 +1,7 @@
 import os
 from pilates.utils.provenance import find_project_root
 
+
 def get_beam_source_dir(settings):
     """
     Robustly resolve the BEAM source directory, matching logic in pilates/beam/preprocessor.py.

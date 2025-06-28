@@ -1164,9 +1164,7 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(
-    settings, state, output_dir=None, overwrite=True
-):
+def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> str:
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings["asim_local_mutable_data_folder"]
@@ -2192,7 +2190,7 @@ def copy_data_to_mutable_location(settings, folder_path, state=None):
             state.record_input_file(
                 "activitysim",
                 input_skims_location,
-                description="Initial default skims copied from BEAM input directory"
+                description="Initial default skims copied from BEAM input directory",
             )
     else:
         if os.path.exists(mutable_skims_location):
@@ -2303,9 +2301,7 @@ def copy_beam_geoms(
         zones.to_file(beam_shape_location)
 
 
-def create_asim_data_from_h5(
-    settings, state, warm_start=False, output_dir=None
-):
+def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None):
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
@@ -2434,19 +2430,25 @@ def create_asim_data_from_h5(
 
     households.to_csv(os.path.join(output_dir, "households.csv"))
     logger.info("Saved households data to households.csv")
-    state.provenance_tracker.record_input_file(
-        "activitysim", os.path.join(output_dir, "households.csv"), description="activitysim households input based on UrbanSim .h5",
-        source_file_paths=[store._path]
+    state.record_input_file(
+        "activitysim",
+        os.path.join(output_dir, "households.csv"),
+        description="activitysim households input based on UrbanSim .h5",
+        source_file_paths=[store._path],
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
-    state.provenance_tracker.record_input_file(
-        "activitysim", os.path.join(output_dir, "persons.csv"), description="activitysim persons input based on UrbanSim .h5",
-        source_file_paths=[store._path]
+    state.record_input_file(
+        "activitysim",
+        os.path.join(output_dir, "persons.csv"),
+        description="activitysim persons input based on UrbanSim .h5",
+        source_file_paths=[store._path],
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
-    state.provenance_tracker.record_input_file(
-        "activitysim", os.path.join(output_dir, "land_use.csv"), description="activitysim land use input based on UrbanSim .h5",
-        source_file_paths=[store._path]
+    state.record_input_file(
+        "activitysim",
+        os.path.join(output_dir, "land_use.csv"),
+        description="activitysim land use input based on UrbanSim .h5",
+        source_file_paths=[store._path],
     )

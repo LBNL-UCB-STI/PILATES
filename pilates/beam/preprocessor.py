@@ -16,6 +16,7 @@ beam_param_map = {
     "skim_zone_geoid_col": "beam.agentsim.taz.tazIdFieldName",
 }
 
+
 def copy_data_to_mutable_location(settings, output_dir):
     """
     Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
@@ -47,16 +48,26 @@ def copy_data_to_mutable_location(settings, output_dir):
             )
         )
         if os.path.exists(alt_beam_production_path):
-            logger.info(f"Primary BEAM production path not found, using alternate: {alt_beam_production_path}")
+            logger.info(
+                f"Primary BEAM production path not found, using alternate: {alt_beam_production_path}"
+            )
             beam_production_path = alt_beam_production_path
         else:
-            logger.error(f"BEAM production input directory does not exist at either {beam_production_path} or {alt_beam_production_path}")
+            logger.error(
+                f"BEAM production input directory does not exist at either {beam_production_path} or {alt_beam_production_path}"
+            )
             return
     dest = os.path.join(os.path.abspath(output_dir), region)
-    logger.info("Copying BEAM production inputs from {0} to {1}".format(beam_production_path, dest))
+    logger.info(
+        "Copying BEAM production inputs from {0} to {1}".format(
+            beam_production_path, dest
+        )
+    )
 
     if not os.path.exists(beam_production_path):
-        logger.error(f"BEAM production input directory does not exist: {beam_production_path}")
+        logger.error(
+            f"BEAM production input directory does not exist: {beam_production_path}"
+        )
         return
 
     shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
@@ -168,9 +179,7 @@ def copy_vehicles_from_atlas(settings, state):
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
 
 
-def copy_plans_from_asim(
-    settings, state, replanning_iteration_number=0
-):
+def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
     asim_output_data_dir = os.path.join(
         state.full_path, settings["asim_local_output_folder"]
     )
@@ -225,7 +234,9 @@ def copy_plans_from_asim(
                 ]).select(pl.col("*").exclude_duplicates()).collect()
                 df.write_csv(beam_file_path, compression="gzip")
         """
-        from workflow_state import WorkflowState  # Import WorkflowState to access the provenance tracker
+        from workflow_state import (
+            WorkflowState,
+        )  # Import WorkflowState to access the provenance tracker
 
         if state.provenance_tracker.is_git_repo(asim_output_data_dir):
             repo_name = os.path.basename(asim_output_data_dir)
@@ -272,7 +283,7 @@ def copy_plans_from_asim(
                         beam_file_path,
                         description=f"Copied from ActivitySim output: {asim_file_name}",
                         source_file_paths=[asim_file_path],
-                        source_run_id=state.run_id
+                        source_run_id=state.run_id,
                     )
                     # with open(asim_file_path, 'rb') as f_in, gzip.open(
                     #         beam_file_path, 'wb') as f_out:
@@ -458,7 +469,6 @@ def copy_plans_from_asim(
             persons_final = persons_final.astype(
                 {
                     "household_id": pd.Int64Dtype(),
-                    "person_id": pd.Int64Dtype(),
                     "age": pd.Int64Dtype(),
                     "sex": pd.Int64Dtype(),
                 }
@@ -467,13 +477,11 @@ def copy_plans_from_asim(
             households_final = pd.concat(
                 [
                     updated_households,
-                    original_households.loc[
-                        ~original_households.index.isin(hh_u), :
-                    ],
+                    original_households.loc[~original_households.index.isin(hh_u), :],
                 ]
             )
             households_final = households_final.astype(
-                {"household_id": pd.Int64Dtype(), "cars": pd.Int64Dtype()}
+                {"cars": pd.Int64Dtype()}
             )
 
             unchanged_plans = original_plans.loc[
@@ -486,7 +494,7 @@ def copy_plans_from_asim(
             )
             plans_final = pd.concat([updated_plans, unchanged_plans])
             persons_with_plans = np.in1d(
-                persons_final.person_id.unique().astype(float),
+                persons_final.index.unique().astype(float),
                 plans_final.person_id.unique().astype(float),
             ).sum()
             logger.info(

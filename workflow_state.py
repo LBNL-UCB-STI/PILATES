@@ -138,11 +138,6 @@ class WorkflowState:
         if traffic_assignment_enabled:
             self.loop_substages.append(self.Stage.traffic_assignment)
 
-        # For backward compatibility
-        self.enabled_individual_stages = self.enabled_stages
-        self.MAJOR_STAGE_SEQUENCE = self.major_stage_order
-        self.SUB_STAGE_SEQUENCE = self.loop_substages
-
     @property
     def settings(self):
         return (
@@ -431,18 +426,26 @@ class WorkflowState:
                     )
                     os.makedirs(output_dir, exist_ok=True)
 
-    def record_model_start(
-        self, model: str, year: int = None, iteration: int = None
-    ) -> int:
+    def record_model_init(
+        self, model: str, year: int = None, iteration: int = None, message: Optional[str] = None
+    ) -> str:
         """Record the start of a model run and return the run index."""
         if self.provenance_tracker:
-            return self.provenance_tracker.start_model_run(model, year, iteration)
-        return -1  # Return -1 if tracker is not initialized
+            return self.provenance_tracker.init_model_run(model, year, iteration, message)
+        return ""  # Return "" if tracker is not initialized
 
-    def record_model_completion(self, run_index: int, status: str = "completed"):
+    def record_model_start(
+        self, run_inputs_to_duplicate: Optional[str]=None, message: Optional[str] = None
+    ) -> str:
+        """Record the start of a model run and return the run index."""
+        if self.provenance_tracker:
+            return self.provenance_tracker.start_model_run(run_inputs_to_duplicate, message)
+        return ""  # Return "" if tracker is not initialized
+
+    def record_model_completion(self, run_hash: str, status: str = "completed"):
         """Record the completion of a model run."""
-        if self.provenance_tracker and run_index >= 0:
-            self.provenance_tracker.complete_model_run(run_index, status)
+        if self.provenance_tracker:
+            self.provenance_tracker.complete_model_run(run_hash, status)
 
     def record_input_file(
         self,
@@ -466,20 +469,20 @@ class WorkflowState:
             else:
                 logger.warning(f"Input file not found: {abs_file_path}")
 
-    def record_model_io_batch(
-        self,
-        model: str,
-        inputs: List[str] = None,
-        outputs: List[str] = None,
-        year: int = None,
-        input_descriptions: List[str] = None,
-        output_descriptions: List[str] = None,
-    ):
-        """Record multiple input and output files for a model in batch."""
-        if self.provenance_tracker:
-            self.provenance_tracker.record_model_io_batch(
-                model, inputs, outputs, year, input_descriptions, output_descriptions
-            )
+    # def record_model_io_batch(
+    #     self,
+    #     model: str,
+    #     inputs: List[str] = None,
+    #     outputs: List[str] = None,
+    #     year: int = None,
+    #     input_descriptions: List[str] = None,
+    #     output_descriptions: List[str] = None,
+    # ):
+    #     """Record multiple input and output files for a model in batch."""
+    #     if self.provenance_tracker:
+    #         self.provenance_tracker.record_model_io_batch(
+    #             model, inputs, outputs, year, input_descriptions, output_descriptions
+    #         )
 
     def record_output_file(
         self, model: str, file_path: str, year: int = None, description: str = None, model_run_id: str = None, source_file_paths: list = None
@@ -601,7 +604,7 @@ class WorkflowState:
                 # Ensure settings are initialized in the tracker if it's a resume
                 if (
                     out.provenance_tracker
-                    and out.provenance_tracker.run_info.get("settings_hash") is None
+                    and out.provenance_tracker.run_info.settings_hash is None
                 ):
                     out.provenance_tracker.initialize_from_settings(settings)
 

@@ -2639,27 +2639,35 @@ def merge_current_zarr_od_skims(
             state.record_input_file(
                 "activitysim",
                 all_skims_path,
-                description="Previous zarr skims before merge"
+                description="Previous zarr skims before merge",
             )
         # Record the BEAM partial skims file being merged in (if it existed)
-        if partialSkims and current_omx_skims_path and os.path.exists(current_omx_skims_path):
+        if (
+            partialSkims
+            and current_omx_skims_path
+            and os.path.exists(current_omx_skims_path)
+        ):
             state.record_input_file(
                 "activitysim",
                 current_omx_skims_path,
-                description="BEAM partial skims for merge"
+                description="BEAM partial skims for merge",
             )
         # Record the output zarr skims file after the update, with source_file_paths
         source_files = []
         if os.path.exists(all_skims_path):
             source_files.append(all_skims_path)
-        if partialSkims and current_omx_skims_path and os.path.exists(current_omx_skims_path):
+        if (
+            partialSkims
+            and current_omx_skims_path
+            and os.path.exists(current_omx_skims_path)
+        ):
             source_files.append(current_omx_skims_path)
         if os.path.exists(all_skims_path):
             state.record_output_file(
                 "activitysim",
                 all_skims_path,
                 description="Updated zarr skims after merge",
-                source_file_paths=source_files
+                source_file_paths=source_files,
             )
 
     # Close the datasets

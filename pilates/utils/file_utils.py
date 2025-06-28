@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+
 def _validate_file_path(file_path: str) -> Optional[str]:
     """
     Validate and normalize file path.
@@ -28,6 +29,7 @@ def _validate_file_path(file_path: str) -> Optional[str]:
 
     return abs_path
 
+
 def _get_relative_path(file_path: str, base_path: str = None) -> str:
     """Get path relative to base directory for consistent storage."""
     abs_path = os.path.abspath(file_path)
@@ -39,6 +41,7 @@ def _get_relative_path(file_path: str, base_path: str = None) -> str:
             f"Could not create relative path for {abs_path} relative to {base_path}"
         )
         return abs_path
+
 
 def _calculate_file_hash(file_path: str) -> Optional[str]:
     """Calculate SHA256 hash of a file with improved error handling."""
@@ -56,9 +59,12 @@ def _calculate_file_hash(file_path: str) -> Optional[str]:
         logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
         return None
 
+
 def _load_metadata(file_path: str) -> Dict[str, Any]:
     """Load metadata from a JSON file located in the same directory as the file."""
-    metadata_file = os.path.join(os.path.dirname(file_path), f"{os.path.basename(file_path)}.metadata.json")
+    metadata_file = os.path.join(
+        os.path.dirname(file_path), f"{os.path.basename(file_path)}.metadata.json"
+    )
     if os.path.exists(metadata_file):
         try:
             with open(metadata_file, "r") as f:

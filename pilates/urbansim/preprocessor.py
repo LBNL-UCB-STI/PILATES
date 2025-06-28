@@ -140,7 +140,9 @@ def copy_data_to_mutable_location(settings, output_dir, state):
         if os.path.exists(src):
             logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
             shutil.copyfile(src, dest)
-            state.record_input_file("urbansim", dest, description=f"UrbanSim input file: {fname}")
+            state.record_input_file(
+                "urbansim", dest, description=f"UrbanSim input file: {fname}"
+            )
 
 
 def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):

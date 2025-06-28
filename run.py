@@ -317,6 +317,10 @@ def warm_start_activities(settings, state: WorkflowState, client):
         print_str = "Initializing {0} warm start sequence".format(activity_demand_model)
         formatted_print(print_str)
 
+        asim_run_index = state.record_model_init(
+            activity_demand_model, year=state.current_year, iteration=0
+        )
+
         # 2. CREATE DATA FROM BASE YEAR SKIMS AND URBANSIM INPUTS
 
         # data tables
@@ -351,12 +355,14 @@ def warm_start_activities(settings, state: WorkflowState, client):
         #     model_run_id=asim_run_index
         # )
 
-        if not os.path.exists(
-            os.path.join(
+        skims_loc = os.path.join(
                 state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
             )
-        ):
+
+        if not os.path.exists(skims_loc):
             asim_pre.create_skims_from_beam(settings, state, overwrite=False)
+
+        state.record_input_file(activity_demand_model, skims_loc, None, "skims")
 
         asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
 
@@ -395,9 +401,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
         )  # No compile in warm start run
 
         # Record ActivitySim warm start run start
-        asim_run_index = state.record_model_start(
-            activity_demand_model, year=state.current_year, iteration=0
-        )
+        asim_run_index = state.record_model_start()
 
         success = run_container(
             client,
@@ -480,7 +484,7 @@ def forecast_land_use(
     land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
 
     # Record UrbanSim run start
-    usim_run_index = workflow_state.record_model_start(
+    usim_run_index = workflow_state.record_model_init(
         land_use_model, year=workflow_state.forecast_year
     )
 
@@ -496,7 +500,7 @@ def forecast_land_use(
     usim_datastore_fpath = os.path.join(output_dir, usim_output_store_name)
 
     if os.path.exists(usim_datastore_fpath):
-        workflow_state.record_model_completion(usim_run_index, status="completed")
+        # workflow_state.record_model_completion(usim_run_index, status="completed")
         # Record UrbanSim output file
         workflow_state.record_output_file(
             land_use_model,
@@ -586,6 +590,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
         year, forecast_year, land_use_model
     )
     formatted_print(print_str)
+    usim_hash = workflow_state.record_model_start()
 
     # run_container call is now wrapped in forecast_land_use for provenance tracking
     run_container(
@@ -598,6 +603,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
         model_name=land_use_model,
     )
     logger.info("Done!")
+    workflow_state.record_model_completion(usim_hash, status="completed")
 
     return
 
@@ -988,6 +994,13 @@ def generate_activity_plans(
 
     elif activity_demand_model == "activitysim":
 
+        init_asim_run_hash = state.record_model_init(
+            activity_demand_model,
+            year=state.forecast_year,
+            iteration=state.current_inner_iter,
+            message="asim full run"
+        )
+
         # 1. PARSE SETTINGS
 
         region = settings["region"]
@@ -1007,65 +1020,15 @@ def generate_activity_plans(
         formatted_print(print_str)
 
         # Record inputs and outputs for ActivitySim preprocessing
-        usim_output_store_name = usim_post.get_usim_datastore_fname(
+        usim_post.get_usim_datastore_fname(
             settings, io="output", year=state.forecast_year
         )
-        usim_output_store_path = os.path.join(
-            state.full_path,
-            settings["usim_local_mutable_data_folder"],
-            usim_output_store_name,
-        )
-        expected_beam_skims_path = os.path.join(
-            state.full_path,
-            settings["beam_local_output_folder"],
-            settings["skims_fname"],
-        )
-
-        # record_inputs_and_outputs(
-        #     state,
-        #     activity_demand_model,
-        #     inputs=[
-        #         (
-        #             usim_output_store_path,
-        #             "UrbanSim output for ActivitySim input preparation",
-        #         ),
-        #         (
-        #             expected_beam_skims_path,
-        #             "BEAM skims for ActivitySim input preparation",
-        #         ),
-        #     ],
-        # )
 
         asim_pre.create_skims_from_beam(
             settings, state=state, overwrite=overwrite_skims_arg
         )
+
         asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
-
-        # Record outputs from ActivitySim preprocessing
-        asim_mutable_data_dir = os.path.join(
-            state.full_path, settings["asim_local_mutable_data_folder"]
-        )
-        asim_input_tables = settings["asim_output_tables"]["tables"]
-        outputs = [
-            (
-                os.path.join(
-                    asim_mutable_data_dir,
-                    f"{settings['asim_output_tables']['prefix']}{table_name}.csv",
-                ),
-                f"ActivitySim preprocessed input table: {table_name}",
-            )
-            for table_name in asim_input_tables
-        ]
-        outputs.append(
-            (
-                os.path.join(asim_mutable_data_dir, settings["skims_fname"]),
-                "ActivitySim skims input file",
-            )
-        )
-
-        # record_inputs_and_outputs(
-        #     state, activity_demand_model, outputs=outputs, year=state.forecast_year, model_run_id=asim_main_run_index
-        # )
 
         # 3. GENERATE ACTIVITY PLANS
         print_str = "Generating activity plans for the year " "{0} with {1}".format(
@@ -1075,6 +1038,12 @@ def generate_activity_plans(
         # Record ActivitySim run start (Compilation if needed)
         asim_compile_run_index = -1
         if not state.asim_compiled:
+            skims_loc = os.path.join(
+                state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
+            )
+
+            state.record_input_file(activity_demand_model, skims_loc, None, "skims")
+
             asim_cmd = get_base_asim_cmd(
                 settings, household_sample_size=2500, num_processes=1
             )
@@ -1083,10 +1052,8 @@ def generate_activity_plans(
 
             additional_args = get_asim_additional_args(settings, asim_docker_vols, True)
 
-            asim_compile_run_index = state.record_model_start(
-                activity_demand_model,
-                year=state.forecast_year,
-                iteration=state.current_inner_iter,
+            asim_compile_run_hash = state.record_model_start(
+                message="asim compilation"
             )
 
             success = run_container(
@@ -1101,7 +1068,7 @@ def generate_activity_plans(
             )
 
             state.record_model_completion(
-                asim_compile_run_index, status="completed" if success else "failed"
+                asim_compile_run_hash, status="completed" if success else "failed"
             )
 
             logger.info("ASIM Compilation success: {0}".format(success))
@@ -1109,29 +1076,34 @@ def generate_activity_plans(
                 raise RuntimeError("ASim Compilation failed")
             state.compile_asim()  # Update state to mark as compiled
 
-        # Record ActivitySim run start (Main run)
-        asim_main_run_index = state.record_model_start(
-            activity_demand_model,
-            year=state.forecast_year,
-            iteration=state.current_inner_iter,
-        )
+            new_asim_run_hash = state.record_model_init(
+                activity_demand_model,
+                year=state.forecast_year,
+                iteration=state.current_inner_iter,
+                message="asim full run"
+            )
+            asim_main_run_hash = state.record_model_start(
+                run_inputs_to_duplicate=init_asim_run_hash
+            )
+        else:
+            asim_main_run_hash = state.record_model_start()
 
-        # Update model_run_id for all activitysim inputs before launching the run
-        if state.provenance_tracker:
-            prov = state.provenance_tracker
-            # Use lowercase for model name
-            model_key = "activitysim"
-            if model_key in prov.run_info["inputs"]["files"]:
-                for rec in prov.run_info["inputs"]["files"][model_key]:
-                    model_run_ids = rec.get("model_run_id")
-                    if model_run_ids is None:
-                        model_run_ids = []
-                    elif not isinstance(model_run_ids, list):
-                        model_run_ids = [model_run_ids]
-                    if asim_main_run_index not in model_run_ids:
-                        model_run_ids.append(asim_main_run_index)
-                        rec["model_run_id"] = model_run_ids
-                prov._save_run_info()
+        # # Update model_run_id for all activitysim inputs before launching the run
+        # if state.provenance_tracker:
+        #     prov = state.provenance_tracker
+        #     # Use lowercase for model name
+        #     model_key = "activitysim"
+        #     if model_key in prov.run_info["inputs"]["files"]:
+        #         for rec in prov.run_info["inputs"]["files"][model_key]:
+        #             model_run_ids = rec.get("model_run_id")
+        #             if model_run_ids is None:
+        #                 model_run_ids = []
+        #             elif not isinstance(model_run_ids, list):
+        #                 model_run_ids = [model_run_ids]
+        #             if asim_main_run_index not in model_run_ids:
+        #                 model_run_ids.append(asim_main_run_index)
+        #                 rec["model_run_id"] = model_run_ids
+        #         prov._save_run_info()
 
         asim_cmd = get_base_asim_cmd(settings)
         if resume_after:
@@ -1154,7 +1126,7 @@ def generate_activity_plans(
 
         # Record ActivitySim run completion (Main run)
         state.record_model_completion(
-            asim_main_run_index, status="completed" if success else "failed"
+            asim_main_run_hash, status="completed" if success else "failed"
         )
         if not success:
             logger.error("ActivitySim main run failed.")
@@ -1325,93 +1297,65 @@ def run_traffic_assignment(
         if previous_origin_skims:
             logger.info(f"Found skims from the previous BEAM run: {previous_od_skims}")
 
+        # Record BEAM run start
+        beam_run_hash = state.record_model_init(
+            travel_model, year=state.forecast_year, iteration=iteration_number
+        )
+
         # 2. COPY ACTIVITY DEMAND OUTPUTS --> TRAFFIC ASSIGNMENT INPUTS
-        if settings["traffic_assignment_enabled"]:
-            print_str = "Generating {0} {1} input data from " "{2} outputs".format(
-                year, travel_model, activity_demand_model
+        print_str = "Generating {0} {1} input data from " "{2} outputs".format(
+            year, travel_model, activity_demand_model
+        )
+        formatted_print(print_str)
+        logger.info("Copying plans from ActivitySim to BEAM")
+        # Record inputs for BEAM input preparation
+        asim_output_data_dir = os.path.join(
+            state.full_path, settings["asim_local_output_folder"]
+        )
+        file_format = settings.get("file_format", "parquet")
+        asim_plans_path = (
+            os.path.join(
+                asim_output_data_dir,
+                "final_pipeline",
+                "beam_plans",
+                "final.parquet",
             )
-            formatted_print(print_str)
-            logger.info("Copying plans from ActivitySim to BEAM")
-
-            # Record inputs for BEAM input preparation
-            asim_output_data_dir = os.path.join(
-                state.full_path, settings["asim_local_output_folder"]
+            if file_format == "parquet"
+            else os.path.join(asim_output_data_dir, "final_plans.csv")
+        )
+        asim_households_path = (
+            os.path.join(
+                asim_output_data_dir,
+                "final_pipeline",
+                "households",
+                "final.parquet",
             )
-            file_format = settings.get("file_format", "parquet")
-            asim_plans_path = (
-                os.path.join(
-                    asim_output_data_dir,
-                    "final_pipeline",
-                    "beam_plans",
-                    "final.parquet",
-                )
-                if file_format == "parquet"
-                else os.path.join(asim_output_data_dir, "final_plans.csv")
+            if file_format == "parquet"
+            else os.path.join(asim_output_data_dir, "final_households.csv")
+        )
+        asim_persons_path = (
+            os.path.join(
+                asim_output_data_dir, "final_pipeline", "persons", "final.parquet"
             )
-            asim_households_path = (
-                os.path.join(
-                    asim_output_data_dir,
-                    "final_pipeline",
-                    "households",
-                    "final.parquet",
-                )
-                if file_format == "parquet"
-                else os.path.join(asim_output_data_dir, "final_households.csv")
+            if file_format == "parquet"
+            else os.path.join(asim_output_data_dir, "final_persons.csv")
+        )
+        atlas_vehicles_file = os.path.join(
+            state.full_path,
+            settings["atlas_host_output_folder"],
+            f"vehicles_{state.forecast_year}.csv.gz",
+        )
+        inputs = [
+            (asim_plans_path, "ActivitySim plans for BEAM input"),
+            (asim_households_path, "ActivitySim households for BEAM input"),
+            (asim_persons_path, "ActivitySim persons for BEAM input"),
+        ]
+        if settings.get("vehicle_ownership_model_enabled"):
+            inputs.append(
+                (atlas_vehicles_file, "Atlas vehicles output for BEAM input")
             )
-            asim_persons_path = (
-                os.path.join(
-                    asim_output_data_dir, "final_pipeline", "persons", "final.parquet"
-                )
-                if file_format == "parquet"
-                else os.path.join(asim_output_data_dir, "final_persons.csv")
-            )
-            atlas_vehicles_file = os.path.join(
-                state.full_path,
-                settings["atlas_host_output_folder"],
-                f"vehicles_{state.forecast_year}.csv.gz",
-            )
-
-            inputs = [
-                (asim_plans_path, "ActivitySim plans for BEAM input"),
-                (asim_households_path, "ActivitySim households for BEAM input"),
-                (asim_persons_path, "ActivitySim persons for BEAM input"),
-            ]
-
-            if settings.get("vehicle_ownership_model_enabled"):
-                inputs.append(
-                    (atlas_vehicles_file, "Atlas vehicles output for BEAM input")
-                )
-
-            # record_inputs_and_outputs(state, travel_model, inputs=inputs)
-
-            beam_pre.copy_plans_from_asim(settings, state, iteration_number)
-
-            # Record outputs from BEAM input preparation
-            beam_scenario_folder = os.path.join(
-                state.full_path,
-                settings["beam_local_mutable_data_folder"],
-                settings["region"],
-                settings["beam_scenario_folder"],
-            )
-            beam_plans_path = os.path.join(beam_scenario_folder, f"plans.{file_format}")
-            beam_households_path = os.path.join(
-                beam_scenario_folder, f"households.{file_format}"
-            )
-            beam_persons_path = os.path.join(
-                beam_scenario_folder, f"persons.{file_format}"
-            )
-            beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
-
-            outputs = [
-                (beam_plans_path, "BEAM scenario plans file"),
-                (beam_households_path, "BEAM scenario households file"),
-                (beam_persons_path, "BEAM scenario persons file"),
-                (beam_vehicles_path, "BEAM scenario vehicles file"),
-            ]
-
-            # record_inputs_and_outputs(
-            #     state, travel_model, outputs=outputs, year=state.forecast_year
-            # )
+        # record_inputs_and_outputs(state, travel_model, inputs=inputs)
+        beam_pre.copy_plans_from_asim(settings, state, iteration_number)
 
         # 3. RUN BEAM
         logger.info(
@@ -1442,9 +1386,7 @@ def run_traffic_assignment(
             # Decide how to handle this - maybe exit? For now, just warn.
 
         # Record BEAM run start
-        beam_run_index = state.record_model_start(
-            travel_model, year=state.forecast_year, iteration=iteration_number
-        )
+        beam_run_index = state.record_model_start()
 
         success = run_container(
             client,
@@ -2095,7 +2037,7 @@ def main():
             f"Current state: major_stage={state.current_major_stage.name if state.current_major_stage else None}, inner_iter={state.current_inner_iter}, sub_stage={state.current_sub_stage.name if state.current_sub_stage else None}"
         )
         logger.info(
-            f"Enabled stages: {[s.name for s in state.enabled_individual_stages]}"
+            f"Enabled stages: {[s.name for s in state.enabled_stages]}"
         )
 
         # 1. FORECAST LAND USE
