@@ -14,10 +14,9 @@ class GenericPostprocessor(ABC):
     def __init__(self, provenanceTracker: FileProvenanceTracker):
         self.provenanceTracker = provenanceTracker
 
-    @classmethod
     @abstractmethod
     def postprocess(
-        cls,
+        self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
         state: WorkflowState

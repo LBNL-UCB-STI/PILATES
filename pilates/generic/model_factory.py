@@ -1,5 +1,6 @@
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.runner import ActivitysimRunner
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 
 
 class ModelFactory:
@@ -35,6 +36,6 @@ class ModelFactory:
         """
         Return a postprocessor instance for the given model name, passing provenanceTracker.
         """
-        # Token implementation: just return None or a dummy
-        # Example: return SomePostprocessorClass(provenanceTracker)
+        if model_name.lower() == "activitysim":
+            return  ActivitysimPostprocessor(provenanceTracker)
         return None

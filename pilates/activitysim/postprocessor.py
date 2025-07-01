@@ -3,6 +3,8 @@ import pandas as pd
 import zipfile
 import os
 
+from pilates.generic.postprocessor import GenericPostprocessor
+from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.utils.io import read_datastore
 from workflow_state import WorkflowState
 
@@ -420,3 +422,34 @@ def update_usim_inputs_after_warm_start(
     usim_datastore.close()
 
     return
+
+class ActivitysimPostprocessor(GenericPostprocessor):
+    """
+    ActivitySim-specific preprocessor that consolidates all preprocessing steps.
+    """
+
+    def postprocess(
+            self,
+            raw_outputs: RecordStore,
+            runInfo: ModelRunInfo,
+            state: WorkflowState
+    ) -> RecordStore:
+        """
+        Consolidates all preprocessing steps for ActivitySim.
+        """
+        settings = state.settings
+        year = state.year
+        logger.info("Running ActivitySim postprocessor for year %s", year)
+
+        # Load the preprocessed data
+        store = state.store
+
+        # Create next iteration inputs
+        create_next_iter_inputs(settings, year, state)
+
+        # Update UrbanSim inputs after warm start
+        update_usim_inputs_after_warm_start(settings)
+
+        create_beam_input_data(settings, state)
+
+        return store, state.model_run_info

@@ -223,12 +223,9 @@ def warm_start_activities(settings, state: WorkflowState, client):
         postprocessor = factory.get_postprocessor("activitysim", provenanceTracker=state.provenance_tracker)
 
         inputData = preprocessor.preprocess(state)
-        preprocessor.run(state)
+        rawOutputs, runInfo = runner.run(inputData, state)
+        outputs = postprocessor.postprocess(rawOutputs, runInfo, state)
 
-        # Record ActivitySim warm start run completion
-        state.record_model_completion(
-            asim_run_index, status="completed" if success else "failed"
-        )
         if not success:
             logger.error("ActivitySim warm start run failed.")
             sys.exit(1)  # Exit if warm start fails
@@ -804,45 +801,15 @@ def generate_activity_plans(
         )
 
     elif activity_demand_model == "activitysim":
+        factory = ModelFactory()
+        runner = factory.get_runner("activitysim", provenanceTracker=state.provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim", provenanceTracker=state.provenance_tracker)
+        postprocessor = factory.get_postprocessor("activitysim", provenanceTracker=state.provenance_tracker)
 
-        init_asim_run_hash = state.record_model_init(
-            activity_demand_model,
-            year=state.forecast_year,
-            iteration=state.current_inner_iter,
-            message="asim full run"
-        )
+        inputData = preprocessor.preprocess(state)
+        rawOutputs, runInfo = runner.run(inputData, state)
+        outputs = postprocessor.postprocess(rawOutputs, runInfo, state)
 
-        # 1. PARSE SETTINGS
-
-        region = settings["region"]
-        asim_subdir = settings["region_to_asim_subdir"][region]
-        asim_workdir = os.path.join("activitysim", asim_subdir)
-
-
-        overwrite_skims_arg = False  # Logic seems to keep this False after warm start
-
-        # 2. PREPROCESS DATA FOR ACTIVITY DEMAND MODEL
-        print_str = "Creating {0} input data from {1} outputs".format(
-            activity_demand_model,
-            settings.get("land_use_model", "UrbanSim Inputs if Land Use Disabled"),
-        )
-        formatted_print(print_str)
-
-        # Record inputs and outputs for ActivitySim preprocessing
-        usim_post.get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-
-        asim_pre.create_skims_from_beam(
-            settings, state=state, overwrite=overwrite_skims_arg
-        )
-
-        asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
-
-        # 3. GENERATE ACTIVITY PLANS
-        print_str = "Generating activity plans for the year " "{0} with {1}".format(
-            state.forecast_year, activity_demand_model
-        )
 
         # RUN HERE
 
@@ -1584,8 +1551,6 @@ def main():
 
     logger = logging.getLogger(__name__)
 
-    logger = logging.getLogger(__name__)
-
     logger.info("Preparing runtime environment...")
 
     #########################################
@@ -1639,6 +1604,8 @@ def main():
         print("TRAFFIC ASSIGNMENT MODEL DISABLED")
     if not vehicle_ownership_model_enabled:
         print("VEHICLE OWNERSHIP MODEL DISABLED")
+
+    factory = ModelFactory()
 
     if traffic_assignment_enabled:
         try:

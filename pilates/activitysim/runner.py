@@ -12,8 +12,10 @@ logger = logging.getLogger(__name__)
 
 class ActivitysimRunner(GenericRunner):
     """
-    A generic runner class that can be extended for specific models.
+    Runner for ActivitySim model.
     """
+    def __init__(self, model_name: str, provenanceTracker):
+        super().__init__(model_name, provenanceTracker)
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):

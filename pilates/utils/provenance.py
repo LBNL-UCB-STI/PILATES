@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 
+from pilates.generic.records import InputRecord, RepoRecord, ModelRunInfo, OutputRecord
 from pilates.utils.git_utils import is_git_repo, get_git_hash
 from pilates.utils.file_utils import (
     _validate_file_path,
@@ -45,52 +46,6 @@ _validate_file_path = _validate_file_path
 _get_relative_path = _get_relative_path
 _calculate_file_hash = _calculate_file_hash
 _load_metadata = _load_metadata
-
-
-@dataclass
-class InputRecord:
-    file_path: str
-    source_run_id: Optional[str] = None
-    input_type: str = "unknown"
-    file_hash: Optional[str] = None
-    description: Optional[str] = None # TODO Add source file path list
-    source_file_paths: List[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class OutputRecord:
-    file_path: str
-    output_type: Optional[str] = None
-    model_run_id: Optional[str] = None
-    file_hash: Optional[str] = None
-    created_at: Optional[str] = None
-    year: Optional[int] = None
-    description: Optional[str] = None
-    source_file_paths: List[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class RepoRecord:
-    repo_path: str
-    description: Optional[str] = None
-    git_hash: Optional[str] = None
-    accessed_at: Optional[str] = None
-
-
-@dataclass
-class ModelRunInfo:
-    model_run_id: str
-    model: str
-    year: int
-    iteration: Optional[int] = None
-    description: Optional[str] = None
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    input_record_hashes: List[str] = field(default_factory=list)
-    output_record_hashes: List[str] = field(default_factory=list)
-    status: str = "uninitialized"
 
 
 @dataclass
