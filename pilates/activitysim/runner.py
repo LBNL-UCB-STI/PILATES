@@ -15,7 +15,7 @@ class ActivitysimRunner(GenericRunner):
     Runner for ActivitySim model.
     """
     def __init__(self, model_name: str):
-        super().__init__(model_name, None)
+        super().__init__(model_name)
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
@@ -159,14 +159,14 @@ class ActivitysimRunner(GenericRunner):
             )
 
             success = self.run_container(
-                client,
-                state.settings,
-                activity_demand_image,
-                working_dir=asim_workdir,
+                client=client,
+                settings=state.settings,
+                image=activity_demand_image,
                 volumes=asim_docker_vols,
                 command=asim_cmd,
-                args=additional_args,
                 model_name="activitysim",
+                working_dir=asim_workdir,
+                args=additional_args,
             )
 
             state.record_model_completion(
@@ -198,14 +198,14 @@ class ActivitysimRunner(GenericRunner):
         additional_args = self.get_asim_additional_args(state.settings, asim_docker_vols, False)
 
         success = self.run_container(
-            client,
-            state.settings,
-            activity_demand_image,
-            working_dir=asim_workdir,
+            client=client,
+            settings=state.settings,
+            image=activity_demand_image,
             volumes=asim_docker_vols,
             command=asim_cmd,
-            args=additional_args,
             model_name="activitysim",
+            working_dir=asim_workdir,
+            args=additional_args,
         )
 
         # Record ActivitySim run completion (Main run)

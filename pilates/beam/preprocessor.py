@@ -6,6 +6,9 @@ import pandas as pd
 import numpy as np
 import glob
 from pilates.utils.provenance import find_project_root
+from pilates.generic.preprocessor import GenericPreprocessor
+from pilates.generic.records import RecordStore
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -606,3 +609,37 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
             )
 
     return
+
+
+class BeamPreprocessor(GenericPreprocessor):
+    """
+    Preprocessor for BEAM model.
+    """
+
+    def preprocess(self, state: WorkflowState) -> RecordStore:
+        """
+        Prepares all data needed to run BEAM.
+        - Updates BEAM config with sample size, replanning fraction, etc.
+        - Copies plans from ActivitySim outputs.
+        - Copies vehicle fleet from Atlas outputs.
+        """
+        settings = state.settings
+        iteration_number = state.iteration
+
+        # Update BEAM config
+        if settings["discard_plans_every_year"]:
+            update_beam_config(settings, state.full_path, "max_plans_memory", 0)
+        else:
+            update_beam_config(settings, state.full_path, "max_plans_memory")
+
+        # Copy vehicle data from Atlas if enabled
+        if settings.get("vehicle_ownership_model_enabled"):
+            copy_vehicles_from_atlas(settings, state)
+
+        # Copy plans from ActivitySim
+        copy_plans_from_asim(settings, state, iteration_number)
+
+        # The preprocessor's job is to prepare the inputs.
+        # We can return a RecordStore of the key inputs that were prepared.
+        # For now, let's return an empty one as the runner doesn't use it yet.
+        return RecordStore()

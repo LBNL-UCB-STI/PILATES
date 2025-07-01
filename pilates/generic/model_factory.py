@@ -1,6 +1,9 @@
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.runner import ActivitysimRunner
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.beam.runner import BeamRunner
+from pilates.beam.postprocessor import BeamPostprocessor
 
 
 class ModelFactory:
@@ -22,6 +25,8 @@ class ModelFactory:
         """
         if model_name.lower() == "activitysim":
             return ActivitysimRunner("activitysim")
+        if model_name.lower() == "beam":
+            return BeamRunner("beam")
         return None
 
     def get_preprocessor(self, model_name):
@@ -30,6 +35,8 @@ class ModelFactory:
         """
         if model_name.lower() == "activitysim":
             return ActivitysimPreprocessor()
+        if model_name.lower() == "beam":
+            return BeamPreprocessor()
         return None
 
     def get_postprocessor(self, model_name):
@@ -38,4 +45,6 @@ class ModelFactory:
         """
         if model_name.lower() == "activitysim":
             return  ActivitysimPostprocessor()
+        if model_name.lower() == "beam":
+            return BeamPostprocessor()
         return None

@@ -72,13 +72,14 @@ class GenericRunner(ABC):
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
+    @staticmethod
     def run_container(
-        self,
         client,
         settings: dict,
         image: str,
         volumes: dict,
         command: str,
+        model_name: str,
         working_dir=None,
         environment=None,
         args=None,
@@ -92,6 +93,7 @@ class GenericRunner(ABC):
             image: the image to run
             volumes: a dictionary describing volume binding
             command: the command to run
+            model_name: name of the model, used for stubs
             working_dir: the working directory inside the container
             environment: a dictionary that contains environment variables
             args: additional arguments to the command
@@ -183,14 +185,14 @@ class GenericRunner(ABC):
                         os.path.dirname(__file__), "..", "..", "tests", "stubs", "run_stub.py"
                     ),  # Use relative path for stub
                     "--model_name",
-                    self.model_name,
+                    model_name,
                     "--cwd",
                     os.getcwd(),  # Pass current working directory of run.py
                     "--config_name",
                     " ".join(command),  # Pass the original command string
                 ]
                 logger.info(
-                    f"Using stub for {self.model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
+                    f"Using stub for {model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
                 )
                 try:
                     result = subprocess.run(
@@ -198,11 +200,11 @@ class GenericRunner(ABC):
                     )
                     print("Stub stdout:\n", result.stdout)
                     print("Stub stderr:\n", result.stderr)
-                    logger.info(f"Stub for {self.model_name} finished successfully.")
+                    logger.info(f"Stub for {model_name} finished successfully.")
                     return True  # Stub success is check=True
                 except subprocess.CalledProcessError as e:
                     logger.error(
-                        f"Stub for {self.model_name} failed with exit code {e.returncode}."
+                        f"Stub for {model_name} failed with exit code {e.returncode}."
                     )
                     print("Stub stdout:\n", e.stdout)
                     print("Stub stderr:\n", e.stderr)
@@ -211,7 +213,7 @@ class GenericRunner(ABC):
                     logger.error(f"Stub script not found at {stub_cmd[2]}.")
                     return False
                 except Exception as e:
-                    logger.error(f"Unexpected error running stub for {self.model_name}: {e}")
+                    logger.error(f"Unexpected error running stub for {model_name}: {e}")
                     return False
 
             else:  # Run actual singularity container

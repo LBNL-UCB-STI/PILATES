@@ -2,6 +2,7 @@ import concurrent.futures
 import logging
 import os
 import shutil
+import sys
 
 import numpy as np
 import openmatrix as omx
@@ -28,6 +29,9 @@ except:
 # from multiprocessing import Pool, cpu_count
 
 from pilates.activitysim.preprocessor import zone_order
+from pilates.generic.postprocessor import GenericPostprocessor
+from pilates.generic.records import RecordStore, ModelRunInfo, OutputRecord
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -3451,3 +3455,108 @@ def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_
     logger.info(
         "Total completed requests: \n {0}".format(totals["completedRequests"].sum())
     )
+
+
+class BeamPostprocessor(GenericPostprocessor):
+    """
+    Postprocessor for BEAM model.
+    """
+
+    def postprocess(
+        self,
+        raw_outputs: RecordStore,
+        runInfo: ModelRunInfo,
+        state: WorkflowState
+    ) -> RecordStore:
+        """
+        Processes the raw outputs from a BEAM run.
+        - Merges new skims into the master skim file.
+        - Renames the BEAM output directory for archival.
+        """
+        settings = state.settings
+        iteration_number = state.iteration
+        year = state.current_year
+        run_path = state.full_path
+        beam_local_output_folder = os.path.join(
+            run_path, settings["beam_local_output_folder"]
+        )
+        abs_beam_output = os.path.abspath(str(beam_local_output_folder))
+
+        skims_fname = settings["skims_fname"]
+        if skims_fname.endswith(".csv.gz"):
+            skimFormat = "csv.gz"
+        elif skims_fname.endswith(".omx"):
+            skimFormat = "omx"
+        else:
+            logger.error("Invalid skim format {0}".format(skims_fname))
+            sys.exit(1)
+
+        if skimFormat == "csv.gz":
+            logger.warning("CSV.GZ skim processing is part of an older workflow and is not fully supported in this refactored version.")
+        else:  # OMX or Zarr
+            asim_enabled = settings.get("activity_demand_model") == "activitysim"
+            if asim_enabled:
+                asim_data_dir = (
+                    os.path.join(
+                        state.full_path, settings["asim_local_output_folder"], "cache"
+                    )
+                    if settings["file_format"] == "parquet"
+                    else os.path.join(
+                        state.full_path, settings["asim_local_mutable_data_folder"]
+                    )
+                )
+                asim_skims_path = (
+                    os.path.join(asim_data_dir, "skims.zarr")
+                    if settings["file_format"] == "parquet"
+                    else os.path.join(asim_data_dir, "skims.omx")
+                )
+
+                if settings["file_format"] == "parquet":
+                    merge_current_zarr_od_skims(
+                        asim_skims_path, beam_local_output_folder, settings, state=state
+                    )
+                    logger.warning(
+                        "RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES"
+                    )
+                else:  # OMX
+                    merge_current_omx_od_skims(
+                        asim_skims_path,
+                        beam_local_output_folder,
+                        settings,
+                    )
+                    beam_asim_ridehail_measure_map = settings["beam_asim_ridehail_measure_map"]
+                    previous_origin_skims = find_produced_origin_skims(
+                        beam_local_output_folder
+                    )
+                    merge_current_omx_origin_skims(
+                        asim_skims_path,
+                        previous_origin_skims,
+                        beam_local_output_folder,
+                        beam_asim_ridehail_measure_map,
+                    )
+                
+                # Record the updated skim file as an output of this postprocessing step
+                state.record_output_file(
+                    "beam",
+                    asim_skims_path,
+                    year=state.forecast_year,
+                    description=f"ActivitySim skims input file updated by BEAM postprocessing ({skimFormat})",
+                    model_run_id=runInfo.model_run_id
+                )
+
+        rename_beam_output_directory(
+            abs_beam_output, settings, year, iteration_number
+        )
+
+        # Return a RecordStore of the processed outputs.
+        processed_records = []
+        if asim_enabled and 'asim_skims_path' in locals():
+            processed_records.append(
+                OutputRecord(
+                    file_path=asim_skims_path,
+                    output_type="processed_skims",
+                    model_run_id=runInfo.model_run_id,
+                    year=state.forecast_year
+                )
+            )
+        return RecordStore(recordList=processed_records)
