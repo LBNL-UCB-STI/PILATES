@@ -9,6 +9,9 @@ from tables import HDF5ExtError
 
 from pilates.generic.model_factory import ModelFactory
 
+# Helper import for model/image lookup and docker client
+from pilates.generic.runner import GenericRunner
+
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
@@ -205,7 +208,9 @@ def warm_start_activities(settings, state: WorkflowState, client):
     auto ownership.
     This runs only in the first year as part of the Land Use stage.
     """
-    activity_demand_model, activity_demand_image = get_model_and_image(
+    # Use ModelFactory for all model/image lookups
+    factory = ModelFactory()
+    activity_demand_model, activity_demand_image = GenericRunner.get_model_and_image(
         settings, "activity_demand_model"
     )
 
@@ -216,69 +221,28 @@ def warm_start_activities(settings, state: WorkflowState, client):
         )
 
     elif activity_demand_model == "activitysim":
-
-        factory = ModelFactory()
-        runner = factory.get_runner("activitysim", provenanceTracker=state.provenance_tracker)
-        preprocessor = factory.get_preprocessor("activitysim", provenanceTracker=state.provenance_tracker)
-        postprocessor = factory.get_postprocessor("activitysim", provenanceTracker=state.provenance_tracker)
+        runner = factory.get_runner("activitysim")
+        preprocessor = factory.get_preprocessor("activitysim")
 
         inputData = preprocessor.preprocess(state)
         rawOutputs, runInfo = runner.run(inputData, state)
-        outputs = postprocessor.postprocess(rawOutputs, runInfo, state)
 
-        if not success:
-            logger.error("ActivitySim warm start run failed.")
-            sys.exit(1)  # Exit if warm start fails
-
-        # 4. UPDATE URBANSIM BASE YEAR INPUT DATA
         logger.info(
-            ("Appending warm start activities/choices to " " {0} base year input data")
-            .format(land_use_model)
-            .upper()
+            "Appending warm start activities/choices to UrbanSim base year input data"
         )
 
-        # Record inputs to UrbanSim update postprocessing
-        state.record_input_file(
-            land_use_model,
-            asim_warm_start_persons_path,
-            description="ActivitySim warm start persons output for USim update",
-            model_run_id=asim_run_index
-        )
-        state.record_input_file(
-            land_use_model,
-            asim_warm_start_households_path,
-            description="ActivitySim warm start households output for USim update",
-            model_run_id=asim_run_index
-        )
-        usim_input_store_path = os.path.join(
-            state.full_path,
-            settings["usim_local_mutable_data_folder"],
-            usim_post.get_usim_datastore_fname(settings, io="input"),
-        )
-        state.record_input_file(
-            land_use_model,
-            usim_input_store_path,
-            description="UrbanSim input data before warm start update",
-            model_run_id=asim_run_index
-        )
-
+        # The post-processing step for warm start is just updating the UrbanSim H5 file.
+        # We call the specific function for this, not the full postprocessor.
         asim_post.update_usim_inputs_after_warm_start(
             settings,
+            state,
+            runInfo,
             usim_data_dir=os.path.join(
                 state.full_path, settings["usim_local_mutable_data_folder"]
             ),
             warm_start_dir=os.path.join(
                 state.full_path, settings["asim_local_output_folder"]
             ),
-        )
-
-        # Record outputs from UrbanSim update postprocessing
-        state.record_output_file(
-            land_use_model,
-            usim_input_store_path,
-            year=state.current_year,
-            description="UrbanSim input data after warm start update",
-            model_run_id=asim_run_index
         )
 
     logger.info("Done!")
@@ -289,7 +253,7 @@ def warm_start_activities(settings, state: WorkflowState, client):
 def forecast_land_use(
     settings, year, workflow_state: WorkflowState, client, container_manager
 ):
-    land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
+    land_use_model, land_use_image = GenericRunner.get_model_and_image(settings, "land_use_model")
 
     # Record UrbanSim run start
     usim_run_index = workflow_state.record_model_init(
@@ -335,7 +299,7 @@ def run_land_use(settings, year, workflow_state: WorkflowState, client):
         workflow_state.full_path, settings["usim_local_mutable_data_folder"]
     )
     os.makedirs(output_dir, exist_ok=True)
-    land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
+    land_use_model, land_use_image = GenericRunner.get_model_and_image(settings, "land_use_model")
     usim_docker_vols = get_usim_docker_vols(
         settings, output_dir
     )  # Pass the mutable output_dir
@@ -435,7 +399,7 @@ def run_atlas(
         yr = state.start_year
 
     # 1. PARSE SETTINGS
-    vehicle_ownership_model, atlas_image = get_model_and_image(
+    vehicle_ownership_model, atlas_image = GenericRunner.get_model_and_image(
         settings, "vehicle_ownership_model"
     )
     freq = settings.get("vehicle_ownership_freq", False)
@@ -755,7 +719,7 @@ def generate_activity_plans(
     data for `state.current_year` (the year the LU model just output)
     """
 
-    activity_demand_model, activity_demand_image = get_model_and_image(
+    activity_demand_model, activity_demand_image = GenericRunner.get_model_and_image(
         settings, "activity_demand_model"
     )
 
@@ -801,112 +765,29 @@ def generate_activity_plans(
         )
 
     elif activity_demand_model == "activitysim":
+        # Use the ModelFactory to get the correct preprocessor, runner, and postprocessor
         factory = ModelFactory()
-        runner = factory.get_runner("activitysim", provenanceTracker=state.provenance_tracker)
-        preprocessor = factory.get_preprocessor("activitysim", provenanceTracker=state.provenance_tracker)
-        postprocessor = factory.get_postprocessor("activitysim", provenanceTracker=state.provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim")
+        runner = factory.get_runner("activitysim")
+        postprocessor = factory.get_postprocessor("activitysim")
 
-        inputData = preprocessor.preprocess(state)
-        rawOutputs, runInfo = runner.run(inputData, state)
-        outputs = postprocessor.postprocess(rawOutputs, runInfo, state)
+        logger.info("Starting ActivitySim preprocessing...")
+        input_data = preprocessor.preprocess(state)
+        logger.info("ActivitySim preprocessing complete.")
 
+        logger.info("Starting ActivitySim model run...")
+        raw_outputs, run_info = runner.run(input_data, state)
+        logger.info("ActivitySim model run complete.")
 
-        # RUN HERE
+        logger.info("Starting ActivitySim postprocessing...")
+        outputs = postprocessor.postprocess(raw_outputs, run_info, state)
+        logger.info("ActivitySim postprocessing complete.")
 
-        if not success:
-            logger.error("ActivitySim main run failed.")
-            # Decide how to handle failure - maybe exit or allow workflow to continue with failed status?
-            # For now, let's exit to prevent cascading errors.
-            sys.exit(1)
-
-        # Record outputs from ActivitySim run (final outputs)
-        asim_output_dir = os.path.join(
-            state.full_path, settings["asim_local_output_folder"]
-        )
-        asim_output_tables_settings = settings["asim_output_tables"]
-        prefix = asim_output_tables_settings["prefix"]
-        output_tables = asim_output_tables_settings["tables"]
-        file_format = settings.get("file_format", "parquet")
-
-        for table_name in output_tables:
-            if file_format == "csv":
-                file_name = f"{prefix}{table_name}.csv"
-                file_path = os.path.join(
-                    asim_output_dir, settings["asim_local_output_folder"], file_name
-                )  # This path seems wrong, should be asim_output_dir directly?
-                # Corrected path assumption:
-                file_path = os.path.join(asim_output_dir, file_name)
-                if os.path.exists(file_path):
-                    state.record_output_file(
-                        activity_demand_model,
-                        file_path,
-                        year=state.forecast_year,
-                        description=f"ActivitySim final output table: {table_name} (CSV)",
-                    )
-            elif file_format == "parquet":
-                # Parquet outputs are typically in a 'final_pipeline' subdir
-                file_path = os.path.join(
-                    asim_output_dir, "final_pipeline", table_name, "final.parquet"
-                )
-                if os.path.exists(file_path):
-                    state.record_output_file(
-                        activity_demand_model,
-                        file_path,
-                        year=state.forecast_year,
-                        description=f"ActivitySim final output table: {table_name} (Parquet)",
-                    )
-            # Add other formats if needed
-
-        # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
-        if (settings.get("land_use_model") is not None) and (not warm_start):
-            land_use_model = settings.get("land_use_model", "UrbanSim")
-            print_str = "Generating {0} {1} input data from " "{2} outputs".format(
-                state.forecast_year, land_use_model, activity_demand_model
-            )
-            formatted_print(print_str)
-
-            # Record inputs to UrbanSim input creation postprocessing (ASim outputs and previous USim data)
-            # ASim outputs recorded above
-            usim_input_store_path_prev = os.path.join(
-                state.full_path,
-                settings["usim_local_mutable_data_folder"],
-                usim_post.get_usim_datastore_fname(settings, io="input"),
-            )
-            state.record_input_file(
-                land_use_model,
-                usim_input_store_path_prev,
-                description="UrbanSim input data from previous iteration",
-            )
-            usim_output_store_path_prev = os.path.join(
-                state.full_path,
-                settings["usim_local_mutable_data_folder"],
-                usim_post.get_usim_datastore_fname(
-                    settings, io="output", year=state.forecast_year
-                ),
-            )
-            state.record_input_file(
-                land_use_model,
-                usim_output_store_path_prev,
-                description="UrbanSim output data from current year",
-            )
-
-            asim_post.create_next_iter_inputs(settings, year, state)
-
-            # Record outputs from UrbanSim input creation postprocessing (New USim input H5)
-            usim_input_store_path_next = os.path.join(
-                state.full_path,
-                settings["usim_local_mutable_data_folder"],
-                usim_post.get_usim_datastore_fname(settings, io="input"),
-            )
-            state.record_output_file(
-                land_use_model,
-                usim_input_store_path_next,
-                year=state.forecast_year + settings.get("land_use_freq", 1),
-                description="UrbanSim input data for next iteration",
-                model_run_id=asim_main_run_index
-            )
-
-    logger.info("Done!")
+        # Log the outputs for traceability
+        if hasattr(outputs, "all_records"):
+            logger.info("ActivitySim outputs:")
+            for record in outputs.all_records():
+                logger.info(f"Output: {getattr(record, 'file_path', str(record))}")
 
     return
 
@@ -919,7 +800,7 @@ def run_traffic_assignment(
     generate new skims with updated congested travel times.
     """
     logger.info("===== STARTING TRAFFIC ASSIGNMENT =====")
-    travel_model, travel_model_image = get_model_and_image(settings, "travel_model")
+    travel_model, travel_model_image = GenericRunner.get_model_and_image(settings, "travel_model")
     logger.info(f"Travel model: {travel_model}, Image: {travel_model_image}")
 
     if travel_model == "polaris":
@@ -1645,7 +1526,7 @@ def main():
     client = None  # Initialize client to None
     if container_manager == "docker":
         try:
-            client = initialize_docker_client(settings)
+            client = GenericRunner.initialize_docker_client(settings)
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
             # Decide how to handle failure - maybe exit?

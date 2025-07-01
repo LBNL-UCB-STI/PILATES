@@ -1343,8 +1343,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
         ))
 
-        skim_record = self.provenanceTracker.record_input_file("activitysim", skims_loc)
-
+        # Record the skims file as an input using state
+        skim_record = state.record_input_file("activitysim", skims_loc)
 
         # 2. Create ActivitySim input data from UrbanSim H5
         data_from_usim = create_asim_data_from_h5(settings, state)

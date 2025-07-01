@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from pilates.generic.records import RecordStore, ModelRunInfo
-from pilates.utils.provenance import FileProvenanceTracker
 from workflow_state import WorkflowState
 
 
@@ -11,8 +10,8 @@ class GenericPostprocessor(ABC):
     Subclasses should implement the postprocess() method.
     """
 
-    def __init__(self, provenanceTracker: FileProvenanceTracker):
-        self.provenanceTracker = provenanceTracker
+    def __init__(self):
+        pass
 
     @abstractmethod
     def postprocess(

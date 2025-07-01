@@ -14,8 +14,8 @@ class ActivitysimRunner(GenericRunner):
     """
     Runner for ActivitySim model.
     """
-    def __init__(self, model_name: str, provenanceTracker):
-        super().__init__(model_name, provenanceTracker)
+    def __init__(self, model_name: str):
+        super().__init__(model_name, None)
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
@@ -140,7 +140,6 @@ class ActivitysimRunner(GenericRunner):
                 # For now, log and continue, assuming Singularity might be used or stubs.
                 # If no client and no singularity, container runs will fail later.
 
-
         asim_docker_vols = self.get_asim_docker_vols(state.settings)
         activity_demand_model, activity_demand_image = self.get_model_and_image(
             state.settings, "activity_demand_model"
@@ -186,7 +185,7 @@ class ActivitysimRunner(GenericRunner):
                 message="asim full run"
             )
             asim_main_run_hash = state.record_model_start(
-                run_inputs_to_duplicate=init_asim_run_hash
+                run_inputs_to_duplicate=new_asim_run_hash
             )
         else:
             asim_main_run_hash = state.record_model_start()
@@ -213,3 +212,28 @@ class ActivitysimRunner(GenericRunner):
         state.record_model_completion(
             asim_main_run_hash, status="completed" if success else "failed"
         )
+
+        # Assemble outputs: find the expected output files and return as a RecordStore
+        # For ActivitySim, typical outputs are in the asim_local_output_folder
+        output_dir = os.path.join(state.full_path, state.settings["asim_local_output_folder"])
+        output_files = []
+        if os.path.exists(output_dir):
+            for fname in os.listdir(output_dir):
+                fpath = os.path.join(output_dir, fname)
+                if os.path.isfile(fpath) and (fname.endswith(".csv") or fname.endswith(".parquet")):
+                    # Record as output file in provenance and collect OutputRecord
+                    state.record_output_file("activitysim", fpath, year=state.forecast_year, description="ActivitySim output file", model_run_id=asim_main_run_hash)
+                    from pilates.generic.records import OutputRecord
+                    output_files.append(OutputRecord(file_path=fpath, output_type="ActivitySim output", model_run_id=asim_main_run_hash, year=state.forecast_year))
+        output_store = RecordStore(recordList=output_files)
+
+        # Get the ModelRunInfo for this run
+        run_info = None
+        if hasattr(state, "provenance_tracker") and state.provenance_tracker:
+            run_info = state.provenance_tracker.run_info.model_runs.get(asim_main_run_hash)
+        if run_info is None:
+            # Fallback: create a minimal ModelRunInfo
+            from pilates.generic.records import ModelRunInfo
+            run_info = ModelRunInfo(model="activitysim", year=state.forecast_year, iteration=state.current_inner_iter, description="ActivitySim run", status="completed" if success else "failed")
+
+        return output_store, run_info

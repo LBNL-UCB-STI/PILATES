@@ -18,9 +18,8 @@ class GenericRunner(ABC):
     A generic runner class that can be extended for specific models.
     """
 
-    def __init__(self, model_name: str, provenanceTracker: FileProvenanceTracker):
+    def __init__(self, model_name: str):
         self.model_name = model_name
-        self.provenanceTracker = provenanceTracker
         self.required_input_files = []
         self.required_output_files = []
 

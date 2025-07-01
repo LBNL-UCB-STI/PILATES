@@ -16,26 +16,26 @@ class ModelFactory:
         # In a real implementation, this might register available models
         self._registry = {}
 
-    def get_runner(self, model_name, provenanceTracker=None):
+    def get_runner(self, model_name):
         """
-        Return a runner instance for the given model name, passing provenanceTracker.
+        Return a runner instance for the given model name.
         """
         if model_name.lower() == "activitysim":
-            return ActivitysimRunner("activitysim", provenanceTracker)
+            return ActivitysimRunner("activitysim")
         return None
 
-    def get_preprocessor(self, model_name, provenanceTracker=None):
+    def get_preprocessor(self, model_name):
         """
-        Return a preprocessor instance for the given model name, passing provenanceTracker.
+        Return a preprocessor instance for the given model name.
         """
         if model_name.lower() == "activitysim":
-            return ActivitysimPreprocessor(provenanceTracker)
+            return ActivitysimPreprocessor()
         return None
 
-    def get_postprocessor(self, model_name, provenanceTracker=None):
+    def get_postprocessor(self, model_name):
         """
-        Return a postprocessor instance for the given model name, passing provenanceTracker.
+        Return a postprocessor instance for the given model name.
         """
         if model_name.lower() == "activitysim":
-            return  ActivitysimPostprocessor(provenanceTracker)
+            return  ActivitysimPostprocessor()
         return None
