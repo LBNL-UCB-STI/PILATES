@@ -11,23 +11,26 @@ class ModelFactory:
         # In a real implementation, this might register available models
         self._registry = {}
 
-    def get_runner(self, model_name):
+    def get_runner(self, model_name, provenanceTracker=None):
         """
-        Return a runner class or instance for the given model name.
+        Return a runner instance for the given model name, passing provenanceTracker.
         """
         # Token implementation: just return None or a dummy
+        # Example: return SomeRunnerClass(provenanceTracker)
         return None
 
-    def get_preprocessor(self, model_name):
+    def get_preprocessor(self, model_name, provenanceTracker=None):
         """
-        Return a preprocessor class or instance for the given model name.
+        Return a preprocessor instance for the given model name, passing provenanceTracker.
         """
         # Token implementation: just return None or a dummy
+        # Example: return SomePreprocessorClass(provenanceTracker)
         return None
 
-    def get_postprocessor(self, model_name):
+    def get_postprocessor(self, model_name, provenanceTracker=None):
         """
-        Return a postprocessor class or instance for the given model name.
+        Return a postprocessor instance for the given model name, passing provenanceTracker.
         """
         # Token implementation: just return None or a dummy
+        # Example: return SomePostprocessorClass(provenanceTracker)
         return None
