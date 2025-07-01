@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Optional
+from typing import Optional, List
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -16,6 +16,7 @@ from pandas.api.types import is_string_dtype
 from shapely import wkt
 from tqdm import tqdm
 
+from pilates.generic.records import RecordStore, InputRecord
 from pilates.utils.geog import (
     get_block_geoms,
     map_block_to_taz,
@@ -1166,7 +1167,7 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> str:
+def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> RecordStore:
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings["asim_local_mutable_data_folder"]
@@ -1213,12 +1214,9 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> 
             _fill_ridehail_skims(settings, tempSkims, order, data_dir=output_dir)
             if isinstance(tempSkims, omx.File):
                 tempSkims.close()
-            # final_skims_path = os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')
-            # skims_fname = settings.get('skims_fname', False)
-            # mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-            # shutil.copyfile(mutable_skims_location, final_skims_path)
 
     _create_offset(settings, order, data_dir=output_dir)
+
 
     if validation:
         order = zone_order(settings, state.year)
@@ -1328,8 +1326,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
 
-    @classmethod
-    def preprocess(cls, state):
+    def preprocess(self, state):
         """
         Run all preprocessing steps for ActivitySim in order.
         """
@@ -1342,13 +1339,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # 1. Create skims from BEAM outputs
         create_skims_from_beam(settings, state)
 
+        skims_loc = str(os.path.join(
+            state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
+        ))
+
+        skim_record = self.provenanceTracker.record_input_file("activitysim", skims_loc)
+
+
         # 2. Create ActivitySim input data from UrbanSim H5
-        create_asim_data_from_h5(settings, state)
+        data_from_usim = create_asim_data_from_h5(settings, state)
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
         # Optionally, return a RecordStore or similar object if needed by the workflow
-        return None  # Or return a RecordStore if appropriate
+        return RecordStore(recordList=[skim_record] + data_from_usim)
 
 
 #######################################
@@ -2333,7 +2337,7 @@ def copy_beam_geoms(
         zones.to_file(beam_shape_location)
 
 
-def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None):
+def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None) -> List[InputRecord]:
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
@@ -2462,7 +2466,7 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
 
     households.to_csv(os.path.join(output_dir, "households.csv"))
     logger.info("Saved households data to households.csv")
-    state.record_input_file(
+    households_input = state.record_input_file(
         "activitysim",
         os.path.join(output_dir, "households.csv"),
         description="activitysim households input based on UrbanSim .h5",
@@ -2470,7 +2474,7 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
-    state.record_input_file(
+    persons_input = state.record_input_file(
         "activitysim",
         os.path.join(output_dir, "persons.csv"),
         description="activitysim persons input based on UrbanSim .h5",
@@ -2478,9 +2482,10 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
-    state.record_input_file(
+    land_use_input = state.record_input_file(
         "activitysim",
         os.path.join(output_dir, "land_use.csv"),
         description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path],
     )
+    return [households_input, persons_input, land_use_input]

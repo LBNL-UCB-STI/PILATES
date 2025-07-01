@@ -537,7 +537,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: List[str] = None,
         skip_missing: bool = True,
         model_run_id: str = None,
-    ):
+    ) -> InputRecord:
         model = self._normalize_model_name(model)
         if model_run_id is None and hasattr(self, "current_model_run_id"):
             model_run_id = self.current_model_run_id
@@ -545,7 +545,9 @@ class FileProvenanceTracker(ProvenanceTracker):
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         file_hash = self._calculate_file_hash(path_to_use) if path_to_use else None
         if not path_to_use:
-            return
+            raise ValueError(
+                f"File path {file_path} does not exist or is invalid. Skipping input recording."
+            )
         if model not in self.run_info.inputs["files"]:
             self.run_info.inputs["files"][model] = []
         existing = None
@@ -560,7 +562,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.debug(
                 f"Updated input for {model}: {relative_path} (set model_run_id {model_run_id})"
             )
-            return
+            return existing
 
         input_record = InputRecord(
             file_path=path_to_use,
@@ -605,6 +607,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         logger.debug(
             f"Recorded input for {model}: {input_record.file_path} (exists: {path_to_use is not None})"
         )
+        return input_record
 
     def record_output_file(
         self,

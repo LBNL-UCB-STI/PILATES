@@ -15,8 +15,31 @@ class RecordStore:
     interact with a database or other persistent storage.
     """
 
-    def __init__(self, records: Optional[Dict[str, Record]] = None):
-        self.records = records or {}
+    def __init__(self, recordDict: Optional[Dict[str, Record]] = None, recordList: Optional[List[Record]]=None) -> None:
+        self.records = recordDict or {}
+        if recordList is not None:
+            for record in recordList:
+                if not isinstance(record, Record):
+                    raise TypeError("All items in recordList must be instances of Record.")
+                self.records[record.unique_id] = record
+
+    def __add__(self, other: 'RecordStore') -> 'RecordStore':
+        """
+        Combines the records of two RecordStore instances into a new RecordStore.
+        """
+        if not isinstance(other, RecordStore):
+            raise TypeError("Operand must be an instance of RecordStore.")
+        combined_records = {**self.records, **other.records}
+        return RecordStore(recordDict=combined_records)
+
+    def __iadd__(self, other: 'RecordStore') -> 'RecordStore':
+        """
+        Updates the current RecordStore by adding records from another RecordStore.
+        """
+        if not isinstance(other, RecordStore):
+            raise TypeError("Operand must be an instance of RecordStore.")
+        self.records.update(other.records)
+        return self
 
     def add_record(self, record: Record):
         self.records[record.unique_id] = record

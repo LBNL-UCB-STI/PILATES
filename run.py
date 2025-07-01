@@ -7,6 +7,8 @@ import pandas as pd
 import tables
 from tables import HDF5ExtError
 
+from pilates.generic.model_factory import ModelFactory
+
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
@@ -99,98 +101,7 @@ def find_latest_beam_iteration(beam_output_dir):
     print(iter_dirs)
 
 
-def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
-    formattable_asim_cmd = settings["asim_formattable_command"]
-    if not household_sample_size:
-        household_sample_size = settings.get("household_sample_size", 0)
-    num_processes = num_processes or settings.get(
-        "num_processes", multiprocessing.cpu_count() - 1
-    )
-    chunk_size = settings.get("chunk_size", 0)  # default no chunking
-    base_asim_cmd = formattable_asim_cmd.format(
-        household_sample_size, num_processes, chunk_size
-    )
-    return base_asim_cmd
 
-
-def get_asim_additional_args(settings, asim_docker_vols, compile):
-    additional_args = []
-    if settings.get("file_format", "parquet") == "parquet":
-        additional_args.append("--persist-sharrow-cache")
-        for local, d in asim_docker_vols.items():
-            if "data" in d["bind"]:
-                additional_args.append("-d")
-                additional_args.append('"{0}"'.format(d["bind"]))
-            elif "output" in d["bind"]:
-                additional_args.append("-o")
-                additional_args.append('"{0}"'.format(d["bind"]))
-            elif "compile" in d["bind"]:
-                if compile:
-                    additional_args.append("-c")
-                    additional_args.append('"{0}"'.format(d["bind"]))
-            elif "configs" in d["bind"]:
-                additional_args.append("-c")
-                additional_args.append('"{0}"'.format(d["bind"]))
-    return additional_args
-
-
-def get_asim_docker_vols(settings, working_dir=None):
-    region = settings["region"]
-    asim_subdir = settings["region_to_asim_subdir"][region]
-    asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
-    if working_dir is not None:
-        asim_local_mutable_data_folder = os.path.abspath(
-            os.path.join(working_dir, settings["asim_local_mutable_data_folder"])
-        )
-        asim_local_output_folder = os.path.abspath(
-            os.path.join(working_dir, settings["asim_local_output_folder"])
-        )
-        asim_local_configs_folder = os.path.abspath(
-            os.path.join(
-                working_dir,
-                settings["asim_local_mutable_configs_folder"],
-                settings.get("asim_main_configs_dir", "configs"),
-            )
-        )
-        asim_local_configs_compile_folder = os.path.abspath(
-            os.path.join(
-                working_dir,
-                settings["asim_local_mutable_configs_folder"],
-                "configs_sh_compile",
-            )
-        )
-    else:
-        asim_local_mutable_data_folder = os.path.abspath(
-            settings["asim_local_mutable_data_folder"]
-        )
-        asim_local_output_folder = os.path.abspath(settings["asim_local_output_folder"])
-        asim_local_configs_folder = os.path.abspath(
-            os.path.join(settings["asim_local_configs_folder"], region, "configs")
-        )
-        asim_local_configs_compile_folder = os.path.abspath(
-            os.path.join(
-                settings["asim_local_configs_folder"], region, "configs_sh_compile"
-            )
-        )
-    asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
-    asim_remote_output_folder = os.path.join(asim_remote_workdir, "output")
-    asim_remote_configs_folder = os.path.join(asim_remote_workdir, "configs")
-    asim_remote_configs_compile_folder = os.path.join(
-        asim_remote_workdir, "configs_sh_compile"
-    )
-    asim_docker_vols = {
-        asim_local_mutable_data_folder: {
-            "bind": asim_remote_input_folder,
-            "mode": "rw",
-        },
-        asim_local_output_folder: {"bind": asim_remote_output_folder, "mode": "rw"},
-        asim_local_configs_compile_folder: {
-            "bind": asim_remote_configs_compile_folder,
-            "mode": "rw",
-        },
-        asim_local_configs_folder: {"bind": asim_remote_configs_folder, "mode": "rw"},
-    }
-    return asim_docker_vols
 
 
 def get_usim_docker_vols(settings, output_dir=None):
@@ -305,114 +216,14 @@ def warm_start_activities(settings, state: WorkflowState, client):
         )
 
     elif activity_demand_model == "activitysim":
-        # 1. PARSE SETTINGS
-        land_use_model = settings["land_use_model"]
-        travel_model = settings["travel_model"]
-        region = settings["region"]
-        asim_subdir = settings["region_to_asim_subdir"][region]
-        asim_workdir = os.path.join("/activitysim", asim_subdir)
-        asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-        base_asim_cmd = get_base_asim_cmd(settings)
 
-        print_str = "Initializing {0} warm start sequence".format(activity_demand_model)
-        formatted_print(print_str)
+        factory = ModelFactory()
+        runner = factory.get_runner("activitysim", provenanceTracker=state.provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim", provenanceTracker=state.provenance_tracker)
+        postprocessor = factory.get_postprocessor("activitysim", provenanceTracker=state.provenance_tracker)
 
-        asim_run_index = state.record_model_init(
-            activity_demand_model, year=state.current_year, iteration=0
-        )
-
-        # 2. CREATE DATA FROM BASE YEAR SKIMS AND URBANSIM INPUTS
-
-        # data tables
-        logger.info(
-            "Creating {0} input data from {1} outputs".format(
-                activity_demand_model, land_use_model
-            ).upper()
-        )
-
-        # Record inputs and outputs for ActivitySim warm start preprocessing
-        usim_output_store_name = usim_post.get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_store_path = os.path.join(
-            state.full_path,
-            settings["usim_local_mutable_data_folder"],
-            usim_output_store_name,
-        )
-        expected_beam_skims_path = os.path.join(
-            state.full_path,
-            settings["beam_local_output_folder"],
-            settings["skims_fname"],
-        )
-
-        # record_inputs_and_outputs(
-        #     state,
-        #     activity_demand_model,
-        #     inputs=[
-        #         (usim_output_store_path, "UrbanSim output for warm start"),
-        #         (expected_beam_skims_path, "BEAM skims for warm start"),
-        #     ],
-        #     model_run_id=asim_run_index
-        # )
-
-        skims_loc = os.path.join(
-                state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
-            )
-
-        if not os.path.exists(skims_loc):
-            asim_pre.create_skims_from_beam(settings, state, overwrite=False)
-
-        state.record_input_file(activity_demand_model, skims_loc, None, "skims")
-
-        asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
-
-        asim_warm_start_persons_path = os.path.join(
-            state.full_path,
-            settings["asim_local_output_folder"],
-            "warm_start_persons.csv",
-        )
-        asim_warm_start_households_path = os.path.join(
-            state.full_path,
-            settings["asim_local_output_folder"],
-            "warm_start_households.csv",
-        )
-
-        # record_inputs_and_outputs(
-        #     state,
-        #     activity_demand_model,
-        #     outputs=[
-        #         (asim_warm_start_persons_path, "ActivitySim warm start persons output"),
-        #         (
-        #             asim_warm_start_households_path,
-        #             "ActivitySim warm start households output",
-        #         ),
-        #     ],
-        #     year=state.current_year,
-        #     model_run_id=asim_run_index
-        # )
-
-        # 3. RUN ACTIVITYSIM IN WARM START MODE
-        logger.info(
-            "Running {0} in warm start mode".format(activity_demand_model).upper()
-        )
-        ws_asim_cmd = base_asim_cmd + " -w"  # warm start flag
-        additional_args = get_asim_additional_args(
-            settings, asim_docker_vols, False
-        )  # No compile in warm start run
-
-        # Record ActivitySim warm start run start
-        asim_run_index = state.record_model_start()
-
-        success = run_container(
-            client,
-            settings,
-            activity_demand_image,
-            asim_docker_vols,
-            ws_asim_cmd,
-            working_dir=asim_workdir,
-            model_name=activity_demand_model,
-            args=additional_args,
-        )
+        inputData = preprocessor.preprocess(state)
+        preprocessor.run(state)
 
         # Record ActivitySim warm start run completion
         state.record_model_completion(
@@ -1006,9 +817,7 @@ def generate_activity_plans(
         region = settings["region"]
         asim_subdir = settings["region_to_asim_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
-        asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
 
-        docker_stdout = settings.get("docker_stdout", False)
 
         overwrite_skims_arg = False  # Logic seems to keep this False after warm start
 
@@ -1035,99 +844,8 @@ def generate_activity_plans(
             state.forecast_year, activity_demand_model
         )
 
-        # Record ActivitySim run start (Compilation if needed)
-        asim_compile_run_index = -1
-        if not state.asim_compiled:
-            skims_loc = os.path.join(
-                state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
-            )
+        # RUN HERE
 
-            state.record_input_file(activity_demand_model, skims_loc, None, "skims")
-
-            asim_cmd = get_base_asim_cmd(
-                settings, household_sample_size=2500, num_processes=1
-            )
-            if resume_after:
-                asim_cmd += " -r {0}".format(resume_after)
-
-            additional_args = get_asim_additional_args(settings, asim_docker_vols, True)
-
-            asim_compile_run_hash = state.record_model_start(
-                message="asim compilation"
-            )
-
-            success = run_container(
-                client,
-                settings,
-                activity_demand_image,
-                working_dir=asim_workdir,
-                volumes=asim_docker_vols,
-                command=asim_cmd,
-                args=additional_args,
-                model_name=activity_demand_model,
-            )
-
-            state.record_model_completion(
-                asim_compile_run_hash, status="completed" if success else "failed"
-            )
-
-            logger.info("ASIM Compilation success: {0}".format(success))
-            if not success:
-                raise RuntimeError("ASim Compilation failed")
-            state.compile_asim()  # Update state to mark as compiled
-
-            new_asim_run_hash = state.record_model_init(
-                activity_demand_model,
-                year=state.forecast_year,
-                iteration=state.current_inner_iter,
-                message="asim full run"
-            )
-            asim_main_run_hash = state.record_model_start(
-                run_inputs_to_duplicate=init_asim_run_hash
-            )
-        else:
-            asim_main_run_hash = state.record_model_start()
-
-        # # Update model_run_id for all activitysim inputs before launching the run
-        # if state.provenance_tracker:
-        #     prov = state.provenance_tracker
-        #     # Use lowercase for model name
-        #     model_key = "activitysim"
-        #     if model_key in prov.run_info["inputs"]["files"]:
-        #         for rec in prov.run_info["inputs"]["files"][model_key]:
-        #             model_run_ids = rec.get("model_run_id")
-        #             if model_run_ids is None:
-        #                 model_run_ids = []
-        #             elif not isinstance(model_run_ids, list):
-        #                 model_run_ids = [model_run_ids]
-        #             if asim_main_run_index not in model_run_ids:
-        #                 model_run_ids.append(asim_main_run_index)
-        #                 rec["model_run_id"] = model_run_ids
-        #         prov._save_run_info()
-
-        asim_cmd = get_base_asim_cmd(settings)
-        if resume_after:
-            asim_cmd += " -r {0}".format(resume_after)
-            print_str += ". Picking up after {0}".format(resume_after)
-        formatted_print(print_str)
-
-        additional_args = get_asim_additional_args(settings, asim_docker_vols, False)
-
-        success = run_container(
-            client,
-            settings,
-            activity_demand_image,
-            working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=asim_cmd,
-            args=additional_args,
-            model_name=activity_demand_model,
-        )
-
-        # Record ActivitySim run completion (Main run)
-        state.record_model_completion(
-            asim_main_run_hash, status="completed" if success else "failed"
-        )
         if not success:
             logger.error("ActivitySim main run failed.")
             # Decide how to handle failure - maybe exit or allow workflow to continue with failed status?
@@ -1579,37 +1297,6 @@ def run_traffic_assignment(
     return
 
 
-def initialize_docker_client(settings):
-    land_use_model = settings.get("land_use_model", False)
-    vehicle_ownership_model = settings.get("vehicle_ownership_model", False)  ## ATLAS
-    activity_demand_model = settings.get("activity_demand_model", False)
-    travel_model = settings.get("travel_model", False)
-    models = [
-        land_use_model,
-        vehicle_ownership_model,
-        activity_demand_model,
-        travel_model,
-    ]
-    image_names = settings["docker_images"]
-    pull_latest = settings.get("pull_latest", False)
-
-    client = docker.from_env()
-    if pull_latest:
-        logger.info("Pulling from docker...")
-        for model in models:
-            if model:
-                image = image_names.get(model)  # Use .get for safety
-                if image is not None:
-                    print("Pulling latest image for {0}".format(image))
-                    try:
-                        client.images.pull(image)
-                    except docker.errors.ImageNotFound:
-                        logger.error(f"Docker image {image} not found.")
-                    except Exception as e:
-                        logger.error(f"Error pulling docker image {image}: {e}")
-
-    return client
-
 
 def postprocess_all(settings, state: WorkflowState):
     logger.info("===== STARTING POSTPROCESSING =====")
@@ -1872,34 +1559,6 @@ def run_container(
                 )
                 return False
 
-
-def get_model_and_image(settings: dict, model_type: str):
-    manager = settings.get("container_manager")
-    if manager == "docker":
-        image_names = settings.get("docker_images", {})
-    elif manager == "singularity":
-        image_names = settings.get("singularity_images", {})
-    else:
-        raise ValueError(
-            "Container Manager not specified (container_manager param in settings.yaml)"
-        )
-
-    model_name = settings.get(model_type)
-    if not model_name:
-        # If model type is optional (e.g., vehicle_ownership_model), return None
-        optional_models = ["vehicle_ownership_model"]  # Add other optional models here
-        if model_type in optional_models:
-            return None, None
-        else:
-            raise ValueError(f"No model {model_type} specified in settings.")
-
-    image_name = image_names.get(model_name)
-    if not image_name:
-        raise ValueError(
-            f"No {manager} image specified for model '{model_name}' (model type: {model_type}). Check settings['{manager}_images']."
-        )
-
-    return model_name, image_name
 
 
 def main():
