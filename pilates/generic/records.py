@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Union
 
 
 class Record:
-    unique_id: str
+    unique_id: Optional[str] = None
     created_at: Optional[str] = None
     short_name: Optional[str] = None
     description: Optional[str] = None
@@ -21,7 +21,8 @@ class RecordStore:
             for record in recordList:
                 if not isinstance(record, Record):
                     raise TypeError("All items in recordList must be instances of Record.")
-                self.records[record.unique_id] = record
+                if record.unique_id:
+                    self.records[record.unique_id] = record
 
     def __add__(self, other: 'RecordStore') -> 'RecordStore':
         """
@@ -42,7 +43,8 @@ class RecordStore:
         return self
 
     def add_record(self, record: Record):
-        self.records[record.unique_id] = record
+        if record.unique_id:
+            self.records[record.unique_id] = record
 
     def get_record(self, unique_id: str) -> Optional[Record]:
         return self.records.get(unique_id)
@@ -51,24 +53,16 @@ class RecordStore:
         return list(self.records.values())
 
 @dataclass(kw_only=True)
-class InputRecord(Record):
+class FileRecord(Record):
     file_path: str
-    source_run_id: Optional[str] = None
-    input_type: str = "unknown"
-    file_hash: Optional[str] = None
-    source_file_paths: List[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass(kw_only=True)
-class OutputRecord:
-    file_path: str
-    output_type: Optional[str] = None
-    model_run_id: Optional[str] = None
-    created_at: Optional[str] = None
+    file_hash: str
+    models: List[str] = field(default_factory=list)
+    description: Optional[str] = None
     year: Optional[int] = None
     source_file_paths: List[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    producing_run_id: Optional[str] = None
+    consuming_run_ids: List[str] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)
@@ -101,7 +95,6 @@ class PilatesRunInfo:
     settings_hash: Optional[str] = None
     code_version: Optional[str] = None
     hostname: Optional[str] = None
-    inputs: Dict[str, Union[Dict[str, List[InputRecord]], Dict[str, List[RepoRecord]]]]  = field(default_factory=lambda: {"files": {}, "repos": {}})
-    outputs: dict = field(default_factory=dict)
+    file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
+    repo_records: Dict[str, List[RepoRecord]] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
-

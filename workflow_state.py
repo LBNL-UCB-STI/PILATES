@@ -3,14 +3,7 @@ from enum import Enum
 from typing import Optional, List
 import os
 import yaml
-import json
 import logging
-from pilates.activitysim import preprocessor as asim_pre
-from pilates.urbansim import preprocessor as usim_pre
-from pilates.beam import preprocessor as beam_pre
-from pilates.atlas import preprocessor as atlas_pre
-from pilates.utils.provenance import ProvenanceTracker  # Import the new class
-from pilates.utils.beam import get_beam_source_dir
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -46,11 +39,8 @@ class WorkflowState:
         major_stage: Stage | None,
         inner_iter: int,
         sub_stage: Stage | None,
-        output_path: str | None,
-        folder_name: str | None,
         file_loc: str,
         asim_compiled: bool,
-        run_id: str | None = None,
     ):
 
         # Store basic simulation parameters
@@ -65,28 +55,10 @@ class WorkflowState:
         self.current_sub_stage = sub_stage
 
         self.forecast_year = None
-        self.output_path = os.path.abspath(output_path) if output_path else None
-        self.folder_name = folder_name
         self.file_loc = file_loc
-        self.run_id = run_id
 
         self.__asim_compiled = asim_compiled
         self.initial_step = 7 if self.current_year == 2010 else None
-
-        # Initialize provenance tracker if output path and run_id are available
-        self.provenance_tracker: Optional[ProvenanceTracker] = None
-        if self.output_path and self.run_id:
-            # Ensure the output directory exists before initializing tracker
-            if self.folder_name:
-                tracker_output_path = os.path.join(self.output_path, self.folder_name)
-            else:
-                tracker_output_path = (
-                    self.output_path
-                )  # Should not happen if folder_name is None with output_path
-            os.makedirs(tracker_output_path, exist_ok=True)
-            self.provenance_tracker = ProvenanceTracker(
-                self.run_id, self.output_path, self.folder_name
-            )
 
         # Store settings for access by methods that need them
         self._settings = {
@@ -147,23 +119,6 @@ class WorkflowState:
         )
 
     @property
-    def full_path(self):
-        """
-        Returns the full path where mutable data should be stored.
-        If output_path is None, returns the current working directory (for in-place updates).
-        Otherwise, returns the path to the run-specific directory.
-        """
-        if self.output_path is None:
-            # No output directory specified - work in place (current directory)
-            return os.getcwd()
-        elif self.folder_name:
-            # Output directory with folder name (no run ID subdirectory)
-            return os.path.join(self.output_path, self.folder_name)
-        else:
-            # Just the base output path (should ideally have a folder_name)
-            return self.output_path
-
-    @property
     def asim_compiled(self):
         if self.current_year is not None:
             if self.__asim_compiled:
@@ -208,317 +163,21 @@ class WorkflowState:
     def enabled(self, stage):
         return stage in self.enabled_stages
 
-    def _create_output_dir(self, settings: dict):
-        """
-        Creates output directory structure and copies input data to mutable locations.
-        Only called when output_directory is specified in settings and it's a new run.
-        """
-        dt = datetime.now().strftime("%Y%m%d-%H%M%S")
-        base_loc = os.path.expandvars(settings["output_directory"])
-        run_name = settings["output_run_name"]
-        folder_name = "{0}-{1}-{2}".format(settings["region"], run_name, dt)
-        base_folder_path = os.path.join(base_loc, folder_name)
-
-        self.run_id = str(uuid.uuid4())
-        os.makedirs(base_folder_path, exist_ok=True)
-
-        self.output_path = base_loc
-        self.folder_name = folder_name
-
-        logger.info(
-            f"Created output directory structure for run {self.run_id}: {base_folder_path}"
-        )
-
-        # Initialize provenance tracker for the new run
-        self.provenance_tracker = ProvenanceTracker(
-            self.run_id, self.output_path, self.folder_name
-        )
-        self.provenance_tracker.initialize_from_settings(settings)
-
-        # Create subdirectories for models and copy input data to mutable locations
-        # Record initial input files as they are copied
-        have_not_copied_usim_data = True
-        # Always ensure BEAM configs are copied if BEAM is used as the traffic assignment model
-        beam_model_name = settings.get("travel_model")
-        if beam_model_name == "beam":
-            # Ensure we use the global get_beam_source_dir, not a local variable
-            from pilates.utils.beam import get_beam_source_dir
-            input_dir = os.path.join(
-                base_folder_path, settings["beam_local_mutable_data_folder"]
-            )
-            os.makedirs(input_dir, exist_ok=True)
-
-            logger.info(f"Preparing to copy BEAM configs: model_name={beam_model_name}, input_dir={input_dir}")
-            # Record BEAM input files before copying
-            # Source: pilates/beam/production/[region]
-            beam_source_dir = get_beam_source_dir(settings)
-            logger.info(f"BEAM source dir resolved to: {beam_source_dir}")
-            if os.path.exists(beam_source_dir):
-                logger.info(f"BEAM source dir exists: {beam_source_dir}")
-                # If this is a git repo, record only the repo itself, not its contents
-                if self.provenance_tracker.is_git_repo(beam_source_dir):
-                    repo_name = os.path.basename(beam_source_dir)
-                    git_hash = self.provenance_tracker.get_git_hash(beam_source_dir)
-                    self.provenance_tracker.record_repo_input(
-                        beam_model_name,
-                        beam_source_dir,
-                        description=f"Git repo {repo_name} at {git_hash}",
-                        git_hash=git_hash,
-                    )
-                else:
-                    # Only log files under the region subdirectory
-                    for root, dirs, files in os.walk(beam_source_dir):
-                        for file in files:
-                            input_path = os.path.join(root, file)
-                            if os.path.isfile(input_path):
-                                self.record_input_file(
-                                    beam_model_name,
-                                    input_path,
-                                    description=f"BEAM input file for region {settings['region']}",
-                                )
-                # Always copy data to mutable location
-                logger.info(f"Calling beam_pre.copy_data_to_mutable_location(settings, input_dir={input_dir})")
-                beam_pre.copy_data_to_mutable_location(settings, input_dir)
-            else:
-                logger.warning(f"BEAM source dir does not exist: {beam_source_dir}")
-            output_dir = os.path.join(
-                base_folder_path, settings["beam_local_output_folder"]
-            )
-            os.makedirs(output_dir, exist_ok=True)
-
-        for model_key in [
-            "travel_model",
-            "activity_demand_model",
-            "vehicle_ownership_model",
-            "land_use_model",
-        ]:
-            model_name = settings.get(model_key)
-            if model_name and not (model_key == "travel_model" and model_name == "beam"):
-                model_output_base = os.path.join(base_folder_path, model_name)
-                os.makedirs(model_output_base, exist_ok=True)
-
-                if (model_name == "urbansim") or (
-                    (model_name == "activitysim") and have_not_copied_usim_data
-                ):
-                    output_dir = os.path.join(
-                        base_folder_path, settings["usim_local_mutable_data_folder"]
-                    )
-                    os.makedirs(output_dir, exist_ok=True)
-
-                    # Record UrbanSim input files before copying
-                    input_dir = settings["usim_local_data_input_folder"]
-                    if os.path.exists(input_dir):
-                        for file in os.listdir(input_dir):
-                            input_path = os.path.join(self.full_path, input_dir, file)
-                            if os.path.isfile(input_path):
-                                logger.info(f"Recording input file for {model_name}: {input_path}")
-                                self.record_input_file(
-                                    model_name,
-                                    input_path,
-                                    description="Base UrbanSim input data",
-                                )
-
-                    usim_pre.copy_data_to_mutable_location(settings, output_dir, self)
-                    have_not_copied_usim_data = False
-
-                if model_name == "beam":
-                    input_dir = os.path.join(
-                        base_folder_path, settings["beam_local_mutable_data_folder"]
-                    )
-                    os.makedirs(input_dir, exist_ok=True)
-
-                    logger.info(f"Preparing to copy BEAM configs: model_name={model_name}, input_dir={input_dir}")
-                    # Record BEAM input files before copying
-                    # Source: pilates/beam/production/[region]
-                    from pilates.utils.beam import get_beam_source_dir
-                    beam_source_dir = get_beam_source_dir(settings)
-                    logger.info(f"BEAM source dir resolved to: {beam_source_dir}")
-                    if os.path.exists(beam_source_dir):
-                        logger.info(f"BEAM source dir exists: {beam_source_dir}")
-                        # If this is a git repo, record only the repo itself, not its contents
-                        if self.provenance_tracker.is_git_repo(beam_source_dir):
-                            repo_name = os.path.basename(beam_source_dir)
-                            git_hash = self.provenance_tracker.get_git_hash(beam_source_dir)
-                            self.provenance_tracker.record_repo_input(
-                                model_name,
-                                beam_source_dir,
-                                description=f"Git repo {repo_name} at {git_hash}",
-                                git_hash=git_hash,
-                            )
-                        else:
-                            # Only log files under the region subdirectory
-                            for root, dirs, files in os.walk(beam_source_dir):
-                                for file in files:
-                                    input_path = os.path.join(root, file)
-                                    if os.path.isfile(input_path):
-                                        self.record_input_file(
-                                            model_name,
-                                            input_path,
-                                            description=f"BEAM input file for region {settings['region']}",
-                                        )
-                        # Always copy data to mutable location
-                        logger.info(f"Calling beam_pre.copy_data_to_mutable_location(settings, input_dir={input_dir})")
-                        beam_pre.copy_data_to_mutable_location(settings, input_dir)
-                    else:
-                        logger.warning(f"BEAM source dir does not exist: {beam_source_dir}")
-                    output_dir = os.path.join(
-                        base_folder_path, settings["beam_local_output_folder"]
-                    )
-                    os.makedirs(output_dir, exist_ok=True)
-
-                if model_name == "atlas":
-                    input_dir = os.path.join(
-                        base_folder_path, settings["atlas_host_mutable_input_folder"]
-                    )
-                    os.makedirs(input_dir, exist_ok=True)
-
-                    # Record Atlas input files before copying
-                    atlas_input_dir = os.path.join(self.full_path, settings.get("atlas_host_input_folder"))
-                    if atlas_input_dir and os.path.exists(atlas_input_dir):
-                        for root, dirs, files in os.walk(atlas_input_dir):
-                            for file in files:
-                                input_path = os.path.join(root, file)
-                                if os.path.isfile(input_path):
-                                    self.record_input_file(
-                                        model_name,
-                                        input_path,
-                                        description="Atlas input file",
-                                    )
-
-                    atlas_pre.copy_data_to_mutable_location(settings, input_dir)
-                    output_dir = os.path.join(
-                        base_folder_path, settings["atlas_host_output_folder"]
-                    )
-                    os.makedirs(output_dir, exist_ok=True)
-
-                if model_name == "activitysim":
-                    # Record ActivitySim config files before copying
-                    asim_config_dir = settings.get("asim_local_configs_folder")
-                    region = settings.get("region")
-                    region_config_dir = os.path.join(asim_config_dir, region) if asim_config_dir and region else None
-                    if region_config_dir and os.path.exists(region_config_dir):
-                        # If this is a git repo, record only the repo itself, not its contents
-                        if self.provenance_tracker.is_git_repo(region_config_dir):
-                            repo_name = os.path.basename(region_config_dir)
-                            git_hash = self.provenance_tracker.get_git_hash(region_config_dir)
-                            self.provenance_tracker.record_repo_input(
-                                model_name,
-                                region_config_dir,
-                                description=f"ActivitySim configuration repository",
-                                git_hash=git_hash,
-                            )
-                        else:
-                            for root, dirs, files in os.walk(region_config_dir):
-                                for file in files:
-                                    input_path = os.path.join(root, file)
-                                    if os.path.isfile(input_path):
-                                        self.record_input_file(
-                                            model_name,
-                                            input_path,
-                                            description=f"ActivitySim configuration file for region {region}",
-                                        )
-
-                    # Always copy data to mutable location
-                    if region_config_dir and os.path.exists(region_config_dir):
-                        asim_pre.copy_data_to_mutable_location(settings, base_folder_path)
-                    output_dir = os.path.join(
-                        base_folder_path, settings["asim_local_output_folder"]
-                    )
-                    os.makedirs(output_dir, exist_ok=True)
-
-    def record_model_init(
-        self, model: str, year: int = None, iteration: int = None, message: Optional[str] = None
-    ) -> str:
-        """Record the start of a model run and return the run index."""
-        if self.provenance_tracker:
-            return self.provenance_tracker.init_model_run(model, year, iteration, message)
-        return ""  # Return "" if tracker is not initialized
-
-    def record_model_start(
-        self, run_inputs_to_duplicate: Optional[str]=None, message: Optional[str] = None
-    ) -> str:
-        """Record the start of a model run and return the run index."""
-        if self.provenance_tracker:
-            return self.provenance_tracker.start_model_run(run_inputs_to_duplicate, message)
-        return ""  # Return "" if tracker is not initialized
-
-    def record_model_completion(self, run_hash: str, status: str = "completed"):
-        """Record the completion of a model run."""
-        if self.provenance_tracker:
-            self.provenance_tracker.complete_model_run(run_hash, status)
-
-    def record_input_file(
-        self,
-        model: str,
-        file_path: str,
-        source_run_id: str = None,
-        description: str = None,
-        source_file_paths: list = None,
-        model_run_id: str = None,
-    ):
-        """Record an input file for provenance tracking."""
-        if self.provenance_tracker:
-            # Ensure file_path is absolute before passing to tracker
-            abs_file_path = os.path.abspath(file_path)
-            logger.debug(f"Recording input file: {file_path}")
-            if os.path.exists(abs_file_path):
-                logger.debug(f"File exists: {abs_file_path}")
-                self.provenance_tracker.record_input_file(
-                    model, abs_file_path, source_run_id, description, source_file_paths, model_run_id=model_run_id
-                )
-            else:
-                logger.warning(f"Input file not found: {abs_file_path}")
-
-    # def record_model_io_batch(
-    #     self,
-    #     model: str,
-    #     inputs: List[str] = None,
-    #     outputs: List[str] = None,
-    #     year: int = None,
-    #     input_descriptions: List[str] = None,
-    #     output_descriptions: List[str] = None,
-    # ):
-    #     """Record multiple input and output files for a model in batch."""
-    #     if self.provenance_tracker:
-    #         self.provenance_tracker.record_model_io_batch(
-    #             model, inputs, outputs, year, input_descriptions, output_descriptions
-    #         )
-
-    def record_output_file(
-        self, model: str, file_path: str, year: int = None, description: str = None, model_run_id: str = None, source_file_paths: list = None
-    ):
-        """Record an output file for provenance tracking."""
-        if self.provenance_tracker:
-            # Ensure file_path is absolute before passing to tracker
-            abs_file_path = os.path.abspath(file_path)
-            if os.path.exists(abs_file_path):
-                self.provenance_tracker.record_output_file(
-                    model, abs_file_path, year, description, model_run_id=model_run_id, source_file_paths=source_file_paths
-                )
-            else:
-                logger.warning(f"Output file not found: {abs_file_path}")
-
     @classmethod
     def write_stage(
         cls,
         year: int,
         current_stage: Stage,
         file_loc,
-        path,
-        folder_name,
         iteration,
         asim_compiled,
-        run_id: str | None,
     ):
         to_save = {
             "year": year,
             "stage": current_stage.name if current_stage else None,
-            "path": path,
-            "folder_name": folder_name,
             "iteration": iteration,
             "asim_compiled": asim_compiled,
-            "run_id": run_id,
-        }  # Save run_id
+        }
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -526,7 +185,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, None, None, False, None]  # Return None for run_id
+            return [None, None, 0, False]
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -537,12 +196,9 @@ class WorkflowState:
             if stage_str is None or stage_str == "null"
             else WorkflowState.Stage[stage_str]
         )
-        path = data.get("path", None)
-        folder_name = data.get("folder_name", None)
         iteration = data.get("iteration", 0) or 0
         asim_compiled = data.get("asim_compiled", False)
-        run_id = data.get("run_id", None)  # Read run_id
-        return [year, stage, iteration, path, folder_name, asim_compiled, run_id]
+        return [year, stage, iteration, asim_compiled]
 
     @classmethod
     def from_settings(cls, settings):
@@ -555,13 +211,8 @@ class WorkflowState:
         traffic_assignment_enabled = settings["traffic_assignment_enabled"]
         replanning_enabled = settings["replanning_enabled"]
         file_loc = settings["state_file_loc"]
-        output_directory = settings.get("output_directory", None)
 
-        [year, stage, iteration, path, folder_name, asim_compiled, run_id] = (
-            cls.read_current_stage(file_loc)
-        )
-
-        current_run_id = run_id  # Use loaded run_id if available
+        [year, stage, iteration, asim_compiled] = cls.read_current_stage(file_loc)
 
         year = year or start_year
 
@@ -578,46 +229,11 @@ class WorkflowState:
             stage,
             iteration,
             None,
-            path,
-            folder_name,
             file_loc,
             asim_compiled,
-            run_id=current_run_id,
         )
 
         out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)
-
-        # Handle output directory logic and provenance tracker initialization
-        if output_directory is not None:
-            base_loc = os.path.expandvars(output_directory)
-            if out.output_path is None or out.folder_name is None:
-                # This is a new run or resuming a run that didn't properly save path/folder_name
-                # Create new output directory structure and initialize tracker
-                out._create_output_dir(settings)
-                out.write_state()  # Save the newly created path, folder_name, run_id
-            else:
-                # Resuming an existing run with a valid output directory
-                logger.info(
-                    f"Resuming run {out.run_id} in existing output directory: {out.full_path}"
-                )
-                # Provenance tracker was already initialized in __init__ if path/folder_name/run_id were loaded
-                # Ensure settings are initialized in the tracker if it's a resume
-                if (
-                    out.provenance_tracker
-                    and out.provenance_tracker.run_info.settings_hash is None
-                ):
-                    out.provenance_tracker.initialize_from_settings(settings)
-
-        else:
-            # output_directory is None - work in place with local inputs
-            out.output_path = None
-            out.folder_name = None
-            # If no output directory, no file-based provenance tracking
-            out.provenance_tracker = None
-            if out.run_id is None:
-                # Still generate a run_id even for in-place runs, just don't track to file
-                out.run_id = str(uuid.uuid4())
-                out.write_state()
 
         if year:
             # Calculate forecast_year based on current_year and frequency
@@ -664,11 +280,8 @@ class WorkflowState:
             self.current_year,
             self.current_sub_stage or self.current_major_stage,
             self.file_loc,
-            self.output_path,
-            self.folder_name,
             self.current_inner_iter,
             self.__asim_compiled,
-            self.run_id,  # Pass run_id to write
         )
 
     def is_enabled(self, stage: Stage) -> bool:

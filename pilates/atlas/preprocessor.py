@@ -9,6 +9,9 @@ import openmatrix as omx
 import pandas as pd
 import yaml
 
+from pilates.workspace import Workspace
+from workflow_state import WorkflowState
+
 # with open('settings.yaml') as file:
 #     settings = yaml.load(file, Loader=yaml.FullLoader)
 
@@ -45,11 +48,9 @@ def _get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
-def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=False):
+def prepare_atlas_inputs(settings, year, workspace: "Workspace", state: "WorkflowState", warm_start=False):
     # set where to find urbansim output
-    urbansim_output_path = os.path.join(
-        state.full_path, settings["usim_local_mutable_data_folder"]
-    )
+    urbansim_output_path = workspace.get_usim_mutable_data_dir()
     if warm_start:
         # if warm start, read custom_mpo h5
         urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
@@ -62,8 +63,7 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
 
     # set where to put atlas csv inputs (processed from urbansim outputs)
     atlas_input_path = os.path.join(
-        state.full_path,
-        settings["atlas_host_mutable_input_folder"],
+        workspace.get_atlas_mutable_input_dir(),
         "year{}".format(year),
     )
 
@@ -74,8 +74,7 @@ def prepare_atlas_inputs(settings, year, state: "WorkflowState", warm_start=Fals
 
     if year != state.year:
         old_input_path = os.path.join(
-            state.full_path,
-            settings["atlas_host_mutable_input_folder"],
+            workspace.get_atlas_mutable_input_dir(),
             "year{}".format(state.year),
         )
         for f in glob.glob(os.path.join(old_input_path, "*.RData")):

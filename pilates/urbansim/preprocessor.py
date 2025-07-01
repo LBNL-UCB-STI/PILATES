@@ -106,7 +106,7 @@ def _load_raw_skims(settings, asim_data_dir, skim_format):
     return skims
 
 
-def copy_data_to_mutable_location(settings, output_dir, state):
+def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
     region = settings["region"]
     region_id = settings["region_to_region_id"][region]
     year_specific_model_data_fname = settings.get(
@@ -126,7 +126,7 @@ def copy_data_to_mutable_location(settings, output_dir, state):
     dest = os.path.join(output_dir, model_data_fname)
     logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
     shutil.copyfile(src, dest)
-    state.record_input_file("urbansim", dest, description="UrbanSim model data")
+    provenance_tracker.record_input_file("urbansim", dest, description="UrbanSim model data")
     other_data_fnames = [
         "hsize_ct_{0}.csv".format(region_id),
         "income_rates_{0}.csv".format(region_id),
@@ -140,7 +140,7 @@ def copy_data_to_mutable_location(settings, output_dir, state):
         if os.path.exists(src):
             logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
             shutil.copyfile(src, dest)
-            state.record_input_file(
+            provenance_tracker.record_input_file(
                 "urbansim", dest, description=f"UrbanSim input file: {fname}"
             )
 

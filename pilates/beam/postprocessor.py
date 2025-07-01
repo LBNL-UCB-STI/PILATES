@@ -13,25 +13,12 @@ try:
 except:
     print("FAILED TO LOAD XARRAY")
 
-# import pickle
-# import cloudpickle
-# import dill
-#
-# np.seterr(divide='ignore')
-#
-# dill.settings['recurse'] = True
-#
-# pickle.ForkingPickler = cloudpickle.Pickler
-#
-# import multiprocessing as mp
-
-# mp.set_start_method('spawn', True)
-# from multiprocessing import Pool, cpu_count
-
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo, OutputRecord
+from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
+from pilates.workspace import Workspace
 from workflow_state import WorkflowState
+from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -107,21 +94,6 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     return od_skims_path
 
 
-def reorder(path):
-    split = path.split("_")
-    if len(split) == 6:
-        split[3], split[5] = split[5], split[3]
-        return "_".join(split)
-    elif len(split) == 4:
-        split[1], split[3] = split[3], split[1]
-        return "_".join(split)
-    elif len(split) == 5:
-        split[2], split[4] = split[4], split[2]
-        return "_".join(split)
-    else:
-        print("STOP ", path)
-
-
 def find_produced_origin_skims(beam_output_dir):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
     if iteration_dir is None:
@@ -129,205 +101,6 @@ def find_produced_origin_skims(beam_output_dir):
     ridehail_skims_path = os.path.join(iteration_dir, f"{it_num}.skimsRidehail.csv.gz")
     logger.info("expecting skims at {0}".format(ridehail_skims_path))
     return ridehail_skims_path
-
-
-def _merge_skim(
-    inputMats, outputMats, path, timePeriod, measures, transit_scale_factor=100.0
-):
-    complete_key = f"{path}_TRIPS__{timePeriod}"
-    failed_key = f"{path}_FAILURES__{timePeriod}"
-    completed, failed = None, None
-
-    if complete_key in inputMats.keys():
-        completed = np.array(inputMats[complete_key]).copy()
-        if f"{path}_TOTIVT__{timePeriod}" in inputMats.keys():
-            shouldNotBeZero = (completed > 0) & (
-                np.array(inputMats[f"{path}_TOTIVT__{timePeriod}"]) == 0
-            )
-            if shouldNotBeZero.any():
-                logger.warning(
-                    f"In BEAM outputs for {path} in {timePeriod} we have {shouldNotBeZero.sum()} completed trips with time = 0"
-                )
-                completed[shouldNotBeZero] = 0
-        failed = np.array(inputMats[failed_key])
-
-        logger.info(
-            f"Adding {np.nan_to_num(completed).sum()} valid trips and {np.nan_to_num(failed).sum()} impossible trips to skim {complete_key}, where {np.nan_to_num(np.array(outputMats[complete_key])).sum()} had existed before"
-        )
-        logger.info(
-            f"Of the {np.nan_to_num(completed).sum()} completed trips, {np.nan_to_num(completed[outputMats[complete_key][:] == 0]).sum()} were to a previously unobserved OD"
-        )
-        toCancel = []
-        toPenalize = []
-
-        for measure in measures:
-            inputKey = f"{path}_{measure}__{timePeriod}"
-            if path in ["WALK", "BIKE"]:
-                if measure == "DIST":
-                    outputKey = f"{path}DIST"
-                else:
-                    outputKey = f"{path}_{measure}"
-            else:
-                outputKey = inputKey
-
-            if (outputKey in outputMats) and (inputKey in inputMats):
-                if measure == "TRIPS":
-                    outputMats[outputKey][completed > 0] += completed[completed > 0]
-                elif measure == "FAILURES":
-                    outputMats[outputKey][failed > 0] += failed[failed > 0]
-                elif measure == "DIST":
-                    outputMats[outputKey][completed > 0] = 0.5 * (
-                        outputMats[outputKey][completed > 0]
-                        + inputMats[inputKey][completed > 0]
-                    )
-                elif measure in [
-                    "IWAIT",
-                    "XWAIT",
-                    "WACC",
-                    "WAUX",
-                    "WEGR",
-                    "DTIM",
-                    "DDIST",
-                    "FERRYIVT",
-                ]:
-                    valid = ~np.isnan(inputMats[inputKey][:])
-                    outputMats[outputKey][(completed > 0) & valid] = (
-                        inputMats[inputKey][(completed > 0) & valid]
-                        * transit_scale_factor
-                    )
-                elif measure in ["TOTIVT", "IVT"]:
-                    inputKeyKEYIVT = f"{path}_KEYIVT__{timePeriod}"
-                    outputKeyKEYIVT = inputKeyKEYIVT
-                    if (inputKeyKEYIVT in inputMats.keys()) & (
-                        outputKeyKEYIVT in outputMats.keys()
-                    ):
-                        additionalFilter = outputMats[outputKeyKEYIVT][:] > 0
-                    else:
-                        additionalFilter = False
-                    outputTravelTime = np.array(outputMats[outputKey])
-                    toCancel = (failed > 3) & (failed > (6 * completed))
-                    previouslyNonZero = (
-                        (outputTravelTime > 0) | additionalFilter
-                    ) & toCancel
-                    toPenalize = (
-                        (failed > completed)
-                        & ~toCancel
-                        & ((outputTravelTime > 0) | additionalFilter)
-                    )
-                    if toCancel.sum() > 0:
-                        logger.info(
-                            f"Marking {toCancel.sum()} {path} trips completely impossible in {timePeriod}. There were {completed[toCancel].sum()} completed trips but {failed[toCancel].sum()} failed trips in these ODs. Previously, {previouslyNonZero.sum()} were nonzero"
-                        )
-                        logger.info(
-                            f"There are now {((completed > 0) & (outputTravelTime > 0)).sum()} observed ODs, {(outputTravelTime == 0).sum()} impossible ODs, and {((completed == 0) & (outputTravelTime > 0)).sum()} default ODs"
-                        )
-                    toAllow = (
-                        ~toCancel & ~toPenalize & ~np.isnan(inputMats[inputKey][:])
-                    )
-                    outputMats[outputKey][toAllow] = inputMats[inputKey][toAllow] * 100
-                    if (inputKeyKEYIVT in inputMats.keys()) & (
-                        outputKeyKEYIVT in outputMats.keys()
-                    ):
-                        outputMats[outputKeyKEYIVT][toAllow] = (
-                            inputMats[inputKeyKEYIVT][toAllow] * 100
-                        )
-                elif not measure.endswith("TOLL"):
-                    outputMats[outputKey][completed > 0] = inputMats[inputKey][
-                        completed > 0
-                    ]
-                    if path.startswith("SOV_"):
-                        for sub in [
-                            "SOVTOLL_",
-                            "HOV2_",
-                            "HOV2TOLL_",
-                            "HOV3_",
-                            "HOV3TOLL_",
-                        ]:
-                            newKey = (
-                                f"{path}_{measure.replace('SOV_', sub)}__{timePeriod}"
-                            )
-                            outputMats[newKey][completed > 0] = inputMats[inputKey][
-                                completed > 0
-                            ]
-                            logger.info(
-                                f"Adding {np.nan_to_num(completed).sum()} valid trips and {np.nan_to_num(failed).sum()} impossible trips to skim {newKey}"
-                            )
-
-                badVals = np.sum(np.isnan(outputMats[outputKey][:]))
-                if badVals > 0:
-                    logger.warning(
-                        f"Total number of {badVals} skim values are NaN for skim {outputKey}"
-                    )
-            elif outputKey in outputMats:
-                logger.warning(f"Target skims are missing key {outputKey}")
-            else:
-                logger.warning(f"BEAM skims are missing key {outputKey}")
-
-        if toCancel.sum() > 0:
-            for measure in measures:
-                if measure not in ["TRIPS", "FAILURES"]:
-                    key = f"{path}_{measure}__{timePeriod}"
-                    try:
-                        outputMats[key][toCancel] = 0.0
-                    except:
-                        logger.warning(
-                            f"Tried to cancel {toCancel.sum()} trips for key {key} but couldn't find key"
-                        )
-
-        if ("TOTIVT" in measures) & ("IWAIT" in measures) & ("KEYIVT" in measures):
-            if toPenalize.sum() > 0:
-                inputKey = f"{path}_IWAIT__{timePeriod}"
-                outputMats[inputKey][toPenalize] = (
-                    inputMats[inputKey][toPenalize]
-                    * (failed[toPenalize] + 1)
-                    / (completed[toPenalize] + 1)
-                )
-    else:
-        logger.info(
-            f"No input skim for mode {path} and time period {timePeriod}, with key {complete_key}"
-        )
-
-    return (path, timePeriod), (completed, failed)
-
-
-def simplify(input, timePeriod, mode, utf=False, expand=False):
-    # TODO: This is a hack
-    hdf_utf = input[
-        {"mode": mode.encode("utf-8"), "timePeriod": timePeriod.encode("utf-8")}
-    ]
-    hdf = input[{"mode": mode, "timePeriod": timePeriod}]
-    originalDictUtf = {sk.name: sk for sk in hdf}
-    originalDict = {sk.name: sk for sk in hdf_utf}
-    bruteForceDict = {
-        name: input[name]
-        for name in input.list_matrices()
-        if (name.startswith(mode) & name.endswith(timePeriod))
-    }
-    if originalDict is None:
-        if originalDictUtf is None:
-            originalDict = bruteForceDict
-        else:
-            originalDict = originalDictUtf.update(originalDictUtf)
-    else:
-        originalDict.update(bruteForceDict)
-        if originalDictUtf is not None:
-            originalDict.update(originalDictUtf)
-    newDict = dict()
-    if expand:
-        for key, item in originalDict.items():
-            if key.startswith("SOV_"):
-                newKey = key.replace("SOV_", "SOVTOLL_")
-                newDict[newKey] = item
-                newKey = key.replace("SOV_", "HOV2_")
-                newDict[newKey] = item
-                newKey = key.replace("SOV_", "HOV2TOLL_")
-                newDict[newKey] = item
-                newKey = key.replace("SOV_", "HOV3_")
-                newDict[newKey] = item
-                newKey = key.replace("SOV_", "HOV3TOLL_")
-                newDict[newKey] = item
-    originalDict.update(newDict)
-    return originalDict
 
 
 def copy_skims_for_unobserved_modes(mapping, skims_ds):
@@ -976,40 +749,6 @@ def _accumulate_all_completed_failed_trips(partialSkims, timePeriods):
     return completed_failed_dict
 
 
-def _accumulate_completed_failed_trips(partialSkims, timePeriods):
-    completed_failed_dict = {}
-    out_array_shape = list(partialSkims.shape()) + [len(timePeriods)]
-
-    for tpIdx, tp in enumerate(timePeriods):
-        for key in partialSkims.list_matrices():
-            if key.endswith(f"_TRIPS__{tp}"):
-                mode = key.rsplit("_", 3)[
-                    0
-                ]  # Extract mode from key (e.g., WLK_TRN_WLK)
-                if mode not in completed_failed_dict:
-                    completed_failed_dict[mode] = [
-                        np.zeros(out_array_shape, dtype=np.float32),
-                        np.zeros(out_array_shape, dtype=np.float32),
-                    ]
-                completed_failed_dict[mode][0][:, :, tpIdx] = np.nan_to_num(
-                    partialSkims[key][:]
-                )
-            elif key.endswith(f"_FAILURES__{tp}"):
-                mode = key.rsplit("_", 3)[
-                    0
-                ]  # Extract mode from key (e.g., WLK_TRN_WLK)
-                if mode not in completed_failed_dict:
-                    completed_failed_dict[mode] = [
-                        np.zeros(out_array_shape, dtype=np.float32),
-                        np.zeros(out_array_shape, dtype=np.float32),
-                    ]
-                completed_failed_dict[mode][1][:, :, tpIdx] = np.nan_to_num(
-                    partialSkims[key][:]
-                )
-
-    return completed_failed_dict
-
-
 def _transform_measure(
     input_vals, completed, failed, measure, path, transit_scale_factor=100.0
 ):
@@ -1071,78 +810,44 @@ def _transform_measure(
         else 1.0
     )
 
-    # Handle measures that need scaling
-    if measure in measures_is_scaled_for_transit:
+    # Handle measures that need scaling but no other special logic
+    if measure in measures_is_scaled_for_transit and measure not in ["TOTIVT", "IVT"]:
         return basic_mask, input_vals[basic_mask] * scaling, None
 
     # Handle travel time measures with penalty logic (only TOTIVT/IVT) for NON-TNC/RH
     elif measure in ["TOTIVT", "IVT"]:
-        # The penalty logic applies only to non-TNC/RH modes (like transit)
-
         if path.startswith("TNC_") or path.startswith("RH_"):
-            # TNC/RH TOTIVT/IVT is handled by the interpolation logic in post-processing
-
-            is_tnc_rh = path.startswith("TNC_") or path.startswith("RH_")
-
-            if is_tnc_rh:
-                return basic_mask, input_vals[basic_mask], None
-            else:
-                # Apply penalty logic for non-TNC/RH modes (like transit)
-                to_cancel = (failed > 5) & (failed > (1 * completed))
-
-                # To allow: NOT canceled, NOT penalized, valid input, and some completed trips
-                to_allow = valid & completed_mask & ~to_cancel
-
-                # Prepare result values for cells to update
-                result_vals = np.zeros_like(
-                    input_vals[basic_mask]
-                )  # Only allocate for cells covered by basic_mask
-
-                # Use regular values where allowed (within the basic_mask)
-                mask_allow_subset = to_allow[
-                    basic_mask
-                ]  # Subset of basic_mask that is also to_allow
-                if mask_allow_subset.any():
-                    result_vals[mask_allow_subset] = (
-                        input_vals[basic_mask][mask_allow_subset] * scaling
-                    )
-
-                # The update mask is the basic_mask itself, but the values are calculated based on penalty/allowance
-                return basic_mask, result_vals, to_cancel
+            # TNC/RH TOTIVT/IVT is handled by the interpolation logic in post-processing.
+            # Just copy values, no scaling here.
+            return basic_mask, input_vals[basic_mask], None
+        else:
+            # Apply penalty logic for non-TNC/RH modes (like transit)
+            to_cancel = (failed > 5) & (failed > (1 * completed))
+            # Update where not cancelled
+            update_mask = basic_mask & ~to_cancel
+            # Apply scaling for transit
+            scaled_vals = input_vals[update_mask] * scaling
+            return update_mask, scaled_vals, to_cancel
 
     # Handle DIST (simple assignment where completed > 0)
     elif measure == "DIST":
         # TNC DDIST interpolation is handled in post-processing
         if path.startswith("TNC_") or path.startswith("RH_"):
-            # For TNC/RH, DIST is handled by interpolation
-            return np.zeros_like(input_vals, dtype=bool), np.array([]), None
+            # For TNC/RH, DIST is handled by interpolation, so just copy raw values for now.
+            return basic_mask, input_vals[basic_mask], None
         else:
             # For others, just apply direct value where completed > 0
             return basic_mask, input_vals[basic_mask], None
 
     # Handle non-scaled measures (simple assignment where completed > 0)
-    # Includes COST, TOLLs, FAR, REJECTIONPROB etc.
-    # TNC FAR and REJECTIONPROB are handled in post-processing
-    elif measure not in [
-        "REJECTIONPROB",
-        "FAR",
-    ]:  # Exclude measures handled in post-processing
-        if path.startswith("TNC_") or path.startswith("RH_"):
-            if measure == "COST":
-                # For TNC/RH COST, simple assignment where completed > 0
-                return basic_mask, input_vals[basic_mask], None
-            else:
-                # Other non-excluded measures for TNC/RH (e.g. TOLLs) - simple assignment where completed > 0
-                return basic_mask, input_vals[basic_mask], None
+    # Includes COST, TOLLs, etc.
+    # TNC FAR and REJECTIONPROB are handled in post-processing, so they are excluded here.
+    elif measure not in ["REJECTIONPROB", "FAR"]:
+        return basic_mask, input_vals[basic_mask], None
 
-        else:
-            # For non-TNC/RH, simple assignment where completed > 0
-            return basic_mask, input_vals[basic_mask], None
-
-    # Default case (e.g., REJECTIONPROB, FAR - handled in post-processing)
-    # Should not be reached for measures intended to be processed here.
-    logger.warning(
-        f"Measure {measure} for path {path} fell through _transform_measure logic."
+    # Default case for measures handled entirely in post-processing (e.g., REJECTIONPROB, FAR)
+    logger.debug(
+        f"Measure {measure} for path {path} will be handled in post-processing. No direct merge."
     )
     return np.zeros_like(input_vals, dtype=bool), np.array([]), None
 
@@ -1298,163 +1003,6 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
         logger.warning(
             f"Skipping trip counts merge for {path} as {key_completed} or {key_failed} does not exist in target skims file"
         )
-
-
-def _merge_zarr_skim(partialSkims, skims_da, completed_failed_dict, timePeriods):
-    """
-    Merges a single measure's data for all time periods from OMX partial skims
-    into a Zarr DataArray, applying measure-specific transformations.
-
-    Parameters:
-    -----------
-    partialSkims : omx.open_file object
-        The OMX file containing the partial skims from BEAM.
-    skims_da : xarray.DataArray
-        The target Zarr DataArray for the current measure (e.g., skims['SOV_TOTIVT']).
-        Expected dimensions: (origin, destination, time_period).
-    completed_failed_dict : dict
-        Dictionary containing completed and failed trip counts aggregated across
-        all time periods for each mode path. Keyed by mode path, values are
-        [completed_trips_3d_array, failed_trips_3d_array].
-    timePeriods : list of str
-        List of time period names.
-
-    Returns:
-    --------
-    tuple (path, measure_name)
-        The path and measure name of the skim that was processed.
-    """
-    # Extract path and measure name from the DataArray name
-    # Expected name format: "PATH_MEASURE" (e.g., "SOV_TOTIVT")
-    path_measure_name = skims_da.name
-    parts = path_measure_name.rsplit("_", 1)
-    if len(parts) != 2:
-        logger.warning(
-            f"Skipping skim '{path_measure_name}' due to unexpected name format."
-        )
-        return None, None  # Indicate skipping
-
-    path, measure_name = path_measure_name.rsplit(
-        "_", 1
-    )  # Re-parse to handle names like WLK_TRN_WLK_TOTIVT
-
-    # Skip TNC-specific measures that are handled in post-processing
-    if path.startswith("TNC") and measure_name in [
-        "REJECTIONPROB",
-        "IWAIT",
-        "DDIST",
-        "TOTIVT",
-    ]:
-        # These will be calculated in the post-processing step
-        return path, measure_name  # Indicate processed, but no data merged here
-
-    # Get the completed and failed trips for the current mode path
-    # These are 3D arrays [zones, zones, time periods]
-    completed_3d, failed_3d = completed_failed_dict.get(path, (None, None))
-
-    if completed_3d is None or failed_3d is None:
-        logger.debug(
-            f"No completed/failed trip data found for mode path {path}. Skipping merge for {path_measure_name}."
-        )
-        return path, measure_name  # Indicate processed, but no data merged
-
-    weighted_avgs = {}
-    cancellation_counts = {}
-
-    # Iterate through each time period slice in the DataArray
-    for tpIdx, tp in enumerate(timePeriods):
-        # Construct the key for the partial skims in OMX format
-        partial_key = f"{path}_{measure_name}__{tp}"
-
-        # Get the 2D completed/failed slices for the current time period
-        completed_tp = completed_3d[:, :, tpIdx]
-        failed_tp = failed_3d[:, :, tpIdx]
-
-        if partial_key in partialSkims:
-            try:
-                input_vals_tp = partialSkims[partial_key][
-                    :
-                ]  # Get 2D numpy array for this period
-
-                # Apply transformations using the helper function
-                # _transform_measure expects 2D completed/failed arrays
-                mask_update, vals_update, to_cancel_tp = _transform_measure(
-                    input_vals_tp, completed_tp, failed_tp, measure_name, path
-                )
-
-                # Apply updates to the Zarr DataArray slice using the mask
-                if mask_update.any():
-                    # Use .data for direct, in-place modification
-                    current_slice = skims_da.data[:, :, tpIdx]
-
-                    # Calculate weighted averages for logging *before* update
-                    # Use completed trips for the weight
-                    weights = completed_tp[mask_update]
-                    before_vals = current_slice[mask_update]
-                    after_vals = vals_update
-
-                    if np.sum(weights) > 0:
-                        weighted_avg_before = np.average(before_vals, weights=weights)
-                        weighted_avg_after = np.average(after_vals, weights=weights)
-                    else:
-                        weighted_avg_before = np.nan
-                        weighted_avg_after = np.nan
-                    weighted_avgs[tp] = (weighted_avg_before, weighted_avg_after)
-
-                    # Apply the updated values
-                    current_slice[mask_update] = after_vals
-                    skims_da.data[:, :, tpIdx] = (
-                        current_slice  # Ensure changes are reflected (might be redundant with [:] but safer)
-                    )
-
-                # Handle cancellations for IVT/TOTIVT
-                if to_cancel_tp is not None and to_cancel_tp.any():
-                    cancellation_counts[tp] = to_cancel_tp.sum()
-                    current_slice = skims_da.data[:, :, tpIdx]
-                    current_slice[to_cancel_tp] = 0.0  # Set canceled values to 0
-                    skims_da.data[:, :, tpIdx] = (
-                        current_slice  # Ensure changes reflected
-                    )
-
-            except Exception as e:
-                logger.error(f"Error processing skim slice {partial_key}: {e}")
-                # Continue to the next time period
-
-        else:
-            logger.debug(
-                f"Partial skims missing key {partial_key}. Skipping merge for this period."
-            )
-
-    # Log weighted averages summary if any updates occurred
-    if weighted_avgs:
-        summary = "; ".join(
-            f"{tp}: before={before:.2f}, after={after:.2f}"
-            for tp, (before, after) in weighted_avgs.items()
-            if not np.isnan(before) or not np.isnan(after)
-        )
-        if summary:
-            logger.info(
-                f"Weighted average update for {path_measure_name} (by completed trips): {summary}"
-            )
-        else:
-            logger.debug(
-                f"No weighted average updates for {path_measure_name} (no completed trips in updated cells)."
-            )
-
-    # Log cancellation summary if any occurred
-    if cancellation_counts:
-        summary = "; ".join(
-            f"{tp}: {count} ODs"
-            for tp, count in cancellation_counts.items()
-            if count > 0
-        )
-        if summary:
-            logger.info(f"Canceled ODs for {path_measure_name}: {summary}")
-
-    # Note: SOV/HOV copying logic removed from here.
-    # Note: TNC specific logic removed from here.
-
-    return path, measure_name
 
 
 def _handle_transit_mode_availability(skims_ds, timePeriods):
@@ -2342,8 +1890,8 @@ def write_zarr_skim_as_omx(
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
 
-def merge_current_zarr_od_skims(
-    all_skims_path, beam_output_dir, settings, override=None, state=None
+def _merge_beam_skims_to_zarr(
+    all_skims_path, beam_output_dir, settings, override=None, provenance_tracker=None, model_run_hash=None
 ):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
@@ -2637,13 +2185,14 @@ def merge_current_zarr_od_skims(
         merge_successful = False  # Indicate failure
 
     # --- Provenance tracking for skims lineage ---
-    if state is not None:
+    if provenance_tracker is not None:
         # Record the input zarr skims before update (if it existed)
         if os.path.exists(all_skims_path):
-            state.record_input_file(
-                "activitysim",
+            provenance_tracker.record_input_file(
+                "beam_postprocessor",
                 all_skims_path,
                 description="Previous zarr skims before merge",
+                model_run_id=model_run_hash
             )
         # Record the BEAM partial skims file being merged in (if it existed)
         if (
@@ -2651,10 +2200,11 @@ def merge_current_zarr_od_skims(
             and current_omx_skims_path
             and os.path.exists(current_omx_skims_path)
         ):
-            state.record_input_file(
-                "activitysim",
+            provenance_tracker.record_input_file(
+                "beam_postprocessor",
                 current_omx_skims_path,
                 description="BEAM partial skims for merge",
+                model_run_id=model_run_hash
             )
         # Record the output zarr skims file after the update, with source_file_paths
         source_files = []
@@ -2667,11 +2217,12 @@ def merge_current_zarr_od_skims(
         ):
             source_files.append(current_omx_skims_path)
         if os.path.exists(all_skims_path):
-            state.record_output_file(
-                "activitysim",
+            provenance_tracker.record_output_file(
+                "beam_postprocessor",
                 all_skims_path,
                 description="Updated zarr skims after merge",
                 source_file_paths=source_files,
+                model_run_id=model_run_hash
             )
 
     # Close the datasets
@@ -2824,67 +2375,6 @@ def _process_all_tnc_logic(
         )
 
     return processed_vars
-
-
-def merge_current_omx_od_skims(all_skims_path, beam_output_dir, settings):
-    """
-    Merge current OMX skims from BEAM into the main skims file.
-
-    Parameters
-    ----------
-    all_skims_path : str
-        Path to the main skims file
-    beam_output_dir : str
-        Path to the BEAM output directory
-    settings : dict
-        Settings dictionary
-
-    Returns
-    -------
-    str
-        Path to the current skims file
-    """
-    skims = omx.open_file(all_skims_path, "a")
-    current_skims_path = find_produced_od_skims(beam_output_dir, "omx")
-    partialSkims = omx.open_file(current_skims_path, mode="r")
-    iterable = [
-        (path, timePeriod, vals[1].to_list())
-        for (path, timePeriod), vals in pd.Series(partialSkims.listMatrices())
-        .str.rsplit("_", n=3, expand=True)
-        .groupby([0, 3])
-    ]
-
-    # GIVING UP ON PARALLELIZING THIS FOR NOW. see below for attempts that didn't work for some reason or another
-
-    # results = Parallel(n_jobs=-1)(delayed(_merge_skim)(x) for x in iterable)
-    # p = mp.Pool(4)
-    # result = [p.apply_async(_merge_skim, args=((simplify(partialSkims, timePeriod, path, True),
-    #                                             simplify(skims, timePeriod, path, False), path,
-    #                                             timePeriod, vals))) for (path, timePeriod, vals) in iterable]
-    result = [
-        _merge_skim(
-            simplify(partialSkims, timePeriod, path, True),
-            simplify(skims, timePeriod, path, False),
-            path,
-            timePeriod,
-            vals,
-        )
-        for (path, timePeriod, vals) in iterable
-    ]
-
-    discover_impossible_ods(result, skims, skims.list_matrices())
-    mapping = {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]}
-    copy_skims_for_unobserved_modes(mapping, skims, skims.list_matrices())
-
-    order = zone_order(settings, settings["start_year"])
-    zone_id = np.arange(1, len(order) + 1)
-
-    # Generint offset
-    skims.create_mapping("zone_id", zone_id, overwrite=True)
-
-    skims.close()
-    partialSkims.close()
-    return current_skims_path
 
 
 def trim_inaccessible_ods_zarr(all_skims_path, settings):
@@ -3129,334 +2619,6 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
     skims.close()
 
 
-def trim_inaccessible_ods(settings, working_dir):
-    all_skims_path = os.path.join(
-        working_dir, settings["asim_local_mutable_data_folder"], "skims.omx"
-    )
-    order = zone_order(settings, settings["start_year"])
-    skims = omx.open_file(str(all_skims_path), "a")
-    all_mats = skims.list_matrices()
-    totalTrips = dict()
-    for period in settings["periods"]:
-        totalTrips[period] = np.zeros((len(order), len(order)))
-    for mat in all_mats:
-        if ("TRIPS__" in mat) & ("RH_" not in mat):
-            tp = mat[-2:]
-            totalTrips[tp] += np.array(skims[mat])
-    for period in settings["periods"]:
-        completedAllTripsByOandD = totalTrips[period].sum(axis=0) + totalTrips[
-            period
-        ].sum(axis=1)
-        for path, metrics in settings["transit_paths"].items():
-            trip_name = "{0}_TRIPS__{1}".format(path, period)
-            fail_name = "{0}_FAILURES__{1}".format(path, period)
-            if trip_name in all_mats:
-                completedTransitTrips = np.array(skims[trip_name])
-                failedTransitTrips = np.array(skims[fail_name])
-                completedTransitTripsByOandD = completedTransitTrips.sum(
-                    axis=0
-                ) + completedTransitTrips.sum(axis=1)
-                failedTransitTripsByOandD = failedTransitTrips.sum(
-                    axis=0
-                ) + failedTransitTrips.sum(axis=1)
-                toDelete = np.squeeze(
-                    (completedAllTripsByOandD > 1000)
-                    & (failedTransitTripsByOandD > 200)
-                    & (completedTransitTripsByOandD == 0)
-                )
-                logger.info(
-                    "Deleting all {0} service for {1} zones in {2} "
-                    "because no trips were observed".format(
-                        path, np.sum(toDelete), period
-                    )
-                )
-                for metric in metrics:
-                    name = "{0}_{1}__{2}".format(path, metric, period)
-                    if name in all_mats:
-                        skims[name][toDelete[:, None] | toDelete[None, :]] = 0.0
-    skims.close()
-
-
-def discover_impossible_ods(result, skims, mats):
-    # return (path, timePeriod), (completed, failed)
-    allMats = mats
-    metricsPerPath = dict()
-    for (path, tp), _ in result:
-        if path not in metricsPerPath.keys():
-            try:
-                metricsPerPath[path] = set(
-                    [mat.split("_")[3] for mat in allMats if mat.startswith(path)]
-                )
-            except:
-                continue
-    timePeriods = np.unique([b for (a, b), _ in result])
-    # WALK TRANSIT:
-    for tp in timePeriods:
-        completed = {
-            (a, b): c
-            for (a, b), (c, d) in result
-            if a.startswith("WLK") & a.endswith("WLK") & (b == tp) & ("TRN" not in a)
-        }
-        failed = {
-            (a, b): d
-            for (a, b), (c, d) in result
-            if a.startswith("WLK") & a.endswith("WLK") & (b == tp) & ("TRN" not in a)
-        }
-        totalCompleted = np.nansum(list(completed.values()), axis=0)
-        totalFailed = np.nansum(list(failed.values()), axis=0)
-        for (path, _), mat in completed.items():
-            for metric in metricsPerPath[path]:
-                name = "_".join([path, metric, "", tp])
-                if (name in allMats) & (metric not in ["TRIPS", "FAILURES"]):
-                    toDelete = (
-                        (mat == 0)
-                        & (totalCompleted > 50)
-                        & (totalFailed > 50)
-                        & (skims[name][:] > 0)
-                    )
-                    if np.any(toDelete):
-                        print(
-                            "Deleting {0} ODs for {1} in the {2} because after 50 transit trips "
-                            "there no one has chosen it".format(
-                                toDelete.sum(), name, tp
-                            )
-                        )
-                        skims[name][toDelete] = 0
-
-
-def merge_current_od_skims(all_skims_path, previous_skims_path, beam_output_dir):
-    current_skims_path = find_produced_od_skims(beam_output_dir)
-    if (current_skims_path is None) | (previous_skims_path == current_skims_path):
-        # this means beam has not produced the skims
-        logger.error(
-            "No skims found in directory {0}, defaulting to {1}".format(
-                beam_output_dir, current_skims_path
-            )
-        )
-        return previous_skims_path
-
-    schema = {
-        "origin": str,
-        "destination": str,
-        "DEBUG_TEXT": str,
-    }
-    index_columns = ["timePeriod", "pathType", "origin", "destination"]
-
-    all_skims = pd.read_csv(
-        all_skims_path, dtype=schema, index_col=index_columns, na_values=["∞"]
-    )
-    cur_skims = pd.read_csv(
-        current_skims_path, dtype=schema, index_col=index_columns, na_values=["∞"]
-    )
-    for col in cur_skims.columns:  # Handle new skim columns
-        if col not in all_skims.columns:
-            all_skims[col] = 0.0
-    all_skims = pd.concat(
-        [
-            cur_skims,
-            all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)],
-        ]
-    )
-    all_skims = all_skims.reset_index()
-    all_skims.to_csv(all_skims_path, index=False)
-    return current_skims_path
-
-
-def hourToTimeBin(hour: int):
-    if hour < 3:
-        return "EV"
-    elif hour < 6:
-        return "EA"
-    elif hour < 10:
-        return "AM"
-    elif hour < 15:
-        return "MD"
-    elif hour < 19:
-        return "PM"
-    else:
-        return "EV"
-
-
-def aggregateInTimePeriod(df):
-    if df["completedRequests"].sum() > 0:
-        totalCompletedRequests = df["completedRequests"].sum()
-        waitTime = (
-            (df["waitTime"] * df["completedRequests"]).sum()
-            / totalCompletedRequests
-            / 60.0
-        )
-        costPerMile = (
-            df["costPerMile"] * df["completedRequests"]
-        ).sum() / totalCompletedRequests
-        observations = df["observations"].sum()
-        unmatchedRequestPortion = 1.0 - totalCompletedRequests / observations
-        return pd.Series(
-            {
-                "waitTimeInMinutes": waitTime,
-                "costPerMile": costPerMile,
-                "unmatchedRequestPortion": unmatchedRequestPortion,
-                "observations": observations,
-                "completedRequests": totalCompletedRequests,
-            }
-        )
-    else:
-        observations = df["observations"].sum()
-        return pd.Series(
-            {
-                "waitTimeInMinutes": 6.0,
-                "costPerMile": 5.0,
-                "unmatchedRequestPortion": 1.0,
-                "observations": observations,
-                "completedRequests": 0,
-            }
-        )
-
-
-# noinspection PyUnresolvedReferences
-def merge_current_omx_origin_skims(
-    all_skims_path, previous_skims_path, beam_output_dir, measure_map
-):
-    current_skims_path = find_produced_origin_skims(beam_output_dir)
-
-    rawInputSchema = {
-        "tazId": str,
-        "hour": int,
-        "reservationType": str,
-        "waitTime": float,
-        "costPerMile": float,
-        "unmatchedRequestsPercent": float,
-        "observations": int,
-        "iterations": int,
-    }
-
-    cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
-    cur_skims["timePeriod"] = cur_skims["hour"].apply(hourToTimeBin)
-    cur_skims.rename(columns={"tazId": "origin"}, inplace=True)
-    cur_skims["completedRequests"] = cur_skims["observations"] * (
-        1.0 - cur_skims["unmatchedRequestsPercent"] / 100.0
-    )
-    cur_skims = cur_skims.groupby(["timePeriod", "reservationType", "origin"]).apply(
-        aggregateInTimePeriod
-    )
-    cur_skims["failures"] = cur_skims["observations"] - cur_skims["completedRequests"]
-    skims = omx.open_file(all_skims_path, "a")
-    idx = pd.Index(np.array(list(skims.mapping("zone_id").keys()), dtype=str).copy())
-    for (timePeriod, reservationType), _df in cur_skims.groupby(level=[0, 1]):
-        df = _df.loc[(timePeriod, reservationType)].reindex(idx, fill_value=0.0)
-
-        trips = "RH_{0}_{1}__{2}".format(
-            reservationType.upper(), "TRIPS", timePeriod.upper()
-        )
-        failures = "RH_{0}_{1}__{2}".format(
-            reservationType.upper(), "FAILURES", timePeriod.upper()
-        )
-        rejectionprob = "RH_{0}_{1}__{2}".format(
-            reservationType.upper(), "REJECTIONPROB", timePeriod.upper()
-        )
-
-        logger.info(
-            "Adding {0} complete trips and {1} failed trips to skim {2}".format(
-                int(df["completedRequests"].sum()), int(df["failures"].sum()), trips
-            )
-        )
-
-        skims[trips][:] = (
-            skims[trips][:] * 0.5 + df.loc[:, "completedRequests"].values[:, None]
-        )
-        skims[failures][:] = (
-            skims[trips][:] * 0.5 + df.loc[:, "failures"].values[:, None]
-        )
-        skims[rejectionprob][:] = np.nan_to_num(
-            skims[failures][:] / (skims[trips][:] + skims[failures][:])
-        )
-
-        wait = "RH_{0}_{1}__{2}".format(
-            reservationType.upper(), "WAIT", timePeriod.upper()
-        )
-        originalWaitTime = np.array(
-            skims[wait]
-        )  # Hack due to pytables issue https://github.com/PyTables/PyTables/issues/310
-        originalWaitTime[df["completedRequests"] > 0, :] = df.loc[
-            df["completedRequests"] > 0, measure_map["WAIT"]
-        ].values[:, None]
-        skims[wait][:] = originalWaitTime
-    skims.close()
-
-
-def merge_current_origin_skims(all_skims_path, previous_skims_path, beam_output_dir):
-    current_skims_path = find_produced_origin_skims(beam_output_dir)
-    if (current_skims_path is None) | (previous_skims_path == current_skims_path):
-        # this means beam has not produced the skims
-        logger.error("no skims produced from path {0}".format(current_skims_path))
-        return previous_skims_path
-
-    rawInputSchema = {
-        "tazId": str,
-        "hour": int,
-        "reservationType": str,
-        "waitTime": float,
-        "costPerMile": float,
-        "unmatchedRequestsPercent": float,
-        "observations": int,
-        "iterations": int,
-    }
-
-    aggregatedInput = {
-        "origin": str,
-        "timePeriod": str,
-        "reservationType": str,
-        "waitTimeInMinutes": float,
-        "costPerMile": float,
-        "unmatchedRequestPortion": float,
-        "observations": int,
-    }
-
-    index_columns = ["timePeriod", "reservationType", "origin"]
-
-    all_skims = pd.read_csv(all_skims_path, dtype=aggregatedInput, na_values=["∞"])
-    all_skims.set_index(index_columns, drop=True, inplace=True)
-    cur_skims = pd.read_csv(current_skims_path, dtype=rawInputSchema, na_values=["∞"])
-    cur_skims["timePeriod"] = cur_skims["hour"].apply(hourToTimeBin)
-    cur_skims.rename(columns={"tazId": "origin"}, inplace=True)
-    cur_skims["completedRequests"] = cur_skims["observations"] * (
-        1.0 - cur_skims["unmatchedRequestsPercent"] / 100.0
-    )
-    cur_skims = cur_skims.groupby(["timePeriod", "reservationType", "origin"]).apply(
-        aggregateInTimePeriod
-    )
-    all_skims = pd.concat(
-        [
-            cur_skims,
-            all_skims.loc[all_skims.index.difference(cur_skims.index, sort=False)],
-        ]
-    )
-    if all_skims.index.duplicated().sum() > 0:
-        logger.warning(
-            "Duplicated values in index: \n {0}".format(
-                all_skims.loc[all_skims.duplicated()]
-            )
-        )
-        all_skims.drop_duplicates(inplace=True)
-    all_skims.to_csv(all_skims_path, index=True)
-    cur_skims["totalWaitTimeInMinutes"] = (
-        cur_skims["waitTimeInMinutes"] * cur_skims["completedRequests"]
-    )
-    totals = cur_skims.groupby(["timePeriod", "reservationType"]).sum()
-    totals["matchedPercent"] = totals["completedRequests"] / totals["observations"]
-    totals["meanWaitTimeInMinutes"] = (
-        totals["totalWaitTimeInMinutes"] / totals["completedRequests"]
-    )
-    logger.info(
-        "Ridehail matching summary: \n {0}".format(
-            totals[["meanWaitTimeInMinutes", "matchedPercent"]]
-        )
-    )
-    logger.info("Total requests: \n {0}".format(totals["observations"].sum()))
-    logger.info(
-        "Total completed requests: \n {0}".format(totals["completedRequests"].sum())
-    )
-
-
 class BeamPostprocessor(GenericPostprocessor):
     """
     Postprocessor for BEAM model.
@@ -3466,97 +2628,71 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+        model_run_hash: str,
     ) -> RecordStore:
         """
-        Processes the raw outputs from a BEAM run.
-        - Merges new skims into the master skim file.
-        - Renames the BEAM output directory for archival.
+        Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
         """
+        logger.info("Running BEAM postprocessor...")
         settings = state.settings
-        iteration_number = state.iteration
-        year = state.current_year
-        run_path = state.full_path
-        beam_local_output_folder = os.path.join(
-            run_path, settings["beam_local_output_folder"]
-        )
-        abs_beam_output = os.path.abspath(str(beam_local_output_folder))
-
-        skims_fname = settings["skims_fname"]
-        if skims_fname.endswith(".csv.gz"):
-            skimFormat = "csv.gz"
-        elif skims_fname.endswith(".omx"):
-            skimFormat = "omx"
-        else:
-            logger.error("Invalid skim format {0}".format(skims_fname))
-            sys.exit(1)
-
-        if skimFormat == "csv.gz":
-            logger.warning("CSV.GZ skim processing is part of an older workflow and is not fully supported in this refactored version.")
-        else:  # OMX or Zarr
-            asim_enabled = settings.get("activity_demand_model") == "activitysim"
-            if asim_enabled:
-                asim_data_dir = (
-                    os.path.join(
-                        state.full_path, settings["asim_local_output_folder"], "cache"
-                    )
-                    if settings["file_format"] == "parquet"
-                    else os.path.join(
-                        state.full_path, settings["asim_local_mutable_data_folder"]
-                    )
-                )
-                asim_skims_path = (
-                    os.path.join(asim_data_dir, "skims.zarr")
-                    if settings["file_format"] == "parquet"
-                    else os.path.join(asim_data_dir, "skims.omx")
-                )
-
-                if settings["file_format"] == "parquet":
-                    merge_current_zarr_od_skims(
-                        asim_skims_path, beam_local_output_folder, settings, state=state
-                    )
-                    logger.warning(
-                        "RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES"
-                    )
-                else:  # OMX
-                    merge_current_omx_od_skims(
-                        asim_skims_path,
-                        beam_local_output_folder,
-                        settings,
-                    )
-                    beam_asim_ridehail_measure_map = settings["beam_asim_ridehail_measure_map"]
-                    previous_origin_skims = find_produced_origin_skims(
-                        beam_local_output_folder
-                    )
-                    merge_current_omx_origin_skims(
-                        asim_skims_path,
-                        previous_origin_skims,
-                        beam_local_output_folder,
-                        beam_asim_ridehail_measure_map,
-                    )
-                
-                # Record the updated skim file as an output of this postprocessing step
-                state.record_output_file(
-                    "beam",
-                    asim_skims_path,
-                    year=state.forecast_year,
-                    description=f"ActivitySim skims input file updated by BEAM postprocessing ({skimFormat})",
-                    model_run_id=runInfo.model_run_id
-                )
-
-        rename_beam_output_directory(
-            abs_beam_output, settings, year, iteration_number
-        )
-
-        # Return a RecordStore of the processed outputs.
         processed_records = []
-        if asim_enabled and 'asim_skims_path' in locals():
-            processed_records.append(
-                OutputRecord(
-                    file_path=asim_skims_path,
-                    output_type="processed_skims",
-                    model_run_id=runInfo.model_run_id,
-                    year=state.forecast_year
+
+        # Find the raw BEAM OD skims from the input records
+        raw_od_skims_path = None
+        for record in raw_outputs.all_records():
+            if isinstance(record, FileRecord) and record.description == "raw_od_skims":
+                raw_od_skims_path = record.file_path
+                # Record this raw skim file as an input to the post-processing step
+                provenance_tracker.record_input_file(
+                    "beam_postprocessor",
+                    raw_od_skims_path,
+                    model_run_id=model_run_hash,
+                    source_run_id=record.producing_run_id
                 )
-            )
+                break
+
+        if not raw_od_skims_path:
+            logger.warning("Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed.")
+
+        # Path to the main Zarr skims store, which is an ActivitySim data artifact.
+        all_skims_path = os.path.join(workspace.get_asim_mutable_data_dir(), settings["skims_fname"])
+        beam_output_dir = workspace.get_beam_output_dir()
+
+        # Call the main merging and post-processing logic for Zarr skims
+        updated_skims_path = _merge_beam_skims_to_zarr(
+            all_skims_path=all_skims_path,
+            beam_output_dir=beam_output_dir,
+            settings=settings,
+            override=raw_od_skims_path,
+            provenance_tracker=provenance_tracker,
+            model_run_hash=model_run_hash
+        )
+
+        # The main output is the modified Zarr store. Record it.
+        output_rec = provenance_tracker.record_output_file(
+            "beam_postprocessor",
+            all_skims_path,
+            model_run_id=model_run_hash,
+            description="Zarr skims store updated with BEAM outputs."
+        )
+        if output_rec:
+            processed_records.append(output_rec)
+
+        # Optionally, if other files are produced (e.g., an OMX version of the skims), record them too.
+        if settings.get("write_final_skims_as_omx"):
+            omx_skim_name = settings.get("final_omx_skim_name", "skims.omx")
+            final_omx_path = write_zarr_skim_as_omx(all_skims_path, settings, omx_skim_name)
+            if final_omx_path:
+                omx_rec = provenance_tracker.record_output_file(
+                    "beam_postprocessor",
+                    final_omx_path,
+                    model_run_id=model_run_hash,
+                    description="Final skims converted to OMX format."
+                )
+                if omx_rec:
+                    processed_records.append(omx_rec)
+
         return RecordStore(recordList=processed_records)

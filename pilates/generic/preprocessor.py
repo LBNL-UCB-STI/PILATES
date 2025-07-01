@@ -14,12 +14,13 @@ class GenericPreprocessor(ABC):
         pass
 
     @abstractmethod
-    def preprocess(self, state: WorkflowState) -> RecordStore:
+    def preprocess(self, state: WorkflowState, model_run_hash: str) -> RecordStore:
         """
         Preprocess input data for the model.
 
         Args:
             state: The workflow state or context object.
+            model_run_hash: The unique hash for this preprocessor run.
 
         Returns:
             RecordStore: Preprocessed input data for the model.

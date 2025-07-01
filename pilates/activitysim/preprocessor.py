@@ -16,7 +16,7 @@ from pandas.api.types import is_string_dtype
 from shapely import wkt
 from tqdm import tqdm
 
-from pilates.generic.records import RecordStore, InputRecord
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.geog import (
     get_block_geoms,
     map_block_to_taz,
@@ -29,6 +29,8 @@ from pilates.utils.geog import (
 from pilates.utils.io import read_datastore
 
 from pilates.generic.preprocessor import GenericPreprocessor
+from pilates.workspace import Workspace
+from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -1326,7 +1328,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
 
-    def preprocess(self, state):
+    def preprocess(self, state, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", model_run_hash: str) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
         """
@@ -1336,23 +1338,36 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
+        # Record inputs to preprocessor
+        # Raw BEAM skims are an input.
+        skims_fname = settings.get("skims_fname", False)
+        path_to_beam_skims = os.path.join(workspace.get_beam_output_dir(), skims_fname)
+        if os.path.exists(path_to_beam_skims):
+            provenance_tracker.record_input_file("activitysim_preprocessor", path_to_beam_skims, model_run_id=model_run_hash, description="Raw BEAM OD skims")
+        
+        origin_skims_fname = settings.get("origin_skims_fname", False)
+        path_to_origin_skims = os.path.join(workspace.get_beam_output_dir(), origin_skims_fname)
+        if os.path.exists(path_to_origin_skims):
+            provenance_tracker.record_input_file("activitysim_preprocessor", path_to_origin_skims, model_run_id=model_run_hash, description="Raw BEAM origin skims")
+
+
         # 1. Create skims from BEAM outputs
-        create_skims_from_beam(settings, state)
+        create_skims_from_beam(settings, state, output_dir=workspace.get_asim_mutable_data_dir())
 
         skims_loc = str(os.path.join(
-            state.full_path, settings["asim_local_mutable_data_folder"], "skims.omx"
+            workspace.get_asim_mutable_data_dir(), "skims.omx"
         ))
 
-        # Record the skims file as an input using state
-        skim_record = state.record_input_file("activitysim", skims_loc)
+        # Record the skims file as an OUTPUT of the preprocessor
+        skim_record = provenance_tracker.record_output_file("activitysim_preprocessor", skims_loc, model_run_id=model_run_hash)
 
         # 2. Create ActivitySim input data from UrbanSim H5
-        data_from_usim = create_asim_data_from_h5(settings, state)
+        data_from_usim = create_asim_data_from_h5(settings, state, workspace, provenance_tracker, model_run_hash=model_run_hash)
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
-        # Optionally, return a RecordStore or similar object if needed by the workflow
-        return RecordStore(recordList=[skim_record] + data_from_usim)
+        all_outputs = ([skim_record] if skim_record else []) + data_from_usim
+        return RecordStore(recordList=all_outputs)
 
 
 #######################################
@@ -2337,7 +2352,7 @@ def copy_beam_geoms(
         zones.to_file(beam_shape_location)
 
 
-def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None) -> List[InputRecord]:
+def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", warm_start=False, model_run_hash: str = None) -> List[FileRecord]:
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
@@ -2348,10 +2363,7 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
     local_crs = settings["local_crs"][region]
     zone_type = settings["skims_zone_type"]
 
-    if not output_dir:
-        output_dir = os.path.join(
-            state.full_path, settings["asim_local_mutable_data_folder"]
-        )
+    output_dir = workspace.get_asim_mutable_data_dir()
 
     asim_zone_id_col = "TAZ"
 
@@ -2373,8 +2385,17 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
         settings,
         state.forecast_year,
         warm_start=warm_start,
-        mutable_data_dir=state.full_path,
+        mutable_data_dir=workspace.full_path,
     )
+    
+    # Record the H5 datastore as an input to this preprocessor run
+    provenance_tracker.record_input_file(
+        "activitysim_preprocessor",
+        store._path,
+        model_run_id=model_run_hash,
+        description="UrbanSim H5 data store"
+    )
+
 
     logger.info(
         "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(
@@ -2466,26 +2487,38 @@ def create_asim_data_from_h5(settings, state, warm_start=False, output_dir=None)
 
     households.to_csv(os.path.join(output_dir, "households.csv"))
     logger.info("Saved households data to households.csv")
-    households_input = state.record_input_file(
-        "activitysim",
+    households_record = provenance_tracker.record_output_file(
+        "activitysim_preprocessor",
         os.path.join(output_dir, "households.csv"),
         description="activitysim households input based on UrbanSim .h5",
         source_file_paths=[store._path],
+        model_run_id=model_run_hash
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
-    persons_input = state.record_input_file(
-        "activitysim",
+    persons_record = provenance_tracker.record_output_file(
+        "activitysim_preprocessor",
         os.path.join(output_dir, "persons.csv"),
         description="activitysim persons input based on UrbanSim .h5",
         source_file_paths=[store._path],
+        model_run_id=model_run_hash
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
-    land_use_input = state.record_input_file(
-        "activitysim",
+    land_use_record = provenance_tracker.record_output_file(
+        "activitysim_preprocessor",
         os.path.join(output_dir, "land_use.csv"),
         description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path],
+        model_run_id=model_run_hash
     )
-    return [households_input, persons_input, land_use_input]
+    
+    output_records = []
+    if households_record:
+        output_records.append(households_record)
+    if persons_record:
+        output_records.append(persons_record)
+    if land_use_record:
+        output_records.append(land_use_record)
+        
+    return output_records

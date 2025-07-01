@@ -5,9 +5,10 @@ import shutil
 import pandas as pd
 import numpy as np
 import glob
-from pilates.utils.provenance import find_project_root
+from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
+from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -156,17 +157,14 @@ def make_archive(source, destination):
     shutil.move("%s.%s" % (name, fmt), destination)
 
 
-def copy_vehicles_from_atlas(settings, state):
+def copy_vehicles_from_atlas(settings, workspace: Workspace, state: WorkflowState, provenance_tracker: "FileProvenanceTracker", model_run_hash: str):
     beam_scenario_folder = os.path.join(
-        state.full_path,
-        settings["beam_local_mutable_data_folder"],
+        workspace.get_beam_mutable_data_dir(),
         settings["region"],
         settings["beam_scenario_folder"],
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
-    atlas_output_data_dir = os.path.join(
-        state.full_path, settings["atlas_host_output_folder"]
-    )
+    atlas_output_data_dir = workspace.get_atlas_output_dir()
     atlas_vehicle_file_loc = os.path.join(
         atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year)
     )
@@ -179,16 +177,15 @@ def copy_vehicles_from_atlas(settings, state):
             atlas_vehicle_file_loc, beam_vehicles_path
         )
     )
+    provenance_tracker.record_input_file("beam_preprocessor", atlas_vehicle_file_loc, model_run_id=model_run_hash)
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
+    provenance_tracker.record_output_file("beam_preprocessor", beam_vehicles_path, model_run_id=model_run_hash, source_file_paths=[atlas_vehicle_file_loc])
 
 
-def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
-    asim_output_data_dir = os.path.join(
-        state.full_path, settings["asim_local_output_folder"]
-    )
+def copy_plans_from_asim(settings, workspace: Workspace, state: WorkflowState, provenance_tracker: "FileProvenanceTracker", replanning_iteration_number=0, model_run_hash: str = None):
+    asim_output_data_dir = workspace.get_asim_output_dir()
     beam_scenario_folder = os.path.join(
-        state.full_path,
-        settings["beam_local_mutable_data_folder"],
+        workspace.get_beam_mutable_data_dir(),
         settings["region"],
         settings["beam_scenario_folder"],
     )
@@ -237,15 +234,11 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                 ]).select(pl.col("*").exclude_duplicates()).collect()
                 df.write_csv(beam_file_path, compression="gzip")
         """
-        from workflow_state import (
-            WorkflowState,
-        )  # Import WorkflowState to access the provenance tracker
-
-        if state.provenance_tracker.is_git_repo(asim_output_data_dir):
+        if provenance_tracker.is_git_repo(asim_output_data_dir):
             repo_name = os.path.basename(asim_output_data_dir)
-            git_hash = state.provenance_tracker.get_git_hash(asim_output_data_dir)
-            state.provenance_tracker.record_repo_input(
-                "beam",
+            git_hash = provenance_tracker.get_git_hash(asim_output_data_dir)
+            provenance_tracker.record_repo_input(
+                "beam_preprocessor",
                 asim_output_data_dir,
                 description=f"ActivitySim output repository",
                 git_hash=git_hash,
@@ -261,6 +254,12 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                 )
 
                 if os.path.exists(asim_file_path):
+                    provenance_tracker.record_input_file(
+                        "beam_preprocessor",
+                        asim_file_path,
+                        description=f"ActivitySim output for BEAM: {asim_file_name}",
+                        model_run_id=model_run_hash
+                    )
                     df = (
                         pd.read_csv(
                             asim_file_path,
@@ -280,17 +279,14 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                     df = df.loc[:, ~df.columns.duplicated()].copy()
                     df.to_csv(beam_file_path, compression="gzip")
 
-                    # Record the copied file as an input to BEAM
-                    state.record_input_file(
-                        "beam",
+                    # Record the copied file as an output of the preprocessor
+                    provenance_tracker.record_output_file(
+                        "beam_preprocessor",
                         beam_file_path,
                         description=f"Copied from ActivitySim output: {asim_file_name}",
                         source_file_paths=[asim_file_path],
-                        source_run_id=state.run_id,
+                        model_run_id=model_run_hash,
                     )
-                    # with open(asim_file_path, 'rb') as f_in, gzip.open(
-                    #         beam_file_path, 'wb') as f_out:
-                    #     f_out.writelines(f_in)
             elif file_format == "parquet":
                 asim_file_path = locate_asim_file(asim_file_name, file_format)
                 beam_file_path = locate_beam_file(beam_file_name, file_format)
@@ -298,6 +294,12 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                     "Copying asim file %s to beam input scenario file %s",
                     asim_file_path,
                     beam_file_path,
+                )
+                provenance_tracker.record_input_file(
+                    "beam_preprocessor",
+                    asim_file_path,
+                    description=f"ActivitySim output for BEAM: {asim_file_name}",
+                    model_run_id=model_run_hash
                 )
                 df = (
                     pd.read_parquet(asim_file_path)
@@ -309,15 +311,14 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                     df = df.astype({"household_id": pd.Int64Dtype()})
                 df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
-                # Record the copied file as an input to BEAM
-                state.record_input_file(
-                    "beam",
+                # Record the copied file as an output of the preprocessor
+                provenance_tracker.record_output_file(
+                    "beam_preprocessor",
                     beam_file_path,
                     description=f"Copied from ActivitySim output: {asim_file_name}",
+                    source_file_paths=[asim_file_path],
+                    model_run_id=model_run_hash
                 )
-                if "household_id" in df.columns:
-                    df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(
         file_path, file_name, year, replanning_iteration_number, fmt
@@ -340,7 +341,7 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
                 ) as f_out:
                     f_out.writelines(f_in)
                 # Record the archived file path
-                state.record_output_file(
+                provenance_tracker.record_output_file(
                     "activitysim",
                     target_file_path,
                     year=year,
@@ -349,7 +350,7 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
         elif os.path.isdir(os.path.abspath(input_file_path)):
             make_archive(input_file_path, target_file_path + ".zip")
             # Record the archived file path
-            state.record_output_file(
+            provenance_tracker.record_output_file(
                 "activitysim",
                 target_file_path + ".zip",
                 year=year,
@@ -358,7 +359,7 @@ def copy_plans_from_asim(settings, state, replanning_iteration_number=0):
         else:
             shutil.copy(input_file_path, target_file_path + ".parquet")
             # Record the archived file path
-            state.record_output_file(
+            provenance_tracker.record_output_file(
                 "activitysim",
                 target_file_path + ".parquet",
                 year=year,
@@ -616,7 +617,7 @@ class BeamPreprocessor(GenericPreprocessor):
     Preprocessor for BEAM model.
     """
 
-    def preprocess(self, state: WorkflowState) -> RecordStore:
+    def preprocess(self, state: WorkflowState, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", model_run_hash: str) -> RecordStore:
         """
         Prepares all data needed to run BEAM.
         - Updates BEAM config with sample size, replanning fraction, etc.
@@ -628,16 +629,16 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Update BEAM config
         if settings["discard_plans_every_year"]:
-            update_beam_config(settings, state.full_path, "max_plans_memory", 0)
+            update_beam_config(settings, workspace.full_path, "max_plans_memory", 0)
         else:
-            update_beam_config(settings, state.full_path, "max_plans_memory")
+            update_beam_config(settings, workspace.full_path, "max_plans_memory")
 
         # Copy vehicle data from Atlas if enabled
         if settings.get("vehicle_ownership_model_enabled"):
-            copy_vehicles_from_atlas(settings, state)
+            copy_vehicles_from_atlas(settings, workspace, state, provenance_tracker, model_run_hash)
 
         # Copy plans from ActivitySim
-        copy_plans_from_asim(settings, state, iteration_number)
+        copy_plans_from_asim(settings, workspace, state, provenance_tracker, iteration_number, model_run_hash)
 
         # The preprocessor's job is to prepare the inputs.
         # We can return a RecordStore of the key inputs that were prepared.
