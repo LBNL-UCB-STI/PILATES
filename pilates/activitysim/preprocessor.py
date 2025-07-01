@@ -2190,6 +2190,8 @@ def copy_data_to_mutable_location(settings, folder_path, state=None):
             state.record_input_file(
                 "activitysim",
                 input_skims_location,
+                None,
+                None,
                 description="Initial default skims copied from BEAM input directory",
             )
     else:
