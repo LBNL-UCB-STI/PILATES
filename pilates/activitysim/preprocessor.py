@@ -27,6 +27,8 @@ from pilates.utils.geog import (
 
 from pilates.utils.io import read_datastore
 
+from pilates.generic.preprocessor import GenericPreprocessor
+
 logger = logging.getLogger(__name__)
 
 beam_skims_types = {
@@ -1319,6 +1321,34 @@ def skim_validations(settings, year, order, data_dir=None):
     plot_skims(settings, zone, distances, order, 6, 3, "DIST", "in miles")
     plot_skims(settings, zone, sov_time, order, 6, 3, "SOV_TIME", "in minutes")
     plot_skims(settings, zone, PuT_time, order, 6, 3, "WLK_LOC_WLK_TIME", "in minutes")
+
+
+class ActivitysimPreprocessor(GenericPreprocessor):
+    """
+    ActivitySim-specific preprocessor that consolidates all preprocessing steps.
+    """
+
+    @classmethod
+    def preprocess(cls, state):
+        """
+        Run all preprocessing steps for ActivitySim in order.
+        """
+        settings = getattr(state, "settings", None)
+        if settings is None:
+            raise ValueError("Workflow state must have a 'settings' attribute.")
+
+        logger.info("Starting ActivitysimPreprocessor.preprocess()")
+
+        # 1. Create skims from BEAM outputs
+        create_skims_from_beam(settings, state)
+
+        # 2. Create ActivitySim input data from UrbanSim H5
+        create_asim_data_from_h5(settings, state)
+
+        logger.info("ActivitysimPreprocessor.preprocess() completed.")
+
+        # Optionally, return a RecordStore or similar object if needed by the workflow
+        return None  # Or return a RecordStore if appropriate
 
 
 #######################################
