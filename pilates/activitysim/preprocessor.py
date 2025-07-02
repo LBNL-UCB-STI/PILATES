@@ -660,7 +660,9 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
     missing = np.isnan(mx_dist)
     if missing.all():
         logger.info("Imputing all missing distance skims.")
-        zones = read_zone_geoms(settings, year)
+        zones = read_zone_geoms(
+            settings, year, asim_zone_id_col=settings.get("geoms_index_col")
+        )
         mx_dist = impute_distances(zones)
         output_skims["DIST"] = mx_dist
     elif missing.any():
@@ -1169,7 +1171,7 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> RecordStore:
+def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) -> str:
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings["asim_local_mutable_data_folder"]
@@ -1219,10 +1221,11 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=True) -> 
 
     _create_offset(settings, order, data_dir=output_dir)
 
-
     if validation:
         order = zone_order(settings, state.year)
         skim_validations(settings, state.year, order, data_dir=output_dir)
+
+    return os.path.join(output_dir, "skims.omx")
 
 
 def plot_skims(
@@ -1328,41 +1331,74 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
 
-    def preprocess(self, state, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", model_run_hash: str) -> RecordStore:
+    def preprocess(
+        self,
+        state,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+        model_run_hash: str,
+    ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
         """
-        settings = getattr(state, "settings", None)
+        settings = getattr(state, "full_settings", None)
         if settings is None:
-            raise ValueError("Workflow state must have a 'settings' attribute.")
+            raise ValueError("Workflow state must have a 'full_settings' attribute.")
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
         skims_fname = settings.get("skims_fname", False)
-        path_to_beam_skims = os.path.join(workspace.get_beam_output_dir(), skims_fname)
+        path_to_beam_skims = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            workspace.settings["region"],
+            skims_fname,
+        )
         if os.path.exists(path_to_beam_skims):
-            provenance_tracker.record_input_file("activitysim_preprocessor", path_to_beam_skims, model_run_id=model_run_hash, description="Raw BEAM OD skims")
-        
-        origin_skims_fname = settings.get("origin_skims_fname", False)
-        path_to_origin_skims = os.path.join(workspace.get_beam_output_dir(), origin_skims_fname)
-        if os.path.exists(path_to_origin_skims):
-            provenance_tracker.record_input_file("activitysim_preprocessor", path_to_origin_skims, model_run_id=model_run_hash, description="Raw BEAM origin skims")
+            input_skims_record = provenance_tracker.record_input_file(
+                "activitysim_preprocessor",
+                path_to_beam_skims,
+                model_run_id=model_run_hash,
+                description="Raw BEAM OD skims",
+            )
+            skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
+            shutil.copyfile(path_to_beam_skims, skims_loc)
+        else:
+            skims_loc = create_skims_from_beam(
+                settings, state, output_dir=workspace.get_asim_mutable_data_dir()
+            )
 
+        # origin_skims_fname = settings.get("origin_skims_fname", False)
+        # path_to_origin_skims = os.path.join(
+        #     workspace.get_beam_output_dir(), origin_skims_fname
+        # )
+        # if os.path.exists(path_to_origin_skims):
+        #     provenance_tracker.record_input_file(
+        #         "activitysim_preprocessor",
+        #         path_to_origin_skims,
+        #         model_run_id=model_run_hash,
+        #         description="Raw BEAM origin skims",
+        #     )
 
         # 1. Create skims from BEAM outputs
-        create_skims_from_beam(settings, state, output_dir=workspace.get_asim_mutable_data_dir())
-
-        skims_loc = str(os.path.join(
-            workspace.get_asim_mutable_data_dir(), "skims.omx"
-        ))
 
         # Record the skims file as an OUTPUT of the preprocessor
-        skim_record = provenance_tracker.record_output_file("activitysim_preprocessor", skims_loc, model_run_id=model_run_hash)
+        skim_record = provenance_tracker.record_output_file(
+            "activitysim_preprocessor",
+            skims_loc,
+            model_run_id=model_run_hash,
+            description="OD Skims copied over to ASim data directory",
+        )
 
         # 2. Create ActivitySim input data from UrbanSim H5
-        data_from_usim = create_asim_data_from_h5(settings, state, workspace, provenance_tracker, model_run_hash=model_run_hash)
+        data_from_usim = create_asim_data_from_h5(
+            settings,
+            state,
+            workspace,
+            provenance_tracker,
+            model_run_hash=model_run_hash,
+        )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
@@ -2202,15 +2238,9 @@ def copy_data_to_mutable_location(settings, folder_path, state=None):
     os.makedirs(input_dir, exist_ok=True)
     region = settings["region"]
     beam_input_dir = settings["beam_local_input_folder"]
-    beam_output_dir = settings["beam_local_output_folder"]
-    skims_fname = settings["skims_fname"]
-    origin_skims_fname = settings["origin_skims_fname"]
     beam_geoms_fname = settings["beam_geoms_fname"]
     beam_router_directory = settings["beam_router_directory"]
     asim_geoms_location = os.path.join(input_dir, beam_geoms_fname)
-
-    input_skims_location = os.path.join(beam_input_dir, region, skims_fname)
-    mutable_skims_location = os.path.join(input_dir, "skims.omx")
 
     beam_geoms_location = os.path.join(
         beam_input_dir, region, beam_router_directory, beam_geoms_fname
@@ -2224,58 +2254,6 @@ def copy_data_to_mutable_location(settings, folder_path, state=None):
             "Not updating zone_id in beam shapefile, make sure it is correct"
         )
         beam_shape_location = None
-
-    # TODO: Handle exception when these dont exist
-
-    if os.path.exists(input_skims_location):
-        logger.info(
-            "Copying input skims from {0} to {1}".format(
-                input_skims_location, mutable_skims_location
-            )
-        )
-        shutil.copyfile(input_skims_location, mutable_skims_location)
-        # Provenance: record initial default skims as input to ActivitySim
-        if state is not None:
-            state.record_input_file(
-                "activitysim",
-                input_skims_location,
-                None,
-                None,
-                description="Initial default skims copied from BEAM input directory",
-            )
-    else:
-        if os.path.exists(mutable_skims_location):
-            logger.info(
-                "No input skims at {0}. Proceeding with defaults at {1}".format(
-                    input_skims_location, mutable_skims_location
-                )
-            )
-        else:
-            logger.info(
-                "No default skims found anywhere. We will generate defaults instead"
-            )
-
-    input_skims_location = os.path.join(beam_input_dir, region, origin_skims_fname)
-    mutable_skims_location = os.path.join(input_dir, "origin_skims.csv.gz")
-
-    if os.path.exists(input_skims_location):
-        logger.info(
-            "Copying input origin skims from {0} to {1}".format(
-                input_skims_location, mutable_skims_location
-            )
-        )
-        shutil.copyfile(input_skims_location, mutable_skims_location)
-    else:
-        if os.path.exists(mutable_skims_location):
-            logger.info(
-                "No input skims at {0}. Proceeding with defaults at {1}".format(
-                    input_skims_location, mutable_skims_location
-                )
-            )
-        else:
-            logger.info(
-                "No default input skims found anywhere. We will generate defaults instead"
-            )
 
     logger.info(
         "Copying beam zone geoms from {0} to {1}".format(
@@ -2352,7 +2330,14 @@ def copy_beam_geoms(
         zones.to_file(beam_shape_location)
 
 
-def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", warm_start=False, model_run_hash: str = None) -> List[FileRecord]:
+def create_asim_data_from_h5(
+    settings,
+    state,
+    workspace: Workspace,
+    provenance_tracker: "FileProvenanceTracker",
+    warm_start=False,
+    model_run_hash: str = None,
+) -> List[FileRecord]:
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
@@ -2387,15 +2372,14 @@ def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_t
         warm_start=warm_start,
         mutable_data_dir=workspace.full_path,
     )
-    
+
     # Record the H5 datastore as an input to this preprocessor run
     provenance_tracker.record_input_file(
         "activitysim_preprocessor",
         store._path,
         model_run_id=model_run_hash,
-        description="UrbanSim H5 data store"
+        description="UrbanSim H5 data store",
     )
-
 
     logger.info(
         "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(
@@ -2492,7 +2476,7 @@ def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_t
         os.path.join(output_dir, "households.csv"),
         description="activitysim households input based on UrbanSim .h5",
         source_file_paths=[store._path],
-        model_run_id=model_run_hash
+        model_run_id=model_run_hash,
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
@@ -2501,7 +2485,7 @@ def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_t
         os.path.join(output_dir, "persons.csv"),
         description="activitysim persons input based on UrbanSim .h5",
         source_file_paths=[store._path],
-        model_run_id=model_run_hash
+        model_run_id=model_run_hash,
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
@@ -2510,9 +2494,9 @@ def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_t
         os.path.join(output_dir, "land_use.csv"),
         description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path],
-        model_run_id=model_run_hash
+        model_run_id=model_run_hash,
     )
-    
+
     output_records = []
     if households_record:
         output_records.append(households_record)
@@ -2520,5 +2504,5 @@ def create_asim_data_from_h5(settings, state, workspace: Workspace, provenance_t
         output_records.append(persons_record)
     if land_use_record:
         output_records.append(land_use_record)
-        
+
     return output_records

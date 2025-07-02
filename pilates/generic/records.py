@@ -2,11 +2,13 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union
 
 
+@dataclass(kw_only=True)
 class Record:
     unique_id: Optional[str] = None
     created_at: Optional[str] = None
     short_name: Optional[str] = None
     description: Optional[str] = None
+
 
 class RecordStore:
     """
@@ -15,16 +17,22 @@ class RecordStore:
     interact with a database or other persistent storage.
     """
 
-    def __init__(self, recordDict: Optional[Dict[str, Record]] = None, recordList: Optional[List[Record]]=None) -> None:
+    def __init__(
+        self,
+        recordDict: Optional[Dict[str, Record]] = None,
+        recordList: Optional[List[Record]] = None,
+    ) -> None:
         self.records = recordDict or {}
         if recordList is not None:
             for record in recordList:
                 if not isinstance(record, Record):
-                    raise TypeError("All items in recordList must be instances of Record.")
+                    raise TypeError(
+                        "All items in recordList must be instances of Record."
+                    )
                 if record.unique_id:
                     self.records[record.unique_id] = record
 
-    def __add__(self, other: 'RecordStore') -> 'RecordStore':
+    def __add__(self, other: "RecordStore") -> "RecordStore":
         """
         Combines the records of two RecordStore instances into a new RecordStore.
         """
@@ -33,7 +41,7 @@ class RecordStore:
         combined_records = {**self.records, **other.records}
         return RecordStore(recordDict=combined_records)
 
-    def __iadd__(self, other: 'RecordStore') -> 'RecordStore':
+    def __iadd__(self, other: "RecordStore") -> "RecordStore":
         """
         Updates the current RecordStore by adding records from another RecordStore.
         """
@@ -52,10 +60,13 @@ class RecordStore:
     def all_records(self) -> List[Record]:
         return list(self.records.values())
 
+    def all_unique_ids(self) -> List[str]:
+        return list(self.records.keys())
+
+
 @dataclass(kw_only=True)
 class FileRecord(Record):
     file_path: str
-    file_hash: str
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
     year: Optional[int] = None
@@ -66,14 +77,14 @@ class FileRecord(Record):
 
 
 @dataclass(kw_only=True)
-class RepoRecord:
-    repo_path: str
+class RepoRecord(Record):
+    repo_path: Optional[str] = None
     description: Optional[str] = None
     accessed_at: Optional[str] = None
 
 
 @dataclass(kw_only=True)
-class ModelRunInfo:
+class ModelRunInfo(Record):
     model: str
     year: int
     iteration: Optional[int] = None

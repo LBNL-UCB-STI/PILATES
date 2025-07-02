@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 
-from pilates.generic.records import FileRecord, RepoRecord, ModelRunInfo
+from pilates.generic.records import FileRecord, RepoRecord, ModelRunInfo, RecordStore
 from pilates.utils.git_utils import is_git_repo, get_git_hash
 from pilates.utils.file_utils import (
     _validate_file_path,
@@ -204,54 +204,6 @@ class ProvenanceTracker:
         if current_model_run:
             current_model_run.input_record_hashes.append(repo_record.git_hash)
 
-
-    def init_model_run(
-        self,
-        model: str,
-        year: int = None,
-        iteration: int = None,
-        description: str = None,
-    ) -> str:
-        model_run_id = (
-            f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
-        )
-        run_record = ModelRunInfo(
-            model_run_id=model_run_id,
-            model=model,
-            year=year,
-            iteration=iteration,
-            description=description,
-            status="initialized",
-        )
-        self.current_model_run_id = model_run_id
-        self.run_info.model_runs[model_run_id] = run_record
-        return model_run_id
-
-    def start_model_run(
-        self, inputs_to_copy: Optional[str] = None, message: Optional[str] = None
-    ) -> str:
-        if inputs_to_copy:
-            if inputs_to_copy in self.run_info.model_runs:
-                self.current_model_run().input_record_hashes = self.run_info.model_runs[
-                    inputs_to_copy
-                ].input_record_hashes
-            else:
-                raise ValueError()
-        self.run_info.model_runs[self.current_model_run_id].status = "running"
-        self.run_info.model_runs[self.current_model_run_id].started_at = (
-            datetime.now().isoformat()
-        )
-        if message:
-            self.run_info.model_runs[self.current_model_run_id].description = message
-        return self.current_model_run_id
-
-    def complete_model_run(self, run_hash: str, status: str = "completed"):
-        if run_hash in self.run_info.model_runs:
-            self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
-            self.run_info.model_runs[run_hash].status = status
-        else:
-            logger.error(f"Model run hash {run_hash} not found to complete.")
-
     def get_run_info(self) -> Dict[str, Any]:
         return self.run_info.copy()
 
@@ -373,7 +325,9 @@ class FileProvenanceTracker(ProvenanceTracker):
         relative_path = self._get_relative_path(path_to_use)
         return path_to_use, relative_path
 
-    def _calculate_file_hash(self, file_path: str) -> Optional[str]:
+    def _calculate_file_hash(
+        self, file_path: str, description: Optional[str] = None
+    ) -> Optional[str]:
         abs_file_path = self._validate_file_path(file_path)
         if not abs_file_path:
             return None
@@ -382,6 +336,8 @@ class FileProvenanceTracker(ProvenanceTracker):
             with open(abs_file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(chunk)
+            if description:
+                sha256_hash.update(description.encode())
             return sha256_hash.hexdigest()
         except (IOError, OSError) as e:
             logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
@@ -401,6 +357,39 @@ class FileProvenanceTracker(ProvenanceTracker):
                 f"Could not create relative path for {abs_path} relative to {base_path}"
             )
             return abs_path
+
+    def start_model_run(
+        self,
+        model: str,
+        year: int = None,
+        iteration: int = None,
+        description: str = None,
+        inputs: RecordStore = RecordStore(),
+    ) -> str:
+        model_run_id = (
+            f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
+        )
+        run_record = ModelRunInfo(
+            unique_id=model_run_id,
+            model=model,
+            year=year,
+            iteration=iteration,
+            description=description,
+            status="running",
+            input_record_hashes=inputs.all_unique_ids(),
+        )
+        self.current_model_run_id = model_run_id
+        self.run_info.model_runs[model_run_id] = run_record
+        self._save_run_info()
+        return model_run_id
+
+    def complete_model_run(self, run_hash: str, status: str = "completed"):
+        if run_hash in self.run_info.model_runs:
+            self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
+            self.run_info.model_runs[run_hash].status = status
+            self._save_run_info()
+        else:
+            logger.error(f"Model run hash {run_hash} not found to complete.")
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
         self.run_info.start_year = settings.get("start_year")
@@ -435,12 +424,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         relative_path = self._get_relative_path(abs_path)
         if model not in self.run_info.repo_records:
             self.run_info.repo_records[model] = []
-            
+
         repo_record = RepoRecord(
+            unique_id=git_hash,
             repo_path=relative_path,
-            git_hash=git_hash,
             accessed_at=datetime.now().isoformat(),
-            description=description
+            description=description,
         )
         self.run_info.repo_records[model].append(repo_record)
         self._save_run_info()
@@ -448,25 +437,33 @@ class FileProvenanceTracker(ProvenanceTracker):
             f"Recorded repository input for {model}: {relative_path} (exists: {abs_path is not None})"
         )
 
-    def _get_or_create_file_record(self, file_path: str, skip_missing: bool = True) -> Optional[FileRecord]:
+    def _get_or_create_file_record(
+        self,
+        file_path: str,
+        skip_missing: bool = True,
+        description: Optional[str] = None,
+        short_name: Optional[str] = None,
+    ) -> Optional[FileRecord]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return None
-        
-        file_hash = self._calculate_file_hash(path_to_use)
+
+        file_hash = self._calculate_file_hash(path_to_use, description)
         if not file_hash:
-            logger.warning(f"Could not calculate hash for {file_path}, cannot create record.")
+            logger.warning(
+                f"Could not calculate hash for {file_path}, cannot create record."
+            )
             return None
 
         if file_hash in self.run_info.file_records:
             return self.run_info.file_records[file_hash]
-        
+
         metadata = self._load_metadata(path_to_use)
         file_record = FileRecord(
             unique_id=file_hash,
             file_path=relative_path,
-            file_hash=file_hash,
             created_at=datetime.now().isoformat(),
+            short_name=short_name,
             metadata=metadata,
         )
         self.run_info.file_records[file_hash] = file_record
@@ -483,7 +480,9 @@ class FileProvenanceTracker(ProvenanceTracker):
         model_run_id: str = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
-        file_record = self._get_or_create_file_record(file_path, skip_missing)
+        file_record = self._get_or_create_file_record(
+            file_path, skip_missing, description
+        )
         if not file_record:
             return None
 
@@ -492,7 +491,9 @@ class FileProvenanceTracker(ProvenanceTracker):
         if description:
             file_record.description = description
         if source_file_paths:
-            file_record.source_file_paths = [self._get_relative_path(p) for p in source_file_paths]
+            file_record.source_file_paths = [
+                self._get_relative_path(p) for p in source_file_paths
+            ]
         if source_run_id:
             file_record.producing_run_id = source_run_id
 
@@ -500,12 +501,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         if run_id_to_consume:
             if run_id_to_consume not in file_record.consuming_run_ids:
                 file_record.consuming_run_ids.append(run_id_to_consume)
-            
+
             if run_id_to_consume in self.run_info.model_runs:
                 run_info = self.run_info.model_runs[run_id_to_consume]
-                if file_record.file_hash not in run_info.input_record_hashes:
-                    run_info.input_record_hashes.append(file_record.file_hash)
-        
+                if file_record.unique_id not in run_info.input_record_hashes:
+                    run_info.input_record_hashes.append(file_record.unique_id)
+
         self._save_run_info()
         return file_record
 
@@ -517,10 +518,13 @@ class FileProvenanceTracker(ProvenanceTracker):
         description: str = None,
         skip_missing: bool = True,
         model_run_id: str = None,
+        short_name: str = None,
         source_file_paths: list = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
-        file_record = self._get_or_create_file_record(file_path, skip_missing)
+        file_record = self._get_or_create_file_record(
+            file_path, skip_missing, description, short_name
+        )
         if not file_record:
             return None
 
@@ -531,15 +535,17 @@ class FileProvenanceTracker(ProvenanceTracker):
         if year:
             file_record.year = year
         if source_file_paths:
-            file_record.source_file_paths = [self._get_relative_path(p) for p in source_file_paths]
+            file_record.source_file_paths = [
+                self._get_relative_path(p) for p in source_file_paths
+            ]
 
         run_id_producing = model_run_id or self.current_model_run_id
         if run_id_producing:
             file_record.producing_run_id = run_id_producing
             if run_id_producing in self.run_info.model_runs:
                 run_info = self.run_info.model_runs[run_id_producing]
-                if file_record.file_hash not in run_info.output_record_hashes:
-                    run_info.output_record_hashes.append(file_record.file_hash)
+                if file_record.unique_id not in run_info.output_record_hashes:
+                    run_info.output_record_hashes.append(file_record.unique_id)
 
         self._save_run_info()
         return file_record

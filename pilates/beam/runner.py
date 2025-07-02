@@ -6,7 +6,10 @@ from typing import Tuple
 
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
-from pilates.beam.postprocessor import find_produced_od_skims, find_produced_origin_skims
+from pilates.beam.postprocessor import (
+    find_produced_od_skims,
+    find_produced_origin_skims,
+)
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -22,7 +25,13 @@ class BeamRunner(GenericRunner):
     def __init__(self, model_name: str):
         super().__init__(model_name)
 
-    def run(self, store: RecordStore, state: WorkflowState, workspace: Workspace, provenance_tracker: "FileProvenanceTracker") -> Tuple[RecordStore, ModelRunInfo]:
+    def run(
+        self,
+        store: RecordStore,
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+    ) -> Tuple[RecordStore, ModelRunInfo]:
         """
         Executes a BEAM model run.
         """
@@ -39,7 +48,7 @@ class BeamRunner(GenericRunner):
         beam_config = settings["beam_config"]
         region = settings["region"]
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
-        
+
         abs_beam_input = workspace.get_beam_mutable_data_dir()
         abs_beam_output = workspace.get_beam_output_dir()
 
@@ -89,7 +98,6 @@ class BeamRunner(GenericRunner):
             skimFormat = "omx"
             logger.info("Defaulting to 'omx' skim format for finding BEAM outputs.")
 
-
         # Find raw BEAM outputs
         beam_local_output_folder = workspace.get_beam_output_dir()
         od_skims_path = find_produced_od_skims(beam_local_output_folder, skimFormat)
@@ -102,7 +110,7 @@ class BeamRunner(GenericRunner):
                 od_skims_path,
                 year=state.forecast_year,
                 description="raw_od_skims",
-                model_run_id=beam_run_hash
+                model_run_id=beam_run_hash,
             )
             if output_rec:
                 output_records.append(output_rec)
@@ -113,16 +121,14 @@ class BeamRunner(GenericRunner):
                 origin_skims_path,
                 year=state.forecast_year,
                 description="raw_origin_skims",
-                model_run_id=beam_run_hash
+                model_run_id=beam_run_hash,
             )
             if output_rec:
                 output_records.append(output_rec)
-        
+
         # Record BEAM run completion now that outputs are recorded
-        provenance_tracker.complete_model_run(
-            beam_run_hash, status="completed"
-        )
-        
+        provenance_tracker.complete_model_run(beam_run_hash, status="completed")
+
         output_store = RecordStore(recordList=output_records)
 
         run_info = provenance_tracker.run_info.model_runs.get(beam_run_hash)

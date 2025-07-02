@@ -41,6 +41,7 @@ class WorkflowState:
         sub_stage: Stage | None,
         file_loc: str,
         asim_compiled: bool,
+        full_settings: Optional[dict] = None,
     ):
 
         # Store basic simulation parameters
@@ -69,6 +70,7 @@ class WorkflowState:
             "activity_demand_enabled": activity_demand_enabled,
             "traffic_assignment_enabled": traffic_assignment_enabled,
         }
+        self.full_settings = full_settings or {}
 
         # Determine what stages are enabled
         self.enabled_stages = set()
@@ -231,6 +233,7 @@ class WorkflowState:
             None,
             file_loc,
             asim_compiled,
+            settings
         )
 
         out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)

@@ -200,3 +200,29 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         raise ValueError("No land use data found at {0}!".format(usim_datastore_fpath))
 
     return store, table_prefix_yr
+
+
+def locate_asim_file(asim_output_data_dir, file_name, fmt):
+    if fmt == "csv":
+        return os.path.join(asim_output_data_dir, "final_" + file_name + ".csv")
+    elif fmt == "parquet":
+        if file_name == "plans":
+            a_n = "beam_plans"
+        else:
+            a_n = file_name
+        return os.path.join(
+            asim_output_data_dir, "final_pipeline", a_n, "final.parquet"
+        )
+    elif fmt is None:
+        return os.path.join(asim_output_data_dir, file_name)
+    else:
+        raise ValueError()
+
+
+def locate_beam_file(beam_scenario_folder, file_name, fmt):
+    if fmt == "csv":
+        return os.path.join(beam_scenario_folder, file_name + ".csv.gz")
+    elif fmt == "parquet":
+        return os.path.join(beam_scenario_folder, file_name + ".parquet")
+    else:
+        raise ValueError()

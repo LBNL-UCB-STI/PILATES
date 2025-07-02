@@ -1891,7 +1891,12 @@ def write_zarr_skim_as_omx(
 
 
 def _merge_beam_skims_to_zarr(
-    all_skims_path, beam_output_dir, settings, override=None, provenance_tracker=None, model_run_hash=None
+    all_skims_path,
+    beam_output_dir,
+    settings,
+    override=None,
+    provenance_tracker=None,
+    model_run_hash=None,
 ):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
@@ -2192,7 +2197,7 @@ def _merge_beam_skims_to_zarr(
                 "beam_postprocessor",
                 all_skims_path,
                 description="Previous zarr skims before merge",
-                model_run_id=model_run_hash
+                model_run_id=model_run_hash,
             )
         # Record the BEAM partial skims file being merged in (if it existed)
         if (
@@ -2204,7 +2209,7 @@ def _merge_beam_skims_to_zarr(
                 "beam_postprocessor",
                 current_omx_skims_path,
                 description="BEAM partial skims for merge",
-                model_run_id=model_run_hash
+                model_run_id=model_run_hash,
             )
         # Record the output zarr skims file after the update, with source_file_paths
         source_files = []
@@ -2222,7 +2227,7 @@ def _merge_beam_skims_to_zarr(
                 all_skims_path,
                 description="Updated zarr skims after merge",
                 source_file_paths=source_files,
-                model_run_id=model_run_hash
+                model_run_id=model_run_hash,
             )
 
     # Close the datasets
@@ -2650,15 +2655,19 @@ class BeamPostprocessor(GenericPostprocessor):
                     "beam_postprocessor",
                     raw_od_skims_path,
                     model_run_id=model_run_hash,
-                    source_run_id=record.producing_run_id
+                    source_run_id=record.producing_run_id,
                 )
                 break
 
         if not raw_od_skims_path:
-            logger.warning("Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed.")
+            logger.warning(
+                "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
+            )
 
         # Path to the main Zarr skims store, which is an ActivitySim data artifact.
-        all_skims_path = os.path.join(workspace.get_asim_mutable_data_dir(), settings["skims_fname"])
+        all_skims_path = os.path.join(
+            workspace.get_asim_mutable_data_dir(), settings["skims_fname"]
+        )
         beam_output_dir = workspace.get_beam_output_dir()
 
         # Call the main merging and post-processing logic for Zarr skims
@@ -2668,7 +2677,7 @@ class BeamPostprocessor(GenericPostprocessor):
             settings=settings,
             override=raw_od_skims_path,
             provenance_tracker=provenance_tracker,
-            model_run_hash=model_run_hash
+            model_run_hash=model_run_hash,
         )
 
         # The main output is the modified Zarr store. Record it.
@@ -2676,7 +2685,7 @@ class BeamPostprocessor(GenericPostprocessor):
             "beam_postprocessor",
             all_skims_path,
             model_run_id=model_run_hash,
-            description="Zarr skims store updated with BEAM outputs."
+            description="Zarr skims store updated with BEAM outputs.",
         )
         if output_rec:
             processed_records.append(output_rec)
@@ -2684,13 +2693,15 @@ class BeamPostprocessor(GenericPostprocessor):
         # Optionally, if other files are produced (e.g., an OMX version of the skims), record them too.
         if settings.get("write_final_skims_as_omx"):
             omx_skim_name = settings.get("final_omx_skim_name", "skims.omx")
-            final_omx_path = write_zarr_skim_as_omx(all_skims_path, settings, omx_skim_name)
+            final_omx_path = write_zarr_skim_as_omx(
+                all_skims_path, settings, omx_skim_name
+            )
             if final_omx_path:
                 omx_rec = provenance_tracker.record_output_file(
                     "beam_postprocessor",
                     final_omx_path,
                     model_run_id=model_run_hash,
-                    description="Final skims converted to OMX format."
+                    description="Final skims converted to OMX format.",
                 )
                 if omx_rec:
                     processed_records.append(omx_rec)

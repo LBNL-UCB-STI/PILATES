@@ -218,8 +218,7 @@ def warm_start_activities(settings, state: WorkflowState, client, workspace: Wor
         preprocessor = factory.get_preprocessor("activitysim")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.init_model_run("activitysim_preprocessor", message="Preprocessing for ActivitySim warm start")
-        provenance_tracker.start_model_run()
+        pre_run_hash = provenance_tracker.start_model_run("activitysim_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for ActivitySim warm start")
         inputData = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
         provenance_tracker.complete_model_run(pre_run_hash)
 
@@ -232,8 +231,7 @@ def warm_start_activities(settings, state: WorkflowState, client, workspace: Wor
 
         # The post-processing step for warm start is just updating the UrbanSim H5 file.
         # We call the specific function for this, not the full postprocessor.
-        post_run_hash = provenance_tracker.init_model_run("activitysim_postprocessor", message="Post-processing for ActivitySim warm start")
-        provenance_tracker.start_model_run()
+        post_run_hash = provenance_tracker.start_model_run("activitysim_postprocessor", state.current_year, state.current_inner_iter, message="Post-processing for ActivitySim warm start")
         asim_post.update_usim_inputs_after_warm_start(
             settings,
             state,
@@ -566,8 +564,7 @@ def run_activity_demand(settings, state: WorkflowState, client, workspace: Works
         postprocessor = factory.get_postprocessor("activitysim")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.init_model_run("activitysim_preprocessor", message="Preprocessing for ActivitySim")
-        provenance_tracker.start_model_run()
+        pre_run_hash = provenance_tracker.start_model_run("activitysim_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for ActivitySim")
         input_data = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
         provenance_tracker.complete_model_run(pre_run_hash)
 
@@ -575,8 +572,7 @@ def run_activity_demand(settings, state: WorkflowState, client, workspace: Works
         raw_outputs, run_info = runner.run(input_data, state, workspace, provenance_tracker)
 
         # Postprocess
-        post_run_hash = provenance_tracker.init_model_run("activitysim_postprocessor", message="Post-processing ActivitySim outputs")
-        provenance_tracker.start_model_run()
+        post_run_hash = provenance_tracker.start_model_run("activitysim_postprocessor", state.current_year, state.current_inner_iter, description="Post-processing ActivitySim outputs")
         processed_outputs = postprocessor.postprocess(raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash)
         provenance_tracker.complete_model_run(post_run_hash)
 

@@ -16,6 +16,7 @@ class ActivitysimRunner(GenericRunner):
     """
     Runner for ActivitySim model.
     """
+
     def __init__(self, model_name: str):
         super().__init__(model_name)
 
@@ -84,7 +85,9 @@ class ActivitysimRunner(GenericRunner):
             asim_local_mutable_data_folder = os.path.abspath(
                 settings["asim_local_mutable_data_folder"]
             )
-            asim_local_output_folder = os.path.abspath(settings["asim_local_output_folder"])
+            asim_local_output_folder = os.path.abspath(
+                settings["asim_local_output_folder"]
+            )
             asim_local_configs_folder = os.path.abspath(
                 os.path.join(settings["asim_local_configs_folder"], region, "configs")
             )
@@ -109,11 +112,20 @@ class ActivitysimRunner(GenericRunner):
                 "bind": asim_remote_configs_compile_folder,
                 "mode": "rw",
             },
-            asim_local_configs_folder: {"bind": asim_remote_configs_folder, "mode": "rw"},
+            asim_local_configs_folder: {
+                "bind": asim_remote_configs_folder,
+                "mode": "rw",
+            },
         }
         return asim_docker_vols
 
-    def run(self, store: RecordStore, state: WorkflowState, workspace: Workspace, provenance_tracker: "FileProvenanceTracker") -> Tuple[RecordStore, ModelRunInfo]:
+    def run(
+        self,
+        store: RecordStore,
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+    ) -> Tuple[RecordStore, ModelRunInfo]:
         """
         Do the model run
 
@@ -128,43 +140,51 @@ class ActivitysimRunner(GenericRunner):
                 - data (RecordStore): The raw output files that have been prepared to run the model
                 - model_run_info (ModelRunInfo): Information about the model run
         """
-
-        region = state.settings["region"]
-        asim_subdir = state.settings["region_to_asim_subdir"][region]
+        settings = state.full_settings
+        region = settings["region"]
+        asim_subdir = settings["region_to_asim_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # start docker client
         client = None  # Initialize client to None
-        if state.settings.get("container_manager") == "docker":
+        if settings.get("container_manager") == "docker":
             try:
-                client = self.initialize_docker_client(state.settings)
+                client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
                 # Decide how to handle failure - maybe exit?
                 # For now, log and continue, assuming Singularity might be used or stubs.
                 # If no client and no singularity, container runs will fail later.
 
-        asim_docker_vols = self.get_asim_docker_vols(state.settings, working_dir=workspace.full_path)
+        asim_docker_vols = self.get_asim_docker_vols(
+            settings, working_dir=workspace.full_path
+        )
         activity_demand_model, activity_demand_image = self.get_model_and_image(
-            state.settings, "activity_demand_model"
+            settings, "activity_demand_model"
         )
 
         # Record ActivitySim run start (Compilation if needed)
         if not state.asim_compiled:
 
             asim_cmd = self.get_base_asim_cmd(
-                state.settings, household_sample_size=2500, num_processes=1
+                settings, household_sample_size=2500, num_processes=1
             )
 
-            additional_args = self.get_asim_additional_args(state.settings, asim_docker_vols, True)
+            additional_args = self.get_asim_additional_args(
+                settings, asim_docker_vols, True
+            )
 
             asim_compile_run_hash = provenance_tracker.start_model_run(
-                message="asim compilation"
+                model=activity_demand_model,
+                year=state.current_year,
+                iteration=state.current_inner_iter,
+                description="asim compilation",
+                inputs=store,
             )
 
             success = self.run_container(
                 client=client,
-                settings=state.settings,
+                settings=settings,
                 image=activity_demand_image,
                 volumes=asim_docker_vols,
                 command=asim_cmd,
@@ -182,28 +202,23 @@ class ActivitysimRunner(GenericRunner):
                 raise RuntimeError("ASim Compilation failed")
             state.compile_asim()  # Update state to mark as compiled
 
-            new_asim_run_hash = provenance_tracker.init_model_run(
-                activity_demand_model,
-                year=state.forecast_year,
-                iteration=state.current_inner_iter,
-                description="asim full run"
-            )
-            asim_main_run_hash = provenance_tracker.start_model_run(
-                inputs_to_copy=new_asim_run_hash
-            )
-        else:
-            asim_main_run_hash = provenance_tracker.start_model_run()
-            asim_cmd = self.get_base_asim_cmd(
-                state.settings, num_processes=1
-            )
+        new_asim_run_hash = provenance_tracker.start_model_run(
+            model=activity_demand_model,
+            year=state.current_year,
+            iteration=state.current_inner_iter,
+            description="asim full run",
+            inputs=store,
+        )
 
-        asim_cmd = self.get_base_asim_cmd(state.settings)
+        asim_cmd = self.get_base_asim_cmd(settings)
 
-        additional_args = self.get_asim_additional_args(state.settings, asim_docker_vols, False)
+        additional_args = self.get_asim_additional_args(
+            settings, asim_docker_vols, False
+        )
 
         success = self.run_container(
             client=client,
-            settings=state.settings,
+            settings=settings,
             image=activity_demand_image,
             volumes=asim_docker_vols,
             command=asim_cmd,
@@ -212,11 +227,13 @@ class ActivitysimRunner(GenericRunner):
             args=additional_args,
         )
 
-        run_info = provenance_tracker.run_info.model_runs.get(asim_main_run_hash)
+        run_info = provenance_tracker.run_info.model_runs.get(new_asim_run_hash)
         if not success:
-            provenance_tracker.complete_model_run(asim_main_run_hash, status="failed")
-            if run_info is None:
-                run_info = ModelRunInfo(model="activitysim", year=state.forecast_year, iteration=state.current_inner_iter, description="ActivitySim run", status="failed")
+            logger.error(
+                "ASIM run failed for year {0} iteration {1}".format(
+                    state.current_year, state.current_inner_iter
+                )
+            )
             return RecordStore(), run_info
 
         # Assemble outputs: find the expected output files and return as a RecordStore
@@ -225,28 +242,37 @@ class ActivitysimRunner(GenericRunner):
         if os.path.exists(output_dir):
             for fname in os.listdir(output_dir):
                 fpath = os.path.join(output_dir, fname)
-                if os.path.isfile(fpath) and (fname.endswith(".csv") or fname.endswith(".parquet")):
+                if os.path.isfile(fpath) and (
+                    fname.endswith(".csv") or fname.endswith(".parquet")
+                ):
                     # Record as output file in provenance and collect FileRecord
                     output_rec = provenance_tracker.record_output_file(
                         "activitysim",
                         fpath,
                         year=state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
-                        model_run_id=asim_main_run_hash
+                        short_name=fname,
+                        model_run_id=new_asim_run_hash,
                     )
                     if output_rec:
                         output_records.append(output_rec)
 
         # Record ActivitySim run completion (Main run)
         provenance_tracker.complete_model_run(
-            asim_main_run_hash, status="completed"
+            new_asim_run_hash, status="completed" if success else "failed"
         )
-        
+
         output_store = RecordStore(recordList=output_records)
 
         # Get the ModelRunInfo for this run
         if run_info is None:
             # Fallback: create a minimal ModelRunInfo
-            run_info = ModelRunInfo(model="activitysim", year=state.forecast_year, iteration=state.current_inner_iter, description="ActivitySim run", status="completed")
+            run_info = ModelRunInfo(
+                model="activitysim",
+                year=state.forecast_year,
+                iteration=state.current_inner_iter,
+                description="ActivitySim run",
+                status="completed",
+            )
 
         return output_store, run_info

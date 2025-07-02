@@ -44,7 +44,7 @@ class ModelFactory:
         Return a postprocessor instance for the given model name.
         """
         if model_name.lower() == "activitysim":
-            return  ActivitysimPostprocessor()
+            return ActivitysimPostprocessor()
         if model_name.lower() == "beam":
             return BeamPostprocessor()
         return None

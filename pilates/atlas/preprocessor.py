@@ -9,7 +9,6 @@ import openmatrix as omx
 import pandas as pd
 import yaml
 
-from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 # with open('settings.yaml') as file:
@@ -48,7 +47,9 @@ def _get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
-def prepare_atlas_inputs(settings, year, workspace: "Workspace", state: "WorkflowState", warm_start=False):
+def prepare_atlas_inputs(
+    settings, year, workspace: "Workspace", state: "WorkflowState", warm_start=False
+):
     # set where to find urbansim output
     urbansim_output_path = workspace.get_usim_mutable_data_dir()
     if warm_start:

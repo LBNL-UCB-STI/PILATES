@@ -1,4 +1,7 @@
+import gzip
 import logging
+import shutil
+
 import pandas as pd
 import zipfile
 import os
@@ -6,7 +9,7 @@ from typing import Tuple, Optional
 
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
-from pilates.utils.io import read_datastore
+from pilates.utils.io import read_datastore, locate_asim_file
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -30,9 +33,7 @@ def _load_asim_outputs(settings, workspace: Workspace):
             table = pd.read_parquet(file_path)
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
-            file_path = os.path.join(
-                asim_output_dir, file_name
-            )
+            file_path = os.path.join(asim_output_dir, file_name)
             if table_name == "persons":
                 index_col = "person_id"
             elif table_name == "households":
@@ -190,6 +191,59 @@ def _prepare_updated_tables(
     ].astype(str)
 
     return asim_output_dict
+
+
+def _copy_with_compression_asim_file_to_asim_archive(
+    file_path,
+    file_name,
+    year,
+    replanning_iteration_number,
+    fmt,
+    provenance_tracker: "FileProvenanceTracker",
+):
+    iteration_folder_name = "year-{0}-iteration-{1}".format(
+        year, replanning_iteration_number
+    )
+    iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
+    if not os.path.exists(os.path.abspath(iteration_folder_path)):
+        os.makedirs(iteration_folder_path, exist_ok=True)
+    input_file_path = locate_asim_file(file_name, fmt)
+    target_file_path = os.path.join(iteration_folder_path, file_name)
+    if target_file_path.endswith(".csv"):
+        target_file_path += ".gz"
+        if os.path.exists(file_path):
+            with open(input_file_path, "rb") as f_in, gzip.open(
+                target_file_path, "wb"
+            ) as f_out:
+                f_out.writelines(f_in)
+            # Record the archived file path
+            provenance_tracker.record_output_file(
+                "activitysim",
+                target_file_path,
+                year=year,
+                description=f"Archived ActivitySim output: {file_name}",
+            )
+    elif os.path.isdir(os.path.abspath(input_file_path)):
+        logger.warning(
+            "Skipping compression for directory: {0}".format(input_file_path)
+        )
+        # make_archive(input_file_path, target_file_path + ".zip")
+        # # Record the archived file path
+        # provenance_tracker.record_output_file(
+        #     "activitysim",
+        #     target_file_path + ".zip",
+        #     year=year,
+        #     description=f"Archived ActivitySim output: {file_name}",
+        # )
+    else:
+        shutil.copy(input_file_path, target_file_path + ".parquet")
+        # Record the archived file path
+        provenance_tracker.record_output_file(
+            "activitysim",
+            target_file_path + ".parquet",
+            year=year,
+            description=f"Archived ActivitySim output: {file_name}",
+        )
 
 
 def create_beam_input_data(
@@ -423,7 +477,11 @@ def create_usim_input_data(
 
 
 def update_usim_inputs_after_warm_start(
-    settings, state: WorkflowState, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", runInfo: ModelRunInfo,
+    settings,
+    state: WorkflowState,
+    workspace: Workspace,
+    provenance_tracker: "FileProvenanceTracker",
+    runInfo: ModelRunInfo,
 ):
     """
     TODO: Combine this method with create_usim_input_data() above
@@ -521,7 +579,13 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     """
 
     def postprocess(
-        self, raw_outputs: RecordStore, runInfo: ModelRunInfo, state: WorkflowState, workspace: Workspace, provenance_tracker: "FileProvenanceTracker", model_run_hash: str
+        self,
+        raw_outputs: RecordStore,
+        runInfo: ModelRunInfo,
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+        model_run_hash: str,
     ) -> RecordStore:
         """
         Consolidates all postprocessing steps for ActivitySim.
@@ -532,21 +596,48 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         settings = state.settings
         year = state.year
         forecast_year = state.forecast_year
+        replanning_iteration_number = state.current_inner_iter
         logger.info(
             "Running ActivitySim postprocessor for year %s, forecast year %s",
             year,
             forecast_year,
         )
 
+        iteration_folder_name = "year-{0}-iteration-{1}".format(
+            year, replanning_iteration_number
+        )
+
+        iteration_folder_path = os.path.join(
+            workspace.get_asim_output_dir(), iteration_folder_name
+        )
+        if not os.path.exists(os.path.abspath(iteration_folder_path)):
+            os.makedirs(iteration_folder_path, exist_ok=True)
+
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
-            if hasattr(record, 'file_path'):
+            if hasattr(record, "file_path"):
+                if hasattr(record, "producing_run_id"):
+                    producing_run_id = record.producing_run_id
+                else:
+                    producing_run_id = None
                 provenance_tracker.record_input_file(
                     "activitysim_postprocessor",
                     record.file_path,
                     model_run_id=model_run_hash,
-                    source_run_id=record.producing_run_id
+                    source_run_id=producing_run_id,
                 )
+                if isinstance(record, FileRecord):
+                    target = os.path.join(iteration_folder_path, record.short_name)
+                    shutil.copy(record.file_path, target)
+                    logger.info(f"Copied {record.file_path} to {target}")
+                    provenance_tracker.record_output_file(
+                        "activitysim_postprocessor",
+                        target,
+                        state.current_year,
+                        record.description,
+                        model_run_id=model_run_hash,
+                        source_file_paths=[record.unique_id],
+                    )
 
         # 1. Load raw ActivitySim outputs from files
         # The raw_outputs RecordStore contains the paths to these files.
@@ -583,7 +674,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             asim_output_dict,
             tables_updated_by_asim,
             source_file_paths,
-            model_run_hash
+            model_run_hash,
         )
         if usim_record:
             processed_records.append(usim_record)
@@ -591,7 +682,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # 4. Create BEAM input data (if traffic assignment is enabled)
         if settings.get("traffic_assignment_enabled", False):
             beam_input_zip_path, beam_record = create_beam_input_data(
-                settings, state, workspace, provenance_tracker, runInfo, asim_output_dict, source_file_paths, model_run_hash
+                settings,
+                state,
+                workspace,
+                provenance_tracker,
+                runInfo,
+                asim_output_dict,
+                source_file_paths,
+                model_run_hash,
             )
             if beam_record:
                 processed_records.append(beam_record)
