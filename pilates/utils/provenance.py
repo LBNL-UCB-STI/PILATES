@@ -1,3 +1,17 @@
+"""
+This module provides utilities for provenance tracking in the Pilates framework. It includes classes and functions
+to manage run contexts, track provenance information, and interact with file-based and repository-based data.
+
+Classes:
+- PilatesRunInfo: Represents metadata and provenance information for a single Pilates run.
+- RunContext: Manages the context for a single model run, including its unique ID and methods for recording provenance.
+- ProvenanceTracker: Base class for tracking provenance information.
+- FileProvenanceTracker: Extends ProvenanceTracker with file I/O, hashing, and OS/git logic.
+
+Functions:
+- find_project_root: Searches upwards from a given path for a directory containing specific marker directories/files.
+"""
+
 import uuid
 import logging
 import json
@@ -329,11 +343,29 @@ class FileProvenanceTracker(ProvenanceTracker):
     def _calculate_file_hash(
         self, file_path: str, state: Optional[WorkflowState] = None
     ) -> Optional[str]:
+        """
+        Calculates the SHA-256 hash of a file, depending on its contents and its location. It also optionally
+        incorporates additional state information, such as the year and iteration for which it was created.
+
+        Args:
+            file_path (str): The path to the file whose hash is to be calculated.
+            state (Optional[WorkflowState]): An optional state object containing additional metadata
+                (e.g., current stage, year, and iteration) to include in the hash.
+
+        Returns:
+            Optional[str]: The calculated SHA-256 hash as a hexadecimal string, or None if the file
+            path is invalid or an error occurs during hashing.
+
+        Raises:
+            Warning: Logs a warning if the file cannot be read or hashed due to an IOError or OSError.
+        """
+        # Validate the file path and ensure it exists
         abs_file_path = self._validate_file_path(file_path)
         if not abs_file_path:
             return None
         try:
             sha256_hash = hashlib.sha256()
+            sha256_hash.update(abs_file_path.encode())
             with open(abs_file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(chunk)

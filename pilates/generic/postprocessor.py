@@ -5,7 +5,6 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 
-
 class GenericPostprocessor(ABC):
     """
     Abstract base class for all model postprocessors.
@@ -22,7 +21,7 @@ class GenericPostprocessor(ABC):
         runInfo: ModelRunInfo,
         state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
+        provenance_tracker: FileProvenanceTracker,
         model_run_hash: str,
     ) -> RecordStore:
         """
@@ -31,10 +30,10 @@ class GenericPostprocessor(ABC):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             runInfo (ModelRunInfo): Metadata or information about the model run.
-            state: The workflow state or context object.
+            state (WorkflowState): The workflow state or context object.
             workspace (Workspace): The workspace object for path management.
             provenance_tracker (FileProvenanceTracker): The provenance tracker.
-            model_run_hash: The unique hash for this postprocessor run.
+            model_run_hash (str): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.

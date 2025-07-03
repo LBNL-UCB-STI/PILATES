@@ -89,6 +89,9 @@ def record_inputs_and_outputs(provenance_tracker, model, inputs=None, outputs=No
 
 
 def formatted_print(string, width=50, fill_char="#"):
+    """
+    Print a formatted banner for major workflow steps.
+    """
     print("\n")
     if len(string) + 2 > width:
         width = len(string) + 4
@@ -99,12 +102,19 @@ def formatted_print(string, width=50, fill_char="#"):
 
 
 def find_latest_beam_iteration(beam_output_dir):
+    """
+    Find the latest BEAM iteration directory (if any).
+    """
     iter_dirs = []
     for root, dirs, files in os.walk(beam_output_dir):
         for dir in dirs:
             if dir == "ITER":
-                iter_dirs += os.path.join(root, dir)
-    print(iter_dirs)
+                iter_dirs.append(os.path.join(root, dir))
+    if iter_dirs:
+        logger.info(f"Found BEAM iteration directories: {iter_dirs}")
+    else:
+        logger.info("No BEAM iteration directories found.")
+    return iter_dirs
 
 
 
@@ -652,6 +662,7 @@ def main():
         if state.should_run(WorkflowState.Stage.land_use):
             formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
             if state.is_start_year() and settings.get("warm_start_activities"):
+                logger.info("[Main] Running warm start activities for ActivitySim.")
                 warm_start_activities(settings, state, client, workspace, provenance_tracker)
             forecast_land_use(
                 settings, year, state, client, workspace, provenance_tracker
@@ -661,6 +672,7 @@ def main():
         # B. VEHICLE OWNERSHIP MODEL (ATLAS)
         if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
             formatted_print(f"VEHICLE OWNERSHIP MODEL FOR YEAR {state.forecast_year}")
+            logger.info("[Main] Running Atlas vehicle ownership model.")
             run_atlas_auto(
                 settings,
                 state,
@@ -686,6 +698,7 @@ def main():
                     WorkflowState.Stage.activity_demand,
                 ):
                     formatted_print("ACTIVITY DEMAND MODEL")
+                    logger.info("[Main] Running ActivitySim activity demand model.")
                     run_activity_demand(settings, state, client, workspace, provenance_tracker)
                     state.complete_step(
                         WorkflowState.Stage.supply_demand_loop,
@@ -700,6 +713,7 @@ def main():
                     WorkflowState.Stage.traffic_assignment,
                 ):
                     formatted_print("TRAFFIC ASSIGNMENT MODEL")
+                    logger.info("[Main] Running BEAM traffic assignment model.")
                     run_traffic_assignment(settings, state, client, workspace, provenance_tracker)
                     state.complete_step(
                         WorkflowState.Stage.supply_demand_loop,
@@ -713,6 +727,7 @@ def main():
         # D. POST-PROCESSING
         if state.should_run(WorkflowState.Stage.postprocessing):
             formatted_print("POST-PROCESSING")
+            logger.info("[Main] Running post-processing steps.")
             if settings.get("mep_metrics_to_create"):
                 process_event_file(settings, state, workspace, provenance_tracker)
             if settings.get("mep_output_dir"):
@@ -720,6 +735,7 @@ def main():
             state.complete_step(WorkflowState.Stage.postprocessing)
 
     formatted_print("SIMULATION COMPLETE")
+    logger.info("[Main] Simulation complete.")
 
 
 if __name__ == "__main__":

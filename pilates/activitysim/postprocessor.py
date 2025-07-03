@@ -601,6 +601,17 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         This involves taking the raw outputs from the ActivitySim run,
         processing them, and creating the necessary inputs for the next
         models in the workflow (e.g., UrbanSim, BEAM).
+
+        Args:
+            raw_outputs (RecordStore): The raw outputs from the model run.
+            runInfo (ModelRunInfo): Metadata or information about the model run.
+            state (WorkflowState): The workflow state or context object.
+            workspace (Workspace): The workspace object for path management.
+            provenance_tracker (FileProvenanceTracker): The provenance tracker.
+            model_run_hash (str): The unique hash for this postprocessor run.
+
+        Returns:
+            RecordStore: Postprocessed output data.
         """
         settings = state.full_settings
         year = state.year
@@ -634,6 +645,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     os.path.join(workspace.output_path, record.file_path),
                     model_run_id=model_run_hash,
                     source_run_id=producing_run_id,
+                    state=state,
                 )
                 if isinstance(record, FileRecord):
                     target = os.path.join(iteration_folder_path, record.short_name + ".parquet")

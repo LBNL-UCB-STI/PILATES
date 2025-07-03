@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from pilates.generic.records import RecordStore
-from workflow_state import WorkflowState
-
+# from workflow_state import WorkflowState
+# from pilates.utils.provenance import FileProvenanceTracker
 
 class GenericPreprocessor(ABC):
     """
@@ -16,7 +16,7 @@ class GenericPreprocessor(ABC):
     @abstractmethod
     def preprocess(
         self,
-        state: WorkflowState,
+        state: "WorkflowState",
         workspace: "Workspace",
         provenance_tracker: "FileProvenanceTracker",
         model_run_hash: str,
@@ -25,10 +25,10 @@ class GenericPreprocessor(ABC):
         Preprocess input data for the model.
 
         Args:
-            state: The workflow state or context object.
-            workspace: The workspace containing input data.
-            provenance_tracker: Tracker for file provenance.
-            model_run_hash: The unique hash for this preprocessor run.
+            state (WorkflowState): The workflow state or context object.
+            workspace (Workspace): The workspace containing input data.
+            provenance_tracker (FileProvenanceTracker): Tracker for file provenance.
+            model_run_hash (str): The unique hash for this preprocessor run.
 
         Returns:
             RecordStore: Preprocessed input data for the model.

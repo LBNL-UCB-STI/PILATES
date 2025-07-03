@@ -59,14 +59,16 @@ class BeamRunner(GenericRunner):
 
         # 2. RUN BEAM
         logger.info(
-            "Starting BEAM container, input: %s, output: %s, config: %s",
+            "[BEAM Runner] Starting BEAM container, input: %s, output: %s, config: %s",
             abs_beam_input,
             abs_beam_output,
             beam_config,
         )
 
         # Record BEAM run start
-        beam_run_hash = provenance_tracker.start_model_run()
+        beam_run_hash = provenance_tracker.start_model_run(
+            self.model_name, state.current_year, state.current_inner_iter, description="BEAM run"
+        )
 
         success = self.run_container(
             client=client,
@@ -83,7 +85,7 @@ class BeamRunner(GenericRunner):
         )
 
         if not success:
-            logger.error("BEAM run failed.")
+            logger.error("[BEAM Runner] BEAM run failed.")
             provenance_tracker.complete_model_run(beam_run_hash, status="failed")
             sys.exit(1)
 
@@ -96,7 +98,7 @@ class BeamRunner(GenericRunner):
         else:
             # BEAM outputs an OMX file that is then merged into the Zarr store
             skimFormat = "omx"
-            logger.info("Defaulting to 'omx' skim format for finding BEAM outputs.")
+            logger.info("[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs.")
 
         # Find raw BEAM outputs
         beam_local_output_folder = workspace.get_beam_output_dir()
@@ -114,6 +116,8 @@ class BeamRunner(GenericRunner):
             )
             if output_rec:
                 output_records.append(output_rec)
+            else:
+                logger.warning(f"[BEAM Runner] Could not record output file: {od_skims_path}")
 
         if origin_skims_path and os.path.exists(origin_skims_path):
             output_rec = provenance_tracker.record_output_file(
@@ -125,6 +129,8 @@ class BeamRunner(GenericRunner):
             )
             if output_rec:
                 output_records.append(output_rec)
+            else:
+                logger.warning(f"[BEAM Runner] Could not record output file: {origin_skims_path}")
 
         # Record BEAM run completion now that outputs are recorded
         provenance_tracker.complete_model_run(beam_run_hash, status="completed")
@@ -133,4 +139,5 @@ class BeamRunner(GenericRunner):
 
         run_info = provenance_tracker.run_info.model_runs.get(beam_run_hash)
 
+        logger.info(f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}")
         return output_store, run_info

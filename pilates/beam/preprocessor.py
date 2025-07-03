@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 from pilates.utils.io import locate_asim_file, locate_beam_file
-from pilates.utils.provenance import find_project_root, FileProvenanceTracker
+from pilates.utils.provenance import find_project_root
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from workflow_state import WorkflowState
@@ -81,9 +81,9 @@ def copy_data_to_mutable_location(settings, output_dir):
         for root, dirs, files in os.walk(dest):
             for file in files:
                 copied_files.append(os.path.relpath(os.path.join(root, file), dest))
-        logger.info(f"BEAM config copy complete. Files in {dest}: {copied_files}")
+        logger.info(f"[BEAM Preprocessor] BEAM config copy complete. Files in {dest}: {copied_files}")
     else:
-        logger.warning(f"Destination directory {dest} does not exist after copy!")
+        logger.warning(f"[BEAM Preprocessor] Destination directory {dest} does not exist after copy!")
 
     # Optionally copy 'common' configs if present
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
@@ -93,9 +93,7 @@ def copy_data_to_mutable_location(settings, output_dir):
 
     if "beam_skims_shapefile" in settings:
         logger.info(
-            "Updating beam config to use zone id of {0}".format(
-                settings["skim_zone_geoid_col"]
-            )
+            f"[BEAM Preprocessor] Updating beam config to use zone id of {settings['skim_zone_geoid_col']}"
         )
         update_beam_config(
             settings,
@@ -108,6 +106,9 @@ def copy_data_to_mutable_location(settings, output_dir):
 
 
 def update_beam_config(settings, working_dir, param, valueOverride=None):
+    """
+    Update a BEAM config file parameter with a new value.
+    """
     if param in settings:
         config_header = beam_param_map[param]
         if valueOverride is None:
@@ -120,6 +121,9 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
             settings["region"],
             settings["beam_config"],
         )
+        if not os.path.exists(beam_config_path):
+            logger.warning(f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}")
+            return
         modified = False
         with open(beam_config_path, "r") as file:
             data = file.readlines()
@@ -135,11 +139,10 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
                     file.writelines(line)
             if not modified:
                 file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
+        logger.info(f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}")
     else:
         logger.warning(
-            "Tried to modify parameter {0} but couldn't find it in settings.yaml".format(
-                param
-            )
+            f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
         )
 
 
@@ -525,8 +528,17 @@ class BeamPreprocessor(GenericPreprocessor):
         - Updates BEAM config with sample size, replanning fraction, etc.
         - Copies plans from ActivitySim outputs.
         - Copies vehicle fleet from Atlas outputs.
+
+        Args:
+            state (WorkflowState): The workflow state or context object.
+            workspace (Workspace): The workspace containing input data.
+            provenance_tracker (FileProvenanceTracker): Tracker for file provenance.
+            model_run_hash (str): The unique hash for this preprocessor run.
+
+        Returns:
+            RecordStore: Preprocessed input data for the model.
         """
-        settings = state.settings
+        settings = state.full_settings
         iteration_number = state.iteration
 
         # Update BEAM config
@@ -554,4 +566,5 @@ class BeamPreprocessor(GenericPreprocessor):
         # The preprocessor's job is to prepare the inputs.
         # We can return a RecordStore of the key inputs that were prepared.
         # For now, let's return an empty one as the runner doesn't use it yet.
+        logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return RecordStore()

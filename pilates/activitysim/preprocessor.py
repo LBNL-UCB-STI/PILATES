@@ -30,7 +30,6 @@ from pilates.utils.io import read_datastore
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.workspace import Workspace
-from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -1333,13 +1332,22 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
     def preprocess(
         self,
-        state,
+        state: "WorkflowState",
         workspace: Workspace,
         provenance_tracker: "FileProvenanceTracker",
         model_run_hash: str,
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
+
+        Args:
+            state (WorkflowState): The workflow state or context object.
+            workspace (Workspace): The workspace containing input data.
+            provenance_tracker (FileProvenanceTracker): Tracker for file provenance.
+            model_run_hash (str): The unique hash for this preprocessor run.
+
+        Returns:
+            RecordStore: Preprocessed input data for the model.
         """
         settings = getattr(state, "full_settings", None)
         if settings is None:
