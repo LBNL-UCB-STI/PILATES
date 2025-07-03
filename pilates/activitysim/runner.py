@@ -163,6 +163,10 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
+        asim_compile_run_hash = provenance_tracker.run_info.get_latest_model_run(
+            "activitysim"
+        )
+
         # Record ActivitySim run start (Compilation if needed)
         if not state.asim_compiled:
 
@@ -201,6 +205,33 @@ class ActivitysimRunner(GenericRunner):
             if not success:
                 raise RuntimeError("ASim Compilation failed")
             state.compile_asim()  # Update state to mark as compiled
+
+        if settings.get("file_format") == "parquet":
+            # Using new ASIM with caching:
+            skims_cache_loc = os.path.join(
+                workspace.get_asim_mutable_data_dir(), "cache", "skims.zarr"
+            )
+            if os.path.exists(skims_cache_loc):
+                logger.info(
+                    "Using existing ASIM skims cache at: {0}".format(skims_cache_loc)
+                )
+                skims_record = provenance_tracker.record_input_file(
+                    "activitysim",
+                    skims_cache_loc,
+                    description="ASIM skims cache",
+                    model_run_id=asim_compile_run_hash,
+                    short_name="asim_skims_cache",
+                    state=state,
+                )
+                if skims_record:
+                    store.remove_record_type("omx_skims")
+                    store.add_record(skims_record)
+            else:
+                logger.warning(
+                    "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
+                        skims_cache_loc
+                    )
+                )
 
         new_asim_run_hash = provenance_tracker.start_model_run(
             model=activity_demand_model,

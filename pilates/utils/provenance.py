@@ -20,10 +20,8 @@ import os
 import subprocess
 import hashlib
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
 
-from IPython.terminal.interactiveshell import black_reformat_handler
 
 from pilates.generic.records import (
     FileRecord,
@@ -31,14 +29,9 @@ from pilates.generic.records import (
     ModelRunInfo,
     RecordStore,
     Record,
+    PilatesRunInfo,
 )
-from pilates.utils.git_utils import is_git_repo, get_git_hash
-from pilates.utils.file_utils import (
-    _validate_file_path,
-    _get_relative_path,
-    _calculate_file_hash,
-    _load_metadata,
-)
+
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -63,106 +56,6 @@ def find_project_root(start_path=None, markers=("pilates", ".git")):
     return None
 
 
-# Re-export for backward compatibility
-is_git_repo = is_git_repo
-get_git_hash = get_git_hash
-_validate_file_path = _validate_file_path
-_get_relative_path = _get_relative_path
-_calculate_file_hash = _calculate_file_hash
-_load_metadata = _load_metadata
-
-
-@dataclass
-class PilatesRunInfo:
-    run_id: str
-    created_at: str
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
-    models_used: list = field(default_factory=list)
-    settings_hash: Optional[str] = None
-    code_version: Optional[str] = None
-    hostname: Optional[str] = None
-    file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
-    repo_records: Dict[str, List[RepoRecord]] = field(default_factory=dict)
-    model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
-
-
-class RunContext:
-    """
-    Manages the context for a single model run, including its unique ID
-    and methods for recording provenance information.
-    (Note: This class seems intended for database interaction and is kept separate
-    from the file-based ProvenanceTracker for now.)
-    """
-
-    def __init__(
-        self,
-        run_id: str = None,
-        parameters: dict = None,
-        code_version: str = None,
-        hostname: str = None,
-    ):
-        """
-        Initializes the RunContext.
-
-        Args:
-            run_id (str, optional): A pre-defined run ID. If None, a new UUID is generated.
-            parameters (dict, optional): Dictionary of run parameters.
-            code_version (str, optional): Identifier for the code version (e.g., git hash).
-            hostname (str, optional): Hostname where the run is executed.
-        """
-        self.run_id = run_id if run_id else str(uuid.uuid4())
-        self.start_time = None
-        self.end_time = None
-        self.status = "initialized"
-        self.parameters = parameters
-        self.code_version = code_version
-        self.hostname = hostname
-        # logger.info(f"RunContext initialized with ID: {self.run_id}") # Avoid logging here to prevent double logging with ProvenanceTracker
-
-    def record_run_start(self):
-        """Records the start time and updates the status."""
-        self.start_time = datetime.now()
-        self.status = "running"
-        # logger.info(f"Run {self.run_id} started at {self.start_time}") # Avoid logging here
-        # TODO: Add database interaction to record run start in ModelRuns table
-
-    def record_run_end(self, status: str = "completed"):
-        """Records the end time and final status."""
-        self.end_time = datetime.now()
-        self.status = status
-        # logger.info(f"Run {self.run_id} ended at {self.end_time} with status: {self.status}") # Avoid logging here
-        # TODO: Add database interaction to update run end time and status in ModelRuns table
-
-    def record_input(
-        self, source_run_id: str, file_path: str, input_type: str = "unknown"
-    ):
-        """
-        Records an input file consumed by the current run.
-
-        Args:
-            source_run_id (str): The run ID that produced this input file.
-            file_path (str): The path to the input file.
-            input_type (str, optional): A description of the input (e.g., 'ActivitySim Plans').
-        """
-        # logger.info(f"Run {self.run_id} consumed input: Type='{input_type}', Path='{file_path}', SourceRun='{source_run_id}'") # Avoid logging here
-        # TODO: Add database interaction to record input in ModelInputs table.
-        # This might involve looking up the source_output_id from ModelOutputs
-        # based on source_run_id and file_path.
-
-    def record_output(self, output_type: str, file_path: str):
-        """
-        Records an output file produced by the current run.
-
-        Args:
-            output_type (str): A description of the output (e.g., 'BEAM Plans GZ').
-            file_path (str): The path where the output file was saved.
-        """
-        # logger.info(f"Run {self.run_id} produced output: Type='{output_type}', Path='{file_path}'") # Avoid logging here
-        # TODO: Add database interaction to record output in ModelOutputs table.
-        # The output_id would be generated here or in the database.
-
-
 class ProvenanceTracker:
     """
     Pure data model for provenance tracking (no file I/O, OS, or git logic).
@@ -176,6 +69,11 @@ class ProvenanceTracker:
             run_id=run_id, created_at=datetime.now().isoformat()
         )
         self.current_model_run_id = None
+
+    def _save_run_info(self):
+        # Base class does nothing (or could log, or raise NotImplementedError)
+        logger.warning("No save_run_info implemented in base ProvenanceTracker class.")
+        pass
 
     def current_model_run(self) -> Optional[ModelRunInfo]:
         """
@@ -221,20 +119,20 @@ class ProvenanceTracker:
         repo_record = RepoRecord(
             repo_path=repo_path,
             description=description,
-            git_hash=git_hash,
+            unique_id=git_hash,
         )
         self.run_info.repo_records[model].append(repo_record)
         current_model_run = self.current_model_run()
         if current_model_run:
-            current_model_run.input_record_hashes.append(repo_record.git_hash)
+            current_model_run.input_record_hashes.append(repo_record.unique_id)
 
     def get_run_info(self) -> Dict[str, Any]:
         return self.run_info.copy()
 
     def get_model_summary(self) -> Dict[str, Any]:
         summary = {
-            "total_model_runs": len(self.run_info.get("model_runs", [])),
-            "models_used": self.run_info.get("models_used", []),
+            "total_model_runs": len(self.run_info.model_runs),
+            "models_used": self.run_info.model_runs,
             "input_files_by_model": {},
             "output_files_by_model": {},
             "run_status": {},
@@ -253,7 +151,8 @@ class ProvenanceTracker:
         summary["input_files_by_model"] = input_counts
         summary["output_files_by_model"] = output_counts
 
-        for run in self.run_info.model_runs:
+        for run_id in self.run_info.model_runs:
+            run = self.run_info.model_runs[run_id]
             model = run.model
             status = run.status
             if model not in summary["run_status"]:
@@ -262,6 +161,40 @@ class ProvenanceTracker:
                 summary["run_status"][model].get(status, 0) + 1
             )
         return summary
+
+    def start_model_run(
+        self,
+        model: str,
+        year: int = None,
+        iteration: int = None,
+        description: str = None,
+        inputs: RecordStore = RecordStore(),
+    ) -> str:
+        model_run_id = (
+            f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
+        )
+        run_record = ModelRunInfo(
+            unique_id=model_run_id,
+            model=model,
+            year=year,
+            iteration=iteration,
+            description=description,
+            created_at=datetime.now().isoformat(),
+            status="running",
+            input_record_hashes=inputs.all_unique_ids(),
+        )
+        self.current_model_run_id = model_run_id
+        self.run_info.model_runs[model_run_id] = run_record
+        self._save_run_info()
+        return model_run_id
+
+    def complete_model_run(self, run_hash: str, status: str = "completed"):
+        if run_hash in self.run_info.model_runs:
+            self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
+            self.run_info.model_runs[run_hash].status = status
+            self._save_run_info()
+        else:
+            logger.error(f"Model run hash {run_hash} not found to complete.")
 
 
 class FileProvenanceTracker(ProvenanceTracker):
@@ -402,39 +335,6 @@ class FileProvenanceTracker(ProvenanceTracker):
             )
             return abs_path
 
-    def start_model_run(
-        self,
-        model: str,
-        year: int = None,
-        iteration: int = None,
-        description: str = None,
-        inputs: RecordStore = RecordStore(),
-    ) -> str:
-        model_run_id = (
-            f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
-        )
-        run_record = ModelRunInfo(
-            unique_id=model_run_id,
-            model=model,
-            year=year,
-            iteration=iteration,
-            description=description,
-            status="running",
-            input_record_hashes=inputs.all_unique_ids(),
-        )
-        self.current_model_run_id = model_run_id
-        self.run_info.model_runs[model_run_id] = run_record
-        self._save_run_info()
-        return model_run_id
-
-    def complete_model_run(self, run_hash: str, status: str = "completed"):
-        if run_hash in self.run_info.model_runs:
-            self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
-            self.run_info.model_runs[run_hash].status = status
-            self._save_run_info()
-        else:
-            logger.error(f"Model run hash {run_hash} not found to complete.")
-
     def initialize_from_settings(self, settings: Dict[str, Any]):
         self.run_info.start_year = settings.get("start_year")
         self.run_info.end_year = settings.get("end_year")
@@ -515,6 +415,22 @@ class FileProvenanceTracker(ProvenanceTracker):
         self.run_info.file_records[file_hash] = file_record
         return file_record
 
+    def rename_directory(self, old_directory_name, new_directory_name):
+        """
+        Renames a directory in the run_info.file_records.
+        This is useful when the directory structure changes but the file records need to be preserved.
+        """
+        for record in self.run_info.file_records.values():
+            if record.file_path.startswith(old_directory_name):
+                new_path = record.file_path.replace(
+                    old_directory_name, new_directory_name, 1
+                )
+                record.file_path = new_path
+                logger.info(
+                    f"Renamed file path from {old_directory_name} to {new_directory_name} for record {record.unique_id}"
+                )
+        self._save_run_info()
+
     def move_file(
         self,
         record: Record,
@@ -526,13 +442,13 @@ class FileProvenanceTracker(ProvenanceTracker):
         if isinstance(record, FileRecord):
             self.record_input_file(
                 model=self._normalize_model_name(model),
-                file_path=source_path,
+                file_path=record.file_path,
                 model_run_id=self.current_model_run_id,
                 source_run_id=record.producing_run_id,
                 state=state,
             )
             os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-            shutil.move(record.file_path, destination_path)
+            shutil.move(source_path, destination_path)
             record.exists = False
             self.run_info.file_records[record.unique_id] = record
             self.record_output_file(
@@ -551,6 +467,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         file_path: str,
         source_run_id: str = None,
         description: str = None,
+        short_name: str = None,
         source_file_paths: List[str] = None,
         skip_missing: bool = True,
         model_run_id: str = None,
@@ -558,7 +475,7 @@ class FileProvenanceTracker(ProvenanceTracker):
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, state=state
+            file_path, skip_missing, description, short_name=short_name, state=state
         )
         if not file_record:
             return None
@@ -693,7 +610,3 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
         self._save_run_info(run_info)
         return run_info
-
-
-# Backward compatibility: ProvenanceTracker = FileProvenanceTracker
-ProvenanceTracker = FileProvenanceTracker

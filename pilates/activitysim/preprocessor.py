@@ -1396,17 +1396,35 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             "activitysim_preprocessor",
             skims_loc,
             model_run_id=model_run_hash,
+            short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
         )
 
-        # 2. Create ActivitySim input data from UrbanSim H5
-        data_from_usim = create_asim_data_from_h5(
-            settings,
-            state,
-            workspace,
-            provenance_tracker,
-            model_run_hash=model_run_hash,
-        )
+        if state.current_inner_iter > 0:
+            # 2: Re-use existing persons/households/skim cache
+            last_asim_hash = provenance_tracker.run_info.get_latest_model_run(
+                "activitysim_preprocessor"
+            )
+            record_hashes = provenance_tracker.run_info.model_runs[
+                last_asim_hash
+            ].output_record_hashes
+            data_from_usim = [
+                provenance_tracker.run_info.file_records.get(h)
+                for h in record_hashes
+                if h in provenance_tracker.run_info.file_records
+            ]
+            logger.info(
+                f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
+            )
+        else:
+            # 2. Create ActivitySim input data from UrbanSim H5
+            data_from_usim = create_asim_data_from_h5(
+                settings,
+                state,
+                workspace,
+                provenance_tracker,
+                model_run_hash=model_run_hash,
+            )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 

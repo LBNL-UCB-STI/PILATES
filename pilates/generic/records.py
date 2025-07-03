@@ -1,5 +1,9 @@
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
@@ -55,6 +59,14 @@ class RecordStore:
         if record.unique_id:
             self.records[record.unique_id] = record
 
+    def remove_record_type(self, short_name: str):
+        for record in self.records:
+            if record.short_name == short_name:
+                logger.info(
+                    f"Removing record type {record.short_name} from record store"
+                )
+                del self.records[record.unique_id]
+
     def get_record(self, unique_id: str) -> Optional[Record]:
         return self.records.get(unique_id)
 
@@ -90,7 +102,6 @@ class ModelRunInfo(Record):
     year: int
     iteration: Optional[int] = None
     description: Optional[str] = None
-    started_at: Optional[str] = None
     completed_at: Optional[str] = None
     input_record_hashes: List[str] = field(default_factory=list)
     output_record_hashes: List[str] = field(default_factory=list)
@@ -110,3 +121,25 @@ class PilatesRunInfo:
     file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
     repo_records: Dict[str, List[RepoRecord]] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
+
+    def get_latest_model_run(self, model_name: str) -> Optional[str]:
+        """
+        Returns the latest ModelRunInfo for the given model name, or None if not found.
+        """
+        runs = [
+            run.unique_id
+            for run in self.model_runs.values()
+            if getattr(run, "model", None) == model_name
+        ]
+        if not runs:
+            return None
+
+        # Prefer started_at, fallback to created_at
+        def get_time(run):
+            iso_time = getattr(run, "created_at", None)
+            if iso_time:
+                return datetime.fromisoformat(iso_time)
+            else:
+                return 0.0
+
+        return max(runs, key=get_time)

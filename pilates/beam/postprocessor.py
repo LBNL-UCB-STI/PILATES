@@ -61,7 +61,7 @@ def find_not_taken_dir_name(dir_name):
 
 def rename_beam_output_directory(
     beam_output_dir, settings, year, replanning_iteration_number=0
-):
+) -> str:
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(
@@ -81,6 +81,7 @@ def rename_beam_output_directory(
             "Files {0} not found. Adding a slash".format(beam_run_output_dir)
         )
         os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
+    return new_iteration_output_directory
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
@@ -88,9 +89,20 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     if iteration_dir is None:
         return None
     od_skims_path = os.path.join(
-        iteration_dir, "{0}.activitySimODSkims_current.{1}".format(it_num, suffix)
+        iteration_dir, "{0}.skimsActivitySimOD_current.{1}".format(it_num, suffix)
     )
     logger.info("expecting skims at {0}".format(od_skims_path))
+    return od_skims_path
+
+
+def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
+    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
+    if iteration_dir is None:
+        return None
+    od_skims_path = os.path.join(
+        iteration_dir, "{0}.linkstats.{1}".format(it_num, suffix)
+    )
+    logger.info("expecting linkstats at {0}".format(od_skims_path))
     return od_skims_path
 
 
@@ -2642,7 +2654,7 @@ class BeamPostprocessor(GenericPostprocessor):
         Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
         """
         logger.info("Running BEAM postprocessor...")
-        settings = state.settings
+        settings = state.full_settings
         processed_records = []
 
         # Find the raw BEAM OD skims from the input records
@@ -2706,4 +2718,9 @@ class BeamPostprocessor(GenericPostprocessor):
                 if omx_rec:
                     processed_records.append(omx_rec)
 
-        return RecordStore(recordList=processed_records)
+        output_store = RecordStore(recordList=processed_records)
+        new_path = rename_beam_output_directory(
+            beam_output_dir, settings, state.current_year, state.current_inner_iter
+        )
+
+        return output_store

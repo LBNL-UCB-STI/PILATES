@@ -9,6 +9,7 @@ from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
 from pilates.beam.postprocessor import (
     find_produced_od_skims,
     find_produced_origin_skims,
+    find_produced_linkstats,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -71,6 +72,7 @@ class BeamRunner(GenericRunner):
             state.current_year,
             state.current_inner_iter,
             description="BEAM run",
+            inputs=store,
         )
 
         success = self.run_container(
@@ -109,6 +111,7 @@ class BeamRunner(GenericRunner):
         beam_local_output_folder = workspace.get_beam_output_dir()
         od_skims_path = find_produced_od_skims(beam_local_output_folder, skimFormat)
         origin_skims_path = find_produced_origin_skims(beam_local_output_folder)
+        linkstats_path = find_produced_linkstats(beam_local_output_folder)
 
         output_records = []
         if od_skims_path and os.path.exists(od_skims_path):

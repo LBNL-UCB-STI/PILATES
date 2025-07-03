@@ -636,35 +636,17 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
-                if hasattr(record, "producing_run_id"):
-                    producing_run_id = record.producing_run_id
-                else:
-                    producing_run_id = None
-                provenance_tracker.record_input_file(
-                    "activitysim_postprocessor",
-                    os.path.join(workspace.output_path, record.file_path),
-                    model_run_id=model_run_hash,
-                    source_run_id=producing_run_id,
+                source = os.path.join(workspace.output_path, record.file_path)
+                target = os.path.join(
+                    iteration_folder_path, record.short_name + ".parquet"
+                )
+                provenance_tracker.move_file(
+                    record,
+                    source,
+                    target,
+                    model="activitysim_postprocessor",
                     state=state,
                 )
-                if isinstance(record, FileRecord):
-                    target = os.path.join(
-                        iteration_folder_path, record.short_name + ".parquet"
-                    )
-                    shutil.copy(
-                        os.path.join(workspace.output_path, record.file_path), target
-                    )
-                    logger.info(f"Copied {record.file_path} to {target}")
-                    provenance_tracker.record_output_file(
-                        "activitysim_postprocessor",
-                        target,
-                        state.current_year,
-                        record.description,
-                        model_run_id=model_run_hash,
-                        source_file_paths=[record.unique_id],
-                        short_name=record.short_name,
-                        state=state,
-                    )
 
         # 1. Load raw ActivitySim outputs from files
         # The raw_outputs RecordStore contains the paths to these files.
