@@ -297,7 +297,7 @@ def create_beam_input_data(
         description="Zipped ActivitySim outputs for BEAM",
         model_run_id=model_run_hash,
         source_file_paths=source_file_paths,
-        state=state
+        state=state,
     )
     return outpath, output_record
 
@@ -648,8 +648,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     state=state,
                 )
                 if isinstance(record, FileRecord):
-                    target = os.path.join(iteration_folder_path, record.short_name + ".parquet")
-                    shutil.copy(os.path.join(workspace.output_path, record.file_path), target)
+                    target = os.path.join(
+                        iteration_folder_path, record.short_name + ".parquet"
+                    )
+                    shutil.copy(
+                        os.path.join(workspace.output_path, record.file_path), target
+                    )
                     logger.info(f"Copied {record.file_path} to {target}")
                     provenance_tracker.record_output_file(
                         "activitysim_postprocessor",
@@ -659,7 +663,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         model_run_id=model_run_hash,
                         source_file_paths=[record.unique_id],
                         short_name=record.short_name,
-                        state=state
+                        state=state,
                     )
 
         # 1. Load raw ActivitySim outputs from files

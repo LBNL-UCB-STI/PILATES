@@ -5,6 +5,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 
+
 class GenericPostprocessor(ABC):
     """
     Abstract base class for all model postprocessors.

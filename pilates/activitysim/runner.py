@@ -251,7 +251,7 @@ class ActivitysimRunner(GenericRunner):
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname,
                         model_run_id=new_asim_run_hash,
-                        state=state
+                        state=state,
                     )
                     if output_rec:
                         output_records.append(output_rec)

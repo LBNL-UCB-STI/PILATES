@@ -12,6 +12,7 @@ Functions:
 - find_project_root: Searches upwards from a given path for a directory containing specific marker directories/files.
 """
 
+import shutil
 import uuid
 import logging
 import json
@@ -22,7 +23,15 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 
-from pilates.generic.records import FileRecord, RepoRecord, ModelRunInfo, RecordStore
+from IPython.terminal.interactiveshell import black_reformat_handler
+
+from pilates.generic.records import (
+    FileRecord,
+    RepoRecord,
+    ModelRunInfo,
+    RecordStore,
+    Record,
+)
 from pilates.utils.git_utils import is_git_repo, get_git_hash
 from pilates.utils.file_utils import (
     _validate_file_path,
@@ -478,7 +487,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         skip_missing: bool = True,
         description: Optional[str] = None,
         short_name: Optional[str] = None,
-        state: Optional[WorkflowState] = None
+        state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
@@ -506,6 +515,36 @@ class FileProvenanceTracker(ProvenanceTracker):
         self.run_info.file_records[file_hash] = file_record
         return file_record
 
+    def move_file(
+        self,
+        record: Record,
+        source_path: str,
+        destination_path: str,
+        model: str,
+        state: Optional[WorkflowState] = None,
+    ):
+        if isinstance(record, FileRecord):
+            self.record_input_file(
+                model=self._normalize_model_name(model),
+                file_path=source_path,
+                model_run_id=self.current_model_run_id,
+                source_run_id=record.producing_run_id,
+                state=state,
+            )
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+            shutil.move(record.file_path, destination_path)
+            record.exists = False
+            self.run_info.file_records[record.unique_id] = record
+            self.record_output_file(
+                model=self._normalize_model_name(model),
+                file_path=destination_path,
+                model_run_id=self.current_model_run_id,
+                state=state,
+            )
+        else:
+            raise NotImplementedError("You have to move git repos manually")
+        return None
+
     def record_input_file(
         self,
         model: str,
@@ -515,7 +554,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: List[str] = None,
         skip_missing: bool = True,
         model_run_id: str = None,
-        state: Optional[WorkflowState] = None
+        state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(

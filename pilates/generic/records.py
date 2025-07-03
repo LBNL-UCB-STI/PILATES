@@ -8,6 +8,7 @@ class Record:
     created_at: Optional[str] = None
     short_name: Optional[str] = None
     description: Optional[str] = None
+    exists: bool = True
 
 
 class RecordStore:

@@ -12,7 +12,7 @@ from workflow_state import WorkflowState
 def minimal_settings(tmpdir):
     # Minimal settings for Activitysim/BEAM workflow
     return {
-        "region": "testregion",
+        "region": "seattle",
         "start_year": 2020,
         "end_year": 2020,
         "travel_model_freq": 1,
@@ -36,6 +36,9 @@ def minimal_settings(tmpdir):
         "asim_local_mutable_configs_folder": "activitysim/configs/",
         "beam_local_mutable_data_folder": "beam/input/",
         "beam_local_output_folder": "beam/beam_output/",
+        "beam_local_input_folder": "beam/production/",
+        "beam_geoms_fname": "dummy_geoms.csv",
+        "beam_router_directory": "r5/",
         "beam_config": "dummy.conf",
         "skims_fname": "dummy_skims.omx",
         "origin_skims_fname": "dummy_origin_skims.csv.gz",
@@ -47,7 +50,7 @@ def minimal_settings(tmpdir):
         "beam_asim_transit_measure_map": {},
         "beam_asim_ridehail_measure_map": {},
         "asim_output_tables": {"prefix": "final_", "tables": ["households", "persons"]},
-        "region_to_region_id": {"testregion": "00000000"},
+        "region_to_region_id": {"seattle": "00000000"},
         "usim_local_data_input_folder": "pilates/urbansim/data/",
         "usim_local_mutable_data_folder": "urbansim/data/",
         "usim_client_data_folder": "/base/demos_urbansim/data/",

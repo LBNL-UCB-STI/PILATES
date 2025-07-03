@@ -507,18 +507,21 @@ def copy_plans_from_asim(
                 beam_persons_path,
                 description="Merged persons for BEAM input",
                 model_run_id=model_run_hash,
+                state=state
             )
             households_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
                 beam_households_path,
                 description="Merged households for BEAM input",
                 model_run_id=model_run_hash,
+                state=state
             )
             plans_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
                 beam_plans_path,
                 description="Merged plans for BEAM input",
                 model_run_id=model_run_hash,
+                state=state
             )
             record_list = [plans_record, households_record, persons_record]
         else:
@@ -532,6 +535,7 @@ def copy_plans_from_asim(
                 beam_plans_path,
                 description="Copied plans for BEAM input (no merge)",
                 model_run_id=model_run_hash,
+                state=state
             )
             record_list = [plans_record]
         return record_list
@@ -569,6 +573,7 @@ def copy_plans_from_asim(
                     beam_file_path,
                     description=f"BEAM input file: {fname}",
                     model_run_id=model_run_hash,
+                    state=state
                 )
                 record_list.append(record)
         record_store = RecordStore(recordList=[r for r in record_list if r is not None])
@@ -583,7 +588,7 @@ def copy_plans_from_asim(
                 "beam_preprocessor",
                 beam_file_path,
                 description=f"Existing BEAM input file: {fname}",
-                model_run_id=model_run_hash,
+                model_run_id=model_run_hash
             )
             record_list.append(record)
         record_store = RecordStore(recordList=[r for r in record_list if r is not None])

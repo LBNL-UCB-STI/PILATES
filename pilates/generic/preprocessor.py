@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from pilates.generic.records import RecordStore
+
 # from workflow_state import WorkflowState
 # from pilates.utils.provenance import FileProvenanceTracker
+
 
 class GenericPreprocessor(ABC):
     """
