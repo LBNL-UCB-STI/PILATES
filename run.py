@@ -601,8 +601,7 @@ def run_traffic_assignment(settings, state: WorkflowState, client, workspace: Wo
         postprocessor = factory.get_postprocessor("beam")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.init_model_run("beam_preprocessor", message="Preprocessing for BEAM")
-        provenance_tracker.start_model_run()
+        pre_run_hash = provenance_tracker.start_model_run("beam_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for BEAM")
         input_data = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
         provenance_tracker.complete_model_run(pre_run_hash)
 
@@ -610,8 +609,7 @@ def run_traffic_assignment(settings, state: WorkflowState, client, workspace: Wo
         raw_outputs, run_info = runner.run(input_data, state, workspace, provenance_tracker)
 
         # Postprocess
-        post_run_hash = provenance_tracker.init_model_run("beam_postprocessor", message="Post-processing BEAM outputs")
-        provenance_tracker.start_model_run()
+        post_run_hash = provenance_tracker.start_model_run("beam_postprocessor", state.current_year, state.current_inner_iter, description="Post-processing BEAM outputs")
         processed_outputs = postprocessor.postprocess(raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash)
         provenance_tracker.complete_model_run(post_run_hash)
 
