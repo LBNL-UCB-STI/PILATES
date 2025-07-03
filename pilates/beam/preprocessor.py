@@ -226,25 +226,7 @@ def copy_plans_from_asim(
         asim_file_name, beam_file_name, file_format
     ) -> Optional[Record]:
         """
-        TODO: Switch this to polars for better performance
-        def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name):
-            import polars as pl
-            asim_file_path = os.path.join(asim_output_data_dir, asim_file_name)
-            beam_file_path = os.path.join(beam_scenario_folder, beam_file_name)
-            logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
-
-            if os.path.exists(asim_file_path):
-                df = pl.scan_csv(asim_file_path).with_columns([
-                    pl.col("household_id").cast(pl.Int64),
-                    pl.col("person_id").cast(pl.Int64),
-                    pl.col("trip_id").cast(pl.Int64),
-                    pl.col("cars").cast(pl.Int64),
-                    pl.col("VEHICL").cast(pl.Int64).alias("cars"),
-                    pl.col("auto_ownership").cast(pl.Int64).alias("cars"),
-                    pl.col("age").cast(pl.Int64),
-                    pl.col("sex").cast(pl.Int64)
-                ]).select(pl.col("*").exclude_duplicates()).collect()
-                df.write_csv(beam_file_path, compression="gzip")
+        Copy and compress a file from ActivitySim output to BEAM input, with provenance logging.
         """
         if provenance_tracker.is_git_repo(asim_output_data_dir):
             repo_name = os.path.basename(asim_output_data_dir)
@@ -305,6 +287,15 @@ def copy_plans_from_asim(
                         model_run_id=model_run_hash,
                     )
                     return record
+                else:
+                    # If file does not exist, still try to record as missing
+                    provenance_tracker.record_output_file(
+                        "beam_preprocessor",
+                        beam_file_path,
+                        description=f"Missing BEAM input file: {beam_file_name}",
+                        model_run_id=model_run_hash,
+                    )
+                    return None
             elif file_format == "parquet":
                 asim_file_path = locate_asim_file(
                     asim_output_data_dir, asim_file_name, file_format
@@ -323,25 +314,34 @@ def copy_plans_from_asim(
                     description=f"ActivitySim output for BEAM: {asim_file_name}",
                     model_run_id=model_run_hash,
                 )
-                df = (
-                    pd.read_parquet(asim_file_path)
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                    .rename(columns={"tripId": "trip_id"})
-                )
-                if "household_id" in df.columns:
-                    df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
+                if os.path.exists(asim_file_path):
+                    df = (
+                        pd.read_parquet(asim_file_path)
+                        .rename(columns={"VEHICL": "cars"})
+                        .rename(columns={"auto_ownership": "cars"})
+                        .rename(columns={"tripId": "trip_id"})
+                    )
+                    if "household_id" in df.columns:
+                        df = df.astype({"household_id": pd.Int64Dtype()})
+                    df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
-                # Record the copied file as an output of the preprocessor
-                record = provenance_tracker.record_output_file(
-                    "beam_preprocessor",
-                    beam_file_path,
-                    description=f"Copied from ActivitySim output: {asim_file_name}",
-                    source_file_paths=[asim_file_path],
-                    model_run_id=model_run_hash,
-                )
-                return record
+                    # Record the copied file as an output of the preprocessor
+                    record = provenance_tracker.record_output_file(
+                        "beam_preprocessor",
+                        beam_file_path,
+                        description=f"Copied from ActivitySim output: {asim_file_name}",
+                        source_file_paths=[asim_file_path],
+                        model_run_id=model_run_hash,
+                    )
+                    return record
+                else:
+                    provenance_tracker.record_output_file(
+                        "beam_preprocessor",
+                        beam_file_path,
+                        description=f"Missing BEAM input file: {beam_file_name}",
+                        model_run_id=model_run_hash,
+                    )
+                    return None
             else:
                 return None
 
@@ -501,15 +501,42 @@ def copy_plans_from_asim(
                 persons_final.to_parquet(beam_persons_path, index=False)
                 households_final.to_parquet(beam_households_path, index=False)
                 plans_final.to_parquet(beam_plans_path, index=False)
+            # Record provenance for all three files
+            persons_record = provenance_tracker.record_output_file(
+                "beam_preprocessor",
+                beam_persons_path,
+                description="Merged persons for BEAM input",
+                model_run_id=model_run_hash,
+            )
+            households_record = provenance_tracker.record_output_file(
+                "beam_preprocessor",
+                beam_households_path,
+                description="Merged households for BEAM input",
+                model_run_id=model_run_hash,
+            )
+            plans_record = provenance_tracker.record_output_file(
+                "beam_preprocessor",
+                beam_plans_path,
+                description="Merged plans for BEAM input",
+                model_run_id=model_run_hash,
+            )
+            record_list = [plans_record, households_record, persons_record]
         else:
             logger.info(
                 "No plans existed already so copying them directly. THIS IS BAD"
             )
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression="gzip")
-        record_list = []
-        # TODO: Fill record_list with actual records for the copied files
+            # Record provenance for the plans file at least
+            plans_record = provenance_tracker.record_output_file(
+                "beam_preprocessor",
+                beam_plans_path,
+                description="Copied plans for BEAM input (no merge)",
+                model_run_id=model_run_hash,
+            )
+            record_list = [plans_record]
         return record_list
 
+    # Main logic for copy_plans_from_asim
     if settings.get("copy_plans_from_asim_outputs", True):
         logging.info(
             "You have chosen to use final ASIM plans. Will attempt to read files from:"
@@ -529,11 +556,37 @@ def copy_plans_from_asim(
             ]
         else:
             record_list = merge_only_updated_households()
-        record_store = RecordStore(recordList=record_list)
+        # Ensure all three BEAM input files are recorded for provenance, even if not created above
+        # (e.g., if a file is missing, record as output anyway)
+        for fname in ["plans", "households", "persons"]:
+            beam_file_path = locate_beam_file(beam_scenario_folder, fname, file_format)
+            found = any(
+                r for r in record_list if r and hasattr(r, "file_path") and os.path.basename(r.file_path) == os.path.basename(beam_file_path)
+            )
+            if not found:
+                record = provenance_tracker.record_output_file(
+                    "beam_preprocessor",
+                    beam_file_path,
+                    description=f"BEAM input file: {fname}",
+                    model_run_id=model_run_hash,
+                )
+                record_list.append(record)
+        record_store = RecordStore(recordList=[r for r in record_list if r is not None])
     else:
         logging.info("Using the plans that were already in the beam scenario folder")
-        # TODO: locate and create records for existing plans, households, persons
-        record_store = RecordStore()
+        # Locate and create records for existing plans, households, persons
+        file_format = settings.get("file_format", "parquet")
+        record_list = []
+        for fname in ["plans", "households", "persons"]:
+            beam_file_path = locate_beam_file(beam_scenario_folder, fname, file_format)
+            record = provenance_tracker.record_output_file(
+                "beam_preprocessor",
+                beam_file_path,
+                description=f"Existing BEAM input file: {fname}",
+                model_run_id=model_run_hash,
+            )
+            record_list.append(record)
+        record_store = RecordStore(recordList=[r for r in record_list if r is not None])
 
     return record_store
 
