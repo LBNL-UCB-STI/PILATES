@@ -1,13 +1,15 @@
 import os
 import logging
 import shutil
+from typing import Optional, List
+
 import pandas as pd
 import numpy as np
 
 from pilates.utils.io import locate_asim_file, locate_beam_file
 from pilates.utils.provenance import find_project_root
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, Record
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -81,9 +83,13 @@ def copy_data_to_mutable_location(settings, output_dir):
         for root, dirs, files in os.walk(dest):
             for file in files:
                 copied_files.append(os.path.relpath(os.path.join(root, file), dest))
-        logger.info(f"[BEAM Preprocessor] BEAM config copy complete. Files in {dest}: {copied_files}")
+        logger.info(
+            f"[BEAM Preprocessor] BEAM config copy complete. Files in {dest}: {copied_files}"
+        )
     else:
-        logger.warning(f"[BEAM Preprocessor] Destination directory {dest} does not exist after copy!")
+        logger.warning(
+            f"[BEAM Preprocessor] Destination directory {dest} does not exist after copy!"
+        )
 
     # Optionally copy 'common' configs if present
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
@@ -122,7 +128,9 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
             settings["beam_config"],
         )
         if not os.path.exists(beam_config_path):
-            logger.warning(f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}")
+            logger.warning(
+                f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
+            )
             return
         modified = False
         with open(beam_config_path, "r") as file:
@@ -139,7 +147,9 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
                     file.writelines(line)
             if not modified:
                 file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
-        logger.info(f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}")
+        logger.info(
+            f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"
+        )
     else:
         logger.warning(
             f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
@@ -204,7 +214,7 @@ def copy_plans_from_asim(
     provenance_tracker: "FileProvenanceTracker",
     replanning_iteration_number=0,
     model_run_hash: str = None,
-):
+) -> RecordStore:
     asim_output_data_dir = workspace.get_asim_output_dir()
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
@@ -214,7 +224,7 @@ def copy_plans_from_asim(
 
     def copy_with_compression_asim_file_to_beam(
         asim_file_name, beam_file_name, file_format
-    ):
+    ) -> Optional[Record]:
         """
         TODO: Switch this to polars for better performance
         def copy_with_compression_asim_file_to_beam(asim_file_name, beam_file_name):
@@ -239,12 +249,13 @@ def copy_plans_from_asim(
         if provenance_tracker.is_git_repo(asim_output_data_dir):
             repo_name = os.path.basename(asim_output_data_dir)
             git_hash = provenance_tracker.get_git_hash(asim_output_data_dir)
-            provenance_tracker.record_repo_input(
+            record = provenance_tracker.record_repo_input(
                 "beam_preprocessor",
                 asim_output_data_dir,
                 description=f"ActivitySim output repository",
                 git_hash=git_hash,
             )
+            return record
         else:
             if file_format == "csv":
                 asim_file_path = locate_asim_file(
@@ -286,13 +297,14 @@ def copy_plans_from_asim(
                     df.to_csv(beam_file_path, compression="gzip")
 
                     # Record the copied file as an output of the preprocessor
-                    provenance_tracker.record_output_file(
+                    record = provenance_tracker.record_output_file(
                         "beam_preprocessor",
                         beam_file_path,
                         description=f"Copied from ActivitySim output: {asim_file_name}",
                         source_file_paths=[asim_file_path],
                         model_run_id=model_run_hash,
                     )
+                    return record
             elif file_format == "parquet":
                 asim_file_path = locate_asim_file(
                     asim_output_data_dir, asim_file_name, file_format
@@ -322,15 +334,18 @@ def copy_plans_from_asim(
                 df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
                 # Record the copied file as an output of the preprocessor
-                provenance_tracker.record_output_file(
+                record = provenance_tracker.record_output_file(
                     "beam_preprocessor",
                     beam_file_path,
                     description=f"Copied from ActivitySim output: {asim_file_name}",
                     source_file_paths=[asim_file_path],
                     model_run_id=model_run_hash,
                 )
+                return record
+            else:
+                return None
 
-    def merge_only_updated_households():
+    def merge_only_updated_households() -> List[Record]:
         asim_plans_path = locate_asim_file(asim_output_data_dir, "plans", file_format)
         asim_households_path = locate_asim_file(
             asim_output_data_dir, "households", file_format
@@ -491,6 +506,9 @@ def copy_plans_from_asim(
                 "No plans existed already so copying them directly. THIS IS BAD"
             )
             pd.read_csv(asim_plans_path).to_csv(beam_plans_path, compression="gzip")
+        record_list = []
+        # TODO: Fill record_list with actual records for the copied files
+        return record_list
 
     if settings.get("copy_plans_from_asim_outputs", True):
         logging.info(
@@ -500,15 +518,24 @@ def copy_plans_from_asim(
         logging.info(f"- ASIM output data directory: {asim_output_data_dir}")
         file_format = settings.get("file_format", "parquet")
         if replanning_iteration_number <= 0:
-            copy_with_compression_asim_file_to_beam("plans", "plans", file_format)
-            copy_with_compression_asim_file_to_beam(
-                "households", "households", file_format
-            )
-            copy_with_compression_asim_file_to_beam("persons", "persons", file_format)
+            record_list = [
+                copy_with_compression_asim_file_to_beam("plans", "plans", file_format),
+                copy_with_compression_asim_file_to_beam(
+                    "households", "households", file_format
+                ),
+                copy_with_compression_asim_file_to_beam(
+                    "persons", "persons", file_format
+                ),
+            ]
         else:
-            merge_only_updated_households()
+            record_list = merge_only_updated_households()
+        record_store = RecordStore(recordList=record_list)
+    else:
+        logging.info("Using the plans that were already in the beam scenario folder")
+        # TODO: locate and create records for existing plans, households, persons
+        record_store = RecordStore()
 
-    return
+    return record_store
 
 
 class BeamPreprocessor(GenericPreprocessor):
