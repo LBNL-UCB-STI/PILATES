@@ -311,12 +311,15 @@ def copy_plans_from_asim(
                     asim_file_path,
                     beam_file_path,
                 )
+
+                # Always record the ActivitySim file as an input to the BEAM preprocessor run
                 provenance_tracker.record_input_file(
                     "beam_preprocessor",
                     asim_file_path,
                     description=f"ActivitySim output for BEAM: {asim_file_name}",
                     model_run_id=model_run_hash,
                 )
+
                 if os.path.exists(asim_file_path):
                     df = (
                         pd.read_parquet(asim_file_path)
