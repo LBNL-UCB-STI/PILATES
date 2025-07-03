@@ -1,0 +1,904 @@
+{
+  "run_id": "554a7432-55ea-47fc-8a22-547e6fca169b",
+  "created_at": "2025-07-03T16:19:48.812135",
+  "start_year": 2010,
+  "end_year": 2050,
+  "models_used": [
+    "beam",
+    "activitysim"
+  ],
+  "settings_hash": "e6f6642972aa85c704ce9ab1bc382dcd7cb61c76faad678c7aa7e5dcba17d575",
+  "code_version": "02ba253d961ebf60d6f3cf9194692a5545fb2e46",
+  "hostname": "mac.lan",
+  "file_records": {
+    "e18cb50eb1762a79d5f3d568f2f049c4335118f68e45fb9354588bc5d53bbbdf": {
+      "unique_id": "e18cb50eb1762a79d5f3d568f2f049c4335118f68e45fb9354588bc5d53bbbdf",
+      "created_at": "2025-07-03T16:20:16.582684",
+      "short_name": null,
+      "description": "UrbanSim model data",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/urbansim/data/custom_mpo_06197001_model_data.h5",
+      "models": [
+        "urbansim"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": []
+    },
+    "eb9082f285ac54afadf960d45fdb3666976002a6966458a493ba88c27edae419": {
+      "unique_id": "eb9082f285ac54afadf960d45fdb3666976002a6966458a493ba88c27edae419",
+      "created_at": "2025-07-03T16:20:16.583723",
+      "short_name": null,
+      "description": "UrbanSim input file: hsize_ct_06197001.csv",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/urbansim/data/hsize_ct_06197001.csv",
+      "models": [
+        "urbansim"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": []
+    },
+    "38f085ab36220ed722d605ee41cc628eb39330983bcb4a60be871d813e255f7b": {
+      "unique_id": "38f085ab36220ed722d605ee41cc628eb39330983bcb4a60be871d813e255f7b",
+      "created_at": "2025-07-03T16:20:16.584342",
+      "short_name": null,
+      "description": "UrbanSim input file: income_rates_06197001.csv",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/urbansim/data/income_rates_06197001.csv",
+      "models": [
+        "urbansim"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": []
+    },
+    "b9dfedbf20d2520f03c3058afcc4226c17b1ceda8225d337c44fc3ec3e166c37": {
+      "unique_id": "b9dfedbf20d2520f03c3058afcc4226c17b1ceda8225d337c44fc3ec3e166c37",
+      "created_at": "2025-07-03T16:20:16.584835",
+      "short_name": null,
+      "description": "UrbanSim input file: relmap_06197001.csv",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/urbansim/data/relmap_06197001.csv",
+      "models": [
+        "urbansim"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": []
+    },
+    "72229ae16b1dc49123dfcd3ee43942de9055488a6e7a5cb05bcb37f0cd70648b": {
+      "unique_id": "72229ae16b1dc49123dfcd3ee43942de9055488a6e7a5cb05bcb37f0cd70648b",
+      "created_at": "2025-07-03T16:20:24.694741",
+      "short_name": null,
+      "description": "Raw BEAM OD skims",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/beam/input/sfbay/as-base-skims-sfbay-taz.omx",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": [
+        "activitysim_preprocessor_20250703_6c22802a",
+        "activitysim_preprocessor_20250703_d42917b9"
+      ]
+    },
+    "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11": {
+      "unique_id": "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11",
+      "created_at": "2025-07-03T16:20:26.467241",
+      "short_name": "omx_skims",
+      "description": "OD Skims copied over to ASim data directory",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/data/skims.omx",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_preprocessor_20250703_d42917b9",
+      "consuming_run_ids": []
+    },
+    "8a4af87302d8eaf83ed5143353b7b9977a1241ad9b617aa392f4337d6e9e4f6a": {
+      "unique_id": "8a4af87302d8eaf83ed5143353b7b9977a1241ad9b617aa392f4337d6e9e4f6a",
+      "created_at": "2025-07-03T16:20:29.101696",
+      "short_name": null,
+      "description": "UrbanSim H5 data store",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/urbansim/data/custom_mpo_06197001_model_data.h5",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": null,
+      "consuming_run_ids": [
+        "activitysim_preprocessor_20250703_6c22802a"
+      ]
+    },
+    "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b": {
+      "unique_id": "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b",
+      "created_at": "2025-07-03T16:22:43.918233",
+      "short_name": null,
+      "description": "activitysim households input based on UrbanSim .h5",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/data/households.csv",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [
+        "pilates-run-20250703-161948/urbansim/data/custom_mpo_06197001_model_data.h5"
+      ],
+      "metadata": {},
+      "producing_run_id": "activitysim_preprocessor_20250703_6c22802a",
+      "consuming_run_ids": []
+    },
+    "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127": {
+      "unique_id": "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127",
+      "created_at": "2025-07-03T16:23:28.049304",
+      "short_name": null,
+      "description": "activitysim persons input based on UrbanSim .h5",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/data/persons.csv",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [
+        "pilates-run-20250703-161948/urbansim/data/custom_mpo_06197001_model_data.h5"
+      ],
+      "metadata": {},
+      "producing_run_id": "activitysim_preprocessor_20250703_6c22802a",
+      "consuming_run_ids": []
+    },
+    "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21": {
+      "unique_id": "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21",
+      "created_at": "2025-07-03T16:23:28.120930",
+      "short_name": null,
+      "description": "activitysim land use input based on UrbanSim .h5",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/data/land_use.csv",
+      "models": [
+        "activitysim_preprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [
+        "pilates-run-20250703-161948/urbansim/data/custom_mpo_06197001_model_data.h5"
+      ],
+      "metadata": {},
+      "producing_run_id": "activitysim_preprocessor_20250703_6c22802a",
+      "consuming_run_ids": []
+    },
+    "d1f3123e5c1fccc04dbf3b1fd6d9b3e4835dd3105c3b4d342b34e7f79132fe41": {
+      "unique_id": "d1f3123e5c1fccc04dbf3b1fd6d9b3e4835dd3105c3b4d342b34e7f79132fe41",
+      "created_at": "2025-07-03T16:23:30.808682",
+      "short_name": "tours",
+      "description": "ActivitySim output file: tours",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/tours/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "6e36722fc2de48db4b858236bb5cd7f46d0ee5a7fef99a880f417f4635f7232b": {
+      "unique_id": "6e36722fc2de48db4b858236bb5cd7f46d0ee5a7fef99a880f417f4635f7232b",
+      "created_at": "2025-07-03T16:23:30.813441",
+      "short_name": "land_use",
+      "description": "ActivitySim output file: land_use",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/land_use/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "1c064d218d1ee79c36ae2e278317caa28ae32795c12fd05e2acd9f18052ffa30": {
+      "unique_id": "1c064d218d1ee79c36ae2e278317caa28ae32795c12fd05e2acd9f18052ffa30",
+      "created_at": "2025-07-03T16:23:30.814731",
+      "short_name": "school_modeled_size",
+      "description": "ActivitySim output file: school_modeled_size",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/school_modeled_size/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "70119915ce7c5ff716e4dbfb86d6baf5ed5174197fac16f6872dbb7b1aa1705c": {
+      "unique_id": "70119915ce7c5ff716e4dbfb86d6baf5ed5174197fac16f6872dbb7b1aa1705c",
+      "created_at": "2025-07-03T16:23:30.815828",
+      "short_name": "school_destination_size",
+      "description": "ActivitySim output file: school_destination_size",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/school_destination_size/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "8cee05e4c29785189e30a958e399dacbe858c6045cdbac8ca5d3e9579fc09f5c": {
+      "unique_id": "8cee05e4c29785189e30a958e399dacbe858c6045cdbac8ca5d3e9579fc09f5c",
+      "created_at": "2025-07-03T16:23:30.817008",
+      "short_name": "joint_tour_participants",
+      "description": "ActivitySim output file: joint_tour_participants",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/joint_tour_participants/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "bc894cb7ffa8b921f770e5538ea92ad40b84a96b0f257f66cdf22bba0cf21740": {
+      "unique_id": "bc894cb7ffa8b921f770e5538ea92ad40b84a96b0f257f66cdf22bba0cf21740",
+      "created_at": "2025-07-03T16:23:30.818495",
+      "short_name": "person_windows",
+      "description": "ActivitySim output file: person_windows",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/person_windows/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "0de9eec9c3a82a67471cd1b2ff760ab41c72ede18fdc583dc4fd5d5031564402": {
+      "unique_id": "0de9eec9c3a82a67471cd1b2ff760ab41c72ede18fdc583dc4fd5d5031564402",
+      "created_at": "2025-07-03T16:23:30.819861",
+      "short_name": "workplace_destination_size",
+      "description": "ActivitySim output file: workplace_destination_size",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/workplace_destination_size/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "cb7296081365d7ecad1f6666de9f7786e36ebe4d3014af52186938100c2c2da7": {
+      "unique_id": "cb7296081365d7ecad1f6666de9f7786e36ebe4d3014af52186938100c2c2da7",
+      "created_at": "2025-07-03T16:23:30.821453",
+      "short_name": "households",
+      "description": "ActivitySim output file: households",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/households/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "74c1ac48a58be661740970e301c1c6ac0569b80bffc8c3a164f75206f8d799bb": {
+      "unique_id": "74c1ac48a58be661740970e301c1c6ac0569b80bffc8c3a164f75206f8d799bb",
+      "created_at": "2025-07-03T16:23:30.823868",
+      "short_name": "persons",
+      "description": "ActivitySim output file: persons",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/persons/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "346e8352cd0cf18ce13d9813b22b429f195b9b6f47969b6bab5179740b201a0b": {
+      "unique_id": "346e8352cd0cf18ce13d9813b22b429f195b9b6f47969b6bab5179740b201a0b",
+      "created_at": "2025-07-03T16:23:30.827959",
+      "short_name": "beam_plans",
+      "description": "ActivitySim output file: beam_plans",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/beam_plans/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "26e8b5a40ac9f86ae51e9a7f3d65e3e2cf5b56240ddb1ab13d5a915eabbff17b": {
+      "unique_id": "26e8b5a40ac9f86ae51e9a7f3d65e3e2cf5b56240ddb1ab13d5a915eabbff17b",
+      "created_at": "2025-07-03T16:23:30.829729",
+      "short_name": "accessibility",
+      "description": "ActivitySim output file: accessibility",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/accessibility/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "78054d74e560f739d29fa4370d5105ad0bbbf81d3b33eb1254980114693fc34e": {
+      "unique_id": "78054d74e560f739d29fa4370d5105ad0bbbf81d3b33eb1254980114693fc34e",
+      "created_at": "2025-07-03T16:23:30.833406",
+      "short_name": "trips",
+      "description": "ActivitySim output file: trips",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/trips/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "30826c761ea7ee476ba355099178bab6604379926e4602426d926ddf2663bd35": {
+      "unique_id": "30826c761ea7ee476ba355099178bab6604379926e4602426d926ddf2663bd35",
+      "created_at": "2025-07-03T16:23:30.835118",
+      "short_name": "workplace_modeled_size",
+      "description": "ActivitySim output file: workplace_modeled_size",
+      "exists": false,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/final_pipeline/workplace_modeled_size/final.parquet",
+      "models": [
+        "activitysim"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_20250703_51e10918",
+      "consuming_run_ids": []
+    },
+    "5e769ffdf3cfd68561cdb04c2d4596dce951cd9a540d421672bc06b12778620e": {
+      "unique_id": "5e769ffdf3cfd68561cdb04c2d4596dce951cd9a540d421672bc06b12778620e",
+      "created_at": "2025-07-03T16:23:30.838809",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/tours.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "8f62c3f5d7080a722f0faeb9b3d47898cbb6986b2949933bdc03a85c0bdf4c30": {
+      "unique_id": "8f62c3f5d7080a722f0faeb9b3d47898cbb6986b2949933bdc03a85c0bdf4c30",
+      "created_at": "2025-07-03T16:23:30.840855",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/land_use.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "5685dd335e7863f899b8cb10482be790483a723beaa6fa7d0f57e036ecf26253": {
+      "unique_id": "5685dd335e7863f899b8cb10482be790483a723beaa6fa7d0f57e036ecf26253",
+      "created_at": "2025-07-03T16:23:30.841832",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/school_modeled_size.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "1de4c01b0618bce0ca3a52624a8e3ad1a31835eb1031f754e3d8f16689c0e815": {
+      "unique_id": "1de4c01b0618bce0ca3a52624a8e3ad1a31835eb1031f754e3d8f16689c0e815",
+      "created_at": "2025-07-03T16:23:30.843031",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/school_destination_size.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "c0e870c9ffebda67085cfce3c3789e79dccaa46a14276788e8db72858754c917": {
+      "unique_id": "c0e870c9ffebda67085cfce3c3789e79dccaa46a14276788e8db72858754c917",
+      "created_at": "2025-07-03T16:23:30.843993",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/joint_tour_participants.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "75d98833223dd52577e4a037ffc4021eab17c0b4ad9717dfae1f467e1852523d": {
+      "unique_id": "75d98833223dd52577e4a037ffc4021eab17c0b4ad9717dfae1f467e1852523d",
+      "created_at": "2025-07-03T16:23:30.845307",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/person_windows.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "b93d02bfd4f647517fb11c9d32783669121e10c398e94ee2271f9d69dd4cb60e": {
+      "unique_id": "b93d02bfd4f647517fb11c9d32783669121e10c398e94ee2271f9d69dd4cb60e",
+      "created_at": "2025-07-03T16:23:30.846413",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/workplace_destination_size.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "6e70c9ffe3493c333f743ff6ab99c03d3e45ee52e79e4db008437fda06c5a9f5": {
+      "unique_id": "6e70c9ffe3493c333f743ff6ab99c03d3e45ee52e79e4db008437fda06c5a9f5",
+      "created_at": "2025-07-03T16:23:30.847564",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/households.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "b5eadcd539bcd2bcb06732e342cf25f5c4328b4ec029237e456b34c7c0d36502": {
+      "unique_id": "b5eadcd539bcd2bcb06732e342cf25f5c4328b4ec029237e456b34c7c0d36502",
+      "created_at": "2025-07-03T16:23:30.849088",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/persons.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "05bd6bf6807f1f76eaf47ae97fc89476d986b094ec40729fc2b00d3798ce3ced": {
+      "unique_id": "05bd6bf6807f1f76eaf47ae97fc89476d986b094ec40729fc2b00d3798ce3ced",
+      "created_at": "2025-07-03T16:23:30.851305",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/beam_plans.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "478917f05e7ca25044b0db2a165d84b5e32042fc29f0c4c8acd3478c1cefd360": {
+      "unique_id": "478917f05e7ca25044b0db2a165d84b5e32042fc29f0c4c8acd3478c1cefd360",
+      "created_at": "2025-07-03T16:23:30.852333",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/accessibility.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "ad0e070a37cecba564bddab9b85308537d2e880f45a044c0c007db9fc1a11c5c": {
+      "unique_id": "ad0e070a37cecba564bddab9b85308537d2e880f45a044c0c007db9fc1a11c5c",
+      "created_at": "2025-07-03T16:23:30.854204",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/trips.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "c3d48a1a7625b7c168a8decce22cf56a6a501b2ceaa444d21f08dcbd0289cfd0": {
+      "unique_id": "c3d48a1a7625b7c168a8decce22cf56a6a501b2ceaa444d21f08dcbd0289cfd0",
+      "created_at": "2025-07-03T16:23:30.855174",
+      "short_name": null,
+      "description": null,
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/year-2011-iteration-0/workplace_modeled_size.parquet",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": null,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "462bb20b96f3809c451ae5f34919a1d22d7942441cd72993541d4c083e9afb9b": {
+      "unique_id": "462bb20b96f3809c451ae5f34919a1d22d7942441cd72993541d4c083e9afb9b",
+      "created_at": "2025-07-03T16:23:30.895136",
+      "short_name": null,
+      "description": "Zipped ActivitySim outputs for BEAM",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/asim_outputs_2010.zip",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": 2010,
+      "source_file_paths": [
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/tours/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/land_use/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/school_modeled_size/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/school_destination_size/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/joint_tour_participants/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/person_windows/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/workplace_destination_size/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/households/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/persons/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/beam_plans/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/accessibility/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/trips/final.parquet",
+        "../pilates-run-20250703-161948/activitysim/output/final_pipeline/workplace_modeled_size/final.parquet"
+      ],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_1400cb40",
+      "consuming_run_ids": []
+    },
+    "79264b5491ccccd61e8a0468eb14f0ca4bee32a849e4cfea3ea821033da9bc2a": {
+      "unique_id": "79264b5491ccccd61e8a0468eb14f0ca4bee32a849e4cfea3ea821033da9bc2a",
+      "created_at": "2025-07-03T16:23:32.055785",
+      "short_name": null,
+      "description": "raw_od_skims",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/beam/beam_output/sfbay/sfbay-pilates-2.5k__2025-03-25_13-01-12_jnk/ITERS/it.2/2.skimsActivitySimOD_current.omx",
+      "models": [
+        "beam"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "beam_20250703_888eb814",
+      "consuming_run_ids": []
+    },
+    "c281a7984368ad0ed5100940a0b0fa1eed8c9ae2e7e4302eb2ba92c4e9e7ecb6": {
+      "unique_id": "c281a7984368ad0ed5100940a0b0fa1eed8c9ae2e7e4302eb2ba92c4e9e7ecb6",
+      "created_at": "2025-07-03T16:23:34.648771",
+      "short_name": null,
+      "description": "Zipped ActivitySim outputs for BEAM",
+      "exists": true,
+      "file_path": "pilates-run-20250703-161948/activitysim/output/asim_outputs_2010.zip",
+      "models": [
+        "activitysim_postprocessor"
+      ],
+      "year": 2010,
+      "source_file_paths": [],
+      "metadata": {},
+      "producing_run_id": "activitysim_postprocessor_20250703_c3143b5d",
+      "consuming_run_ids": []
+    }
+  },
+  "repo_records": {
+    "beam": [
+      {
+        "unique_id": "bdc5cb7412352fafd1f9ba566d22f3e0b9809b14",
+        "created_at": null,
+        "short_name": null,
+        "description": "",
+        "exists": true,
+        "repo_path": "../pilates/beam/production/sfbay",
+        "accessed_at": "2025-07-03T16:20:13.128042"
+      }
+    ],
+    "activitysim": [
+      {
+        "unique_id": "da503ff78602d0d5bfc3cb3243c8e5a211896d6e",
+        "created_at": null,
+        "short_name": null,
+        "description": "ActivitySim configuration repository",
+        "exists": true,
+        "repo_path": "../pilates/activitysim/configs/sfbay",
+        "accessed_at": "2025-07-03T16:20:23.878982"
+      }
+    ]
+  },
+  "model_runs": {
+    "activitysim_preprocessor_20250703_6c22802a": {
+      "unique_id": "activitysim_preprocessor_20250703_6c22802a",
+      "created_at": "2025-07-03T16:20:23.880815",
+      "short_name": null,
+      "description": "Preprocessing for ActivitySim",
+      "exists": true,
+      "model": "activitysim_preprocessor",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:28.656630",
+      "input_record_hashes": [
+        "72229ae16b1dc49123dfcd3ee43942de9055488a6e7a5cb05bcb37f0cd70648b",
+        "8a4af87302d8eaf83ed5143353b7b9977a1241ad9b617aa392f4337d6e9e4f6a"
+      ],
+      "output_record_hashes": [
+        "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11",
+        "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b",
+        "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127",
+        "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21"
+      ],
+      "status": "completed"
+    },
+    "activitysim_20250703_240ab9a0": {
+      "unique_id": "activitysim_20250703_240ab9a0",
+      "created_at": "2025-07-03T16:23:28.657196",
+      "short_name": null,
+      "description": "asim compilation",
+      "exists": true,
+      "model": "activitysim",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:29.731923",
+      "input_record_hashes": [
+        "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11",
+        "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b",
+        "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127",
+        "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21"
+      ],
+      "output_record_hashes": [],
+      "status": "completed"
+    },
+    "activitysim_20250703_51e10918": {
+      "unique_id": "activitysim_20250703_51e10918",
+      "created_at": "2025-07-03T16:23:29.735755",
+      "short_name": null,
+      "description": "asim full run",
+      "exists": true,
+      "model": "activitysim",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:30.836230",
+      "input_record_hashes": [
+        "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11",
+        "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b",
+        "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127",
+        "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21"
+      ],
+      "output_record_hashes": [
+        "d1f3123e5c1fccc04dbf3b1fd6d9b3e4835dd3105c3b4d342b34e7f79132fe41",
+        "6e36722fc2de48db4b858236bb5cd7f46d0ee5a7fef99a880f417f4635f7232b",
+        "1c064d218d1ee79c36ae2e278317caa28ae32795c12fd05e2acd9f18052ffa30",
+        "70119915ce7c5ff716e4dbfb86d6baf5ed5174197fac16f6872dbb7b1aa1705c",
+        "8cee05e4c29785189e30a958e399dacbe858c6045cdbac8ca5d3e9579fc09f5c",
+        "bc894cb7ffa8b921f770e5538ea92ad40b84a96b0f257f66cdf22bba0cf21740",
+        "0de9eec9c3a82a67471cd1b2ff760ab41c72ede18fdc583dc4fd5d5031564402",
+        "cb7296081365d7ecad1f6666de9f7786e36ebe4d3014af52186938100c2c2da7",
+        "74c1ac48a58be661740970e301c1c6ac0569b80bffc8c3a164f75206f8d799bb",
+        "346e8352cd0cf18ce13d9813b22b429f195b9b6f47969b6bab5179740b201a0b",
+        "26e8b5a40ac9f86ae51e9a7f3d65e3e2cf5b56240ddb1ab13d5a915eabbff17b",
+        "78054d74e560f739d29fa4370d5105ad0bbbf81d3b33eb1254980114693fc34e",
+        "30826c761ea7ee476ba355099178bab6604379926e4602426d926ddf2663bd35"
+      ],
+      "status": "completed"
+    },
+    "activitysim_postprocessor_20250703_1400cb40": {
+      "unique_id": "activitysim_postprocessor_20250703_1400cb40",
+      "created_at": "2025-07-03T16:23:30.836961",
+      "short_name": null,
+      "description": "Post-processing ActivitySim outputs",
+      "exists": true,
+      "model": "activitysim_postprocessor",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:30.896111",
+      "input_record_hashes": [],
+      "output_record_hashes": [
+        "5e769ffdf3cfd68561cdb04c2d4596dce951cd9a540d421672bc06b12778620e",
+        "8f62c3f5d7080a722f0faeb9b3d47898cbb6986b2949933bdc03a85c0bdf4c30",
+        "5685dd335e7863f899b8cb10482be790483a723beaa6fa7d0f57e036ecf26253",
+        "1de4c01b0618bce0ca3a52624a8e3ad1a31835eb1031f754e3d8f16689c0e815",
+        "c0e870c9ffebda67085cfce3c3789e79dccaa46a14276788e8db72858754c917",
+        "75d98833223dd52577e4a037ffc4021eab17c0b4ad9717dfae1f467e1852523d",
+        "b93d02bfd4f647517fb11c9d32783669121e10c398e94ee2271f9d69dd4cb60e",
+        "6e70c9ffe3493c333f743ff6ab99c03d3e45ee52e79e4db008437fda06c5a9f5",
+        "b5eadcd539bcd2bcb06732e342cf25f5c4328b4ec029237e456b34c7c0d36502",
+        "05bd6bf6807f1f76eaf47ae97fc89476d986b094ec40729fc2b00d3798ce3ced",
+        "478917f05e7ca25044b0db2a165d84b5e32042fc29f0c4c8acd3478c1cefd360",
+        "ad0e070a37cecba564bddab9b85308537d2e880f45a044c0c007db9fc1a11c5c",
+        "c3d48a1a7625b7c168a8decce22cf56a6a501b2ceaa444d21f08dcbd0289cfd0",
+        "462bb20b96f3809c451ae5f34919a1d22d7942441cd72993541d4c083e9afb9b"
+      ],
+      "status": "completed"
+    },
+    "beam_preprocessor_20250703_82815914": {
+      "unique_id": "beam_preprocessor_20250703_82815914",
+      "created_at": "2025-07-03T16:23:30.897053",
+      "short_name": null,
+      "description": "Preprocessing for BEAM",
+      "exists": true,
+      "model": "beam_preprocessor",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:30.899009",
+      "input_record_hashes": [],
+      "output_record_hashes": [],
+      "status": "completed"
+    },
+    "beam_20250703_888eb814": {
+      "unique_id": "beam_20250703_888eb814",
+      "created_at": "2025-07-03T16:23:30.899638",
+      "short_name": null,
+      "description": "BEAM run",
+      "exists": true,
+      "model": "beam",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:32.056784",
+      "input_record_hashes": [],
+      "output_record_hashes": [
+        "79264b5491ccccd61e8a0468eb14f0ca4bee32a849e4cfea3ea821033da9bc2a"
+      ],
+      "status": "completed"
+    },
+    "beam_postprocessor_20250703_ded227b4": {
+      "unique_id": "beam_postprocessor_20250703_ded227b4",
+      "created_at": "2025-07-03T16:23:32.058367",
+      "short_name": null,
+      "description": "Post-processing BEAM outputs",
+      "exists": true,
+      "model": "beam_postprocessor",
+      "year": 2011,
+      "iteration": 0,
+      "completed_at": "2025-07-03T16:23:32.060509",
+      "input_record_hashes": [],
+      "output_record_hashes": [],
+      "status": "completed"
+    },
+    "activitysim_preprocessor_20250703_d42917b9": {
+      "unique_id": "activitysim_preprocessor_20250703_d42917b9",
+      "created_at": "2025-07-03T16:23:32.061962",
+      "short_name": null,
+      "description": "Preprocessing for ActivitySim",
+      "exists": true,
+      "model": "activitysim_preprocessor",
+      "year": 2011,
+      "iteration": 1,
+      "completed_at": "2025-07-03T16:23:33.585028",
+      "input_record_hashes": [
+        "72229ae16b1dc49123dfcd3ee43942de9055488a6e7a5cb05bcb37f0cd70648b"
+      ],
+      "output_record_hashes": [
+        "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11"
+      ],
+      "status": "completed"
+    },
+    "activitysim_20250703_9288e2cd": {
+      "unique_id": "activitysim_20250703_9288e2cd",
+      "created_at": "2025-07-03T16:23:33.585779",
+      "short_name": null,
+      "description": "asim full run",
+      "exists": true,
+      "model": "activitysim",
+      "year": 2011,
+      "iteration": 1,
+      "completed_at": "2025-07-03T16:23:34.635329",
+      "input_record_hashes": [
+        "5fa70059210c8cc13fe3d9f534de49791f13b7d533b4b7470c4e0bc2c8e51d11",
+        "36aa3f2e8d90394dd8230d3254671091a56b16dc0959b37f729cc53fc48deb2b",
+        "65029515b980c7632b27e281a85c917ab84b4b792337c6584e7d74ff81b57127",
+        "1bd931d171ff99fb4465bbd6086315a9f47c83eb41d28711272d575f1b3f2d21"
+      ],
+      "output_record_hashes": [],
+      "status": "completed"
+    },
+    "activitysim_postprocessor_20250703_c3143b5d": {
+      "unique_id": "activitysim_postprocessor_20250703_c3143b5d",
+      "created_at": "2025-07-03T16:23:34.642656",
+      "short_name": null,
+      "description": "Post-processing ActivitySim outputs",
+      "exists": true,
+      "model": "activitysim_postprocessor",
+      "year": 2011,
+      "iteration": 1,
+      "completed_at": "2025-07-03T16:23:34.650006",
+      "input_record_hashes": [],
+      "output_record_hashes": [
+        "c281a7984368ad0ed5100940a0b0fa1eed8c9ae2e7e4302eb2ba92c4e9e7ecb6"
+      ],
+      "status": "completed"
+    },
+    "beam_preprocessor_20250703_5311db97": {
+      "unique_id": "beam_preprocessor_20250703_5311db97",
+      "created_at": "2025-07-03T16:23:34.651764",
+      "short_name": null,
+      "description": "Preprocessing for BEAM",
+      "exists": true,
+      "model": "beam_preprocessor",
+      "year": 2011,
+      "iteration": 1,
+      "completed_at": null,
+      "input_record_hashes": [],
+      "output_record_hashes": [],
+      "status": "running"
+    }
+  }
+}
