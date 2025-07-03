@@ -254,9 +254,9 @@ def forecast_land_use(
 ):
     land_use_model, land_use_image = GenericRunner.get_model_and_image(settings, "land_use_model")
 
-    # Record UrbanSim run start
-    usim_run_hash = provenance_tracker.init_model_run(
-        land_use_model, year=workflow_state.forecast_year
+    # Start UrbanSim run and get model_run_hash
+    usim_run_hash = provenance_tracker.start_model_run(
+        land_use_model, workflow_state.current_year, workflow_state.current_inner_iter, description="UrbanSim run"
     )
 
     run_land_use(settings, year, workflow_state, client, workspace, provenance_tracker, usim_run_hash)
@@ -435,9 +435,10 @@ def run_atlas(
         usim_output_store_name,
     )
     
-    atlas_pre_hash = provenance_tracker.init_model_run(f"{vehicle_ownership_model}_preprocessor", year=yr)
-    provenance_tracker.start_model_run()
-    
+    atlas_pre_hash = provenance_tracker.start_model_run(
+        f"{vehicle_ownership_model}_preprocessor", yr, description="Atlas preprocessing"
+    )
+
     provenance_tracker.record_input_file(
         f"{vehicle_ownership_model}_preprocessor",
         usim_output_store_path,
@@ -487,11 +488,10 @@ def run_atlas(
     )
     formatted_print(print_str)
 
-    # Record Atlas run start
-    atlas_run_hash = provenance_tracker.init_model_run(
-        vehicle_ownership_model, year=yr, iteration=atlas_run_count
+    # Start Atlas run and get model_run_hash
+    atlas_run_hash = provenance_tracker.start_model_run(
+        vehicle_ownership_model, yr, description="Atlas run", iteration=atlas_run_count
     )
-    provenance_tracker.start_model_run()
 
     success = GenericRunner.run_container(
         client=client,
@@ -512,8 +512,9 @@ def run_atlas(
         # Don't exit immediately here, let run_atlas_auto handle retries
 
     # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
-    atlas_post_hash = provenance_tracker.init_model_run(f"{vehicle_ownership_model}_postprocessor", year=yr)
-    provenance_tracker.start_model_run()
+    atlas_post_hash = provenance_tracker.start_model_run(
+        f"{vehicle_ownership_model}_postprocessor", yr, description="Atlas postprocessing"
+    )
     atlas_post.update_usim_for_atlas(settings, yr, workspace, provenance_tracker, model_run_hash=atlas_post_hash, warm_start=warm_start_atlas)
     provenance_tracker.complete_model_run(atlas_post_hash)
 
