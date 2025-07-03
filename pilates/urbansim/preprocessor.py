@@ -125,7 +125,14 @@ def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
         src = os.path.join(data_dir, model_data_fname)
     dest = os.path.join(output_dir, model_data_fname)
     logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
-    shutil.copyfile(src, dest)
+    if os.path.exists(src):
+        shutil.copyfile(src, dest)
+    else:
+        # Create an empty HDF5 file if the source does not exist
+        import pandas as pd
+        with pd.HDFStore(dest, "w"):
+            pass
+        logger.warning(f"Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}.")
     provenance_tracker.record_input_file(
         "urbansim", dest, description="UrbanSim model data"
     )
