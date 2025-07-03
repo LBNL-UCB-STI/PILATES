@@ -328,6 +328,20 @@ def copy_plans_from_asim(
         beam_persons_path = locate_beam_file(
             beam_scenario_folder, "persons", file_format
         )
+
+        # Record ActivitySim files as inputs to BEAM preprocessor
+        for asim_path, name in [
+            (asim_plans_path, "plans"),
+            (asim_households_path, "households"), 
+            (asim_persons_path, "persons")
+        ]:
+            provenance_tracker.record_input_file(
+                "beam_preprocessor",
+                asim_path,
+                description=f"ActivitySim output for BEAM merge: {name}",
+                model_run_id=model_run_hash,
+            )
+
         if os.path.exists(beam_plans_path):
             logger.info("Merging asim outputs with existing beam input scenario files")
             if file_format == "csv":
@@ -476,6 +490,7 @@ def copy_plans_from_asim(
                 description="Merged persons for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
+                source_file_paths=[asim_persons_path],
             )
             households_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
@@ -483,6 +498,7 @@ def copy_plans_from_asim(
                 description="Merged households for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
+                source_file_paths=[asim_households_path],
             )
             plans_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
@@ -490,6 +506,7 @@ def copy_plans_from_asim(
                 description="Merged plans for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
+                source_file_paths=[asim_plans_path],
             )
             record_list = [plans_record, households_record, persons_record]
         else:
@@ -504,6 +521,7 @@ def copy_plans_from_asim(
                 description="Copied plans for BEAM input (no merge)",
                 model_run_id=model_run_hash,
                 state=state,
+                source_file_paths=[asim_plans_path],
             )
             record_list = [plans_record]
         return record_list
@@ -516,22 +534,28 @@ def copy_plans_from_asim(
         logging.info(f"- Beam scenario folder: {beam_scenario_folder}")
         logging.info(f"- ASIM output data directory: {asim_output_data_dir}")
         file_format = settings.get("file_format", "parquet")
+        
+        # Map ActivitySim output names to BEAM input names
+        # Note: ActivitySim outputs "beam_plans" but BEAM expects "plans"
+        asim_to_beam_mapping = [
+            ("beam_plans", "plans"),  # ActivitySim outputs beam_plans, BEAM needs plans
+            ("households", "households"),
+            ("persons", "persons"),
+        ]
+        
         if replanning_iteration_number <= 0:
-            record_list = [
-                copy_with_compression_asim_file_to_beam("plans", "plans", file_format),
-                copy_with_compression_asim_file_to_beam(
-                    "households", "households", file_format
-                ),
-                copy_with_compression_asim_file_to_beam(
-                    "persons", "persons", file_format
-                ),
-            ]
+            record_list = []
+            for asim_name, beam_name in asim_to_beam_mapping:
+                record = copy_with_compression_asim_file_to_beam(asim_name, beam_name, file_format)
+                if record:
+                    record_list.append(record)
         else:
             record_list = merge_only_updated_households()
+            
         # Ensure all three BEAM input files are recorded for provenance, even if not created above
         # (e.g., if a file is missing, record as output anyway)
-        for fname in ["plans", "households", "persons"]:
-            beam_file_path = locate_beam_file(beam_scenario_folder, fname, file_format)
+        for asim_name, beam_name in asim_to_beam_mapping:
+            beam_file_path = locate_beam_file(beam_scenario_folder, beam_name, file_format)
             found = any(
                 r
                 for r in record_list
@@ -543,28 +567,30 @@ def copy_plans_from_asim(
                 record = provenance_tracker.record_output_file(
                     "beam_preprocessor",
                     beam_file_path,
-                    description=f"BEAM input file: {fname}",
-                    short_name=fname,
+                    description=f"BEAM input file: {beam_name}",
+                    short_name=beam_name,
                     model_run_id=model_run_hash,
                     state=state,
                 )
-                record_list.append(record)
+                if record:
+                    record_list.append(record)
         record_store = RecordStore(recordList=[r for r in record_list if r is not None])
     else:
         logging.info("Using the plans that were already in the beam scenario folder")
         # Locate and create records for existing plans, households, persons
         file_format = settings.get("file_format", "parquet")
         record_list = []
-        for fname in ["plans", "households", "persons"]:
-            beam_file_path = locate_beam_file(beam_scenario_folder, fname, file_format)
+        for _, beam_name in [("beam_plans", "plans"), ("households", "households"), ("persons", "persons")]:
+            beam_file_path = locate_beam_file(beam_scenario_folder, beam_name, file_format)
             record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
                 beam_file_path,
-                description=f"Existing BEAM input file: {fname}",
-                short_name=fname,
+                description=f"Existing BEAM input file: {beam_name}",
+                short_name=beam_name,
                 model_run_id=model_run_hash,
             )
-            record_list.append(record)
+            if record:
+                record_list.append(record)
         record_store = RecordStore(recordList=[r for r in record_list if r is not None])
 
     return record_store
