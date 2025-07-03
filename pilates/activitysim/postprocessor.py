@@ -30,7 +30,11 @@ def _load_asim_outputs(settings, workspace: Workspace):
             file_path = os.path.join(
                 asim_output_dir, "final_pipeline", table_name, "final.parquet"
             )
-            table = pd.read_parquet(file_path)
+            try:
+                table = pd.read_parquet(file_path)
+            except FileNotFoundError:
+                logger.warning("Parquet file not found: %s", file_path)
+                return {}
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
             file_path = os.path.join(asim_output_dir, file_name)
@@ -40,7 +44,11 @@ def _load_asim_outputs(settings, workspace: Workspace):
                 index_col = "household_id"
             else:
                 index_col = None
-            table = pd.read_csv(file_path, index_col=index_col)
+            try:
+                table = pd.read_csv(file_path, index_col=index_col)
+            except FileNotFoundError:
+                logger.warning("CSV file not found: %s", file_path)
+                return {}
 
         if "block_id" in table.columns:
             table["block_id"] = table["block_id"].astype(str).str.zfill(15)
@@ -193,57 +201,57 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-def _copy_with_compression_asim_file_to_asim_archive(
-    file_path,
-    file_name,
-    year,
-    replanning_iteration_number,
-    fmt,
-    provenance_tracker: "FileProvenanceTracker",
-):
-    iteration_folder_name = "year-{0}-iteration-{1}".format(
-        year, replanning_iteration_number
-    )
-    iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
-    if not os.path.exists(os.path.abspath(iteration_folder_path)):
-        os.makedirs(iteration_folder_path, exist_ok=True)
-    input_file_path = locate_asim_file(file_name, fmt)
-    target_file_path = os.path.join(iteration_folder_path, file_name)
-    if target_file_path.endswith(".csv"):
-        target_file_path += ".gz"
-        if os.path.exists(file_path):
-            with open(input_file_path, "rb") as f_in, gzip.open(
-                target_file_path, "wb"
-            ) as f_out:
-                f_out.writelines(f_in)
-            # Record the archived file path
-            provenance_tracker.record_output_file(
-                "activitysim",
-                target_file_path,
-                year=year,
-                description=f"Archived ActivitySim output: {file_name}",
-            )
-    elif os.path.isdir(os.path.abspath(input_file_path)):
-        logger.warning(
-            "Skipping compression for directory: {0}".format(input_file_path)
-        )
-        # make_archive(input_file_path, target_file_path + ".zip")
-        # # Record the archived file path
-        # provenance_tracker.record_output_file(
-        #     "activitysim",
-        #     target_file_path + ".zip",
-        #     year=year,
-        #     description=f"Archived ActivitySim output: {file_name}",
-        # )
-    else:
-        shutil.copy(input_file_path, target_file_path + ".parquet")
-        # Record the archived file path
-        provenance_tracker.record_output_file(
-            "activitysim",
-            target_file_path + ".parquet",
-            year=year,
-            description=f"Archived ActivitySim output: {file_name}",
-        )
+# def _copy_with_compression_asim_file_to_asim_archive(
+#     file_path,
+#     file_name,
+#     year,
+#     replanning_iteration_number,
+#     fmt,
+#     provenance_tracker: "FileProvenanceTracker",
+# ):
+#     iteration_folder_name = "year-{0}-iteration-{1}".format(
+#         year, replanning_iteration_number
+#     )
+#     iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
+#     if not os.path.exists(os.path.abspath(iteration_folder_path)):
+#         os.makedirs(iteration_folder_path, exist_ok=True)
+#     input_file_path = locate_asim_file(file_name, fmt)
+#     target_file_path = os.path.join(iteration_folder_path, file_name)
+#     if target_file_path.endswith(".csv"):
+#         target_file_path += ".gz"
+#         if os.path.exists(file_path):
+#             with open(input_file_path, "rb") as f_in, gzip.open(
+#                 target_file_path, "wb"
+#             ) as f_out:
+#                 f_out.writelines(f_in)
+#             # Record the archived file path
+#             provenance_tracker.record_output_file(
+#                 "activitysim",
+#                 target_file_path,
+#                 year=year,
+#                 description=f"Archived ActivitySim output: {file_name}",
+#             )
+#     elif os.path.isdir(os.path.abspath(input_file_path)):
+#         logger.warning(
+#             "Skipping compression for directory: {0}".format(input_file_path)
+#         )
+#         # make_archive(input_file_path, target_file_path + ".zip")
+#         # # Record the archived file path
+#         # provenance_tracker.record_output_file(
+#         #     "activitysim",
+#         #     target_file_path + ".zip",
+#         #     year=year,
+#         #     description=f"Archived ActivitySim output: {file_name}",
+#         # )
+#     else:
+#         shutil.copy(input_file_path, target_file_path + ".parquet")
+#         # Record the archived file path
+#         provenance_tracker.record_output_file(
+#             "activitysim",
+#             target_file_path + ".parquet",
+#             year=year,
+#             description=f"Archived ActivitySim output: {file_name}",
+#         )
 
 
 def create_beam_input_data(
@@ -289,6 +297,7 @@ def create_beam_input_data(
         description="Zipped ActivitySim outputs for BEAM",
         model_run_id=model_run_hash,
         source_file_paths=source_file_paths,
+        state=state
     )
     return outpath, output_record
 
@@ -593,7 +602,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         processing them, and creating the necessary inputs for the next
         models in the workflow (e.g., UrbanSim, BEAM).
         """
-        settings = state.settings
+        settings = state.full_settings
         year = state.year
         forecast_year = state.forecast_year
         replanning_iteration_number = state.current_inner_iter
@@ -622,13 +631,13 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     producing_run_id = None
                 provenance_tracker.record_input_file(
                     "activitysim_postprocessor",
-                    record.file_path,
+                    os.path.join(workspace.output_path, record.file_path),
                     model_run_id=model_run_hash,
                     source_run_id=producing_run_id,
                 )
                 if isinstance(record, FileRecord):
-                    target = os.path.join(iteration_folder_path, record.short_name)
-                    shutil.copy(record.file_path, target)
+                    target = os.path.join(iteration_folder_path, record.short_name + ".parquet")
+                    shutil.copy(os.path.join(workspace.output_path, record.file_path), target)
                     logger.info(f"Copied {record.file_path} to {target}")
                     provenance_tracker.record_output_file(
                         "activitysim_postprocessor",
@@ -637,6 +646,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         record.description,
                         model_run_id=model_run_hash,
                         source_file_paths=[record.unique_id],
+                        short_name=record.short_name,
+                        state=state
                     )
 
         # 1. Load raw ActivitySim outputs from files
@@ -650,34 +661,36 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(r, "file_path")
         ]
 
-        # 2. Prepare tables for integration with UrbanSim
-        tables_updated_by_asim = ["households", "persons"]
-        asim_output_dict = _prepare_updated_tables(
-            settings,
-            state,
-            workspace,
-            asim_output_dict,
-            tables_updated_by_asim,
-            prefix=forecast_year,
-        )
-
         processed_records = []
 
-        # 3. Create UrbanSim input data for the next iteration
-        # This function will handle its own provenance logging.
-        next_usim_input_path, usim_record = create_usim_input_data(
-            settings,
-            state,
-            workspace,
-            provenance_tracker,
-            runInfo,
-            asim_output_dict,
-            tables_updated_by_asim,
-            source_file_paths,
-            model_run_hash,
-        )
-        if usim_record:
-            processed_records.append(usim_record)
+        if state.is_enabled(WorkflowState.Stage.land_use):
+
+            # 2. Prepare tables for integration with UrbanSim
+            tables_updated_by_asim = ["households", "persons"]
+            asim_output_dict = _prepare_updated_tables(
+                settings,
+                state,
+                workspace,
+                asim_output_dict,
+                tables_updated_by_asim,
+                prefix=forecast_year,
+            )
+
+            # 3. Create UrbanSim input data for the next iteration
+            # This function will handle its own provenance logging.
+            next_usim_input_path, usim_record = create_usim_input_data(
+                settings,
+                state,
+                workspace,
+                provenance_tracker,
+                runInfo,
+                asim_output_dict,
+                tables_updated_by_asim,
+                source_file_paths,
+                model_run_hash,
+            )
+            if usim_record:
+                processed_records.append(usim_record)
 
         # 4. Create BEAM input data (if traffic assignment is enabled)
         if settings.get("traffic_assignment_enabled", False):

@@ -16,6 +16,7 @@ from pilates.utils.file_utils import (
     _calculate_file_hash,
     _load_metadata,
 )
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return path_to_use, relative_path
 
     def _calculate_file_hash(
-        self, file_path: str, description: Optional[str] = None
+        self, file_path: str, state: Optional[WorkflowState] = None
     ) -> Optional[str]:
         abs_file_path = self._validate_file_path(file_path)
         if not abs_file_path:
@@ -336,8 +337,10 @@ class FileProvenanceTracker(ProvenanceTracker):
             with open(abs_file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(chunk)
-            if description:
-                sha256_hash.update(description.encode())
+            if state:
+                sha256_hash.update(str(state.current_major_stage).encode())
+                sha256_hash.update(str(state.current_year).encode())
+                sha256_hash.update(str(state.current_inner_iter).encode())
             return sha256_hash.hexdigest()
         except (IOError, OSError) as e:
             logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
@@ -443,12 +446,13 @@ class FileProvenanceTracker(ProvenanceTracker):
         skip_missing: bool = True,
         description: Optional[str] = None,
         short_name: Optional[str] = None,
+        state: Optional[WorkflowState] = None
     ) -> Optional[FileRecord]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return None
 
-        file_hash = self._calculate_file_hash(path_to_use, description)
+        file_hash = self._calculate_file_hash(path_to_use, state)
         if not file_hash:
             logger.warning(
                 f"Could not calculate hash for {file_path}, cannot create record."
@@ -465,6 +469,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             created_at=datetime.now().isoformat(),
             short_name=short_name,
             metadata=metadata,
+            description=description,
         )
         self.run_info.file_records[file_hash] = file_record
         return file_record
@@ -478,10 +483,11 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: List[str] = None,
         skip_missing: bool = True,
         model_run_id: str = None,
+        state: Optional[WorkflowState] = None
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description
+            file_path, skip_missing, description, state=state
         )
         if not file_record:
             return None
@@ -520,10 +526,11 @@ class FileProvenanceTracker(ProvenanceTracker):
         model_run_id: str = None,
         short_name: str = None,
         source_file_paths: list = None,
+        state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, short_name
+            file_path, skip_missing, description, short_name, state=state
         )
         if not file_record:
             return None

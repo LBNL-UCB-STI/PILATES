@@ -237,14 +237,12 @@ class ActivitysimRunner(GenericRunner):
             return RecordStore(), run_info
 
         # Assemble outputs: find the expected output files and return as a RecordStore
-        output_dir = workspace.get_asim_output_dir()
+        output_dir = os.path.join(workspace.get_asim_output_dir(), "final_pipeline")
         output_records = []
         if os.path.exists(output_dir):
             for fname in os.listdir(output_dir):
-                fpath = os.path.join(output_dir, fname)
-                if os.path.isfile(fpath) and (
-                    fname.endswith(".csv") or fname.endswith(".parquet")
-                ):
+                fpath = os.path.join(output_dir, fname, "final.parquet")
+                if os.path.isfile(fpath):
                     # Record as output file in provenance and collect FileRecord
                     output_rec = provenance_tracker.record_output_file(
                         "activitysim",
@@ -253,6 +251,7 @@ class ActivitysimRunner(GenericRunner):
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname,
                         model_run_id=new_asim_run_hash,
+                        state=state
                     )
                     if output_rec:
                         output_records.append(output_rec)
