@@ -633,7 +633,7 @@ def main():
     state = WorkflowState.from_settings(settings)
 
     # Set up provenance tracking and workspace
-    output_path = settings.get("output_directory")
+    output_path = os.path.expandvars(settings.get("output_directory"))
     run_name = settings.get("run_name", f"pilates-run-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
     run_id = str(uuid.uuid4())
     
