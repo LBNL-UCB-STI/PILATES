@@ -1,7 +1,10 @@
 import abc
 import logging
 import subprocess
-import docker
+try:
+    import docker
+except ImportError:
+    print('Warning: Unable to import Docker Module')
 from abc import ABC
 from typing import Dict, Optional, List, Tuple
 
@@ -153,12 +156,6 @@ class GenericRunner(ABC):
                 )
                 return exit_code == 0
 
-            except docker.errors.ImageNotFound:
-                logger.error(f"Docker image not found: {image}")
-                return False
-            except docker.errors.APIError as e:
-                logger.error(f"Docker API error running container {image}: {e}")
-                return False
             except Exception as e:
                 logger.error(f"Unexpected error running docker container {image}: {e}")
                 return False
@@ -167,7 +164,7 @@ class GenericRunner(ABC):
                     try:
                         container.remove()
                         logger.debug(f"Removed container {container.id}")
-                    except docker.errors.APIError as e:
+                    except Exception as e:
                         logger.warning(
                             f"Could not remove container {container.id}: {e}"
                         )
@@ -285,8 +282,6 @@ class GenericRunner(ABC):
                         print("Pulling latest image for {0}".format(image))
                         try:
                             client.images.pull(image)
-                        except docker.errors.ImageNotFound:
-                            logger.error(f"Docker image {image} not found.")
                         except Exception as e:
                             logger.error(f"Error pulling docker image {image}: {e}")
 
