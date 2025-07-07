@@ -8,10 +8,10 @@
 region: seattle
 scenario: base
 start_year: 2010
-end_year: 2024
+end_year: 2013
 land_use_freq: 1
-travel_model_freq: 2
-vehicle_ownership_freq: 2
+travel_model_freq: 1
+vehicle_ownership_freq: 1
 
 # simulation platforms (leave blank to turn off)
 land_use_model:
@@ -20,21 +20,21 @@ activity_demand_model: activitysim
 vehicle_ownership_model:
 
 # docker or singularity
-container_manager: singularity
+container_manager: docker
 #singularity settings
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:1.0.1
-  activitysim: docker://zaneedell/activitysim:0.1.12
+  beam: docker://zaneedell/beam:0.9.12
+  activitysim: docker://zaneedell/activitysim:0.1.4
   polaris:
 
 # docker settings
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:0.9.10
-  activitysim: zaneedell/activitysim:0.1.1
+  beam: zaneedell/beam:0.9.13-beta-v2
+  activitysim: zaneedell/activitysim:0.1.7
   polaris: tbd
 docker_stdout: False
 pull_latest: False
@@ -44,9 +44,8 @@ skims_zone_type: block_group # one of [taz, block_group, block]
 skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
-beam_router_directory: r5/r5-residential-partiallysimplified-ferry
+beam_router_directory: r5-dense
 beam_geoms_fname: clipped_tazs.csv
-geoms_index_col: GEOID
 
 # region_zone_type:
 #   austin: block_groups # one of [taz, block_groups, block]
@@ -59,16 +58,12 @@ geoms_index_col: GEOID
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: baseline-tourmode
-
 # URBANSIM
 region_to_region_id:
   sfbay: "06197001"
   austin: "48197301"
   seattle: "53199100"
-usim_local_data_input_folder: pilates/urbansim/data/
-usim_local_mutable_data_folder: urbansim/data/
+usim_local_data_folder: pilates/urbansim/data/
 usim_client_base_folder: /base/demos_urbansim
 usim_client_data_folder: /base/demos_urbansim/data/
 usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
@@ -99,12 +94,11 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 # BEAM 
 beam_config: seattle.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
-beam_replanning_portion: 0.25
+beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
-beam_local_mutable_data_folder: beam/input/
-beam_local_output_folder: beam/beam_output/
+beam_local_output_folder: pilates/beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: 215g
+#beam_memory: "650g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
@@ -130,13 +124,11 @@ polaris_skim_keys:
 mep_local_output_folder: pilates/postprocessing/MEP/
 
 # ACTIVITYSIM
-household_sample_size: 226950  # zero means no sampling, whole pop.
+household_sample_size: 150000  # zero means no sampling, whole pop.
 chunk_size: 12_000_000_000 # 4000000000
 #num_processes: 90 # 94
 asim_local_input_folder: pilates/activitysim/data/
-asim_local_mutable_configs_folder: activitysim/configs/
-asim_local_mutable_data_folder: activitysim/data/
-asim_local_output_folder: activitysim/output/
+asim_local_output_folder: pilates/activitysim/output/
 asim_local_configs_folder: pilates/activitysim/configs/
 asim_validation_folder: pilates/activitysim/validation
 asim_formattable_command: "-h {0} -n {1} -c {2}"

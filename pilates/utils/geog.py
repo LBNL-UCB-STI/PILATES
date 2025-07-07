@@ -1,3 +1,5 @@
+import time
+
 import geopandas as gpd
 import pandas as pd
 import logging
@@ -65,7 +67,8 @@ def get_taz_geoms(settings, taz_id_col_in='taz1454', zone_id_col_out='zone_id',
 
         ## FIX ME: other regions taz should be here - only sfbay for now
         print(url)
-        gdf = gpd.read_file(url, crs="EPSG:4326")
+        gdf = gpd.read_file(url)
+        gdf = gdf.set_crs("EPSG:4326", allow_override=True)
         print(list(gdf))
         if region == 'austin':
             mapping = geoid_to_zone_map(settings)
@@ -109,14 +112,16 @@ def get_county_block_geoms(
     blocks_remaining = True
     all_features = []
     page = 0
-    while blocks_remaining:
+    max_pages = 100
+    while blocks_remaining and page < max_pages:
         offset = page * result_size
         url = base_url.format(state_fips, county_fips, result_size, offset)
         result = requests.get(url)
         try:
             features = result.json()['features']
-        except KeyError:
-            logger.error("No features returned. Try a smaller result size.")
+        except Exception as e:
+            logger.error(f"Error parsing features: {e}")
+            break
         all_features += features
         if 'exceededTransferLimit' in result.json().keys():
             if result.json()['exceededTransferLimit']:
@@ -128,6 +133,10 @@ def get_county_block_geoms(
                 blocks_remaining = False
             else:
                 page += 1
+        time.sleep(0.2)  # be nice to the API
+
+    if page == max_pages:
+        logger.warning("Reached max_pages limit in get_county_block_geoms, possible infinite loop avoided.")
 
     df = pd.DataFrame()
     for feature in all_features:

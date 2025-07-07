@@ -106,16 +106,35 @@ def find_latest_beam_iteration(beam_output_dir):
     print(iter_dirs)
 
 
-def get_base_asim_cmd(settings, household_sample_size=None):
+def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
     formattable_asim_cmd = settings['asim_formattable_command']
     if not household_sample_size:
         household_sample_size = settings.get('household_sample_size', 0)
-    num_processes = settings.get('num_processes', multiprocessing.cpu_count() - 1)
+    num_processes = num_processes or settings.get('num_processes', multiprocessing.cpu_count() - 1)
     chunk_size = settings.get('chunk_size', 0)  # default no chunking
     base_asim_cmd = formattable_asim_cmd.format(
         household_sample_size, num_processes, chunk_size)
     return base_asim_cmd
 
+def get_asim_additional_args(asim_docker_vols, compile):
+    additional_args = []
+    if settings.get("file_format", "parquet") == "parquet":
+        additional_args.append("--persist-sharrow-cache")
+        for local, d in asim_docker_vols.items():
+            if "data" in d['bind']:
+                additional_args.append('-d')
+                additional_args.append('"{0}"'.format(d['bind']))
+            elif "output" in d['bind']:
+                additional_args.append('-o')
+                additional_args.append('"{0}"'.format(d['bind']))
+            elif "compile" in d['bind']:
+                if compile:
+                    additional_args.append('-c')
+                    additional_args.append('"{0}"'.format(d['bind']))
+            elif "configs" in d['bind']:
+                additional_args.append('-c')
+                additional_args.append('"{0}"'.format(d['bind']))
+    return additional_args
 
 def get_asim_docker_vols(settings, working_dir=None):
     region = settings['region']
@@ -127,20 +146,26 @@ def get_asim_docker_vols(settings, working_dir=None):
         asim_local_output_folder = os.path.abspath(
             os.path.join(working_dir, settings['asim_local_output_folder']))
         asim_local_configs_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_configs_folder']))
+            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], settings.get('asim_main_configs_dir', "configs")))
+        asim_local_configs_compile_folder = os.path.abspath(
+            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], "configs_sh_compile"))
     else:
         asim_local_mutable_data_folder = os.path.abspath(
             settings['asim_local_mutable_data_folder'])
         asim_local_output_folder = os.path.abspath(
             settings['asim_local_output_folder'])
         asim_local_configs_folder = os.path.abspath(
-            os.path.join(settings['asim_local_configs_folder'], region))
+            os.path.join(settings['asim_local_configs_folder'], region, "configs"))
+        asim_local_configs_compile_folder = os.path.abspath(
+            os.path.join(settings['asim_local_configs_folder'], region, "configs_sh_compile"))
     asim_remote_input_folder = os.path.join(
         asim_remote_workdir, 'data')
     asim_remote_output_folder = os.path.join(
         asim_remote_workdir, 'output')
     asim_remote_configs_folder = os.path.join(
         asim_remote_workdir, 'configs')
+    asim_remote_configs_compile_folder = os.path.join(
+        asim_remote_workdir, 'configs_sh_compile')
     asim_docker_vols = {
         asim_local_mutable_data_folder: {
             'bind': asim_remote_input_folder,
@@ -148,9 +173,13 @@ def get_asim_docker_vols(settings, working_dir=None):
         asim_local_output_folder: {
             'bind': asim_remote_output_folder,
             'mode': 'rw'},
+        asim_local_configs_compile_folder: {
+            'bind': asim_remote_configs_compile_folder,
+            'mode': 'rw'},
         asim_local_configs_folder: {
             'bind': asim_remote_configs_folder,
-            'mode': 'rw'}}
+            'mode': 'rw'}
+    }
     return asim_docker_vols
 
 
@@ -470,7 +499,7 @@ def generate_activity_plans(
     if settings.get('regenerate_seed', True):
         new_seed = random.randint(0, int(1e9))
         logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-        asim_pre.update_asim_config(settings, "random_seed", new_seed)
+        asim_pre.update_asim_config(settings, state.full_path, "random_seed", new_seed)
 
     activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
 
@@ -485,9 +514,9 @@ def generate_activity_plans(
         land_use_model = settings['land_use_model']
         region = settings['region']
         asim_subdir = settings['region_to_asim_subdir'][region]
-        asim_workdir = os.path.join('/activitysim', asim_subdir)
+        asim_workdir = os.path.join('activitysim', asim_subdir)
         asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-        asim_cmd = get_base_asim_cmd(settings)
+
         docker_stdout = settings.get('docker_stdout', False)
 
         # If this is the first iteration, skims should only exist because
@@ -511,16 +540,37 @@ def generate_activity_plans(
             "Generating activity plans for the year "
             "{0} with {1}".format(
                 state.forecast_year, activity_demand_model))
+
+        if not state.asim_compiled:
+            asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500, num_processes=1)
+            if resume_after:
+                asim_cmd += ' -r {0}'.format(resume_after)
+
+            additional_args = get_asim_additional_args(asim_docker_vols, True)
+            success = run_container(client, settings,
+                          activity_demand_image,
+                          working_dir=asim_workdir,
+                          volumes=asim_docker_vols,
+                          command=asim_cmd,
+                          args=additional_args)
+            logger.info("ASIM Compilation success: {0}".format(success))
+            # if not success:
+            #     raise RuntimeError("ASim Compilation failed")
+            state.compile_asim()
+        asim_cmd = get_base_asim_cmd(settings)
         if resume_after:
             asim_cmd += ' -r {0}'.format(resume_after)
             print_str += ". Picking up after {0}".format(resume_after)
         formatted_print(print_str)
 
+        additional_args = get_asim_additional_args(asim_docker_vols, False)
+
         run_container(client, settings,
                       activity_demand_image,
                       working_dir=asim_workdir,
                       volumes=asim_docker_vols,
-                      command=asim_cmd)
+                      command=asim_cmd,
+                      args=additional_args)
 
         # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
         # If generating activities for the base year (i.e. warm start),
@@ -653,7 +703,7 @@ def run_traffic_assignment(
 
             # Check if ActivitySim is enabled - only proceed with ActivitySim integration if it's enabled
             asim_enabled = activity_demand_model and activity_demand_model == 'activitysim'
-
+            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
             if not asim_enabled:
                 logger.info("ActivitySim is not enabled, skipping skim merging for ActivitySim")
                 # Still check if BEAM produced skims
@@ -661,20 +711,26 @@ def run_traffic_assignment(
                 if current_od_skims == previous_od_skims and replanning_iteration_number > 0:
                     logger.error(
                         "BEAM hasn't produced the new skims at {0} for some reason. "
-                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
+                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims,
+                                                                                          abs_beam_output)
                     )
                 return
-
-            asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-            asim_skims_path = os.path.join(str(asim_data_dir), 'skims.omx')
+            elif settings["file_format"] == "parquet":
+                asim_data_dir = os.path.join(run_path, settings['asim_local_output_folder'], "cache")
+                asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
+                current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path,
+                                                                         beam_local_output_folder, settings)
+                logger.warning("RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES")
+            else:
+                asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
+                asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
+                current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
+                                                                        beam_local_output_folder, settings)
+                beam_post.merge_current_omx_origin_skims(
+                    asim_skims_path, previous_origin_skims, beam_local_output_folder,
+                    beam_asim_ridehail_measure_map)
             logger.info(f"ActivitySim data directory: {asim_data_dir}")
             logger.info(f"ActivitySim skims path: {asim_skims_path}")
-
-            current_od_skims = beam_post.merge_current_omx_od_skims(
-                asim_skims_path,
-                str(beam_local_output_folder),
-                settings
-            )
 
             if current_od_skims == previous_od_skims:
                 logger.error(
@@ -682,10 +738,6 @@ def run_traffic_assignment(
                     "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
                 )
                 sys.exit(1)
-            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
-            beam_post.merge_current_omx_origin_skims(
-                asim_skims_path, previous_origin_skims, beam_local_output_folder,
-                beam_asim_ridehail_measure_map)
 
         logger.info(f"Renaming BEAM output directory for year {year}, iteration {replanning_iteration_number}")
         beam_post.rename_beam_output_directory(abs_beam_output, settings, year, replanning_iteration_number)
@@ -758,7 +810,7 @@ def run_replanning_loop(state: WorkflowState):
         if settings.get('regenerate_seed', True):
             new_seed = random.randint(0, int(1e9))
             logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-            asim_pre.update_asim_config(settings, "random_seed", new_seed)
+            asim_pre.update_asim_config(settings, state.full_path,"random_seed", new_seed)
 
         # a) format new skims for asim
         asim_pre.create_skims_from_beam(settings, state, overwrite=False)
@@ -818,7 +870,7 @@ def to_singularity_env(env):
 
 
 def run_container(client, settings: dict, image: str, volumes: dict, command: str,
-                  working_dir=None, environment=None):
+                  working_dir=None, environment=None, args=None) -> bool:
     """
     Executes container using docker or singularity
     :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
@@ -833,6 +885,7 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
      (or image layers at the docker hub) and find the last WORKDIR instruction or by issuing a command:
       docker run -it --entrypoint /bin/bash ghcr.io/lbnl-science-it/atlas:v1.0.7 -c "env | grep PWD"
     :param environment: a dictionary that contains environment variables that needs to be set to the container
+    :param args: additional arguments to the command
     """
     if client:
         docker_stdout = settings.get('docker_stdout', False)
@@ -854,18 +907,20 @@ def run_container(client, settings: dict, image: str, volumes: dict, command: st
             print(log)
         container.remove()
         logger.info("Finished docker container: %s, command: %s", image, command)
+        return True
     else:
         for local_folder in volumes:
             os.makedirs(local_folder, exist_ok=True)
         singularity_volumes = to_singularity_volumes(volumes)
         proc = ["singularity", "run", "--cleanenv", "--writable-tmpfs"] \
                + (["--env", to_singularity_env(environment)] if environment else []) \
-               + (["--pwd", working_dir] if working_dir else []) \
-               + ["-B", singularity_volumes, image] \
+               + (["--pwd", working_dir] if working_dir else [])   \
+               + ["-B", singularity_volumes, image] + (args if args else []) \
                + command.split()
         logger.info("Running command: %s", " ".join(proc))
-        subprocess.run(proc)
-        logger.info("Finished command: %s", " ".join(proc))
+        result = subprocess.run(proc)
+        logger.info("Finished command: %s with exit code %s", " ".join(proc), result.returncode)
+        return str(result) == "0"
 
 
 def get_model_and_image(settings: dict, model_type: str):
@@ -1054,7 +1109,7 @@ if __name__ == '__main__':
                 beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
             else:
                 beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
+            # beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
             if vehicle_ownership_model_enabled:
                 beam_pre.copy_vehicles_from_atlas(settings, state)
             run_traffic_assignment(settings, year, state, client, -1)
@@ -1077,7 +1132,19 @@ if __name__ == '__main__':
                         copy_outputs_to_mep(settings, year, -1)
                     except:
                         print("Skipping post")
-                beam_post.trim_inaccessible_ods(settings, working_dir)
+
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
+
+        activity_demand_model = settings.get('activity_demand_model', "")
+        if (activity_demand_model.lower() == "activitysim") and activity_demand_enabled:
+            if settings['file_format'] == "parquet":
+                try:
+                    asim_data_dir = os.path.join(working_dir, settings['asim_local_output_folder'], "cache")
+                    asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
+                    current_od_skims = beam_post.trim_inaccessible_ods_zarr(asim_skims_path, settings)
+                except Exception as e:
+                    logger.error(f"Error trimming inaccessible ODs: {e}")
+            else:
+                beam_post.trim_inaccessible_ods(settings, working_dir)
 
     logger.info("Finished")

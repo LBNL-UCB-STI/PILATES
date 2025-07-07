@@ -3,23 +3,8 @@ import sys
 import openmatrix as omx
 import numpy as np
 
-if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        path = "pilates/activitysim/sfbay/data/skims.omx"
-        dry_run = True
-    else:
-        path = sys.argv[1]
-        if len(sys.argv) >= 3:
-            dry_run = (sys.argv[2].lower() == 'true')
-        else:
-            print("Doing a try run. Add another argument of `false` to do a real run.")
-            dry_run = True
 
-    if dry_run:
-        method = 'r'
-    else:
-        method = 'a'
-
+def validate_skim(path, dry_run):
     sk = omx.open_file(path, method)
     tables = sk.list_matrices()
 
@@ -54,8 +39,8 @@ if __name__ == '__main__':
             sz_valid = sz - ignore.sum().sum()
             print("Finding {:0.2%} of speeds are 0, leaving them alone".format(ignore.sum().sum() / sz))
             print("Finding {:0.2%} of ODs have valid observations, leaving them alone".format(nonzero.sum().sum() / sz))
-            print("Finding {:0.2%} of remaining speeds are nan, replacing them with 30 mph".format(
-                np.isnan(spd_raw[~ignore]).sum() / sz_valid))
+            print("Finding {:0.2%} of remaining {:} speeds are nan, replacing them with 30 mph".format(
+                np.isnan(spd_raw[~ignore]).sum() / sz_valid, sz_valid))
             spd_raw[np.isnan(spd_raw)] = 30.0
             print("Finding {0:0.2%} of remaining speeds are too fast, replacing them with {1} mph".format(
                 (spd_raw[~ignore] > modeMaxSpeed).sum() / sz_valid, modeMaxSpeed))
@@ -102,3 +87,23 @@ if __name__ == '__main__':
                 sk[table][:] = newToll
 
     sk.close()
+
+
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        path = "pilates/activitysim/sfbay/data/skims.omx"
+        dry_run = True
+    else:
+        path = sys.argv[1]
+        if len(sys.argv) >= 3:
+            dry_run = (sys.argv[2].lower() == 'true')
+        else:
+            print("Doing a try run. Add another argument of `false` to do a real run.")
+            dry_run = True
+
+    if dry_run:
+        method = 'r'
+    else:
+        method = 'a'
+
+    validate_skim(path, dry_run)

@@ -195,16 +195,17 @@ def read_zone_geoms(settings, year,
 asim_param_map = {'random_seed': 'rng_base_seed'}
 
 
-def update_asim_config(settings, param, valueOverride=None):
+def update_asim_config(settings, full_path, param, valueOverride=None):
     config_header = asim_param_map[param]
     if valueOverride is None:
         config_value = settings[param]
     else:
         config_value = valueOverride
-    asim_config_path = os.path.join(
-        settings['asim_local_configs_folder'],
-        settings['region'],
-        'settings.yaml')
+
+    path_list = [full_path, settings['asim_local_mutable_configs_folder'],
+                 settings.get('asim_main_configs_dir', "configs"), 'settings.yaml']
+
+    asim_config_path = os.path.join(*path_list)
     modified = False
     with open(asim_config_path, 'r') as file:
         data = file.readlines()
@@ -1241,140 +1242,127 @@ def _get_part_time_enrollment(state_fips):
 
 
 def _update_persons_table(persons, households, unassigned_households, blocks, asim_zone_id_col='TAZ'):
-    # assign zones
+    """Updates person attributes and assigns zones for ActivitySim processing.
+
+    Args:
+        persons: DataFrame containing person records
+        households: DataFrame containing household records
+        unassigned_households: Series of household IDs without locations
+        blocks: DataFrame containing block/zone information
+        asim_zone_id_col: Column name for zone ID (default: 'TAZ')
+
+    Returns:
+        DataFrame with updated person attributes
+    """
+    # Convert index to int and filter out unassigned persons
     persons.index = persons.index.astype(int)
-    unassigned_persons = persons.household_id.isin(unassigned_households)
-    logger.info("Dropping {0} people from {1} households that haven't been assigned locations yet".format(
-        unassigned_households.shape[0], unassigned_persons.sum()))
-    persons = persons.loc[~unassigned_persons, :]
-    persons.loc[:, asim_zone_id_col] = blocks[asim_zone_id_col].reindex(
-        households['block_id'].reindex(persons['household_id']).values).values
-    persons.loc[:, asim_zone_id_col] = persons.loc[:, asim_zone_id_col].astype(str)
+    unassigned_mask = persons.household_id.isin(unassigned_households)
+    logger.info(f"Dropping {unassigned_mask.sum()} people from {unassigned_households.shape[0]} unassigned households")
+    persons = persons.loc[~unassigned_mask]
 
-    # create new column variables
-    age_mask_1 = persons.age >= 18
-    age_mask_2 = persons.age.between(18, 64, inclusive="both")
-    age_mask_3 = persons.age >= 65
-    work_mask = persons.worker == 1
-    student_mask = persons.student == 1
-    type_1 = ((age_mask_1) & (work_mask) & (~student_mask)) * 1  # Full time
-    type_4 = ((age_mask_2) & (~work_mask) & (~student_mask)) * 4
-    type_5 = ((age_mask_3) & (~work_mask) & (~student_mask)) * 5
-    type_3 = ((age_mask_1) & (student_mask)) * 3
-    type_6 = (persons.age.between(16, 17, inclusive="both")) * 6
-    type_7 = (persons.age.between(6, 15, inclusive="both")) * 7
-    type_8 = (persons.age.between(0, 5, inclusive="both")) * 8
-    type_list = [
-        type_1, type_3, type_4, type_5, type_6, type_7, type_8]
-    for x in type_list:
-        type_1.where(type_1 != 0, x, inplace=True)
-    persons.loc[:, 'ptype'] = type_1
+    household_zone_map = households['block_id'].map(blocks[asim_zone_id_col])
+    persons[asim_zone_id_col] = persons['household_id'].map(household_zone_map).astype(str)
 
-    pemploy_1 = ((persons.worker == 1) & (persons.age >= 16)) * 1
-    pemploy_3 = ((persons.worker == 0) & (persons.age >= 16)) * 3
-    pemploy_4 = (persons.age < 16) * 4
-    type_list = [pemploy_1, pemploy_3, pemploy_4]
-    for x in type_list:
-        pemploy_1.where(pemploy_1 != 0, x, inplace=True)
-    persons.loc[:, 'pemploy'] = pemploy_1
+    # Precalculate age ranges and worker/student status
+    persons['age'] = persons['age'].fillna(-1)
+    age_ranges = {
+        'adult': persons.age >= 18,
+        'working_age': persons.age.between(18, 64, inclusive="both"),
+        'senior': persons.age >= 65,
+        'teen': persons.age.between(16, 17, inclusive="both"),
+        'child': persons.age.between(6, 15, inclusive="both"),
+        'young_child': persons.age.between(0, 5, inclusive="both")
+    }
 
-    pstudent_1 = (persons.age <= 18) * 1
-    pstudent_2 = ((persons.student == 1) & (persons.age > 18)) * 2
-    pstudent_3 = (persons.student == 0) * 3
-    type_list = [pstudent_1, pstudent_2, pstudent_3]
-    for x in type_list:
-        pstudent_1.where(pstudent_1 != 0, x, inplace=True)
-    persons.loc[:, 'pstudent'] = pstudent_1
+    # Calculate person types more efficiently
+    conditions = [
+        (age_ranges['adult'] & (persons.worker == 1) & (persons.student != 1)),  # type 1
+        (age_ranges['adult'] & (persons.student == 1)),  # type 3
+        (age_ranges['working_age'] & (persons.worker != 1) & (persons.student != 1)),  # type 4
+        (age_ranges['senior'] & (persons.worker != 1) & (persons.student != 1)),  # type 5
+        age_ranges['teen'],  # type 6
+        age_ranges['child'],  # type 7
+        age_ranges['young_child']  # type 8
+    ]
+    values = [1, 3, 4, 5, 6, 7, 8]
+    persons['ptype'] = np.select(conditions, values, default=0)
 
-    persons_w_res_blk = pd.merge(
-        persons, households[['block_id']],
-        left_on='household_id', right_index=True)
-    persons_w_xy = pd.merge(
-        persons_w_res_blk, blocks[['x', 'y']],
-        left_on='block_id', right_index=True)
-    persons.loc[:, 'home_x'] = persons_w_xy['x']
-    persons.loc[:, 'home_y'] = persons_w_xy['y']
+    # Calculate employment status
+    conditions = [
+        ((persons.worker == 1) & (persons.age >= 16)),  # type 1
+        ((persons.worker == 0) & (persons.age >= 16)),  # type 3
+        (persons.age < 16)  # type 4
+    ]
+    values = [1, 3, 4]
+    persons['pemploy'] = np.select(conditions, values, default=0)
 
-    del persons_w_res_blk
-    del persons_w_xy
+    # Calculate student status
+    conditions = [
+        (persons.age <= 18),  # type 1
+        ((persons.student == 1) & (persons.age > 18)),  # type 2
+        (persons.student == 0)  # type 3
+    ]
+    values = [1, 2, 3]
+    persons['pstudent'] = np.select(conditions, values, default=0)
 
-    try:
-        persons.loc[:, "workplace_taz"] = pd.to_numeric(persons.loc[:, "work_zone_id"].copy(), errors='coerce').fillna(
-            -1)
-    except KeyError:
-        logger.info("Field `workplace_taz` not present in input h5 file. This may be a problem")
-    try:
-        persons.loc[:, "school_taz"] = pd.to_numeric(persons.loc[:, "school_zone_id"].copy(), errors='coerce').fillna(
-            -1)
-    except KeyError:
-        logger.info("Field `school_taz` not present in input h5 file. This may be a problem")
-    persons.loc[:, "worker"] = pd.to_numeric(persons.loc[:, "worker"].copy(), errors='coerce').fillna(0)
-    persons.loc[:, "student"] = pd.to_numeric(persons.loc[:, "student"].copy(), errors='coerce').fillna(0)
+    # Add home coordinates efficiently
+    home_coords = (households[['block_id']]
+                  .merge(blocks[['x', 'y']], left_on='block_id', right_index=True)
+                  .set_index(households.index))
+    persons['home_x'] = persons['household_id'].map(home_coords['x'])
+    persons['home_y'] = persons['household_id'].map(home_coords['y'])
 
-    # clean up dataframe structure
-    # TODO: move this to annotate_persons.yaml in asim settings
-    #     p_names_dict = {'member_id': 'PNUM'}
-    #     persons = persons.rename(columns=p_names_dict)
+    # Convert location fields
+    for field in ['workplace_taz', 'school_taz']:
+        try:
+            source_field = 'work_zone_id' if field == 'workplace_taz' else 'school_zone_id'
+            persons[field] = pd.to_numeric(persons[source_field], errors='coerce').fillna(-1)
+        except KeyError:
+            logger.info(f"Field `{field}` not present in input h5 file")
 
-    p_null_taz = persons[asim_zone_id_col].isnull()
-    logger.info("Dropping {0} persons without TAZs".format(
-        p_null_taz.sum()))
-    p_newborn = persons['age'] < 1.0
-    logger.info("Dropping {0} newborns from this iteration".format(
-        p_newborn.sum()))
-    if ("workplace_taz" in persons.columns) & ("school_taz" in persons.columns):
-        p_badwork = (persons.worker == 1) & ~(persons.workplace_taz >= 0)
-        p_badschool = (persons.student == 1) & ~(persons.school_taz >= 0)
-        logger.warn(
-            "Dropping {0} workers with undefined workplace and {1} students with undefined school".format(
-                p_badwork.sum(),
-                p_badschool.sum()))
-        persons = persons.loc[(~p_null_taz) & (~p_newborn) & (~p_badwork) & (~p_badschool), :]
-    persons = persons.dropna()
-    persons['member_id'] = \
-        persons.groupby('household_id')['member_id'].apply(np.argsort).reset_index().set_index('person_id')[
-            'member_id'].reindex(persons.index).astype(int) + 1
+    # Clean numeric fields
+    persons['worker'] = pd.to_numeric(persons['worker'], errors='coerce').fillna(0)
+    persons['student'] = pd.to_numeric(persons['student'], errors='coerce').fillna(0)
 
-    persons.loc[persons['ptype'] == 1, 'school_zone_id'] = -1
+    # Filter invalid records
+    mask = (
+        ~persons[asim_zone_id_col].isnull() &  # Has valid TAZ
+        (persons['age'] >= 1.0)  # Not newborn
+    )
 
-    if ("workplace_taz" in persons.columns) & ("school_taz" in persons.columns):
-        # Workers with school ID
-        workers_with_school_id = persons[(persons.ptype == 1) & (persons.school_taz >= 0)].shape
+    if all(col in persons.columns for col in ['workplace_taz', 'school_taz']):
+        mask &= ~((persons.worker == 1) & (persons.workplace_taz < 0))  # Valid workplace for workers
+        mask &= ~((persons.student == 1) & (persons.school_taz < 0))  # Valid school for students
 
-        persons.loc[persons['ptype'] == 1, 'school_taz'] = -1
-        workers_with_school_id_post = persons[(persons.ptype == 1) & (persons.school_taz >= 0)].shape
+    persons = persons.loc[mask].dropna()
 
-        logger.info(f"Workers with School location: {workers_with_school_id[0]}")
-        logger.info(f"Workers with School location after cleaning: {workers_with_school_id_post[0]}")
+    # Reset member IDs
+    persons['member_id'] = (persons.groupby('household_id')['member_id']
+                           .transform(lambda x: np.arange(len(x)) + 1))
 
-        # Make Sure non-workers and non-students dont't have a school location
-        non_work_school_with_school_id = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
-        non_work_school_with_work_id = persons[(persons.ptype.isin([4, 5])) & (persons.workplace_taz > 0)].shape
+    # Clear school/work locations for specific person types
+    workers_mask = persons['ptype'] == 1
+    nonwork_mask = persons.ptype.isin([4, 5])
 
-        persons.loc[persons.ptype.isin([4, 5]), 'school_taz'] = -1
-        persons.loc[persons.ptype.isin([4, 5]), 'workplace_taz'] = -1
+    # Clear school locations for workers
+    if 'school_taz' in persons.columns:
+        before_count = (workers_mask & (persons.school_taz >= 0)).sum()
+        persons.loc[workers_mask, ['school_taz', 'school_zone_id']] = -1
+        after_count = (workers_mask & (persons.school_taz >= 0)).sum()
+        logger.info(f"Workers with school location: {before_count} before, {after_count} after cleaning")
 
-        non_work_school_with_school_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
-        logger.info(f"Non-Workers and non-students with School location: {non_work_school_with_school_id[0]}")
-        logger.info(
-            f"Non-Workers and non-students with School location after cleaning: {non_work_school_with_school_id_post[0]}")
+    # Clear work/school locations for non-workers
+    if all(col in persons.columns for col in ['workplace_taz', 'school_taz']):
+        before_school = (nonwork_mask & (persons.school_taz > 0)).sum()
+        before_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+        persons.loc[nonwork_mask, ['school_taz', 'school_zone_id', 'workplace_taz', 'work_zone_id']] = -1
+        after_school = (nonwork_mask & (persons.school_taz > 0)).sum()
+        after_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
 
-        non_work_school_with_work_id_post = persons[(persons.ptype.isin([4, 5])) & (persons.school_taz > 0)].shape
-        logger.info(f"Non-Workers and non-students with Work location: {non_work_school_with_work_id[0]}")
-        logger.info(
-            f"Non-Workers and non-students with Work location after cleaning: {non_work_school_with_work_id_post[0]}")
-
-    persons.loc[persons.ptype.isin([4, 5]), 'school_zone_id'] = -1
-
-    # Make Sure non-workers and non-students dont't have a work location
-
-    persons.loc[persons.ptype.isin([4, 5]), 'work_zone_id'] = -1
-
-    # assert (persons['work_zone_id'] == persons['workplace_taz']).all()
-    # assert (persons['school_zone_id'] == persons['school_taz']).all()
+        logger.info(f"Non-workers/students with school location: {before_school} before, {after_school} after")
+        logger.info(f"Non-workers/students with work location: {before_work} before, {after_work} after")
 
     return persons
-
 
 def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     # assign zones
@@ -1392,6 +1380,7 @@ def _update_households_table(households, blocks, asim_zone_id_col='TAZ'):
     # create new column variables
     s = households.persons
     households.loc[:, 'HHT'] = s.where(s == 1, 4)
+    households["cars"] = households["cars"].astype(int)
 
     # clean up dataframe structure
     # TODO: move this to annotate_households.yaml in asim settings
@@ -1819,6 +1808,11 @@ def copy_data_to_mutable_location(settings, folder_path):
     mutable_skims_location = os.path.join(input_dir, "skims.omx")
 
     beam_geoms_location = os.path.join(beam_input_dir, region, beam_router_directory, beam_geoms_fname)
+    if 'beam_skims_shapefile' in settings:
+        beam_shape_location = os.path.join(beam_input_dir, region, settings['beam_skims_shapefile'])
+    else:
+        logger.warning("Not updating zone_id in beam shapefile, make sure it is correct")
+        beam_shape_location = None
 
     # TODO: Handle exception when these dont exist
 
@@ -1860,18 +1854,17 @@ def copy_data_to_mutable_location(settings, folder_path):
     logger.info("Moving asim configs from {0} to {1}".format(configs_source_dir, configs_dest_dir))
     shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
 
-    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location)
+    copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_shape_location)
 
 
-def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
+def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location, beam_shape_location):
     zone_type_column = {'block_group': 'BLKGRP', 'taz': 'TAZ', 'block': 'BLK'}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={'GEOID': str})
     zone_type = settings['skims_zone_type'].lower()
     zone_id_col = zone_type_column[zone_type]
+    mapping = geoid_to_zone_map(settings, settings['start_year'])
 
     if zone_id_col not in beam_geoms_file.columns:
-
-        mapping = geoid_to_zone_map(settings, settings['start_year'])
 
         if zone_type == 'block':
             logger.info("Mapping block IDs")
@@ -1890,6 +1883,15 @@ def copy_beam_geoms(settings, beam_geoms_location, asim_geoms_location):
             logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
 
     beam_geoms_file.to_csv(asim_geoms_location)
+
+    if beam_shape_location is not None:
+        logger.info("Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
+            settings['skim_zone_geoid_col'],
+            settings['skim_zone_source_id_col']))
+        zones = gpd.read_file(beam_shape_location)
+        zones[settings['skim_zone_source_id_col']] = zones[settings['skim_zone_geoid_col']].astype(str).map(mapping)
+        logger.info("Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(beam_shape_location))
+        zones.to_file(beam_shape_location)
 
 
 def create_asim_data_from_h5(
@@ -1938,7 +1940,7 @@ def create_asim_data_from_h5(
     # update blocks
     blocks_cols = blocks.columns.tolist()
     blocks_to_taz_mapping_updated, blocks = _update_blocks_table(
-        settings, state.forecast_year, blocks, households, jobs, input_zone_id_col)
+        settings, state.forecast_year, blocks, households, jobs, 'zone_id')
     input_zone_id_col = "{0}_zone_id".format(zone_type)
     if blocks_to_taz_mapping_updated:
         logger.info(
