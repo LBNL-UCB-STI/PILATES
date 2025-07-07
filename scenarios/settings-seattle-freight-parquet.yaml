@@ -25,7 +25,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://zaneedell/beam:1.0.6
+  beam: docker://haitamlaarabi/beam:1.0.beta.250701merge #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
   activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: zaneedell/beam:1.0.8
+  beam: haitamlaarabi/beam:1.0.beta.250701merge #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -107,7 +107,7 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "200g"
+beam_memory: "400g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
