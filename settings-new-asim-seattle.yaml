@@ -59,7 +59,7 @@ geoms_index_col: GEOID
 #    SUB-PLATFORM SETTINGS    #
 ###############################
 
-output_directory: /global/scratch/users/$USER/pilates-output
+output_directory: /Users/zaneedell/git/PILATES/tmp
 output_run_name: new-asim-new-map-v5
 
 # URBANSIM

@@ -5,7 +5,8 @@ import uuid
 import pytest
 
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.provenance import OpenLineageTracker
+import json
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -74,45 +75,108 @@ def test_workflow_and_provenance_tracking(tmp_path, model_name):
     # Setup minimal settings and workspace
     tmpdir = str(tmp_path)
     settings = minimal_settings(tmpdir)
-    run_id = str(uuid.uuid4())
-    provenance_tracker = FileProvenanceTracker(run_id, tmpdir, folder_name="test-run")
-    provenance_tracker.initialize_from_settings(settings)
-    workspace = Workspace(settings, tmpdir, folder_name="test-run", provenance_tracker=provenance_tracker)
-    state = WorkflowState.from_settings(settings)
+    original_cwd = os.getcwd()
+    os.chdir(tmpdir)
 
-    # Create dummy input files for preprocessors
-    if model_name == "activitysim":
-        dummy_input = os.path.join(workspace.get_asim_mutable_data_dir(), "dummy_input.csv")
-    else:
-        dummy_input = os.path.join(workspace.get_beam_mutable_data_dir(), "dummy_input.csv")
-    create_dummy_file(dummy_input)
+    try:
+        # Create dummy source file that the preprocessor expects to copy
+        # This path is relative to the new CWD (tmpdir)
+        dummy_geoms_source_path = os.path.join(
+            settings["beam_local_input_folder"],
+            settings["region"],
+            "r5",
+            settings["beam_geoms_fname"],
+        )
+        create_dummy_file(dummy_geoms_source_path)
 
-    # Get model factory and components
-    factory = ModelFactory()
-    preprocessor = factory.get_preprocessor(model_name)
-    runner = factory.get_runner(model_name)
-    postprocessor = factory.get_postprocessor(model_name)
+        run_id = str(uuid.uuid4())
+        provenance_tracker = OpenLineageTracker(
+            run_id, settings["output_directory"], folder_name="test-run"
+        )
+        provenance_tracker.initialize_from_settings(settings)
+        workspace = Workspace(
+            settings,
+            settings["output_directory"],
+            folder_name="test-run",
+            provenance_tracker=provenance_tracker,
+        )
+        state = WorkflowState.from_settings(settings)
 
-    # Preprocess step
-    pre_run_hash = provenance_tracker.start_model_run(f"{model_name}_preprocessor", state.current_year, state.current_inner_iter, description=f"Preprocessing for {model_name}")
-    input_data = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
-    provenance_tracker.complete_model_run(pre_run_hash)
+        # Create dummy input files for preprocessors
+        if model_name == "activitysim":
+            dummy_input = os.path.join(
+                workspace.get_asim_mutable_data_dir(), "dummy_input.csv"
+            )
+        else:
+            dummy_input = os.path.join(
+                workspace.get_beam_mutable_data_dir(), "dummy_input.csv"
+            )
+        create_dummy_file(dummy_input)
 
-    # Simulate runner step (will not actually run model, but should not error)
-    run_outputs, run_info = runner.run(input_data, state, workspace, provenance_tracker)
+        # Get model factory and components
+        factory = ModelFactory()
+        preprocessor = factory.get_preprocessor(model_name)
+        runner = factory.get_runner(model_name)
+        postprocessor = factory.get_postprocessor(model_name)
 
-    # Postprocess step
-    post_run_hash = provenance_tracker.start_model_run(f"{model_name}_postprocessor", state.current_year, state.current_inner_iter, description=f"Post-processing {model_name} outputs")
-    processed_outputs = postprocessor.postprocess(run_outputs, run_info, state, workspace, provenance_tracker, post_run_hash)
-    provenance_tracker.complete_model_run(post_run_hash)
+        # Preprocess step
+        pre_run_hash = provenance_tracker.start_model_run(
+            f"{model_name}_preprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            description=f"Preprocessing for {model_name}",
+        )
+        input_data = preprocessor.preprocess(
+            state, workspace, provenance_tracker, pre_run_hash
+        )
+        provenance_tracker.complete_model_run(pre_run_hash)
 
-    # Check that provenance records exist for the run
-    run_info_data = provenance_tracker.get_run_info()
-    assert "model_runs" in run_info_data
-    assert any(run for run in run_info_data["model_runs"].values() if run["model"].startswith(model_name))
-    assert "file_records" in run_info_data
-    # There should be at least one file record (from dummy input or output)
-    assert len(run_info_data["file_records"]) > 0
+        # Simulate runner step (will not actually run model, but should not error)
+        run_outputs, run_info = runner.run(
+            input_data, state, workspace, provenance_tracker
+        )
 
-    # Clean up
-    shutil.rmtree(tmpdir, ignore_errors=True)
+        # Postprocess step
+        post_run_hash = provenance_tracker.start_model_run(
+            f"{model_name}_postprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            description=f"Post-processing {model_name} outputs",
+        )
+        processed_outputs = postprocessor.postprocess(
+            run_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
+        )
+        provenance_tracker.complete_model_run(post_run_hash)
+
+        # Check that provenance records exist for the run
+        run_info_data = provenance_tracker.get_run_info()
+        assert "model_runs" in run_info_data
+        assert any(
+            run["model"].startswith(model_name)
+            for run in run_info_data["model_runs"].values()
+        )
+        assert "file_records" in run_info_data
+        # There should be at least one file record (from dummy input or output)
+        assert len(run_info_data["file_records"]) > 0
+
+        # Check that the openlineage.jsonl file was created and is valid
+        log_file_path = os.path.join(settings["output_directory"], "test-run", "openlineage.jsonl")
+        assert os.path.exists(log_file_path)
+        with open(log_file_path, "r") as f:
+            lines = f.readlines()
+            # Should be one START and one COMPLETE event for each of the 3 steps
+            assert len(lines) == 6
+            for line in lines:
+                event = json.loads(line)
+                assert "eventType" in event
+                assert "run" in event
+                assert "job" in event
+                if event["eventType"] == "START":
+                    assert "inputs" in event
+                else:
+                    assert "outputs" in event
+
+    finally:
+        os.chdir(original_cwd)
+        # Clean up
+        shutil.rmtree(tmpdir, ignore_errors=True)

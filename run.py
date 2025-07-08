@@ -13,7 +13,7 @@ from pilates.generic.model_factory import ModelFactory
 # Helper import for model/image lookup and docker client
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.provenance import OpenLineageTracker
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -637,7 +637,7 @@ def main():
     run_name = settings.get("run_name", f"pilates-run-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
     run_id = str(uuid.uuid4())
     
-    provenance_tracker = FileProvenanceTracker(run_id, output_path, folder_name=run_name)
+    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
     provenance_tracker.initialize_from_settings(settings)
     
     workspace = Workspace(settings, output_path, folder_name=run_name, provenance_tracker=provenance_tracker)

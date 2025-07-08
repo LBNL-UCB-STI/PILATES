@@ -87,6 +87,7 @@ class FileRecord(Record):
     metadata: dict = field(default_factory=dict)
     producing_run_id: Optional[str] = None
     consuming_run_ids: List[str] = field(default_factory=list)
+    schema: Optional[List[Dict[str, str]]] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)

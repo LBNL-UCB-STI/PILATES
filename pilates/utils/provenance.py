@@ -21,7 +21,11 @@ import subprocess
 import hashlib
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from openlineage.client.run import RunEvent, Run, Job, Dataset
+from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet, DatasetSchemaFieldType, SchemaField, SchemaDatasetFacet
+from openlineage.client import set_producer, OpenLineageClient
 
+set_producer("https://github.com/LBNL-UCB-STI/PILATES")
 
 from pilates.generic.records import (
     FileRecord,
@@ -438,11 +442,11 @@ class FileProvenanceTracker(ProvenanceTracker):
         destination_path: str,
         model: str,
         state: Optional[WorkflowState] = None,
-    ):
+    ) -> Optional[FileRecord]:
         if isinstance(record, FileRecord):
             self.record_input_file(
                 model=self._normalize_model_name(model),
-                file_path=record.file_path,
+                file_path=source_path,
                 model_run_id=self.current_model_run_id,
                 source_run_id=record.producing_run_id,
                 state=state,
@@ -451,15 +455,21 @@ class FileProvenanceTracker(ProvenanceTracker):
             shutil.move(source_path, destination_path)
             record.exists = False
             self.run_info.file_records[record.unique_id] = record
-            self.record_output_file(
+            output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
+                short_name=record.short_name,
                 model_run_id=self.current_model_run_id,
                 state=state,
             )
+            return output_record
         else:
             raise NotImplementedError("You have to move git repos manually")
-        return None
+
+    def record_input_record(self, record: Record, model_run_id: str = None):
+        if model_run_id is None:
+            model_run_id = self.current_model_run_id
+        self.run_info.model_runs[model_run_id].input_record_hashes.append(record.unique_id)
 
     def record_input_file(
         self,
@@ -610,3 +620,185 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
         self._save_run_info(run_info)
         return run_info
+
+
+class OpenLineageTracker(FileProvenanceTracker):
+    """
+    Extends FileProvenanceTracker to generate an OpenLineage event log
+    in a file named `openlineage.jsonl`.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        output_path: str,
+        folder_name: str = None,
+        use_file: bool = True,
+        use_marquez: bool = False,
+        marquez_url: str = "http://localhost:5000"
+    ):
+        """
+        Initializes the OpenLineageTracker instance.
+
+        Args:
+            run_id (str): Unique identifier for the run.
+            output_path (str): Path to the output directory where logs will be stored.
+            folder_name (str, optional): Name of the folder within the output path for storing logs.
+            use_file (bool): Whether to write events to a local file (default True).
+            use_marquez (bool): Whether to send events to Marquez (default False).
+            marquez_url (str): URL of the Marquez server (default "http://localhost:5000").
+
+        Note:
+            To use Marquez, ensure the OpenLineage client is installed and configured correctly.
+            `docker-compose up -d`
+            `python run.py --settings settings.yaml`
+            `docker-compose down`
+        """
+        super().__init__(run_id, output_path, folder_name)
+        self.namespace = "pilates-runs"
+        self.use_file = use_file
+        self.use_marquez = use_marquez
+
+        # Setup file logging if enabled
+        self.log_path = None
+        if self.use_file and self.output_path:
+            self.log_path = os.path.join(
+                self.output_path, self.folder_name or "", "openlineage.jsonl"
+            )
+            if os.path.exists(self.log_path):
+                os.remove(self.log_path)
+
+        # Setup Marquez client if enabled
+        self.marquez_client = None
+        if self.use_marquez:
+            from openlineage.client import OpenLineageClient
+            self.marquez_client = OpenLineageClient(url=marquez_url)
+
+    def _emit_event(self, event: RunEvent):
+        """
+        Emits an OpenLineage event to configured destinations.
+
+        Args:
+            event (RunEvent): The OpenLineage event to emit.
+        """
+        # Emit to file if enabled
+        if self.use_file and self.log_path:
+            try:
+                with open(self.log_path, "a") as f:
+                    f.write(event.to_json() + "\n")
+            except IOError as e:
+                logger.error(f"Could not write to OpenLineage log file: {e}")
+
+        # Emit to Marquez if enabled
+        if self.use_marquez and self.marquez_client:
+            try:
+                self.marquez_client.emit(event)
+            except Exception as e:
+                logger.error(f"Could not send event to Marquez: {e}")
+
+    def _get_job_facets(self, description: str, git_hash: str = None):
+        """
+        Generates job facets for the OpenLineage event.
+
+        Args:
+            description (str): Description of the job.
+            git_hash (str, optional): Git hash of the repository.
+
+        Returns:
+            dict: A dictionary containing job facets.
+        """
+        facets = {"documentation": DocumentationJobFacet(description=description)}
+        if git_hash:
+            # Assuming the repo path is the project root for simplicity
+            repo_path = find_project_root() or os.getcwd()
+            facets["sourceCodeLocation"] = SourceCodeLocationJobFacet(
+                type="git", url=repo_path, repo=repo_path, tag=git_hash
+            )
+        return facets
+
+    def _create_dataset_with_facets(self, file_record: FileRecord) -> Dataset:
+        """
+        Creates an OpenLineage Dataset object with appropriate facets based on file record.
+
+        Args:
+            file_record (FileRecord): The file record to create a dataset for
+
+        Returns:
+            Dataset: OpenLineage Dataset with appropriate facets
+        """
+        facets = {}
+
+        # Add schema facet if schema information exists
+        if file_record.schema:
+            fields = [
+                SchemaField(
+                    name=field.get('name'),
+                    type=field.get('type'),
+                    description=field.get('description')
+                )
+                for field in file_record.schema
+            ]
+            if fields:
+                facets['schema'] = SchemaDatasetFacet(fields=fields)
+
+        return Dataset(
+            namespace=self.namespace,
+            name=file_record.file_path,
+            facets=facets
+        )
+
+    def start_model_run(
+            self,
+            model: str,
+            year: int = None,
+            iteration: int = None,
+            description: str = None,
+            inputs: RecordStore = RecordStore(),
+    ) -> str:
+        """Start a model run and emit OpenLineage event."""
+        model_run_id = super().start_model_run(model, year, iteration, description, inputs)
+
+        input_datasets = []
+        current_run_info = self.run_info.model_runs.get(model_run_id)
+        if current_run_info:
+            for record_hash in current_run_info.input_record_hashes:
+                if record_hash in self.run_info.file_records:
+                    file_record = self.run_info.file_records[record_hash]
+                    input_datasets.append(self._create_dataset_with_facets(file_record))
+
+        event = RunEvent(
+            eventType="START",
+            eventTime=datetime.now().isoformat(),
+            run=Run(runId=model_run_id),
+            job=Job(
+                namespace=self.namespace,
+                name=model,
+                facets=self._get_job_facets(description or f"Pilates model: {model}")
+            ),
+            inputs=input_datasets,
+        )
+        self._emit_event(event)
+        return model_run_id
+
+    def complete_model_run(self, run_hash: str, status: str = "completed"):
+        """Complete a model run and emit OpenLineage event."""
+        super().complete_model_run(run_hash, status)
+
+        output_datasets = []
+        model_run_info = self.run_info.model_runs.get(run_hash)
+        if model_run_info:
+            model_name = model_run_info.model
+            for record_hash in model_run_info.output_record_hashes:
+                if record_hash in self.run_info.file_records:
+                    file_record = self.run_info.file_records[record_hash]
+                    output_datasets.append(self._create_dataset_with_facets(file_record))
+
+            event_type = "COMPLETE" if status == "completed" else "FAIL"
+            event = RunEvent(
+                eventType=event_type,
+                eventTime=datetime.now().isoformat(),
+                run=Run(runId=run_hash),
+                job=Job(namespace=self.namespace, name=model_name),
+                outputs=output_datasets,
+            )
+            self._emit_event(event)

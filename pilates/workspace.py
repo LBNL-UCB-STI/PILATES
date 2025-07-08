@@ -5,7 +5,7 @@ from pilates.urbansim import preprocessor as usim_pre
 from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
 from pilates.utils.beam import get_beam_source_dir
-from pilates.utils.provenance import ProvenanceTracker
+from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class Workspace:
         settings: dict,
         output_path: str,
         folder_name: str,
-        provenance_tracker: "ProvenanceTracker",
+        provenance_tracker: "FileProvenanceTracker",
     ):
         self.settings = settings
         self.output_path = output_path
@@ -63,7 +63,7 @@ class Workspace:
         if settings.get("travel_model") == "beam":
             input_dir = self.get_beam_mutable_data_dir()
             os.makedirs(input_dir, exist_ok=True)
-            beam_pre.copy_data_to_mutable_location(settings, input_dir)
+            beam_pre.copy_data_to_mutable_location(settings, input_dir, self.provenance_tracker)
             os.makedirs(self.get_beam_output_dir(), exist_ok=True)
             self._record_initial_repo_files("beam", get_beam_source_dir(settings))
 
@@ -100,7 +100,7 @@ class Workspace:
 
             # ActivitySim config copy
             if model_name == "activitysim":
-                asim_pre.copy_data_to_mutable_location(settings, base_folder_path)
+                asim_pre.copy_data_to_mutable_location(settings, base_folder_path, self.provenance_tracker)
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
                 asim_config_dir = os.path.join(
                     settings.get("asim_local_configs_folder"), settings.get("region")
