@@ -55,6 +55,8 @@ export GEOS_CONFIG=$HOME/.local/geos/bin/geos-config
 #pip install --user joblib  # Adding joblib for parallel processing
 #pip install --user docker
 #pip install --user sortedcontainers
+pip install --user pyarrow==10.0.1
+pip install --user fastparquet==0.8.3
 
 # Set PYTHONPATH
 export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
