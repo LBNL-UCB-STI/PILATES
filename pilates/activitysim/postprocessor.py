@@ -633,6 +633,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
 
+        processed_records = []
+
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
@@ -640,13 +642,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 target = os.path.join(
                     iteration_folder_path, record.short_name + ".parquet"
                 )
-                provenance_tracker.move_file(
+                moved_record = provenance_tracker.move_file(
                     record,
                     source,
                     target,
                     model="activitysim_postprocessor",
                     state=state,
                 )
+                processed_records.append(moved_record)
 
         # 1. Load raw ActivitySim outputs from files
         # The raw_outputs RecordStore contains the paths to these files.
@@ -659,7 +662,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(r, "file_path")
         ]
 
-        processed_records = []
 
         if state.is_enabled(WorkflowState.Stage.land_use):
 
@@ -690,22 +692,20 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if usim_record:
                 processed_records.append(usim_record)
 
-        # 4. Create BEAM input data (if traffic assignment is enabled)
-        if settings.get("traffic_assignment_enabled", False):
-            beam_input_zip_path, beam_record = create_beam_input_data(
-                settings,
-                state,
-                workspace,
-                provenance_tracker,
-                runInfo,
-                asim_output_dict,
-                source_file_paths,
-                model_run_hash,
-            )
-            if beam_record:
-                processed_records.append(beam_record)
-
-        # The logic for warm start is handled separately in the main run script.
+        # 4. Create BEAM input data THIS ISN'T ACTUALLY USED
+        # if settings.get("traffic_assignment_enabled", False):
+        #     beam_input_zip_path, beam_record = create_beam_input_data(
+        #         settings,
+        #         state,
+        #         workspace,
+        #         provenance_tracker,
+        #         runInfo,
+        #         asim_output_dict,
+        #         source_file_paths,
+        #         model_run_hash,
+        #     )
+        #     if beam_record:
+        #         processed_records.append(beam_record)
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)

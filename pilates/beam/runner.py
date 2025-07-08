@@ -75,6 +75,14 @@ class BeamRunner(GenericRunner):
             inputs=store,
         )
 
+        beam_data_repo = provenance_tracker.run_info.repo_records["beam"][0]
+
+        provenance_tracker.record_input_record(beam_data_repo)
+
+        # for record in store:
+        #     if isinstance(record, FileRecord):
+        #         provenance_tracker.record_input_record(record)
+
         success = self.run_container(
             client=client,
             settings=settings,

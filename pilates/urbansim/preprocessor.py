@@ -139,21 +139,21 @@ def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
     provenance_tracker.record_input_file(
         "urbansim", dest, description="UrbanSim model data"
     )
-    other_data_fnames = [
-        "hsize_ct_{0}.csv".format(region_id),
-        "income_rates_{0}.csv".format(region_id),
-        "relmap_{0}.csv".format(region_id),
-        "schools_2010.csv",
-        "blocks_school_districts_2010.csv",
-    ]
-    for fname in other_data_fnames:
+    other_data_fnames = {
+        "hsize_ct_{0}.csv".format(region_id): "hh_size",
+        "income_rates_{0}.csv".format(region_id): "income_rates",
+        "relmap_{0}.csv".format(region_id): "relmap",
+        "schools_2010.csv": "schools",
+        "blocks_school_districts_2010.csv": "school_districts",
+    }
+    for fname, short_name in other_data_fnames.items():
         src = os.path.join(data_dir, fname)
         dest = os.path.join(output_dir, fname)
         if os.path.exists(src):
             logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
             shutil.copyfile(src, dest)
             provenance_tracker.record_input_file(
-                "urbansim", dest, description=f"UrbanSim input file: {fname}"
+                "urbansim", dest, description=f"UrbanSim input file: {fname}", short_name=short_name
             )
 
 

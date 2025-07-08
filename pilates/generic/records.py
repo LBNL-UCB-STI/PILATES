@@ -143,3 +143,25 @@ class PilatesRunInfo:
                 return 0.0
 
         return max(runs, key=get_time)
+
+    def get_run_outputs(self, model_run_hash: str) -> List[str]:
+        """
+        Returns a list of file hashes that are outputs of the specified model run.
+        """
+        run_info = self.model_runs.get(model_run_hash)
+        if not run_info:
+            return []
+
+        return run_info.output_record_hashes
+
+    def get_latest_model_run_output_records(self, model_name: str) -> List[FileRecord]:
+        """
+        Returns a list of FileRecords that are outputs of the latest model run for the given model name.
+        """
+        latest_run_hash = self.get_latest_model_run(model_name)
+        if not latest_run_hash:
+            return []
+
+        run_outputs = self.get_run_outputs(latest_run_hash)
+
+        return [self.file_records[h] for h in run_outputs if h in self.file_records]

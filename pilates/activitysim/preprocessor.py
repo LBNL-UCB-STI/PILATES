@@ -29,6 +29,7 @@ from pilates.utils.geog import (
 from pilates.utils.io import read_datastore
 
 from pilates.generic.preprocessor import GenericPreprocessor
+from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -1367,6 +1368,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             input_skims_record = provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
                 path_to_beam_skims,
+                short_name="omx_skims",
                 model_run_id=model_run_hash,
                 description="Raw BEAM OD skims",
             )
@@ -2259,7 +2261,8 @@ def _create_land_use_table(
     return zones
 
 
-def copy_data_to_mutable_location(settings, folder_path, state=None):
+def copy_data_to_mutable_location(settings, folder_path, provenance_tracker: FileProvenanceTracker):
+    logger.info(settings)
     input_dir = os.path.join(folder_path, settings["asim_local_mutable_data_folder"])
     os.makedirs(input_dir, exist_ok=True)
     region = settings["region"]
@@ -2299,6 +2302,10 @@ def copy_data_to_mutable_location(settings, folder_path, state=None):
         )
     )
     shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
+    git_hash = provenance_tracker.get_git_hash(configs_source_dir)
+    provenance_tracker.record_repo_input(
+        "beam", configs_dest_dir, "ActivitySim Config Repo", git_hash
+    )
 
     copy_beam_geoms(
         settings, beam_geoms_location, asim_geoms_location, beam_shape_location
@@ -2403,6 +2410,7 @@ def create_asim_data_from_h5(
     provenance_tracker.record_input_file(
         "activitysim_preprocessor",
         store._path,
+        short_name="urbansim_h5",
         model_run_id=model_run_hash,
         description="UrbanSim H5 data store",
     )
@@ -2500,6 +2508,7 @@ def create_asim_data_from_h5(
     households_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "households.csv"),
+        short_name="households",
         description="activitysim households input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,
@@ -2509,6 +2518,7 @@ def create_asim_data_from_h5(
     persons_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "persons.csv"),
+        short_name="persons",
         description="activitysim persons input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,
@@ -2518,6 +2528,7 @@ def create_asim_data_from_h5(
     land_use_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "land_use.csv"),
+        short_name="land_use",
         description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,

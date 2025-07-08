@@ -7,9 +7,9 @@ import pandas as pd
 import numpy as np
 
 from pilates.utils.io import locate_asim_file, locate_beam_file
-from pilates.utils.provenance import find_project_root
+from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record
+from pilates.generic.records import RecordStore, Record, RepoRecord
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,11 @@ beam_param_map = {
 }
 
 
-def copy_data_to_mutable_location(settings, output_dir):
+def copy_data_to_mutable_location(settings, output_dir, provenance_tracker: FileProvenanceTracker):
     """
     Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
     """
+    output_records = []
     region = settings["region"]
     # Find the project root by searching upwards for 'pilates' or '.git'
     pilates_root = find_project_root()
@@ -76,6 +77,11 @@ def copy_data_to_mutable_location(settings, output_dir):
         return
 
     shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
+
+    git_hash = provenance_tracker.get_git_hash(beam_production_path)
+    provenance_tracker.record_repo_input(
+        "beam", dest, "Beam Production Data Repo", git_hash
+    )
 
     # Log the files that were copied for verification
     if os.path.exists(dest):
@@ -295,10 +301,13 @@ def copy_plans_from_asim(
             beam_file_path,
         )
 
+
+
         # Always record the ActivitySim file as an input to the BEAM preprocessor run
         provenance_tracker.record_input_file(
             "beam_preprocessor",
             asim_file_path,
+            short_name=beam_file_name,
             description=f"ActivitySim output for BEAM: {beam_file_name}",
             model_run_id=model_run_hash,
         )
@@ -583,13 +592,18 @@ def copy_plans_from_asim(
         
         # Find ActivitySim output files using provenance tracker
         required_files = ["beam_plans", "households", "persons"]
-        asim_file_paths = find_activitysim_output_files(
-            provenance_tracker, workspace, required_files
-        )
+        asim_output_records = provenance_tracker.run_info.get_latest_model_run_output_records("activitysim_postprocessor")
+
         
-        if not asim_file_paths:
+        if len(asim_output_records) == 0:
             logger.error("No ActivitySim output files found in provenance tracker")
             return RecordStore()
+
+        asim_file_paths = {}
+        for record in asim_output_records:
+            if record.short_name in required_files:
+                asim_file_paths[record.short_name] = os.path.join(workspace.output_path, record.file_path)
+                logger.info(f"Found ActivitySim output file {record.short_name}: {record.file_path}")
         
         if replanning_iteration_number <= 0:
             record_list = []
@@ -686,6 +700,9 @@ class BeamPreprocessor(GenericPreprocessor):
             iteration_number,
             model_run_hash,
         )
+
+        # Add the BEAM scenario folder to the record store
+        store.add_record(provenance_tracker.run_info.repo_records["beam"][0])
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
