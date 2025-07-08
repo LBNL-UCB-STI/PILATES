@@ -175,11 +175,13 @@ def copy_plans_from_asim(settings, state: "WorkflowState", replanning_iteration_
             asim_file_path = locate_asim_file(asim_file_name, file_format)
             beam_file_path = locate_beam_file(beam_file_name, file_format)
             logger.info("Copying asim file %s to beam input scenario file %s", asim_file_path, beam_file_path)
-            df = pd.read_parquet(asim_file_path).rename(columns={"VEHICL": "cars"}).rename(
-                columns={"auto_ownership": "cars"}).rename(columns={"tripId": "trip_id"})
-            if "household_id" in df.columns:
-                df = df.astype({"household_id": pd.Int64Dtype()})
-            df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
+
+            if os.path.exists(asim_file_path):
+                df = pd.read_parquet(asim_file_path).rename(columns={"VEHICL": "cars"}).rename(
+                    columns={"auto_ownership": "cars"}).rename(columns={"tripId": "trip_id"})
+                if "household_id" in df.columns:
+                    df = df.astype({"household_id": pd.Int64Dtype()})
+                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
 
     def copy_with_compression_asim_file_to_asim_archive(file_path, file_name, year, replanning_iteration_number, fmt):
         iteration_folder_name = "year-{0}-iteration-{1}".format(year, replanning_iteration_number)
