@@ -1136,7 +1136,7 @@ if __name__ == '__main__':
             state.complete(WorkflowState.Stage.traffic_assignment_replan)
 
         activity_demand_model = settings.get('activity_demand_model', "")
-        if (activity_demand_model.lower() == "activitysim") and activity_demand_enabled:
+        if (activity_demand_enabled and activity_demand_model.lower() == "activitysim"):
             if settings['file_format'] == "parquet":
                 try:
                     asim_data_dir = os.path.join(working_dir, settings['asim_local_output_folder'], "cache")
