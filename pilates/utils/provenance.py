@@ -12,18 +12,20 @@ Functions:
 - find_project_root: Searches upwards from a given path for a directory containing specific marker directories/files.
 """
 
-import shutil
-import uuid
-import logging
-import json
-import os
-import subprocess
 import hashlib
+import json
+import logging
+import os
+import shutil
+import subprocess
+import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from openlineage.client.run import RunEvent, Run, Job, Dataset
-from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet, DatasetSchemaFieldType, SchemaField, SchemaDatasetFacet
-from openlineage.client import set_producer, OpenLineageClient
+from typing import Dict, List, Optional, Any, Union
+
+import attr
+from openlineage.client import set_producer
+from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
+from openlineage.client.run import RunEvent, Run, Job
 
 set_producer("https://github.com/LBNL-UCB-STI/PILATES")
 
@@ -84,8 +86,8 @@ class ProvenanceTracker:
         Returns the current model run info if available, otherwise None
         """
         if (
-            self.current_model_run_id
-            and self.current_model_run_id in self.run_info.model_runs
+                self.current_model_run_id
+                and self.current_model_run_id in self.run_info.model_runs
         ):
             return self.run_info.model_runs[self.current_model_run_id]
         else:
@@ -111,11 +113,11 @@ class ProvenanceTracker:
         self.run_info.models_used = list(set(models_used))
 
     def record_repo_input(
-        self,
-        model: str,
-        repo_path: str,
-        description: str = None,
-        git_hash: str = None,
+            self,
+            model: str,
+            repo_path: str,
+            description: str = None,
+            git_hash: str = None,
     ):
         model = self._normalize_model_name(model)
         if model not in self.run_info.repo_records:
@@ -162,17 +164,17 @@ class ProvenanceTracker:
             if model not in summary["run_status"]:
                 summary["run_status"][model] = {}
             summary["run_status"][model][status] = (
-                summary["run_status"][model].get(status, 0) + 1
+                    summary["run_status"][model].get(status, 0) + 1
             )
         return summary
 
     def start_model_run(
-        self,
-        model: str,
-        year: int = None,
-        iteration: int = None,
-        description: str = None,
-        inputs: RecordStore = RecordStore(),
+            self,
+            model: str,
+            year: int = None,
+            iteration: int = None,
+            description: str = None,
+            inputs: RecordStore = RecordStore(),
     ) -> str:
         model_run_id = (
             f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
@@ -192,10 +194,21 @@ class ProvenanceTracker:
         self._save_run_info()
         return model_run_id
 
-    def complete_model_run(self, run_hash: str, status: str = "completed"):
+    def complete_model_run(self, run_hash: str, status: str = "completed",
+                           output_datasets: List[Union[FileRecord, RepoRecord]] = None):
+        if output_datasets is None:
+            output_datasets = []
         if run_hash in self.run_info.model_runs:
             self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
             self.run_info.model_runs[run_hash].status = status
+            for dataset in output_datasets:
+                if isinstance(dataset, Record):
+                    if dataset.unique_id not in self.run_info.model_runs[run_hash].output_record_hashes:
+                        logger.info(f"Adding dataset {dataset.short_name} to model run {run_hash} outputs, despite it "
+                                    f"not being flagged in the main model run.")
+                        self.run_info.model_runs[run_hash].output_record_hashes.append(
+                            dataset.unique_id
+                        )
             self._save_run_info()
         else:
             logger.error(f"Model run hash {run_hash} not found to complete.")
@@ -257,9 +270,9 @@ class FileProvenanceTracker(ProvenanceTracker):
             )
             return result.stdout.strip()
         except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
+                subprocess.CalledProcessError,
+                FileNotFoundError,
+                subprocess.TimeoutExpired,
         ) as e:
             logger.warning(f"Could not determine git hash for repo at {repo_path}: {e}")
             return None
@@ -276,7 +289,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return abs_path
 
     def _get_validated_paths(
-        self, file_path: str, skip_missing: bool
+            self, file_path: str, skip_missing: bool
     ) -> (Optional[str], Optional[str]):
         abs_path = self._validate_file_path(file_path)
         if not abs_path and skip_missing:
@@ -287,7 +300,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return path_to_use, relative_path
 
     def _calculate_file_hash(
-        self, file_path: str, state: Optional[WorkflowState] = None
+            self, file_path: str, state: Optional[WorkflowState] = None
     ) -> Optional[str]:
         """
         Calculates the SHA-256 hash of a file, depending on its contents and its location. It also optionally
@@ -358,12 +371,15 @@ class FileProvenanceTracker(ProvenanceTracker):
         logger.info("FileProvenanceTracker initialized with settings.")
 
     def record_repo_input(
-        self,
-        model: str,
-        repo_path: str,
-        description: str = None,
-        git_hash: str = None,
-    ):
+            self,
+            model: str,
+            repo_path: str,
+            short_name: str = None,
+            description: str = None,
+            git_hash: str = None,
+    ) -> RepoRecord:
+        if git_hash is None:
+            git_hash = self._calculate_file_hash(repo_path)
         model = self._normalize_model_name(model)
         abs_path = self._validate_file_path(repo_path)
         if not abs_path:
@@ -384,14 +400,15 @@ class FileProvenanceTracker(ProvenanceTracker):
         logger.debug(
             f"Recorded repository input for {model}: {relative_path} (exists: {abs_path is not None})"
         )
+        return repo_record
 
     def _get_or_create_file_record(
-        self,
-        file_path: str,
-        skip_missing: bool = True,
-        description: Optional[str] = None,
-        short_name: Optional[str] = None,
-        state: Optional[WorkflowState] = None,
+            self,
+            file_path: str,
+            skip_missing: bool = True,
+            description: Optional[str] = None,
+            short_name: Optional[str] = None,
+            state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
@@ -436,12 +453,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         self._save_run_info()
 
     def move_file(
-        self,
-        record: Record,
-        source_path: str,
-        destination_path: str,
-        model: str,
-        state: Optional[WorkflowState] = None,
+            self,
+            record: Record,
+            source_path: str,
+            destination_path: str,
+            model: str,
+            state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         if isinstance(record, FileRecord):
             self.record_input_file(
@@ -452,7 +469,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 state=state,
             )
             os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-            shutil.move(source_path, destination_path)
+            shutil.copyfile(source_path, destination_path)
             record.exists = False
             self.run_info.file_records[record.unique_id] = record
             output_record = self.record_output_file(
@@ -472,16 +489,16 @@ class FileProvenanceTracker(ProvenanceTracker):
         self.run_info.model_runs[model_run_id].input_record_hashes.append(record.unique_id)
 
     def record_input_file(
-        self,
-        model: str,
-        file_path: str,
-        source_run_id: str = None,
-        description: str = None,
-        short_name: str = None,
-        source_file_paths: List[str] = None,
-        skip_missing: bool = True,
-        model_run_id: str = None,
-        state: Optional[WorkflowState] = None,
+            self,
+            model: str,
+            file_path: str,
+            source_run_id: str = None,
+            description: str = None,
+            short_name: str = None,
+            source_file_paths: List[str] = None,
+            skip_missing: bool = True,
+            model_run_id: str = None,
+            state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
@@ -515,16 +532,16 @@ class FileProvenanceTracker(ProvenanceTracker):
         return file_record
 
     def record_output_file(
-        self,
-        model: str,
-        file_path: str,
-        year: int = None,
-        description: str = None,
-        skip_missing: bool = True,
-        model_run_id: str = None,
-        short_name: str = None,
-        source_file_paths: list = None,
-        state: Optional[WorkflowState] = None,
+            self,
+            model: str,
+            file_path: str,
+            year: int = None,
+            description: str = None,
+            skip_missing: bool = True,
+            model_run_id: str = None,
+            short_name: str = None,
+            source_file_paths: list = None,
+            state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
@@ -580,7 +597,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         return dataclasses.asdict(self.run_info)
 
     def _initialize_run_info(self) -> PilatesRunInfo:
-        import dataclasses
 
         if os.path.exists(self.run_info_path):
             try:
@@ -629,13 +645,13 @@ class OpenLineageTracker(FileProvenanceTracker):
     """
 
     def __init__(
-        self,
-        run_id: str,
-        output_path: str,
-        folder_name: str = None,
-        use_file: bool = True,
-        use_marquez: bool = False,
-        marquez_url: str = "http://localhost:5000"
+            self,
+            run_id: str,
+            output_path: str,
+            folder_name: str = None,
+            use_file: bool = True,
+            use_marquez: bool = True,
+            marquez_url: str = "http://localhost:5002"
     ):
         """
         Initializes the OpenLineageTracker instance.
@@ -655,7 +671,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             `docker-compose down`
         """
         super().__init__(run_id, output_path, folder_name)
-        self.namespace = "pilates-runs"
+        self.namespace = "default"
         self.use_file = use_file
         self.use_marquez = use_marquez
 
@@ -685,7 +701,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         if self.use_file and self.log_path:
             try:
                 with open(self.log_path, "a") as f:
-                    f.write(event.to_json() + "\n")
+                    f.write(json.dumps(attr.asdict(event)) + "\n")
             except IOError as e:
                 logger.error(f"Could not write to OpenLineage log file: {e}")
 
@@ -696,7 +712,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             except Exception as e:
                 logger.error(f"Could not send event to Marquez: {e}")
 
-    def _get_job_facets(self, description: str, git_hash: str = None):
+    def _get_job_facets(self, description: str, model_run_id: str = None, git_hash: str = None):
         """
         Generates job facets for the OpenLineage event.
 
@@ -708,44 +724,31 @@ class OpenLineageTracker(FileProvenanceTracker):
             dict: A dictionary containing job facets.
         """
         facets = {"documentation": DocumentationJobFacet(description=description)}
+        if model_run_id:
+            facets["customModelRunId"] = {"_producer": "pilates", "model_run_id": model_run_id}
         if git_hash:
-            # Assuming the repo path is the project root for simplicity
             repo_path = find_project_root() or os.getcwd()
             facets["sourceCodeLocation"] = SourceCodeLocationJobFacet(
                 type="git", url=repo_path, repo=repo_path, tag=git_hash
             )
         return facets
 
-    def _create_dataset_with_facets(self, file_record: FileRecord) -> Dataset:
-        """
-        Creates an OpenLineage Dataset object with appropriate facets based on file record.
-
-        Args:
-            file_record (FileRecord): The file record to create a dataset for
-
-        Returns:
-            Dataset: OpenLineage Dataset with appropriate facets
-        """
-        facets = {}
-
-        # Add schema facet if schema information exists
-        if file_record.schema:
-            fields = [
-                SchemaField(
-                    name=field.get('name'),
-                    type=field.get('type'),
-                    description=field.get('description')
-                )
-                for field in file_record.schema
-            ]
-            if fields:
-                facets['schema'] = SchemaDatasetFacet(fields=fields)
-
-        return Dataset(
-            namespace=self.namespace,
-            name=file_record.file_path,
-            facets=facets
+    def move_file(
+            self,
+            record: Record,
+            source_path: str,
+            destination_path: str,
+            model: str,
+            state: Optional[WorkflowState] = None,
+    ) -> Optional[FileRecord]:
+        output_record = super().move_file(
+            record, source_path, destination_path, model, state
         )
+
+        if state:
+            # If state is provided, update the output record with state information
+            output_record.short_name = output_record.short_name + f"_{state.current_year}_{state.current_inner_iter}"
+        return output_record
 
     def start_model_run(
             self,
@@ -757,6 +760,7 @@ class OpenLineageTracker(FileProvenanceTracker):
     ) -> str:
         """Start a model run and emit OpenLineage event."""
         model_run_id = super().start_model_run(model, year, iteration, description, inputs)
+        run_id_uuid = self.run_info.model_runs[model_run_id].openlineage_id
 
         input_datasets = []
         current_run_info = self.run_info.model_runs.get(model_run_id)
@@ -764,41 +768,67 @@ class OpenLineageTracker(FileProvenanceTracker):
             for record_hash in current_run_info.input_record_hashes:
                 if record_hash in self.run_info.file_records:
                     file_record = self.run_info.file_records[record_hash]
-                    input_datasets.append(self._create_dataset_with_facets(file_record))
+                    dataset = file_record.toInputDataset(self.namespace)
+                    input_datasets.append(dataset)
+        input_names = [dataset.name for dataset in input_datasets]
+        for record in inputs.records.values():
+            dataset = record.toInputDataset(self.namespace)
+            if dataset.name not in input_names:
+                input_datasets.append(dataset)
+                logger.info(f"Adding input dataset {dataset.name} to run inputs.")
+            else:
+                logger.warning(
+                    f"Input dataset {dataset.name} already exists in the run inputs, skipping duplicate."
+                )
 
         event = RunEvent(
             eventType="START",
             eventTime=datetime.now().isoformat(),
-            run=Run(runId=model_run_id),
+            run=Run(runId=run_id_uuid),
             job=Job(
                 namespace=self.namespace,
                 name=model,
-                facets=self._get_job_facets(description or f"Pilates model: {model}")
+                facets=self._get_job_facets(description or f"Pilates model: {model}", model_run_id=model_run_id)
             ),
             inputs=input_datasets,
+            producer="https://github.com/LBNL-UCB-STI/PILATES"
         )
         self._emit_event(event)
         return model_run_id
 
-    def complete_model_run(self, run_hash: str, status: str = "completed"):
+    def complete_model_run(self, run_hash: str, status: str = "completed",
+                           output_datasets: List[Union[FileRecord, RepoRecord]] = None):
         """Complete a model run and emit OpenLineage event."""
-        super().complete_model_run(run_hash, status)
+        if output_datasets is None:
+            output_datasets = []
 
-        output_datasets = []
+        output_names = [dataset.short_name for dataset in output_datasets]
+
         model_run_info = self.run_info.model_runs.get(run_hash)
         if model_run_info:
             model_name = model_run_info.model
+            run_id_uuid = model_run_info.openlineage_id
             for record_hash in model_run_info.output_record_hashes:
                 if record_hash in self.run_info.file_records:
                     file_record = self.run_info.file_records[record_hash]
-                    output_datasets.append(self._create_dataset_with_facets(file_record))
+                    if file_record.short_name not in output_names:
+                        output_datasets.append(file_record.toOutputDataset(self.namespace))
 
             event_type = "COMPLETE" if status == "completed" else "FAIL"
             event = RunEvent(
                 eventType=event_type,
                 eventTime=datetime.now().isoformat(),
-                run=Run(runId=run_hash),
-                job=Job(namespace=self.namespace, name=model_name),
+                run=Run(runId=run_id_uuid),
+                job=Job(
+                    namespace=self.namespace,
+                    name=model_name,
+                    facets=self._get_job_facets(
+                        model_run_info.description or f"Pilates model: {model_name}",
+                        model_run_id=run_hash
+                    )
+                ),
                 outputs=output_datasets,
+                producer="https://github.com/LBNL-UCB-STI/PILATES"
             )
             self._emit_event(event)
+        super().complete_model_run(run_hash, status, output_datasets)

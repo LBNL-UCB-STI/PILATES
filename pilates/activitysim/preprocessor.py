@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -16,19 +16,15 @@ from pandas.api.types import is_string_dtype
 from shapely import wkt
 from tqdm import tqdm
 
+from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.geog import (
     get_block_geoms,
-    map_block_to_taz,
     get_zone_from_points,
     get_taz_geoms,
-    get_county_block_geoms,
     geoid_to_zone_map,
 )
-
 from pilates.utils.io import read_datastore
-
-from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
@@ -155,7 +151,7 @@ def zone_id_to_taz(zones, asim_zone_id_col="TAZ", default_zone_id_col="zone_id")
 
 
 def read_zone_geoms(
-    settings, year, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"
+        settings, year, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"
 ):
     """
     Returns a GeoPandas dataframe with the zones geometries.
@@ -547,9 +543,9 @@ def _build_od_matrix(df, metric, order, fill_na=0.0):
     assert out.index.isin(order).all(), "There are missing origins"
     assert out.columns.isin(order).all(), "There are missing destinations"
     assert (
-        num_zones,
-        num_zones,
-    ) == out.shape, "Origin-Destination matrix is not square"
+               num_zones,
+               num_zones,
+           ) == out.shape, "Origin-Destination matrix is not square"
 
     return out.fillna(fill_na).values, useDefaults
 
@@ -948,24 +944,24 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
                     missing_values = np.isnan(temp)
                     if np.any(missing_values):
                         if (
-                            (measure == "IVT")
-                            | (measure == "TOTIVT")
-                            | (measure == "KEYIVT")
+                                (measure == "IVT")
+                                | (measure == "TOTIVT")
+                                | (measure == "KEYIVT")
                         ):
                             temp[missing_values] = (
-                                distance_miles[missing_values]
-                                / default_speed_mph.get(path.split("_")[1], 10.0)
-                                * 60
-                                * 100
+                                    distance_miles[missing_values]
+                                    / default_speed_mph.get(path.split("_")[1], 10.0)
+                                    * 60
+                                    * 100
                             )  # Assume 20 mph average, with 100x multiplier
                             # temp[tooManyFailures] = 0
                         elif measure == "DIST":
                             temp[missing_values] = distance_miles[missing_values]
                         elif (
-                            (measure == "WAIT")
-                            | (measure == "WACC")
-                            | (measure == "WEGR")
-                            | (measure == "IWAIT")
+                                (measure == "WAIT")
+                                | (measure == "WACC")
+                                | (measure == "WEGR")
+                                | (measure == "IWAIT")
                         ):
                             temp[missing_values] = 1000.0
                         elif measure == "FAR":
@@ -975,11 +971,11 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
                         elif measure == "BOARDS":
                             temp[missing_values] = 2.0
                         elif (measure == "DDIST") & (
-                            path.endswith("DRV") | path.startswith("DRV")
+                                path.endswith("DRV") | path.startswith("DRV")
                         ):
                             temp[missing_values] = 2.0
                         elif (measure == "DTIME") & (
-                            path.endswith("DRV") | path.startswith("DRV")
+                                path.endswith("DRV") | path.startswith("DRV")
                         ):
                             temp[missing_values] = 1500.0
                         else:
@@ -1057,7 +1053,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
                     if np.any(missing_values):
                         if measure == "TIME":
                             temp[missing_values] = (
-                                distance_miles[missing_values] / 35 * 60
+                                    distance_miles[missing_values] / 35 * 60
                             )  # Assume 35 mph average
                         elif measure == "DIST":
                             temp[missing_values] = distance_miles[missing_values]
@@ -1134,7 +1130,7 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
                             mtx[orig, dest] = missing_measure
                         elif measure == "TIME":
                             mtx[orig, dest] = missing_measure * (
-                                60 / 40
+                                    60 / 40
                             )  # Assumes average speed of 40 miles/hour
                         else:
                             mtx[orig, dest] = 0  ## Assumes no toll or payment
@@ -1194,8 +1190,8 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) ->
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
         if isinstance(tempSkims, pd.DataFrame):
             skims = tempSkims.loc[
-                tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :
-            ]
+                    tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :
+                    ]
             skims = _raw_beam_skims_preprocess(settings, state.year, skims)
             auto_df, transit_df = _create_skims_by_mode(settings, skims)
             ridehail_df = _load_raw_beam_origin_skims(settings)
@@ -1229,14 +1225,14 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) ->
 
 
 def plot_skims(
-    settings,
-    zones,
-    skims,
-    order,
-    random_sample=6,
-    cols=3,
-    name="DIST",
-    units="in miles",
+        settings,
+        zones,
+        skims,
+        order,
+        random_sample=6,
+        cols=3,
+        name="DIST",
+        units="in miles",
 ):
     """
     Plot a map of skims for a random set zones to all other zones. For validation/debugging purposes.
@@ -1332,11 +1328,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
 
     def preprocess(
-        self,
-        state: "WorkflowState",
-        workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
-        model_run_hash: str,
+            self,
+            state: "WorkflowState",
+            workspace: Workspace,
+            provenance_tracker: "FileProvenanceTracker"
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -1364,16 +1359,28 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             workspace.settings["region"],
             skims_fname,
         )
+
+        input_records = workspace.input_data.get("activitysim", RecordStore())
+        output_records = workspace.output_data.get("activitysim", RecordStore())
+
+
+        pre_run_hash = provenance_tracker.start_model_run("activitysim_preprocessor",
+                                                          year=state.current_year,
+                                                          iteration=state.current_inner_iter,
+                                                          description="Preprocessing for ActivitySim warm start",
+                                                          inputs=input_records)
+
         if os.path.exists(path_to_beam_skims):
             input_skims_record = provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
                 path_to_beam_skims,
                 short_name="omx_skims",
-                model_run_id=model_run_hash,
+                model_run_id=pre_run_hash,
                 description="Raw BEAM OD skims",
             )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
             shutil.copyfile(path_to_beam_skims, skims_loc)
+            input_records.add_record(input_skims_record)
         else:
             skims_loc = create_skims_from_beam(
                 settings, state, output_dir=workspace.get_asim_mutable_data_dir()
@@ -1397,7 +1404,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         skim_record = provenance_tracker.record_output_file(
             "activitysim_preprocessor",
             skims_loc,
-            model_run_id=model_run_hash,
+            model_run_id=pre_run_hash,
             short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
         )
@@ -1425,12 +1432,14 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 state,
                 workspace,
                 provenance_tracker,
-                model_run_hash=model_run_hash,
+                model_run_hash=pre_run_hash,
             )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
-        all_outputs = ([skim_record] if skim_record else []) + data_from_usim
+        all_outputs = ([skim_record] if skim_record else []) + data_from_usim + list(output_records.records.values())
+
+        provenance_tracker.complete_model_run(run_hash=pre_run_hash, output_datasets=all_outputs)
         return RecordStore(recordList=all_outputs)
 
 
@@ -1512,7 +1521,7 @@ def _get_part_time_enrollment(state_fips):
 
 
 def _update_persons_table(
-    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
+        persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
 ):
     """Updates person attributes and assigns zones for ActivitySim processing.
 
@@ -1553,14 +1562,14 @@ def _update_persons_table(
     # Calculate person types more efficiently
     conditions = [
         (
-            age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
+                age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
         ),  # type 1
         (age_ranges["adult"] & (persons.student == 1)),  # type 3
         (
-            age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
+                age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
         ),  # type 4
         (
-            age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
+                age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
         ),  # type 5
         age_ranges["teen"],  # type 6
         age_ranges["child"],  # type 7
@@ -1614,15 +1623,15 @@ def _update_persons_table(
 
     # Filter invalid records
     mask = ~persons[asim_zone_id_col].isnull() & (  # Has valid TAZ
-        persons["age"] >= 1.0
+            persons["age"] >= 1.0
     )  # Not newborn
 
     if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
         mask &= ~(
-            (persons.worker == 1) & (persons.workplace_taz < 0)
+                (persons.worker == 1) & (persons.workplace_taz < 0)
         )  # Valid workplace for workers
         mask &= ~(
-            (persons.student == 1) & (persons.school_taz < 0)
+                (persons.student == 1) & (persons.school_taz < 0)
         )  # Valid school for students
 
     persons = persons.loc[mask].dropna()
@@ -1701,7 +1710,7 @@ def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
 
 
 def _update_jobs_table(
-    jobs, blocks, state_fips, county_codes, local_crs, asim_zone_id_col="TAZ"
+        jobs, blocks, state_fips, county_codes, local_crs, asim_zone_id_col="TAZ"
 ):
     # assign zones
     jobs[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(jobs["block_id"]).values
@@ -1729,10 +1738,10 @@ def _update_jobs_table(
         blocks_gdf = blocks_gdf.to_crs(local_crs)
 
         for block_id in tqdm(
-            blocks_to_reassign, desc="Redistributing jobs from blocks:"
+                blocks_to_reassign, desc="Redistributing jobs from blocks:"
         ):
             candidate_mask = (blocks_gdf.index.values != block_id) & (
-                blocks_gdf["square_meters_land"] > 0
+                    blocks_gdf["square_meters_land"] > 0
             )
             new_block_id = (
                 blocks_gdf[candidate_mask]
@@ -1807,8 +1816,8 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
 def _get_school_enrollment(state_fips, county_codes):
     logger.info("Downloading school enrollment data from educationdata.urban.org!")
     base_url = (
-        "https://educationdata.urban.org/api/v1/"
-        + "{topic}/{source}/{endpoint}/{year}/?{filters}"
+            "https://educationdata.urban.org/api/v1/"
+            + "{topic}/{source}/{endpoint}/{year}/?{filters}"
     )
 
     # at the moment you can't seem to filter results by county
@@ -1853,8 +1862,8 @@ def _get_college_enrollment(state_fips, county_codes):
     year = "2015"
     logger.info("Downloading college data from educationdata.urban.org!")
     base_url = (
-        "https://educationdata.urban.org/api/v1/"
-        + "{topic}/{source}/{endpoint}/{year}/?{filters}"
+            "https://educationdata.urban.org/api/v1/"
+            + "{topic}/{source}/{endpoint}/{year}/?{filters}"
     )
 
     colleges_list = []
@@ -1942,7 +1951,7 @@ def _compute_area_type(zones):
 
 
 def enrollment_tables(
-    settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
+        settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
 ):
     region = settings["region"]
     FIPS = settings["FIPS"][region]
@@ -1987,17 +1996,17 @@ def enrollment_tables(
 
 
 def _create_land_use_table(
-    settings,
-    region,
-    zones,
-    state_fips,
-    county_codes,
-    local_crs,
-    households,
-    persons,
-    jobs,
-    blocks,
-    asim_zone_id_col="TAZ",
+        settings,
+        region,
+        zones,
+        state_fips,
+        county_codes,
+        local_crs,
+        households,
+        persons,
+        jobs,
+        blocks,
+        asim_zone_id_col="TAZ",
 ):
     logger.info("Creating land use table.")
     zone_type = settings["skims_zone_type"]
@@ -2261,7 +2270,7 @@ def _create_land_use_table(
     return zones
 
 
-def copy_data_to_mutable_location(settings, folder_path, provenance_tracker: FileProvenanceTracker):
+def copy_data_to_mutable_location(settings, folder_path, provenance_tracker: FileProvenanceTracker) -> Tuple[RecordStore, RecordStore]:
     logger.info(settings)
     input_dir = os.path.join(folder_path, settings["asim_local_mutable_data_folder"])
     os.makedirs(input_dir, exist_ok=True)
@@ -2303,20 +2312,27 @@ def copy_data_to_mutable_location(settings, folder_path, provenance_tracker: Fil
     )
     shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
     git_hash = provenance_tracker.get_git_hash(configs_source_dir)
-    provenance_tracker.record_repo_input(
-        "beam", configs_dest_dir, "ActivitySim Config Repo", git_hash
+    repo_in = provenance_tracker.record_repo_input(
+        "beam_preprocessor", configs_source_dir, "asim_configs", "Reference ActivitySim Config Repo", git_hash
+    )
+    repo_out = provenance_tracker.record_repo_input(
+        "beam_preprocessor", configs_dest_dir, "asim_configs", "ActivitySim Config Repo"
     )
 
-    copy_beam_geoms(
-        settings, beam_geoms_location, asim_geoms_location, beam_shape_location
+    geoms_store_in, geoms_store_out = copy_beam_geoms(
+        settings, beam_geoms_location, asim_geoms_location, beam_shape_location, provenance_tracker
     )
+
+    return geoms_store_in.add_record(repo_in), geoms_store_out.add_record(repo_out)
 
 
 def copy_beam_geoms(
-    settings, beam_geoms_location, asim_geoms_location, beam_shape_location
-):
+        settings, beam_geoms_location, asim_geoms_location, beam_shape_location, provenance_tracker: FileProvenanceTracker
+) -> Tuple[RecordStore, RecordStore]:
     zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
+    beam_geoms_in = provenance_tracker.record_input_file(model="activitysim_preprocessor",file_path=beam_geoms_location,
+                                                         short_name="beam_geoms", description="BEAM geometry file")
     zone_type = settings["skims_zone_type"].lower()
     zone_id_col = zone_type_column[zone_type]
     mapping = geoid_to_zone_map(settings, settings["start_year"])
@@ -2344,6 +2360,11 @@ def copy_beam_geoms(
             logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
 
     beam_geoms_file.to_csv(asim_geoms_location)
+    asim_geoms_out = provenance_tracker.record_output_file(model="activitysim_preprocessor",file_path=asim_geoms_location,
+                                                         short_name="asim_geoms", description="ASIM geometry file")
+
+    inputs = [beam_geoms_in]
+    outputs = [asim_geoms_out]
 
     if beam_shape_location is not None:
         logger.info(
@@ -2351,6 +2372,11 @@ def copy_beam_geoms(
                 settings["skim_zone_geoid_col"], settings["skim_zone_source_id_col"]
             )
         )
+        beam_shape_in = provenance_tracker.record_input_file(model="activitysim_preprocessor",
+                                                             file_path=beam_shape_location,
+                                                             short_name="beam_shape",
+                                                             description="BEAM zones shapefile")
+        inputs.append(beam_shape_in)
         zones = gpd.read_file(beam_shape_location)
         zones[settings["skim_zone_source_id_col"]] = (
             zones[settings["skim_zone_geoid_col"]].astype(str).map(mapping)
@@ -2361,15 +2387,21 @@ def copy_beam_geoms(
             )
         )
         zones.to_file(beam_shape_location)
+        beam_shape_out = provenance_tracker.record_output_file(model="activitysim_preprocessor",
+                                                             file_path=beam_shape_location,
+                                                             short_name="beam_shape",
+                                                             description="BEAM zones shapefile")
+        outputs.append(beam_shape_out)
+    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
 
 def create_asim_data_from_h5(
-    settings,
-    state,
-    workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
-    warm_start=False,
-    model_run_hash: str = None,
+        settings,
+        state,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+        warm_start=False,
+        model_run_hash: str = None,
 ) -> List[FileRecord]:
     # warm start: year = start_year
     # asim_no_usim: year = start_year

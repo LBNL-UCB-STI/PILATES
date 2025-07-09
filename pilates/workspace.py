@@ -1,6 +1,9 @@
 import os
 import logging
+from typing import Dict
+
 from pilates.activitysim import preprocessor as asim_pre
+from pilates.generic.records import RecordStore
 from pilates.urbansim import preprocessor as usim_pre
 from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
@@ -28,6 +31,8 @@ class Workspace:
         self.output_path = output_path
         self.folder_name = folder_name
         self.provenance_tracker = provenance_tracker
+        self.input_data: Dict[str, RecordStore] = {}
+        self.output_data: Dict[str, RecordStore] = {}
         self._setup_directories()
 
     @property
@@ -63,9 +68,11 @@ class Workspace:
         if settings.get("travel_model") == "beam":
             input_dir = self.get_beam_mutable_data_dir()
             os.makedirs(input_dir, exist_ok=True)
-            beam_pre.copy_data_to_mutable_location(settings, input_dir, self.provenance_tracker)
+            input_store, output_store = beam_pre.copy_data_to_mutable_location(settings, input_dir, self.provenance_tracker)
+            self.input_data["beam"] = input_store
+            self.output_data["beam"] = output_store
             os.makedirs(self.get_beam_output_dir(), exist_ok=True)
-            self._record_initial_repo_files("beam", get_beam_source_dir(settings))
+            # self._record_initial_repo_files("beam", get_beam_source_dir(settings))
 
         # Other models
         for model_key in [
@@ -83,9 +90,11 @@ class Workspace:
             ):
                 output_dir = self.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
-                usim_pre.copy_data_to_mutable_location(
+                input_store, output_store = usim_pre.copy_data_to_mutable_location(
                     settings, output_dir, self.provenance_tracker
                 )
+                self.input_data[model_name] = input_store
+                self.output_data[model_name] = output_store
                 have_not_copied_usim_data = False
 
             # Atlas data copy
@@ -100,16 +109,18 @@ class Workspace:
 
             # ActivitySim config copy
             if model_name == "activitysim":
-                asim_pre.copy_data_to_mutable_location(settings, base_folder_path, self.provenance_tracker)
+                input_store, output_store = asim_pre.copy_data_to_mutable_location(settings, base_folder_path, self.provenance_tracker)
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
-                asim_config_dir = os.path.join(
-                    settings.get("asim_local_configs_folder"), settings.get("region")
-                )
-                self._record_initial_repo_files(
-                    "activitysim",
-                    asim_config_dir,
-                    "ActivitySim configuration repository",
-                )
+                self.input_data["activitysim"] = input_store
+                self.output_data["activitysim"] = output_store
+                # asim_config_dir = os.path.join(
+                #     settings.get("asim_local_configs_folder"), settings.get("region")
+                # )
+                # self._record_initial_repo_files(
+                #     "activitysim",
+                #     asim_config_dir,
+                #     "ActivitySim configuration repository",
+                # )
 
     def _record_initial_repo_files(self, model_name, repo_path, description=""):
         if not repo_path or not os.path.exists(repo_path):

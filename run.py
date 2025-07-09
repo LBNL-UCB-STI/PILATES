@@ -204,7 +204,7 @@ def get_atlas_cmd(
     return atlas_cmd
 
 
-def warm_start_activities(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker):
+def warm_start_activities(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker):
     """
     Run activity demand models to update UrbanSim inputs with long-term
     choices it needs: workplace location, school location, and
@@ -228,9 +228,7 @@ def warm_start_activities(settings, state: WorkflowState, client, workspace: Wor
         preprocessor = factory.get_preprocessor("activitysim")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.start_model_run("activitysim_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for ActivitySim warm start")
-        inputData = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
-        provenance_tracker.complete_model_run(pre_run_hash)
+        inputData = preprocessor.preprocess(state, workspace, provenance_tracker)
 
         # Run
         rawOutputs, runInfo = runner.run(inputData, state, workspace, provenance_tracker)
@@ -260,7 +258,7 @@ def warm_start_activities(settings, state: WorkflowState, client, workspace: Wor
 
 
 def forecast_land_use(
-    settings, year, workflow_state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker
+    settings, year, workflow_state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker
 ):
     land_use_model, land_use_image = GenericRunner.get_model_and_image(settings, "land_use_model")
 
@@ -297,7 +295,7 @@ def forecast_land_use(
         sys.exit(1)
 
 
-def run_land_use(settings, year, workflow_state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker, model_run_hash: str):
+def run_land_use(settings, year, workflow_state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker, model_run_hash: str):
     logger.info("Running land use")
 
     # 1. PARSE SETTINGS
@@ -375,7 +373,7 @@ def run_atlas(
     state: WorkflowState,
     client,
     workspace: Workspace,
-    provenance_tracker: FileProvenanceTracker,
+    provenance_tracker: OpenLineageTracker,
     warm_start_atlas,
     forecast=False,
     atlas_run_count=1,
@@ -531,7 +529,7 @@ def run_atlas(
     return success
 
 
-def run_atlas_auto(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker, warm_start_atlas, forecast):
+def run_atlas_auto(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker, warm_start_atlas, forecast):
     """
     Run Atlas with automatic retries on failure.
     """
@@ -557,7 +555,7 @@ def run_atlas_auto(settings, state: WorkflowState, client, workspace: Workspace,
     sys.exit(1)
 
 
-def run_activity_demand(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker):
+def run_activity_demand(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker):
     """
     Generate activity plans for the current year.
     """
@@ -575,9 +573,7 @@ def run_activity_demand(settings, state: WorkflowState, client, workspace: Works
         postprocessor = factory.get_postprocessor("activitysim")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.start_model_run("activitysim_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for ActivitySim")
-        input_data = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
-        provenance_tracker.complete_model_run(pre_run_hash)
+        input_data = preprocessor.preprocess(state, workspace, provenance_tracker)
 
         # Run
         raw_outputs, run_info = runner.run(input_data, state, workspace, provenance_tracker)
@@ -593,7 +589,7 @@ def run_activity_demand(settings, state: WorkflowState, client, workspace: Works
         )
 
 
-def run_traffic_assignment(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: FileProvenanceTracker):
+def run_traffic_assignment(settings, state: WorkflowState, client, workspace: Workspace, provenance_tracker: OpenLineageTracker):
     """
     Run traffic assignment for the current year.
     """
@@ -611,9 +607,7 @@ def run_traffic_assignment(settings, state: WorkflowState, client, workspace: Wo
         postprocessor = factory.get_postprocessor("beam")
 
         # Preprocess
-        pre_run_hash = provenance_tracker.start_model_run("beam_preprocessor", state.current_year, state.current_inner_iter, description="Preprocessing for BEAM")
-        input_data = preprocessor.preprocess(state, workspace, provenance_tracker, pre_run_hash)
-        provenance_tracker.complete_model_run(pre_run_hash)
+        input_data = preprocessor.preprocess(state, workspace, provenance_tracker)
 
         # Run
         raw_outputs, run_info = runner.run(input_data, state, workspace, provenance_tracker)

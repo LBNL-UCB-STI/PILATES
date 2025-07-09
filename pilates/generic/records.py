@@ -1,7 +1,11 @@
+import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union
 import logging
+
+from openlineage.client.facet import SchemaField, SchemaDatasetFacet
+from openlineage.client.run import Dataset, InputDataset, OutputDataset
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +17,10 @@ class Record:
     short_name: Optional[str] = None
     description: Optional[str] = None
     exists: bool = True
+    openlineage_id: Optional[str] = None
+
+    def __post_init__(self):
+        self.openlineage_id = str(uuid.uuid4())
 
 
 class RecordStore:
@@ -55,9 +63,10 @@ class RecordStore:
         self.records.update(other.records)
         return self
 
-    def add_record(self, record: Record):
+    def add_record(self, record: Record) -> "RecordStore":
         if record.unique_id:
             self.records[record.unique_id] = record
+        return self
 
     def remove_record_type(self, short_name: str):
         for record in self.records:
@@ -89,12 +98,111 @@ class FileRecord(Record):
     consuming_run_ids: List[str] = field(default_factory=list)
     schema: Optional[List[Dict[str, str]]] = field(default_factory=list)
 
+    def _create_schema(self):
+        facets = {}
+        if self.schema:
+            fields = [
+                SchemaField(
+                    name=f.get('name'),
+                    type=f.get('type'),
+                    description=f.get('description')
+                )
+                for f in self.schema
+            ]
+            if fields:
+                facets['schema'] = SchemaDatasetFacet(fields=fields)
+        return facets
+
+    def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
+        """
+        Converts the FileRecord to an OpenLineage Dataset.
+        """
+        return Dataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": {"value": self.file_path},
+                "description": {"value": self.description or ""},
+                "year": {"value": self.year},
+                "metadata": {"value": self.metadata},
+            } | self._create_schema(),
+        )
+
+    def toInputDataset(self, namespace: Optional[str] = "default") -> InputDataset:
+        """
+        Converts the FileRecord to an OpenLineage InputDataset.
+        """
+        return InputDataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": {"value": self.file_path},
+                "description": {"value": self.description or ""},
+                "year": {"value": self.year},
+                "metadata": {"value": self.metadata},
+            } | self._create_schema(),
+        )
+
+    def toOutputDataset(self, namespace: Optional[str] = "default") -> OutputDataset:
+        """
+        Converts the FileRecord to an OpenLineage OutputDataset.
+        """
+        return OutputDataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": {"value": self.file_path},
+                "description": {"value": self.description or ""},
+                "year": {"value": self.year},
+                "metadata": {"value": self.metadata},
+            } | self._create_schema(),
+        )
+
 
 @dataclass(kw_only=True)
 class RepoRecord(Record):
     repo_path: Optional[str] = None
     description: Optional[str] = None
     accessed_at: Optional[str] = None
+
+    def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
+        """
+        Converts the FileRecord to an OpenLineage Dataset.
+        """
+        return Dataset(
+            namespace=namespace,
+            name=self.short_name or self.repo_path,
+            facets={
+                "filePath": {"value": self.repo_path},
+                "description": {"value": self.description or ""},
+            },
+        )
+
+    def toInputDataset(self, namespace: Optional[str] = "default") -> InputDataset:
+        """
+        Converts the FileRecord to an OpenLineage InputDataset.
+        """
+        return InputDataset(
+            namespace=namespace,
+            name=self.short_name or self.repo_path,
+            facets={
+                "filePath": {"value": self.repo_path},
+                "description": {"value": self.description or ""},
+            },
+        )
+
+    def toOutputDataset(self, namespace: Optional[str] = "default") -> OutputDataset:
+        """
+        Converts the FileRecord to an OpenLineage OutputDataset.
+        """
+        return OutputDataset(
+            namespace=namespace,
+            name=self.short_name or self.repo_path,
+            facets={
+                "filePath": {"value": self.repo_path},
+                "description": {"value": self.description or ""},
+            },
+        )
 
 
 @dataclass(kw_only=True)

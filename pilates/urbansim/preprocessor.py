@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import pandas as pd
 import logging
 import os
@@ -6,6 +8,7 @@ import openmatrix as omx
 import numpy as np
 import shutil
 
+from pilates.generic.records import RecordStore
 from pilates.utils.geog import geoid_to_zone_map
 
 logger = logging.getLogger(__name__)
@@ -106,7 +109,7 @@ def _load_raw_skims(settings, asim_data_dir, skim_format):
     return skims
 
 
-def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
+def copy_data_to_mutable_location(settings, output_dir, provenance_tracker) -> Tuple[RecordStore, RecordStore]:
     region = settings["region"]
     region_id = settings["region_to_region_id"][region]
     year_specific_model_data_fname = settings.get(
@@ -124,6 +127,7 @@ def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
     else:
         src = os.path.join(data_dir, model_data_fname)
     dest = os.path.join(output_dir, model_data_fname)
+
     logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
     if os.path.exists(src):
         shutil.copyfile(src, dest)
@@ -136,9 +140,12 @@ def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
         logger.warning(
             f"Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
         )
-    provenance_tracker.record_input_file(
-        "urbansim", dest, description="UrbanSim model data"
-    )
+    inputs = [provenance_tracker.record_input_file(
+        "urbansim", src, description="Reference urbanSim model data", short_name="usim_data"
+    )]
+    outputs = [provenance_tracker.record_output_file(
+        "urbansim", dest, description="UrbanSim model data", short_name="usim_data"
+    )]
     other_data_fnames = {
         "hsize_ct_{0}.csv".format(region_id): "hh_size",
         "income_rates_{0}.csv".format(region_id): "income_rates",
@@ -152,9 +159,13 @@ def copy_data_to_mutable_location(settings, output_dir, provenance_tracker):
         if os.path.exists(src):
             logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
             shutil.copyfile(src, dest)
-            provenance_tracker.record_input_file(
+            inputs.append(provenance_tracker.record_input_file(
+                "urbansim", src, description=f"UrbanSim input file: {fname}", short_name=short_name
+            ))
+            outputs.append(provenance_tracker.record_output_file(
                 "urbansim", dest, description=f"UrbanSim input file: {fname}", short_name=short_name
-            )
+            ))
+    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
 
 def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):

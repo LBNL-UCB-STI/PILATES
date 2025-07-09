@@ -2,8 +2,9 @@ version: '3'
 services:
   marquez:
     image: marquezproject/marquez:latest
+    platform: linux/amd64
     ports:
-      - "5000:5000"
+      - "5002:5000"
       - "5001:5001"
     environment:
       - MARQUEZ_PORT=5000
