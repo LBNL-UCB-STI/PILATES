@@ -68,7 +68,9 @@ class Workspace:
         if settings.get("travel_model") == "beam":
             input_dir = self.get_beam_mutable_data_dir()
             os.makedirs(input_dir, exist_ok=True)
-            input_store, output_store = beam_pre.copy_data_to_mutable_location(settings, input_dir, self.provenance_tracker)
+            input_store, output_store = beam_pre.copy_data_to_mutable_location(
+                settings, input_dir, self.provenance_tracker
+            )
             self.input_data["beam"] = input_store
             self.output_data["beam"] = output_store
             os.makedirs(self.get_beam_output_dir(), exist_ok=True)
@@ -109,7 +111,9 @@ class Workspace:
 
             # ActivitySim config copy
             if model_name == "activitysim":
-                input_store, output_store = asim_pre.copy_data_to_mutable_location(settings, base_folder_path, self.provenance_tracker)
+                input_store, output_store = asim_pre.copy_data_to_mutable_location(
+                    settings, base_folder_path, self.provenance_tracker
+                )
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
                 self.input_data["activitysim"] = input_store
                 self.output_data["activitysim"] = output_store

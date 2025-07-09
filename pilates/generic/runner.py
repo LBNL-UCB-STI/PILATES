@@ -1,10 +1,11 @@
 import abc
 import logging
 import subprocess
+
 try:
     import docker
 except ImportError:
-    print('Warning: Unable to import Docker Module')
+    print("Warning: Unable to import Docker Module")
 from abc import ABC
 from typing import Dict, Optional, List, Tuple
 

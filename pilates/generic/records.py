@@ -103,14 +103,14 @@ class FileRecord(Record):
         if self.schema:
             fields = [
                 SchemaField(
-                    name=f.get('name'),
-                    type=f.get('type'),
-                    description=f.get('description')
+                    name=f.get("name"),
+                    type=f.get("type"),
+                    description=f.get("description"),
                 )
                 for f in self.schema
             ]
             if fields:
-                facets['schema'] = SchemaDatasetFacet(fields=fields)
+                facets["schema"] = SchemaDatasetFacet(fields=fields)
         return facets
 
     def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
@@ -125,7 +125,8 @@ class FileRecord(Record):
                 "description": {"value": self.description or ""},
                 "year": {"value": self.year},
                 "metadata": {"value": self.metadata},
-            } | self._create_schema(),
+            }
+            | self._create_schema(),
         )
 
     def toInputDataset(self, namespace: Optional[str] = "default") -> InputDataset:
@@ -140,7 +141,8 @@ class FileRecord(Record):
                 "description": {"value": self.description or ""},
                 "year": {"value": self.year},
                 "metadata": {"value": self.metadata},
-            } | self._create_schema(),
+            }
+            | self._create_schema(),
         )
 
     def toOutputDataset(self, namespace: Optional[str] = "default") -> OutputDataset:
@@ -155,7 +157,8 @@ class FileRecord(Record):
                 "description": {"value": self.description or ""},
                 "year": {"value": self.year},
                 "metadata": {"value": self.metadata},
-            } | self._create_schema(),
+            }
+            | self._create_schema(),
         )
 
 

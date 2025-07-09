@@ -14,6 +14,7 @@ try:
 except ImportError:
     raise ImportError("openmatrix is required to write OMX files.")
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert Zarr-format skims to OMX-format skims."
@@ -26,8 +27,7 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     logger = logging.getLogger("zarr_to_omx")
 
@@ -109,6 +109,7 @@ def main():
     omx_file.close()
     ds.close()
     logger.info(f"Finished writing {written_count} matrices to OMX file {omx_path}.")
+
 
 if __name__ == "__main__":
     main()

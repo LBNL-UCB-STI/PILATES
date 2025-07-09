@@ -662,7 +662,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(r, "file_path")
         ]
 
-
         if state.is_enabled(WorkflowState.Stage.land_use):
 
             # 2. Prepare tables for integration with UrbanSim

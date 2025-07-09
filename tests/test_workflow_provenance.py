@@ -10,6 +10,7 @@ import json
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
+
 def minimal_settings(tmpdir):
     # Minimal settings for Activitysim/BEAM workflow
     return {
@@ -26,10 +27,7 @@ def minimal_settings(tmpdir):
         "output_directory": tmpdir,
         "run_name": "test-run",
         "container_manager": "singularity",
-        "singularity_images": {
-            "activitysim": "dummy_image",
-            "beam": "dummy_image"
-        },
+        "singularity_images": {"activitysim": "dummy_image", "beam": "dummy_image"},
         "docker_images": {},
         "asim_local_mutable_data_folder": "activitysim/data/",
         "asim_local_output_folder": "activitysim/output/",
@@ -47,7 +45,12 @@ def minimal_settings(tmpdir):
         "transit_paths": {},
         "hwy_paths": ["SOV"],
         "ridehail_path_map": {},
-        "beam_asim_hwy_measure_map": {"TIME": "TIME_minutes", "DIST": "DIST_miles", "BTOLL": None, "VTOLL": "VTOLL_FAR"},
+        "beam_asim_hwy_measure_map": {
+            "TIME": "TIME_minutes",
+            "DIST": "DIST_miles",
+            "BTOLL": None,
+            "VTOLL": "VTOLL_FAR",
+        },
         "beam_asim_transit_measure_map": {},
         "beam_asim_ridehail_measure_map": {},
         "asim_output_tables": {"prefix": "final_", "tables": ["households", "persons"]},
@@ -65,10 +68,12 @@ def minimal_settings(tmpdir):
         "travel_model": "beam",
     }
 
+
 def create_dummy_file(path, content="dummy"):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(content)
+
 
 @pytest.mark.parametrize("model_name", ["activitysim", "beam"])
 def test_workflow_and_provenance_tracking(tmp_path, model_name):
@@ -160,7 +165,9 @@ def test_workflow_and_provenance_tracking(tmp_path, model_name):
         assert len(run_info_data["file_records"]) > 0
 
         # Check that the openlineage.jsonl file was created and is valid
-        log_file_path = os.path.join(settings["output_directory"], "test-run", "openlineage.jsonl")
+        log_file_path = os.path.join(
+            settings["output_directory"], "test-run", "openlineage.jsonl"
+        )
         assert os.path.exists(log_file_path)
         with open(log_file_path, "r") as f:
             lines = f.readlines()

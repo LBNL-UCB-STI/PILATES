@@ -233,7 +233,7 @@ class WorkflowState:
             None,
             file_loc,
             asim_compiled,
-            settings
+            settings,
         )
 
         out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)

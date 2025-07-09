@@ -20,7 +20,7 @@ class GenericPreprocessor(ABC):
         self,
         state: "WorkflowState",
         workspace: "Workspace",
-        provenance_tracker: "FileProvenanceTracker"
+        provenance_tracker: "FileProvenanceTracker",
     ) -> RecordStore:
         """
         Preprocess input data for the model.
