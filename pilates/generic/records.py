@@ -121,10 +121,10 @@ class FileRecord(Record):
             namespace=namespace,
             name=self.short_name or self.file_path,
             facets={
-                "filePath": {"value": self.file_path},
-                "description": {"value": self.description or ""},
-                "year": {"value": self.year},
-                "metadata": {"value": self.metadata},
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
             }
             | self._create_schema(),
         )
@@ -137,10 +137,10 @@ class FileRecord(Record):
             namespace=namespace,
             name=self.short_name or self.file_path,
             facets={
-                "filePath": {"value": self.file_path},
-                "description": {"value": self.description or ""},
-                "year": {"value": self.year},
-                "metadata": {"value": self.metadata},
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
             }
             | self._create_schema(),
         )
@@ -153,10 +153,10 @@ class FileRecord(Record):
             namespace=namespace,
             name=self.short_name or self.file_path,
             facets={
-                "filePath": {"value": self.file_path},
-                "description": {"value": self.description or ""},
-                "year": {"value": self.year},
-                "metadata": {"value": self.metadata},
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
             }
             | self._create_schema(),
         )
@@ -176,8 +176,8 @@ class RepoRecord(Record):
             namespace=namespace,
             name=self.short_name or self.repo_path,
             facets={
-                "filePath": {"value": self.repo_path},
-                "description": {"value": self.description or ""},
+                "filePath": self.repo_path,
+                "description": self.description or "",
             },
         )
 
@@ -189,8 +189,8 @@ class RepoRecord(Record):
             namespace=namespace,
             name=self.short_name or self.repo_path,
             facets={
-                "filePath": {"value": self.repo_path},
-                "description": {"value": self.description or ""},
+                "filePath": self.repo_path,
+                "description": self.description or "",
             },
         )
 
@@ -202,8 +202,8 @@ class RepoRecord(Record):
             namespace=namespace,
             name=self.short_name or self.repo_path,
             facets={
-                "filePath": {"value": self.repo_path},
-                "description": {"value": self.description or ""},
+                "filePath": self.repo_path,
+                "description": self.description or "",
             },
         )
 
@@ -231,7 +231,7 @@ class PilatesRunInfo:
     code_version: Optional[str] = None
     hostname: Optional[str] = None
     file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
-    repo_records: Dict[str, List[RepoRecord]] = field(default_factory=dict)
+    repo_records: Dict[str, RepoRecord] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
 
     def get_latest_model_run(self, model_name: str) -> Optional[str]:

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record
+from pilates.generic.records import RecordStore, Record, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from workflow_state import WorkflowState
@@ -325,7 +325,7 @@ def copy_plans_from_asim(
     )
 
     def copy_with_compression_asim_file_to_beam(
-        asim_file_path, beam_file_name, file_format
+        asim_file_path, beam_file_name, file_format, input_record: Optional[Record] = None
     ) -> Optional[Record]:
         """
         Copy and compress a file from ActivitySim output to BEAM input, with provenance logging.
@@ -339,6 +339,11 @@ def copy_plans_from_asim(
             beam_file_path,
         )
 
+        if isinstance(input_record, FileRecord):
+            source_run_id = input_record.producing_run_id
+        else:
+            source_run_id = None
+
         # Always record the ActivitySim file as an input to the BEAM preprocessor run
         provenance_tracker.record_input_file(
             "beam_preprocessor",
@@ -346,6 +351,7 @@ def copy_plans_from_asim(
             short_name=beam_file_name,
             description=f"ActivitySim output for BEAM: {beam_file_name}",
             model_run_id=model_run_hash,
+            source_run_id=source_run_id
         )
 
         if os.path.exists(asim_file_path):
@@ -642,10 +648,10 @@ def copy_plans_from_asim(
 
         asim_file_paths = {}
         for record in asim_output_records:
-            if record.short_name in required_files:
-                asim_file_paths[record.short_name] = os.path.join(
+            if record.short_name.rsplit('_', 2)[0] in required_files:
+                asim_file_paths[record.short_name.rsplit('_', 2)[0]] = (os.path.join(
                     workspace.output_path, record.file_path
-                )
+                ), record)
                 logger.info(
                     f"Found ActivitySim output file {record.short_name}: {record.file_path}"
                 )
@@ -663,10 +669,10 @@ def copy_plans_from_asim(
             ]
 
             for asim_name, beam_name in asim_to_beam_mapping:
-                asim_file_path = asim_file_paths.get(asim_name)
+                asim_file_path, asim_file_record = asim_file_paths.get(asim_name)
                 if asim_file_path:
                     record = copy_with_compression_asim_file_to_beam(
-                        asim_file_path, beam_name, file_format
+                        asim_file_path, beam_name, file_format, asim_file_record
                     )
                     if record:
                         record_list.append(record)
@@ -740,7 +746,7 @@ class BeamPreprocessor(GenericPreprocessor):
             year=state.current_year,
             iteration=state.current_inner_iter,
             description="Preprocessing for BEAM",
-            inputs=RecordStore(recordList=input_records),
+            inputs=input_records,
         )
 
         # Update BEAM config
@@ -765,12 +771,15 @@ class BeamPreprocessor(GenericPreprocessor):
             model_run_hash,
         )
 
+        beam_prod_repo_record = next((repo for repo in provenance_tracker.run_info.repo_records if repo.short_name == "beam_prod"), None)
+
         # Add the BEAM scenario folder to the record store
-        store.add_record(provenance_tracker.run_info.repo_records["beam"][0])
+        if beam_prod_repo_record:
+            store.add_record(beam_prod_repo_record)
         store += output_records
 
         provenance_tracker.complete_model_run(
-            run_hash=model_run_hash, output_datasets=store.records
+            run_hash=model_run_hash, output_records=store.records
         )
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")

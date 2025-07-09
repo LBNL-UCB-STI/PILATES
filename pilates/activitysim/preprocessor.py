@@ -1445,7 +1445,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
 
         provenance_tracker.complete_model_run(
-            run_hash=pre_run_hash, output_datasets=all_outputs
+            run_hash=pre_run_hash, output_records=all_outputs
         )
         return RecordStore(recordList=all_outputs)
 
@@ -2322,14 +2322,17 @@ def copy_data_to_mutable_location(
     shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
     git_hash = provenance_tracker.get_git_hash(configs_source_dir)
     repo_in = provenance_tracker.record_repo_input(
-        "beam_preprocessor",
-        configs_source_dir,
-        "asim_configs",
-        "Reference ActivitySim Config Repo",
-        git_hash,
+        model="beam_preprocessor",
+        repo_path=configs_source_dir,
+        short_name="asim_configs_reference",
+        description="Reference ActivitySim Config Repo",
+        git_hash=git_hash,
     )
     repo_out = provenance_tracker.record_repo_input(
-        "beam_preprocessor", configs_dest_dir, "asim_configs", "ActivitySim Config Repo"
+        model="beam_preprocessor",
+        repo_path=configs_dest_dir,
+        short_name="asim_configs",
+        description="ActivitySim Config Repo",
     )
 
     geoms_store_in, geoms_store_out = copy_beam_geoms(

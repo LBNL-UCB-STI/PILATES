@@ -198,14 +198,14 @@ class ProvenanceTracker:
         self,
         run_hash: str,
         status: str = "completed",
-        output_datasets: List[Union[FileRecord, RepoRecord]] = None,
+        output_records: List[Union[FileRecord, RepoRecord]] = None,
     ):
-        if output_datasets is None:
-            output_datasets = []
+        if output_records is None:
+            output_records = []
         if run_hash in self.run_info.model_runs:
             self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
             self.run_info.model_runs[run_hash].status = status
-            for dataset in output_datasets:
+            for dataset in output_records:
                 if isinstance(dataset, Record):
                     if (
                         dataset.unique_id
@@ -308,7 +308,57 @@ class FileProvenanceTracker(ProvenanceTracker):
         relative_path = self._get_relative_path(path_to_use)
         return path_to_use, relative_path
 
-    def _calculate_file_hash(
+    def _calculate_directory_hash(
+            self, abs_dir_path: str, state: Optional[WorkflowState] = None
+    ) -> Optional[str]:
+        """
+        Calculates a SHA-256 hash of a directory based on its file and subdirectory names,
+        and the size and modification time of each file. It optionally incorporates additional
+        state information.
+
+        Args:
+            abs_dir_path (str): The path to the directory to hash.
+            state (Optional[WorkflowState]): Optional state metadata to include in the hash.
+
+        Returns:
+            Optional[str]: The calculated hash, or None if the path is invalid.
+        """
+
+        sha256_hash = hashlib.sha256()
+        # Use os.walk to traverse the directory tree
+        for root, dirs, files in os.walk(abs_dir_path):
+            # Sort directory and file names to ensure a consistent hash
+            dirs.sort()
+            files.sort()
+
+            for dir_name in dirs:
+                # Update hash with subdirectory names
+                sha256_hash.update(dir_name.encode())
+
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                try:
+                    # Get file size and modification time
+                    file_size = os.path.getsize(file_path)
+                    mod_time = os.path.getmtime(file_path)
+
+                    # Update hash with file metadata
+                    sha256_hash.update(file_name.encode())
+                    sha256_hash.update(str(file_size).encode())
+                    sha256_hash.update(str(mod_time).encode())
+                except OSError:
+                    # Ignore files that can't be accessed
+                    continue
+
+        # Optionally include the additional state information
+        if state:
+            sha256_hash.update(str(state.current_major_stage).encode())
+            sha256_hash.update(str(state.current_year).encode())
+            sha256_hash.update(str(state.current_inner_iter).encode())
+
+        return sha256_hash.hexdigest()
+
+    def _calculate_path_hash(
         self, file_path: str, state: Optional[WorkflowState] = None
     ) -> Optional[str]:
         """
@@ -331,6 +381,33 @@ class FileProvenanceTracker(ProvenanceTracker):
         abs_file_path = self._validate_file_path(file_path)
         if not abs_file_path:
             return None
+        if os.path.isfile(abs_file_path):
+            return self._calculate_file_hash(abs_file_path, state)
+        elif os.path.isdir(abs_file_path):
+            return self._calculate_directory_hash(abs_file_path, state)
+        else:
+            logger.error(f"Could not calculate hash for {abs_file_path}: {e}")
+            return None
+
+    def _calculate_file_hash(
+        self, abs_file_path: str, state: Optional[WorkflowState] = None
+    ) -> Optional[str]:
+        """
+        Calculates the SHA-256 hash of a file, depending on its contents and its location. It also optionally
+        incorporates additional state information, such as the year and iteration for which it was created.
+
+        Args:
+            abs_file_path (str): The path to the file whose hash is to be calculated.
+            state (Optional[WorkflowState]): An optional state object containing additional metadata
+                (e.g., current stage, year, and iteration) to include in the hash.
+
+        Returns:
+            Optional[str]: The calculated SHA-256 hash as a hexadecimal string, or None if the file
+            path is invalid or an error occurs during hashing.
+
+        Raises:
+            Warning: Logs a warning if the file cannot be read or hashed due to an IOError or OSError.
+        """
         try:
             sha256_hash = hashlib.sha256()
             sha256_hash.update(abs_file_path.encode())
@@ -388,23 +465,22 @@ class FileProvenanceTracker(ProvenanceTracker):
         git_hash: str = None,
     ) -> RepoRecord:
         if git_hash is None:
-            git_hash = self._calculate_file_hash(repo_path)
+            git_hash = self._calculate_path_hash(repo_path)
         model = self._normalize_model_name(model)
         abs_path = self._validate_file_path(repo_path)
         if not abs_path:
             logger.warning(f"Skipping missing repository for {model}: {repo_path}")
             return
         relative_path = self._get_relative_path(abs_path)
-        if model not in self.run_info.repo_records:
-            self.run_info.repo_records[model] = []
 
         repo_record = RepoRecord(
             unique_id=git_hash,
             repo_path=relative_path,
             accessed_at=datetime.now().isoformat(),
             description=description,
+            short_name=short_name,
         )
-        self.run_info.repo_records[model].append(repo_record)
+        self.run_info.repo_records[git_hash] = repo_record
         self._save_run_info()
         logger.debug(
             f"Recorded repository input for {model}: {relative_path} (exists: {abs_path is not None})"
@@ -824,13 +900,13 @@ class OpenLineageTracker(FileProvenanceTracker):
         self,
         run_hash: str,
         status: str = "completed",
-        output_datasets: List[Union[FileRecord, RepoRecord]] = None,
+        output_records: List[Union[FileRecord, RepoRecord]] = None,
     ):
         """Complete a model run and emit OpenLineage event."""
-        if output_datasets is None:
-            output_datasets = []
+        if output_records is None:
+            output_records = []
 
-        output_names = [dataset.short_name for dataset in output_datasets]
+        output_names = [dataset.short_name for dataset in output_records]
 
         model_run_info = self.run_info.model_runs.get(run_hash)
         if model_run_info:
@@ -840,9 +916,15 @@ class OpenLineageTracker(FileProvenanceTracker):
                 if record_hash in self.run_info.file_records:
                     file_record = self.run_info.file_records[record_hash]
                     if file_record.short_name not in output_names:
-                        output_datasets.append(
-                            file_record.toOutputDataset(self.namespace)
-                        )
+                        output_records.append(file_record)
+                elif record_hash in self.run_info.repo_records:
+                    repo_record = self.run_info.repo_records[record_hash]
+                    if repo_record.short_name not in output_names:
+                        output_records.append(repo_record)
+
+            output_datasets = [
+                record.toOutputDataset(self.namespace) for record in output_records
+            ]
 
             event_type = "COMPLETE" if status == "completed" else "FAIL"
             event = RunEvent(
@@ -861,4 +943,4 @@ class OpenLineageTracker(FileProvenanceTracker):
                 producer="https://github.com/LBNL-UCB-STI/PILATES",
             )
             self._emit_event(event)
-        super().complete_model_run(run_hash, status, output_datasets)
+        super().complete_model_run(run_hash, status, output_records)

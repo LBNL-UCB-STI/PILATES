@@ -34,7 +34,7 @@ def _load_asim_outputs(settings, workspace: Workspace):
                 table = pd.read_parquet(file_path)
             except FileNotFoundError:
                 logger.warning("Parquet file not found: %s", file_path)
-                return {}
+                continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
             file_path = os.path.join(asim_output_dir, file_name)
@@ -48,7 +48,7 @@ def _load_asim_outputs(settings, workspace: Workspace):
                 table = pd.read_csv(file_path, index_col=index_col)
             except FileNotFoundError:
                 logger.warning("CSV file not found: %s", file_path)
-                return {}
+                continue
 
         if "block_id" in table.columns:
             table["block_id"] = table["block_id"].astype(str).str.zfill(15)

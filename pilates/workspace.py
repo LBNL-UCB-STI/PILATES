@@ -95,8 +95,14 @@ class Workspace:
                 input_store, output_store = usim_pre.copy_data_to_mutable_location(
                     settings, output_dir, self.provenance_tracker
                 )
-                self.input_data[model_name] = input_store
-                self.output_data[model_name] = output_store
+                if model_name in self.input_data:
+                    self.input_data[model_name] += input_store
+                else:
+                    self.input_data[model_name] = input_store
+                if model_name in self.output_data:
+                    self.output_data[model_name] += output_store
+                else:
+                    self.output_data[model_name] = output_store
                 have_not_copied_usim_data = False
 
             # Atlas data copy
@@ -115,8 +121,14 @@ class Workspace:
                     settings, base_folder_path, self.provenance_tracker
                 )
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
-                self.input_data["activitysim"] = input_store
-                self.output_data["activitysim"] = output_store
+                if model_name in self.input_data:
+                    self.input_data[model_name] += input_store
+                else:
+                    self.input_data[model_name] = input_store
+                if model_name in self.output_data:
+                    self.output_data[model_name] += output_store
+                else:
+                    self.output_data[model_name] = output_store
                 # asim_config_dir = os.path.join(
                 #     settings.get("asim_local_configs_folder"), settings.get("region")
                 # )

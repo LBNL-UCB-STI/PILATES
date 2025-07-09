@@ -675,6 +675,7 @@ def run_activity_demand(
             raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
         )
         provenance_tracker.complete_model_run(post_run_hash)
+        # TODO, move complete into the postprocess
 
     else:
         logger.warning(
