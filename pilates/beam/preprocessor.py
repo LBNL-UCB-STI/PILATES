@@ -393,7 +393,7 @@ def copy_plans_from_asim(
                 "beam_preprocessor",
                 beam_file_path,
                 description=f"Copied from ActivitySim output: {beam_file_name}",
-                short_name=beam_file_name,
+                short_name=beam_file_name + "_beam_in",
                 source_file_paths=[asim_file_path],
                 model_run_id=model_run_hash,
             )
@@ -588,6 +588,7 @@ def copy_plans_from_asim(
                 model_run_id=model_run_hash,
                 state=state,
                 source_file_paths=[asim_persons_path] if asim_persons_path else [],
+                short_name="persons_beam_in",
             )
             households_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
@@ -598,6 +599,7 @@ def copy_plans_from_asim(
                 source_file_paths=(
                     [asim_households_path] if asim_households_path else []
                 ),
+                short_name="households_beam_in",
             )
             plans_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
@@ -606,6 +608,7 @@ def copy_plans_from_asim(
                 model_run_id=model_run_hash,
                 state=state,
                 source_file_paths=[asim_plans_path] if asim_plans_path else [],
+                short_name="plans_beam_in",
             )
             record_list = [plans_record, households_record, persons_record]
         else:
@@ -620,6 +623,7 @@ def copy_plans_from_asim(
                     model_run_id=model_run_hash,
                     state=state,
                     source_file_paths=[asim_plans_path],
+                    short_name="plans_beam_in",
                 )
                 record_list = [plans_record]
             else:
@@ -655,6 +659,8 @@ def copy_plans_from_asim(
                 logger.info(
                     f"Found ActivitySim output file {record.short_name}: {record.file_path}"
                 )
+            else:
+                logger.info(f"Skipping non-required ActivitySim output file: {record.short_name}")
 
         if replanning_iteration_number <= 0:
             record_list = []
@@ -669,7 +675,7 @@ def copy_plans_from_asim(
             ]
 
             for asim_name, beam_name in asim_to_beam_mapping:
-                asim_file_path, asim_file_record = asim_file_paths.get(asim_name)
+                asim_file_path, asim_file_record = asim_file_paths.get(asim_name, (None, None))
                 if asim_file_path:
                     record = copy_with_compression_asim_file_to_beam(
                         asim_file_path, beam_name, file_format, asim_file_record
@@ -713,6 +719,9 @@ class BeamPreprocessor(GenericPreprocessor):
     """
     Preprocessor for BEAM model.
     """
+    def __init__(self):
+        super().__init__()
+        self.required_input_data: List[str] = ["persons","households","beam_plans","linkstats"]
 
     def preprocess(
         self,
@@ -740,6 +749,14 @@ class BeamPreprocessor(GenericPreprocessor):
 
         input_records = workspace.input_data.get("beam", RecordStore())
         output_records = workspace.output_data.get("beam", RecordStore())
+
+        asim_post_records = provenance_tracker.run_info.get_latest_model_run_output_records("activitysim_postprocessor")
+        for record in asim_post_records:
+            if record.short_name.rsplit('_', 2)[0] in self.required_input_data:
+                input_records.add_record(record)
+
+
+
 
         model_run_hash = provenance_tracker.start_model_run(
             "beam_preprocessor",
@@ -771,7 +788,7 @@ class BeamPreprocessor(GenericPreprocessor):
             model_run_hash,
         )
 
-        beam_prod_repo_record = next((repo for repo in provenance_tracker.run_info.repo_records if repo.short_name == "beam_prod"), None)
+        beam_prod_repo_record = next((repo for repo in provenance_tracker.run_info.repo_records.values() if repo.short_name == "beam_prod"), None)
 
         # Add the BEAM scenario folder to the record store
         if beam_prod_repo_record:
@@ -779,8 +796,29 @@ class BeamPreprocessor(GenericPreprocessor):
         store += output_records
 
         provenance_tracker.complete_model_run(
-            run_hash=model_run_hash, output_records=store.records
+            run_hash=model_run_hash, output_records=store.all_records()
         )
+
+        last_beam_outputs = provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+        linkstats_record = next((record for record in last_beam_outputs if record.short_name == "beam_prod"), None)
+        if not linkstats_record:
+            linkstats_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                settings["region"],
+                settings["beam_router_directory"],
+                "init.linkstats.csv.gz",
+            )
+            if os.path.exists(linkstats_path):
+                linkstats_record = provenance_tracker.record_output_file("beam_preprocessor",linkstats_path, state.year, description="Initialized linkstats file", short_name="linkstats", state=state)
+            else:
+                logger.warning(
+                    "[BEAM Preprocessor] Could not find initlinkstats file at %s",
+                    linkstats_path,
+                )
+
+        if linkstats_record:
+            logger.info("[BEAM Preprocessor] Linkstats file at %s added to BEAM input store",linkstats_path)
+            store.add_record(linkstats_record)
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store

@@ -670,11 +670,12 @@ def run_activity_demand(
             state.current_year,
             state.current_inner_iter,
             description="Post-processing ActivitySim outputs",
+            inputs=raw_outputs
         )
         processed_outputs = postprocessor.postprocess(
             raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
         )
-        provenance_tracker.complete_model_run(post_run_hash)
+        provenance_tracker.complete_model_run(post_run_hash, output_records=processed_outputs.all_records())
         # TODO, move complete into the postprocess
 
     else:
@@ -714,13 +715,7 @@ def run_traffic_assignment(
             input_data, state, workspace, provenance_tracker
         )
 
-        # Postprocess
-        post_run_hash = provenance_tracker.start_model_run(
-            "beam_postprocessor",
-            state.current_year,
-            state.current_inner_iter,
-            description="Post-processing BEAM outputs",
-        )
+
         processed_outputs = postprocessor.postprocess(
             raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
         )

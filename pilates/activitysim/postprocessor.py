@@ -594,7 +594,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         state: WorkflowState,
         workspace: Workspace,
         provenance_tracker: "FileProvenanceTracker",
-        model_run_hash: str,
+        model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
         Consolidates all postprocessing steps for ActivitySim.
@@ -623,6 +623,15 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             forecast_year,
         )
 
+        # Postprocess
+        model_run_hash = provenance_tracker.start_model_run(
+            "activitysim_postprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            description="Post-processing ASIM outputs",
+            inputs=raw_outputs,
+        )
+
         iteration_folder_name = "year-{0}-iteration-{1}".format(
             year, replanning_iteration_number
         )
@@ -640,7 +649,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(record, "file_path"):
                 source = os.path.join(workspace.output_path, record.file_path)
                 target = os.path.join(
-                    iteration_folder_path, record.short_name + ".parquet"
+                    iteration_folder_path, record.short_name.replace("_asim_out","") + ".parquet"
                 )
                 moved_record = provenance_tracker.move_file(
                     record,

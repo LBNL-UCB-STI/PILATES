@@ -19,6 +19,7 @@ class ActivitysimRunner(GenericRunner):
 
     def __init__(self, model_name: str):
         super().__init__(model_name)
+        self.required_input_files = ["persons_asim_in","households_asim_in","land_use_asim_in","omx_skims","zarr_skims","asim_geoms","asim_configs"]
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
@@ -167,6 +168,8 @@ class ActivitysimRunner(GenericRunner):
             "activitysim"
         )
 
+        filtered_store = RecordStore(recordList = [rec for rec in store.all_records() if rec.short_name in self.required_input_files])
+
         # Record ActivitySim run start (Compilation if needed)
         if not state.asim_compiled:
 
@@ -183,7 +186,7 @@ class ActivitysimRunner(GenericRunner):
                 year=state.current_year,
                 iteration=state.current_inner_iter,
                 description="asim compilation",
-                inputs=store,
+                inputs=filtered_store,
             )
 
             success = self.run_container(
@@ -224,8 +227,8 @@ class ActivitysimRunner(GenericRunner):
                     state=state,
                 )
                 if skims_record:
-                    store.remove_record_type("omx_skims")
-                    store.add_record(skims_record)
+                    filtered_store.remove_record_type("omx_skims")
+                    filtered_store.add_record(skims_record)
             else:
                 logger.warning(
                     "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
@@ -238,7 +241,7 @@ class ActivitysimRunner(GenericRunner):
             year=state.current_year,
             iteration=state.current_inner_iter,
             description="asim full run",
-            inputs=store,
+            inputs=filtered_store,
         )
 
         asim_cmd = self.get_base_asim_cmd(settings)
@@ -280,7 +283,7 @@ class ActivitysimRunner(GenericRunner):
                         fpath,
                         year=state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
-                        short_name=fname,
+                        short_name=fname + "_asim_out",
                         model_run_id=new_asim_run_hash,
                         state=state,
                     )

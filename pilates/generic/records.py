@@ -35,7 +35,12 @@ class RecordStore:
         recordDict: Optional[Dict[str, Record]] = None,
         recordList: Optional[List[Record]] = None,
     ) -> None:
-        self.records = recordDict or {}
+        if isinstance(recordDict, dict):
+            self.records = recordDict
+        elif recordDict is not None:
+            raise TypeError("recordDict must be a dictionary.")
+        else:
+            self.records = {}
         if recordList is not None:
             for record in recordList:
                 if not isinstance(record, Record):
@@ -79,7 +84,7 @@ class RecordStore:
     def get_record(self, unique_id: str) -> Optional[Record]:
         return self.records.get(unique_id)
 
-    def all_records(self) -> List[Record]:
+    def all_records(self) -> List[Union["FileRecord", "RepoRecord"]]:
         return list(self.records.values())
 
     def all_unique_ids(self) -> List[str]:

@@ -13,6 +13,7 @@ class GenericPreprocessor(ABC):
     """
 
     def __init__(self):
+        self.required_input_data: list[str] = []
         pass
 
     @abstractmethod

@@ -23,9 +23,12 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 
 import attr
+import h5py
+import pandas as pd
 from openlineage.client import set_producer
 from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
 from openlineage.client.run import RunEvent, Run, Job
+import pyarrow.parquet as pq
 
 set_producer("https://github.com/LBNL-UCB-STI/PILATES")
 
@@ -487,6 +490,58 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
         return repo_record
 
+    def _get_schema_from_h5(self, file_path: str) -> List[Dict[str, str]]:
+        """
+        Extracts a flattened schema from an HDF5 file using pandas.HDFStore
+        to correctly identify tables and column names.
+        """
+        flat_schema = []
+        try:
+            with pd.HDFStore(file_path, mode='r') as store:
+                for table_name in store.keys():
+                    # CORRECTED: Use 'stop=1' to read just the first row
+                    df_sample = store.select(table_name, stop=1)
+
+                    for col_name, col_type in df_sample.dtypes.items():
+                        flat_schema.append({
+                            "name": f"{table_name}:{col_name}".replace("/",""),
+                            "type": str(col_type)
+                        })
+        except Exception as e:
+            logger.warning(f"Could not read HDF5 schema from {file_path} using pandas: {e}")
+
+        return flat_schema
+
+    def _get_schema_from_file(self, file_path: str) -> List[Dict[str, str]]:
+        """
+        Infers the schema from a .csv or .parquet file.
+
+        Args:
+            file_path (str): The path to the file.
+
+        Returns:
+            A list of dictionaries, where each dictionary represents a field
+            in the schema (e.g., [{'name': 'col1', 'type': 'int64'}]).
+        """
+        schema_info = []
+        try:
+            if file_path.endswith(".csv") | file_path.endswith(".csv.gz"):
+                # For CSV, read the header and infer types with pandas
+                df = pd.read_csv(file_path, nrows=10)  # Read a small sample
+                for col_name, col_type in df.dtypes.items():
+                    schema_info.append({"name": col_name, "type": str(col_type)})
+            elif file_path.endswith(".parquet"):
+                # For Parquet, read the schema directly from metadata
+                parquet_file = pq.ParquetFile(file_path)
+                for field in parquet_file.schema:
+                    schema_info.append({"name": field.name, "type": str(field.physical_type)})
+            elif file_path.endswith((".h5", ".hdf5")):
+                return self._get_schema_from_h5(file_path)
+        except Exception as e:
+            logger.warning(f"Could not automatically infer schema for {file_path}: {e}")
+
+        return schema_info
+
     def _get_or_create_file_record(
         self,
         file_path: str,
@@ -510,6 +565,8 @@ class FileProvenanceTracker(ProvenanceTracker):
             return self.run_info.file_records[file_hash]
 
         metadata = self._load_metadata(path_to_use)
+        schema = self._get_schema_from_file(path_to_use)
+
         file_record = FileRecord(
             unique_id=file_hash,
             file_path=relative_path,
@@ -517,6 +574,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             short_name=short_name,
             metadata=metadata,
             description=description,
+            schema=schema,
         )
         self.run_info.file_records[file_hash] = file_record
         return file_record
@@ -560,7 +618,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
-                short_name=record.short_name,
+                short_name=record.short_name.replace("_asim_out","").replace("_beam_out",""), # TODO: This is a hack
                 model_run_id=self.current_model_run_id,
                 state=state,
             )

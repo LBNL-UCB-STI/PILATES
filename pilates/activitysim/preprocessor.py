@@ -2358,7 +2358,7 @@ def copy_beam_geoms(
     beam_geoms_in = provenance_tracker.record_input_file(
         model="activitysim_preprocessor",
         file_path=beam_geoms_location,
-        short_name="beam_geoms",
+        short_name="beam_geoms_reference",
         description="BEAM geometry file",
     )
     zone_type = settings["skims_zone_type"].lower()
@@ -2576,7 +2576,7 @@ def create_asim_data_from_h5(
     households_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "households.csv"),
-        short_name="households",
+        short_name="households_asim_in",
         description="activitysim households input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,
@@ -2586,7 +2586,7 @@ def create_asim_data_from_h5(
     persons_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "persons.csv"),
-        short_name="persons",
+        short_name="persons_asim_in",
         description="activitysim persons input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,
@@ -2596,7 +2596,7 @@ def create_asim_data_from_h5(
     land_use_record = provenance_tracker.record_output_file(
         "activitysim_preprocessor",
         os.path.join(output_dir, "land_use.csv"),
-        short_name="land_use",
+        short_name="land_use_asim_in",
         description="activitysim land use input based on UrbanSim .h5",
         source_file_paths=[store._path],
         model_run_id=model_run_hash,

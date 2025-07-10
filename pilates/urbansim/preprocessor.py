@@ -147,7 +147,7 @@ def copy_data_to_mutable_location(
             "urbansim",
             src,
             description="Reference urbanSim model data",
-            short_name="usim_data",
+            short_name="usim_data_reference",
         )
     ]
     outputs = [

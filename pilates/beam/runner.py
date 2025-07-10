@@ -75,9 +75,9 @@ class BeamRunner(GenericRunner):
             inputs=store,
         )
 
-        beam_data_repo = provenance_tracker.run_info.repo_records["beam"][0]
+        # beam_data_repo = provenance_tracker.run_info.repo_records["beam"][0]
 
-        provenance_tracker.record_input_record(beam_data_repo)
+        # provenance_tracker.record_input_record(beam_data_repo)
 
         # for record in store:
         #     if isinstance(record, FileRecord):
@@ -127,7 +127,7 @@ class BeamRunner(GenericRunner):
                 self.model_name,
                 od_skims_path,
                 year=state.forecast_year,
-                description="raw_od_skims",
+                short_name="raw_od_skims",
                 model_run_id=beam_run_hash,
             )
             if output_rec:
@@ -142,7 +142,7 @@ class BeamRunner(GenericRunner):
                 self.model_name,
                 origin_skims_path,
                 year=state.forecast_year,
-                description="raw_origin_skims",
+                short_name="raw_origin_skims",
                 model_run_id=beam_run_hash,
             )
             if output_rec:
@@ -152,8 +152,23 @@ class BeamRunner(GenericRunner):
                     f"[BEAM Runner] Could not record output file: {origin_skims_path}"
                 )
 
+        if linkstats_path and os.path.exists(linkstats_path):
+            output_rec = provenance_tracker.record_output_file(
+                self.model_name,
+                linkstats_path,
+                year=state.forecast_year,
+                short_name="linkstats",
+                model_run_id=beam_run_hash,
+            )
+            if output_rec:
+                output_records.append(output_rec)
+            else:
+                logger.warning(
+                    f"[BEAM Runner] Could not record output file: {linkstats_path}"
+                )
+
         # Record BEAM run completion now that outputs are recorded
-        provenance_tracker.complete_model_run(beam_run_hash, status="completed")
+        provenance_tracker.complete_model_run(beam_run_hash, status="completed", output_records=output_records)
 
         output_store = RecordStore(recordList=output_records)
 
