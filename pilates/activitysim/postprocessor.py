@@ -649,7 +649,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(record, "file_path"):
                 source = os.path.join(workspace.output_path, record.file_path)
                 target = os.path.join(
-                    iteration_folder_path, record.short_name.replace("_asim_out","") + ".parquet"
+                    iteration_folder_path,
+                    record.short_name.replace("_asim_out", "") + ".parquet",
                 )
                 moved_record = provenance_tracker.move_file(
                     record,

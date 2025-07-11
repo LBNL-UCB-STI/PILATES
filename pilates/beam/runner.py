@@ -10,12 +10,46 @@ from pilates.beam.postprocessor import (
     find_produced_od_skims,
     find_produced_origin_skims,
     find_produced_linkstats,
+    find_latest_beam_iteration, find_produced_plans,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
+
+
+def find_not_taken_dir_name(dir_name):
+    for x in range(1, 99999):
+        testing_name = f"{dir_name}_{x}"
+        if not os.path.exists(testing_name):
+            return testing_name
+    raise RuntimeError(f"Cannot find an appropriate not taken directory for {dir_name}")
+
+
+def rename_beam_output_directory(
+    beam_output_dir, settings, year, replanning_iteration_number=0
+) -> str:
+    iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
+    beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
+    new_iteration_output_directory = os.path.join(
+        beam_output_dir,
+        settings["region"],
+        "year-{0}-iteration-{1}".format(year, replanning_iteration_number),
+    )
+    if os.path.exists(new_iteration_output_directory):
+        os.rename(
+            new_iteration_output_directory,
+            find_not_taken_dir_name(new_iteration_output_directory),
+        )
+    try:
+        os.rename(beam_run_output_dir, new_iteration_output_directory)
+    except FileNotFoundError:
+        logger.warning(
+            "Files {0} not found. Adding a slash".format(beam_run_output_dir)
+        )
+        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
+    return new_iteration_output_directory
 
 
 class BeamRunner(GenericRunner):
@@ -102,6 +136,16 @@ class BeamRunner(GenericRunner):
             provenance_tracker.complete_model_run(beam_run_hash, status="failed")
             sys.exit(1)
 
+        try:
+            new_path = rename_beam_output_directory(
+                workspace.get_beam_output_dir(),
+                settings,
+                state.current_year,
+                state.current_inner_iter,
+            )
+        except Exception as e:
+            logger.error("Whoops!")
+
         # 3. ASSEMBLE OUTPUTS
         skims_fname = settings["skims_fname"]
         if skims_fname.endswith(".csv.gz"):
@@ -120,6 +164,7 @@ class BeamRunner(GenericRunner):
         od_skims_path = find_produced_od_skims(beam_local_output_folder, skimFormat)
         origin_skims_path = find_produced_origin_skims(beam_local_output_folder)
         linkstats_path = find_produced_linkstats(beam_local_output_folder)
+        plans_out_path = find_produced_plans(beam_local_output_folder)
 
         output_records = []
         if od_skims_path and os.path.exists(od_skims_path):
@@ -167,8 +212,25 @@ class BeamRunner(GenericRunner):
                     f"[BEAM Runner] Could not record output file: {linkstats_path}"
                 )
 
+        if plans_out_path and os.path.exists(plans_out_path):
+            output_rec = provenance_tracker.record_output_file(
+                self.model_name,
+                plans_out_path,
+                year=state.forecast_year,
+                short_name="beam_plans_out  ",
+                model_run_id=beam_run_hash,
+            )
+            if output_rec:
+                output_records.append(output_rec)
+            else:
+                logger.warning(
+                    f"[BEAM Runner] Could not record output file: {plans_out_path}"
+                )
+
         # Record BEAM run completion now that outputs are recorded
-        provenance_tracker.complete_model_run(beam_run_hash, status="completed", output_records=output_records)
+        provenance_tracker.complete_model_run(
+            beam_run_hash, status="completed", output_records=output_records
+        )
 
         output_store = RecordStore(recordList=output_records)
 

@@ -1527,8 +1527,6 @@ def _get_part_time_enrollment(state_fips):
     return s
 
 
-
-
 def _get_school_enrollment(state_fips, county_codes):
     logger.info("Downloading school enrollment data from educationdata.urban.org!")
     base_url = (
@@ -1709,9 +1707,6 @@ def enrollment_tables(
         enrollment.to_csv(path_to_schools_data)
 
     return enrollment
-
-
-
 
 
 def copy_data_to_mutable_location(
@@ -2208,54 +2203,69 @@ def _create_land_use_table(
         except:
             print("Skipping BLKGRP")
 
-
     # --- Consolidated Persons Aggregation ---
     logger.info("Aggregating persons data.")
-    persons_agg = persons.assign(
-        AGE0004=persons["age"].between(0, 4),
-        AGE0519=persons["age"].between(5, 19),
-        AGE2044=persons["age"].between(20, 44),
-        AGE4564=persons["age"].between(45, 64),
-        AGE64P=persons["age"] >= 65,
-        AGE62P=persons["age"] >= 62,
-    ).groupby(asim_zone_id_col)[
-        ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
-    ].sum()
-    persons_agg['TOTPOP'] = persons.groupby(asim_zone_id_col).size()
+    persons_agg = (
+        persons.assign(
+            AGE0004=persons["age"].between(0, 4),
+            AGE0519=persons["age"].between(5, 19),
+            AGE2044=persons["age"].between(20, 44),
+            AGE4564=persons["age"].between(45, 64),
+            AGE64P=persons["age"] >= 65,
+            AGE62P=persons["age"] >= 62,
+        )
+        .groupby(asim_zone_id_col)[
+            ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
+        ]
+        .sum()
+    )
+    persons_agg["TOTPOP"] = persons.groupby(asim_zone_id_col).size()
 
     # --- Consolidated Households Aggregation ---
     logger.info("Aggregating households data.")
-    households_agg = households.assign(
-        HHINCQ1=(households["income"] < 30000) | (households["income"].isna()),
-        HHINCQ2=households["income"].between(30000, 59999),
-        HHINCQ3=households["income"].between(60000, 99999),
-        HHINCQ4=households["income"] >= 100000,
-    ).groupby(asim_zone_id_col)[
-        ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
-    ].sum()
-    households_agg['TOTHH'] = households.groupby(asim_zone_id_col).size()
-    households_agg.rename(columns={'workers': 'EMPRES'}, inplace=True)
+    households_agg = (
+        households.assign(
+            HHINCQ1=(households["income"] < 30000) | (households["income"].isna()),
+            HHINCQ2=households["income"].between(30000, 59999),
+            HHINCQ3=households["income"].between(60000, 99999),
+            HHINCQ4=households["income"] >= 100000,
+        )
+        .groupby(asim_zone_id_col)[
+            ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
+        ]
+        .sum()
+    )
+    households_agg["TOTHH"] = households.groupby(asim_zone_id_col).size()
+    households_agg.rename(columns={"workers": "EMPRES"}, inplace=True)
+
+    # --- Consolidated Jobs Aggregation ---
+    logger.info("Aggregating jobs data.")
+    jobs_agg = (
+        jobs.assign(
+            RETEMPN=jobs["sector_id"].isin(["44-45"]),
+            FPSEMPN=jobs["sector_id"].isin(["52", "54"]),
+            HEREMPN=jobs["sector_id"].isin(["61", "62", "71"]),
+            AGREMPN=jobs["sector_id"].isin(["11"]),
+            MWTEMPN=jobs["sector_id"].isin(["42", "31-33", "32", "48-49"]),
+        )
+        .groupby(asim_zone_id_col)[
+            ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
+        ]
+        .sum()
+    )
+    jobs_agg["TOTEMP"] = jobs.groupby(asim_zone_id_col).size()
+
+    # Calculate OTHEMPN from the aggregated sums
+    sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
+    jobs_agg["OTHEMPN"] = jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)
+
+    # --- Join all aggregated data to the zones table ---
+    logger.info("Joining aggregated data to zones.")
+    zones = zones.join([persons_agg, households_agg, jobs_agg]).fillna(0)
 
     zones.loc[:, "SHPOP62P"] = (
         (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
     )
-
-    # --- Consolidated Jobs Aggregation ---
-    logger.info("Aggregating jobs data.")
-    jobs_agg = jobs.assign(
-        RETEMPN=jobs["sector_id"].isin(["44-45"]),
-        FPSEMPN=jobs["sector_id"].isin(["52", "54"]),
-        HEREMPN=jobs["sector_id"].isin(["61", "62", "71"]),
-        AGREMPN=jobs["sector_id"].isin(["11"]),
-        MWTEMPN=jobs["sector_id"].isin(["42", "31-33", "32", "48-49"]),
-    ).groupby(asim_zone_id_col)[
-        ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
-    ].sum()
-    jobs_agg['TOTEMP'] = jobs.groupby(asim_zone_id_col).size()
-
-    # Calculate OTHEMPN from the aggregated sums
-    sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
-    jobs_agg['OTHEMPN'] = jobs_agg['TOTEMP'] - jobs_agg[sector_columns].sum(axis=1)
 
     zones.loc[:, "TOTACRE"] = (
         blocks[["TOTACRE", asim_zone_id_col]]
@@ -2312,6 +2322,7 @@ def _create_land_use_table(
     logger.info(zones.dtypes)
 
     return zones
+
 
 def create_asim_data_from_h5(
     settings,

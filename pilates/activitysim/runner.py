@@ -19,7 +19,15 @@ class ActivitysimRunner(GenericRunner):
 
     def __init__(self, model_name: str):
         super().__init__(model_name)
-        self.required_input_files = ["persons_asim_in","households_asim_in","land_use_asim_in","omx_skims","zarr_skims","asim_geoms","asim_configs"]
+        self.required_input_files = [
+            "persons_asim_in",
+            "households_asim_in",
+            "land_use_asim_in",
+            "omx_skims",
+            "zarr_skims",
+            "asim_geoms",
+            "asim_configs",
+        ]
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
@@ -168,7 +176,17 @@ class ActivitysimRunner(GenericRunner):
             "activitysim"
         )
 
-        filtered_store = RecordStore(recordList = [rec for rec in store.all_records() if rec.short_name in self.required_input_files])
+        filtered_store = RecordStore(
+            recordList=[
+                rec
+                for rec in store.all_records()
+                if rec.short_name in self.required_input_files
+            ]
+        )
+
+        all_skims_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
 
         # Record ActivitySim run start (Compilation if needed)
         if not state.asim_compiled:
@@ -200,8 +218,18 @@ class ActivitysimRunner(GenericRunner):
                 args=additional_args,
             )
 
+            zarr_skims_rec = provenance_tracker.record_output_file(
+                "activitysim",
+                all_skims_path,
+                model_run_id=asim_compile_run_hash,
+                description="Zarr skims initialized from omx.",
+                short_name="zarr_skims",
+            )
+
             provenance_tracker.complete_model_run(
-                asim_compile_run_hash, status="completed" if success else "failed"
+                asim_compile_run_hash,
+                status="completed" if success else "failed",
+                output_records=[zarr_skims_rec],
             )
 
             logger.info("ASIM Compilation success: {0}".format(success))
@@ -211,19 +239,17 @@ class ActivitysimRunner(GenericRunner):
 
         if settings.get("file_format") == "parquet":
             # Using new ASIM with caching:
-            skims_cache_loc = os.path.join(
-                workspace.get_asim_mutable_data_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(skims_cache_loc):
+
+            if os.path.exists(all_skims_path):
                 logger.info(
-                    "Using existing ASIM skims cache at: {0}".format(skims_cache_loc)
+                    "Using existing ASIM skims cache at: {0}".format(all_skims_path)
                 )
                 skims_record = provenance_tracker.record_input_file(
                     "activitysim",
-                    skims_cache_loc,
+                    all_skims_path,
                     description="ASIM skims cache",
                     model_run_id=asim_compile_run_hash,
-                    short_name="asim_skims_cache",
+                    short_name="zarr_skims",
                     state=state,
                 )
                 if skims_record:
@@ -232,7 +258,7 @@ class ActivitysimRunner(GenericRunner):
             else:
                 logger.warning(
                     "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
-                        skims_cache_loc
+                        all_skims_path
                     )
                 )
 

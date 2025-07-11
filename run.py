@@ -670,12 +670,14 @@ def run_activity_demand(
             state.current_year,
             state.current_inner_iter,
             description="Post-processing ActivitySim outputs",
-            inputs=raw_outputs
+            inputs=raw_outputs,
         )
         processed_outputs = postprocessor.postprocess(
             raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
         )
-        provenance_tracker.complete_model_run(post_run_hash, output_records=processed_outputs.all_records())
+        provenance_tracker.complete_model_run(
+            post_run_hash, output_records=processed_outputs.all_records()
+        )
         # TODO, move complete into the postprocess
 
     else:
@@ -715,11 +717,9 @@ def run_traffic_assignment(
             input_data, state, workspace, provenance_tracker
         )
 
-
         processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
+            raw_outputs, run_info, state, workspace, provenance_tracker
         )
-        provenance_tracker.complete_model_run(post_run_hash)
 
     else:
         logger.warning(f"Unknown or disabled travel model: {travel_model}")
@@ -755,8 +755,7 @@ def main():
             client = GenericRunner.initialize_docker_client(settings)
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
-            # If Docker is required and fails, we should probably exit.
-            # For now, we allow continuing for Singularity/stub cases.
+
 
     # 2. MAIN WORKFLOW LOOP
     for year in state:

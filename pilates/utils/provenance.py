@@ -25,9 +25,13 @@ from typing import Dict, List, Optional, Any, Union
 import attr
 import h5py
 import pandas as pd
-from openlineage.client import set_producer
+from openlineage.client import set_producer, OpenLineageClient
 from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
 from openlineage.client.run import RunEvent, Run, Job
+from openlineage.client.transport.http import HttpTransport, HttpConfig
+from openlineage.client.transport.file import FileTransport, FileConfig
+from openlineage.client.transport.composite import CompositeTransport, CompositeConfig
+
 import pyarrow.parquet as pq
 
 set_producer("https://github.com/LBNL-UCB-STI/PILATES")
@@ -312,7 +316,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return path_to_use, relative_path
 
     def _calculate_directory_hash(
-            self, abs_dir_path: str, state: Optional[WorkflowState] = None
+        self, abs_dir_path: str, state: Optional[WorkflowState] = None
     ) -> Optional[str]:
         """
         Calculates a SHA-256 hash of a directory based on its file and subdirectory names,
@@ -497,18 +501,22 @@ class FileProvenanceTracker(ProvenanceTracker):
         """
         flat_schema = []
         try:
-            with pd.HDFStore(file_path, mode='r') as store:
+            with pd.HDFStore(file_path, mode="r") as store:
                 for table_name in store.keys():
                     # CORRECTED: Use 'stop=1' to read just the first row
                     df_sample = store.select(table_name, stop=1)
 
                     for col_name, col_type in df_sample.dtypes.items():
-                        flat_schema.append({
-                            "name": f"{table_name}:{col_name}".replace("/",""),
-                            "type": str(col_type)
-                        })
+                        flat_schema.append(
+                            {
+                                "name": f"{table_name}:{col_name}".replace("/", ""),
+                                "type": str(col_type),
+                            }
+                        )
         except Exception as e:
-            logger.warning(f"Could not read HDF5 schema from {file_path} using pandas: {e}")
+            logger.warning(
+                f"Could not read HDF5 schema from {file_path} using pandas: {e}"
+            )
 
         return flat_schema
 
@@ -534,7 +542,9 @@ class FileProvenanceTracker(ProvenanceTracker):
                 # For Parquet, read the schema directly from metadata
                 parquet_file = pq.ParquetFile(file_path)
                 for field in parquet_file.schema:
-                    schema_info.append({"name": field.name, "type": str(field.physical_type)})
+                    schema_info.append(
+                        {"name": field.name, "type": str(field.physical_type)}
+                    )
             elif file_path.endswith((".h5", ".hdf5")):
                 return self._get_schema_from_h5(file_path)
         except Exception as e:
@@ -553,8 +563,10 @@ class FileProvenanceTracker(ProvenanceTracker):
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return None
-
-        file_hash = self._calculate_file_hash(path_to_use, state)
+        if os.path.isdir(path_to_use):
+            file_hash = self._calculate_path_hash(path_to_use, state)
+        else:
+            file_hash = self._calculate_file_hash(path_to_use, state)
         if not file_hash:
             logger.warning(
                 f"Could not calculate hash for {file_path}, cannot create record."
@@ -618,7 +630,9 @@ class FileProvenanceTracker(ProvenanceTracker):
             output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
-                short_name=record.short_name.replace("_asim_out","").replace("_beam_out",""), # TODO: This is a hack
+                short_name=record.short_name.replace("_asim_out", "").replace(
+                    "_beam_out", ""
+                ),  # TODO: This is a hack
                 model_run_id=self.current_model_run_id,
                 state=state,
             )
@@ -786,7 +800,7 @@ class FileProvenanceTracker(ProvenanceTracker):
 class OpenLineageTracker(FileProvenanceTracker):
     """
     Extends FileProvenanceTracker to generate an OpenLineage event log
-    in a file named `openlineage.jsonl`.
+    using the official OpenLineage transport interface.
     """
 
     def __init__(
@@ -807,56 +821,58 @@ class OpenLineageTracker(FileProvenanceTracker):
             folder_name (str, optional): Name of the folder within the output path for storing logs.
             use_file (bool): Whether to write events to a local file (default True).
             use_marquez (bool): Whether to send events to Marquez (default False).
-            marquez_url (str): URL of the Marquez server (default "http://localhost:5000").
-
-        Note:
-            To use Marquez, ensure the OpenLineage client is installed and configured correctly.
-            `docker-compose up -d`
-            `python run.py --settings settings.yaml`
-            `docker-compose down`
+            marquez_url (str): URL of the Marquez server.
         """
         super().__init__(run_id, output_path, folder_name)
         self.namespace = "default"
-        self.use_file = use_file
-        self.use_marquez = use_marquez
+        self.client = None
 
-        # Setup file logging if enabled
-        self.log_path = None
-        if self.use_file and self.output_path:
-            self.log_path = os.path.join(
-                self.output_path, self.folder_name or "", "openlineage.jsonl"
+        # This list will hold configuration dictionaries
+        transports_config = []
+
+        # 1. Build a list of transport configurations
+        if use_file and self.output_path:
+            log_path = os.path.join(
+                self.output_path, self.folder_name or "", "openlineage.json"
             )
-            if os.path.exists(self.log_path):
-                os.remove(self.log_path)
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            if os.path.exists(log_path):
+                os.remove(log_path)
 
-        # Setup Marquez client if enabled
-        self.marquez_client = None
-        if self.use_marquez:
-            from openlineage.client import OpenLineageClient
+            transports_config.append({"type": "file", "log_file_path": log_path})
 
-            self.marquez_client = OpenLineageClient(url=marquez_url)
+        if use_marquez:
+            transports_config.append({"type": "http", "url": marquez_url})
+
+        # 2. Instantiate the transport(s) and the client
+        if transports_config:
+            final_transport = None
+            if len(transports_config) > 1:
+                # For multiple transports, use CompositeTransport with CompositeConfig
+                composite_config = CompositeConfig(transports=transports_config)
+                final_transport = CompositeTransport(config=composite_config)
+            else:
+                # For a single transport, instantiate it directly
+                config = transports_config[0]
+                if config['type'] == 'file':
+                    final_transport = FileTransport(config=FileConfig(log_file_path=config['log_file_path']))
+                elif config['type'] == 'http':
+                    final_transport = HttpTransport(config=HttpConfig(url=config['url']))
+
+            if final_transport:
+                self.client = OpenLineageClient(transport=final_transport)
 
     def _emit_event(self, event: RunEvent):
         """
-        Emits an OpenLineage event to configured destinations.
-
-        Args:
-            event (RunEvent): The OpenLineage event to emit.
+        Emits an OpenLineage event using the configured client and transport.
         """
-        # Emit to file if enabled
-        if self.use_file and self.log_path:
+        if self.client:
             try:
-                with open(self.log_path, "a") as f:
-                    f.write(json.dumps(attr.asdict(event)) + "\n")
-            except IOError as e:
-                logger.error(f"Could not write to OpenLineage log file: {e}")
-
-        # Emit to Marquez if enabled
-        if self.use_marquez and self.marquez_client:
-            try:
-                self.marquez_client.emit(event)
+                self.client.emit(event)
             except Exception as e:
-                logger.error(f"Could not send event to Marquez: {e}")
+                logger.error(f"Could not emit OpenLineage event: {e}")
+        else:
+            logger.warning("No OpenLineage transport configured; event was not sent.")
 
     def _get_job_facets(
         self, description: str, model_run_id: str = None, git_hash: str = None

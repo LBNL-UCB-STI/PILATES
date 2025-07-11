@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sys
+from typing import Optional
 
 import numpy as np
 import openmatrix as omx
@@ -51,39 +52,6 @@ def find_latest_beam_iteration(beam_output_dir):
     return os.path.join(last_iters_dir, it_prefix + str(max_it_num)), max_it_num
 
 
-def find_not_taken_dir_name(dir_name):
-    for x in range(1, 99999):
-        testing_name = f"{dir_name}_{x}"
-        if not os.path.exists(testing_name):
-            return testing_name
-    raise RuntimeError(f"Cannot find an appropriate not taken directory for {dir_name}")
-
-
-def rename_beam_output_directory(
-    beam_output_dir, settings, year, replanning_iteration_number=0
-) -> str:
-    iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
-    beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
-    new_iteration_output_directory = os.path.join(
-        beam_output_dir,
-        settings["region"],
-        "year-{0}-iteration-{1}".format(year, replanning_iteration_number),
-    )
-    if os.path.exists(new_iteration_output_directory):
-        os.rename(
-            new_iteration_output_directory,
-            find_not_taken_dir_name(new_iteration_output_directory),
-        )
-    try:
-        os.rename(beam_run_output_dir, new_iteration_output_directory)
-    except FileNotFoundError:
-        logger.warning(
-            "Files {0} not found. Adding a slash".format(beam_run_output_dir)
-        )
-        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
-    return new_iteration_output_directory
-
-
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
     if iteration_dir is None:
@@ -103,6 +71,16 @@ def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
         iteration_dir, "{0}.linkstats.{1}".format(it_num, suffix)
     )
     logger.info("expecting linkstats at {0}".format(od_skims_path))
+    return od_skims_path
+
+def find_produced_plans(beam_output_dir, suffix="csv.gz"):
+    iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
+    if iteration_dir is None:
+        return None
+    od_skims_path = os.path.join(
+        iteration_dir, "{0}.plans.{1}".format(it_num, suffix)
+    )
+    logger.info("expecting output plans at {0}".format(od_skims_path))
     return od_skims_path
 
 
@@ -2201,47 +2179,6 @@ def _merge_beam_skims_to_zarr(
         logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
         merge_successful = False  # Indicate failure
 
-    # --- Provenance tracking for skims lineage ---
-    if provenance_tracker is not None:
-        # Record the input zarr skims before update (if it existed)
-        if os.path.exists(all_skims_path):
-            provenance_tracker.record_input_file(
-                "beam_postprocessor",
-                all_skims_path,
-                description="Previous zarr skims before merge",
-                model_run_id=model_run_hash,
-            )
-        # Record the BEAM partial skims file being merged in (if it existed)
-        if (
-            partialSkims
-            and current_omx_skims_path
-            and os.path.exists(current_omx_skims_path)
-        ):
-            provenance_tracker.record_input_file(
-                "beam_postprocessor",
-                current_omx_skims_path,
-                description="BEAM partial skims for merge",
-                model_run_id=model_run_hash,
-            )
-        # Record the output zarr skims file after the update, with source_file_paths
-        source_files = []
-        if os.path.exists(all_skims_path):
-            source_files.append(all_skims_path)
-        if (
-            partialSkims
-            and current_omx_skims_path
-            and os.path.exists(current_omx_skims_path)
-        ):
-            source_files.append(current_omx_skims_path)
-        if os.path.exists(all_skims_path):
-            provenance_tracker.record_output_file(
-                "beam_postprocessor",
-                all_skims_path,
-                description="Updated zarr skims after merge",
-                source_file_paths=source_files,
-                model_run_id=model_run_hash,
-            )
-
     # Close the datasets
     skims_ds.close()
     if partialSkims:
@@ -2648,59 +2585,80 @@ class BeamPostprocessor(GenericPostprocessor):
         state: WorkflowState,
         workspace: Workspace,
         provenance_tracker: "FileProvenanceTracker",
-        model_run_hash: str,
+        model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
         Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
         """
         logger.info("Running BEAM postprocessor...")
         settings = state.full_settings
+
+        zarr_record = provenance_tracker.run_info.get_most_recent_record("zarr_skims")
+        if zarr_record:
+            raw_outputs.add_record(zarr_record)
+            logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
+
+        model_run_hash = provenance_tracker.start_model_run(
+            "beam_postprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            description="Post-processing BEAM outputs",
+            inputs=raw_outputs,
+        )
+
+        raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
 
-        # Find the raw BEAM OD skims from the input records
-        raw_od_skims_path = None
-        for record in raw_outputs.all_records():
-            if isinstance(record, FileRecord) and record.description == "raw_od_skims":
-                raw_od_skims_path = record.file_path
-                # Record this raw skim file as an input to the post-processing step
-                provenance_tracker.record_input_file(
-                    "beam_postprocessor",
-                    raw_od_skims_path,
-                    model_run_id=model_run_hash,
-                    source_run_id=record.producing_run_id,
-                )
-                break
+        all_skims_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
 
-        if not raw_od_skims_path:
+        if "raw_od_skims" not in raw_output_files:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
+        elif not os.path.exists(all_skims_path):
+            logger.warning(
+                f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
+            )
+        else:
+            if not zarr_record:
+                logger.warning(
+                    "No existing Zarr skims record found, even though the file exists. Will generate a record as an output after merging"
+                )
 
-        # Path to the main Zarr skims store, which is an ActivitySim data artifact.
-        all_skims_path = os.path.join(
-            workspace.get_asim_mutable_data_dir(), settings["skims_fname"]
-        )
-        beam_output_dir = workspace.get_beam_output_dir()
+            raw_od_skims_path = os.path.join(
+                workspace.output_path,
+                next(
+                    record.file_path
+                    for record in raw_outputs.all_records()
+                    if record.short_name == "raw_od_skims"
+                ),
+            )
+            # Path to the main Zarr skims store, which is an ActivitySim data artifact.
 
-        # Call the main merging and post-processing logic for Zarr skims
-        updated_skims_path = _merge_beam_skims_to_zarr(
-            all_skims_path=all_skims_path,
-            beam_output_dir=beam_output_dir,
-            settings=settings,
-            override=raw_od_skims_path,
-            provenance_tracker=provenance_tracker,
-            model_run_hash=model_run_hash,
-        )
+            beam_output_dir = workspace.get_beam_output_dir()
 
-        # The main output is the modified Zarr store. Record it.
-        output_rec = provenance_tracker.record_output_file(
-            "beam_postprocessor",
-            all_skims_path,
-            model_run_id=model_run_hash,
-            description="Zarr skims store updated with BEAM outputs.",
-        )
-        if output_rec:
-            processed_records.append(output_rec)
+            # Call the main merging and post-processing logic for Zarr skims
+            updated_skims_path = _merge_beam_skims_to_zarr(
+                all_skims_path=all_skims_path,
+                beam_output_dir=beam_output_dir,
+                settings=settings,
+                override=raw_od_skims_path,
+                provenance_tracker=provenance_tracker,
+                model_run_hash=model_run_hash,
+            )
+
+            # The main output is the modified Zarr store. Record it.
+            output_rec = provenance_tracker.record_output_file(
+                "beam_postprocessor",
+                all_skims_path,
+                model_run_id=model_run_hash,
+                description="Zarr skims store updated with BEAM outputs.",
+                short_name="zarr_skims",
+            )
+            if output_rec:
+                processed_records.append(output_rec)
 
         # Optionally, if other files are produced (e.g., an OMX version of the skims), record them too.
         if settings.get("write_final_skims_as_omx"):
@@ -2719,8 +2677,6 @@ class BeamPostprocessor(GenericPostprocessor):
                     processed_records.append(omx_rec)
 
         output_store = RecordStore(recordList=processed_records)
-        new_path = rename_beam_output_directory(
-            beam_output_dir, settings, state.current_year, state.current_inner_iter
-        )
+        provenance_tracker.complete_model_run(model_run_hash)
 
         return output_store

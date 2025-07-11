@@ -74,7 +74,7 @@ class RecordStore:
         return self
 
     def remove_record_type(self, short_name: str):
-        for record in self.records:
+        for record in self.all_records():
             if record.short_name == short_name:
                 logger.info(
                     f"Removing record type {record.short_name} from record store"
@@ -246,7 +246,7 @@ class PilatesRunInfo:
         runs = [
             run.unique_id
             for run in self.model_runs.values()
-            if getattr(run, "model", None) == model_name
+            if getattr(run, "model", None).startswith(model_name)
         ]
         if not runs:
             return None
@@ -260,6 +260,28 @@ class PilatesRunInfo:
                 return 0.0
 
         return max(runs, key=get_time)
+
+    def get_most_recent_record(self, short_name: str) -> Optional[FileRecord]:
+        """
+        Returns the most recent FileRecord with the given short name.
+        """
+        records = [
+            record
+            for record in self.file_records.values()
+            if record.short_name == short_name
+        ]
+        if not records:
+            return None
+
+        # Prefer created_at, fallback to unique_id
+        def get_time(record):
+            iso_time = getattr(record, "created_at", None)
+            if iso_time:
+                return datetime.fromisoformat(iso_time)
+            else:
+                return 0.0
+
+        return max(records, key=get_time)
 
     def get_run_outputs(self, model_run_hash: str) -> List[str]:
         """
