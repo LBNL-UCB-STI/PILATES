@@ -24,7 +24,7 @@ from pilates.utils.geog import (
     get_taz_geoms,
     geoid_to_zone_map,
 )
-from pilates.utils.io import read_datastore
+from pilates.utils.io import read_datastore, datastore_path
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
@@ -1326,6 +1326,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
+    def __init__(self):
+        super().__init__()
+        self.required_input_data = ["usim_data_reference", "beam_geoms_reference", "asim_configs_reference"]
+        self.required_output_data = ["usim_data","asim_geoms","asim_configs"]
+
 
     def preprocess(
         self,
@@ -1361,14 +1366,17 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
 
         input_records = workspace.input_data.get("activitysim", RecordStore())
+        input_records_filtered = RecordStore(recordList=[rec for rec in input_records.all_records() if rec.short_name in self.required_input_data])
         output_records = workspace.output_data.get("activitysim", RecordStore())
+        output_records_filtered = RecordStore(
+            recordList=[rec for rec in output_records.all_records() if rec.short_name in self.required_output_data])
 
         pre_run_hash = provenance_tracker.start_model_run(
             "activitysim_preprocessor",
             year=state.current_year,
             iteration=state.current_inner_iter,
             description="Preprocessing for ActivitySim warm start",
-            inputs=input_records,
+            inputs=input_records_filtered,
         )
 
         if os.path.exists(path_to_beam_skims):
@@ -1441,7 +1449,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         all_outputs = (
             ([skim_record] if skim_record else [])
             + data_from_usim
-            + list(output_records.records.values())
+            + list(output_records_filtered.records.values())
         )
 
         provenance_tracker.complete_model_run(
@@ -2360,20 +2368,20 @@ def create_asim_data_from_h5(
         default_zone_id_col=input_zone_id_col,
     )
 
+    # Record the H5 datastore as an input to this preprocessor run
+    provenance_tracker.record_input_file(
+        "activitysim_preprocessor",
+        datastore_path(settings, state.forecast_year, mutable_data_dir=workspace.full_path),
+        short_name="urbansim_h5",
+        model_run_id=model_run_hash,
+        description="UrbanSim H5 data store",
+    )
+
     store, table_prefix_yr = read_datastore(
         settings,
         state.forecast_year,
         warm_start=warm_start,
         mutable_data_dir=workspace.full_path,
-    )
-
-    # Record the H5 datastore as an input to this preprocessor run
-    provenance_tracker.record_input_file(
-        "activitysim_preprocessor",
-        store._path,
-        short_name="urbansim_h5",
-        model_run_id=model_run_hash,
-        description="UrbanSim H5 data store",
     )
 
     logger.info(

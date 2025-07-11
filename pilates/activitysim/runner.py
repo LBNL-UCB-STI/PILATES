@@ -202,7 +202,7 @@ class ActivitysimRunner(GenericRunner):
             asim_compile_run_hash = provenance_tracker.start_model_run(
                 model=activity_demand_model,
                 year=state.current_year,
-                iteration=state.current_inner_iter,
+                iteration=-1,
                 description="asim compilation",
                 inputs=filtered_store,
             )
@@ -218,6 +218,8 @@ class ActivitysimRunner(GenericRunner):
                 args=additional_args,
             )
 
+            output_records = []
+
             zarr_skims_rec = provenance_tracker.record_output_file(
                 "activitysim",
                 all_skims_path,
@@ -225,11 +227,13 @@ class ActivitysimRunner(GenericRunner):
                 description="Zarr skims initialized from omx.",
                 short_name="zarr_skims",
             )
+            if zarr_skims_rec:
+                output_records.append(zarr_skims_rec)
 
             provenance_tracker.complete_model_run(
                 asim_compile_run_hash,
                 status="completed" if success else "failed",
-                output_records=[zarr_skims_rec],
+                output_records=output_records,
             )
 
             logger.info("ASIM Compilation success: {0}".format(success))

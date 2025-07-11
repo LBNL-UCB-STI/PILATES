@@ -811,6 +811,8 @@ class OpenLineageTracker(FileProvenanceTracker):
         use_file: bool = True,
         use_marquez: bool = True,
         marquez_url: str = "http://localhost:5002",
+        add_year_to_job_name: bool = True,
+        add_iteration_to_job_name: bool = True,
     ):
         """
         Initializes the OpenLineageTracker instance.
@@ -826,6 +828,8 @@ class OpenLineageTracker(FileProvenanceTracker):
         super().__init__(run_id, output_path, folder_name)
         self.namespace = "default"
         self.client = None
+        self.add_year_to_job_name = add_year_to_job_name
+        self.add_iteration_to_job_name = add_iteration_to_job_name
 
         # This list will hold configuration dictionaries
         transports_config = []
@@ -833,13 +837,13 @@ class OpenLineageTracker(FileProvenanceTracker):
         # 1. Build a list of transport configurations
         if use_file and self.output_path:
             log_path = os.path.join(
-                self.output_path, self.folder_name or "", "openlineage.json"
+                self.output_path, self.folder_name or "", "openlineage.jsonl"
             )
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             if os.path.exists(log_path):
                 os.remove(log_path)
 
-            transports_config.append({"type": "file", "log_file_path": log_path})
+            transports_config.append({"type": "file", "log_file_path": log_path, "append": True})
 
         if use_marquez:
             transports_config.append({"type": "http", "url": marquez_url})
@@ -855,7 +859,7 @@ class OpenLineageTracker(FileProvenanceTracker):
                 # For a single transport, instantiate it directly
                 config = transports_config[0]
                 if config['type'] == 'file':
-                    final_transport = FileTransport(config=FileConfig(log_file_path=config['log_file_path']))
+                    final_transport = FileTransport(config=FileConfig(log_file_path=config['log_file_path'], append=config.get('append', True)))
                 elif config['type'] == 'http':
                     final_transport = HttpTransport(config=HttpConfig(url=config['url']))
 
@@ -899,6 +903,13 @@ class OpenLineageTracker(FileProvenanceTracker):
                 type="git", url=repo_path, repo=repo_path, tag=git_hash
             )
         return facets
+
+    def _format_name(self, name: str, year: Optional[int], iteration: Optional[int]) -> str:
+        if self.add_year_to_job_name and year:
+            name += f"_{year}"
+            if self.add_iteration_to_job_name and iteration:
+                name += f"_{iteration}"
+        return name
 
     def move_file(
         self,
@@ -959,7 +970,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             run=Run(runId=run_id_uuid),
             job=Job(
                 namespace=self.namespace,
-                name=model,
+                name=self._format_name(model, year, iteration),
                 facets=self._get_job_facets(
                     description or f"Pilates model: {model}", model_run_id=model_run_id
                 ),
@@ -983,9 +994,13 @@ class OpenLineageTracker(FileProvenanceTracker):
         output_names = [dataset.short_name for dataset in output_records]
 
         model_run_info = self.run_info.model_runs.get(run_hash)
+        year = None
+        iteration = None
         if model_run_info:
             model_name = model_run_info.model
             run_id_uuid = model_run_info.openlineage_id
+            year =  model_run_info.year
+            iteration = model_run_info.iteration
             for record_hash in model_run_info.output_record_hashes:
                 if record_hash in self.run_info.file_records:
                     file_record = self.run_info.file_records[record_hash]
@@ -1007,7 +1022,7 @@ class OpenLineageTracker(FileProvenanceTracker):
                 run=Run(runId=run_id_uuid),
                 job=Job(
                     namespace=self.namespace,
-                    name=model_name,
+                    name=self._format_name(model_name, year, iteration),
                     facets=self._get_job_facets(
                         model_run_info.description or f"Pilates model: {model_name}",
                         model_run_id=run_hash,

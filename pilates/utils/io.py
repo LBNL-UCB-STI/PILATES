@@ -139,6 +139,29 @@ def parse_args_and_settings(settings_file="settings.yaml"):
 
     return settings
 
+def datastore_path(settings, year=None, mutable_data_dir=None):
+    """
+    Returns the path to the land use .H5 data store.
+    If `year` is None, returns the base year data store.
+    If `year` is specified, returns the forecast year data store.
+    """
+    # TODO: Reuse this code below
+    region = settings["region"]
+    region_id = settings["region_to_region_id"][region]
+    if mutable_data_dir is None:
+        data_loc = settings["usim_local_data_input_folder"]
+    else:
+        data_loc = os.path.join(
+            mutable_data_dir, settings["usim_local_mutable_data_folder"]
+        )
+    if year is None:
+        usim_datastore = settings["usim_formattable_input_file_name"].format(
+            region_id=region_id
+        )
+    else:
+        usim_datastore = settings["usim_formattable_output_file_name"].format(year=year)
+    return os.path.join(data_loc, usim_datastore)
+
 
 def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None):
     """

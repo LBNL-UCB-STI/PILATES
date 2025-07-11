@@ -217,7 +217,7 @@ class BeamRunner(GenericRunner):
                 self.model_name,
                 plans_out_path,
                 year=state.forecast_year,
-                short_name="beam_plans_out  ",
+                short_name="beam_plans_out",
                 model_run_id=beam_run_hash,
             )
             if output_rec:

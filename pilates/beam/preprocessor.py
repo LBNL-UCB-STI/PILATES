@@ -499,9 +499,14 @@ def copy_plans_from_asim(
                 updated_households = pd.read_parquet(asim_households_path)
                 original_persons = pd.read_parquet(beam_persons_path)
                 updated_persons = pd.read_parquet(asim_persons_path)
-                original_plans = pd.read_parquet(beam_plans_path).rename(
-                    columns={"tripId": "trip_id"}
-                )
+                if beam_plans_path.endswith(".parquet"):
+                    original_plans = pd.read_parquet(beam_plans_path).rename(
+                        columns={"tripId": "trip_id"}
+                    )
+                else:
+                    original_plans = pd.read_csv(beam_plans_path).rename(
+                        columns={"tripId": "trip_id"}
+                    )
                 updated_plans = pd.read_parquet(asim_plans_path)
             else:
                 raise NotImplementedError
@@ -646,7 +651,7 @@ def copy_plans_from_asim(
         file_format = settings.get("file_format", "parquet")
 
         # Find ActivitySim output files using provenance tracker
-        required_files = ["beam_plans", "households", "persons"]
+        required_files = ["beam_plans", "households", "persons", "beam_plans_out", "beam_plans_out  "]
         asim_output_records = (
             provenance_tracker.run_info.get_latest_model_run_output_records(
                 "activitysim_postprocessor"
@@ -659,8 +664,16 @@ def copy_plans_from_asim(
 
         asim_file_paths = {}
         for record in input_records.all_records():
-            if record.short_name.rsplit("_", 2)[0] in required_files:
-                asim_file_paths[record.short_name.rsplit("_", 2)[0]] = (
+            if (record.short_name.rsplit("_", 2)[0] in required_files) or (record.short_name in required_files):
+                splt = record.short_name.rsplit("_", 2)
+                if len(splt) >1:
+                    if str.isdigit(splt[1]):
+                        shortened_name = splt[0]
+                    else:
+                        shortened_name = record.short_name
+                else:
+                    shortened_name = record.short_name
+                asim_file_paths[shortened_name] = (
                     os.path.join(workspace.output_path, record.file_path),
                     record,
                 )
@@ -739,7 +752,7 @@ class BeamPreprocessor(GenericPreprocessor):
             "households",
             "beam_plans",
             "linkstats",
-            "plans_beam_out"
+            "beam_plans_out"
         ]
 
     def preprocess(

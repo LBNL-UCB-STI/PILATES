@@ -246,7 +246,7 @@ class PilatesRunInfo:
         runs = [
             run.unique_id
             for run in self.model_runs.values()
-            if getattr(run, "model", None).startswith(model_name)
+            if getattr(run, "model", None) == model_name
         ]
         if not runs:
             return None
