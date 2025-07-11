@@ -1527,297 +1527,6 @@ def _get_part_time_enrollment(state_fips):
     return s
 
 
-def _update_persons_table(
-    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
-):
-    """Updates person attributes and assigns zones for ActivitySim processing.
-
-    Args:
-        persons: DataFrame containing person records
-        households: DataFrame containing household records
-        unassigned_households: Series of household IDs without locations
-        blocks: DataFrame containing block/zone information
-        asim_zone_id_col: Column name for zone ID (default: 'TAZ')
-
-    Returns:
-        DataFrame with updated person attributes
-    """
-    # Convert index to int and filter out unassigned persons
-    persons.index = persons.index.astype(int)
-    unassigned_mask = persons.household_id.isin(unassigned_households)
-    logger.info(
-        f"Dropping {unassigned_mask.sum()} people from {unassigned_households.shape[0]} unassigned households"
-    )
-    persons = persons.loc[~unassigned_mask]
-
-    household_zone_map = households["block_id"].map(blocks[asim_zone_id_col])
-    persons[asim_zone_id_col] = (
-        persons["household_id"].map(household_zone_map).astype(str)
-    )
-
-    # Precalculate age ranges and worker/student status
-    persons["age"] = persons["age"].fillna(-1)
-    age_ranges = {
-        "adult": persons.age >= 18,
-        "working_age": persons.age.between(18, 64, inclusive="both"),
-        "senior": persons.age >= 65,
-        "teen": persons.age.between(16, 17, inclusive="both"),
-        "child": persons.age.between(6, 15, inclusive="both"),
-        "young_child": persons.age.between(0, 5, inclusive="both"),
-    }
-
-    # Calculate person types more efficiently
-    conditions = [
-        (
-            age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
-        ),  # type 1
-        (age_ranges["adult"] & (persons.student == 1)),  # type 3
-        (
-            age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
-        ),  # type 4
-        (
-            age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
-        ),  # type 5
-        age_ranges["teen"],  # type 6
-        age_ranges["child"],  # type 7
-        age_ranges["young_child"],  # type 8
-    ]
-    values = [1, 3, 4, 5, 6, 7, 8]
-    persons["ptype"] = np.select(conditions, values, default=0)
-
-    # Calculate employment status
-    conditions = [
-        ((persons.worker == 1) & (persons.age >= 16)),  # type 1
-        ((persons.worker == 0) & (persons.age >= 16)),  # type 3
-        (persons.age < 16),  # type 4
-    ]
-    values = [1, 3, 4]
-    persons["pemploy"] = np.select(conditions, values, default=0)
-
-    # Calculate student status
-    conditions = [
-        (persons.age <= 18),  # type 1
-        ((persons.student == 1) & (persons.age > 18)),  # type 2
-        (persons.student == 0),  # type 3
-    ]
-    values = [1, 2, 3]
-    persons["pstudent"] = np.select(conditions, values, default=0)
-
-    # Add home coordinates efficiently
-    home_coords = (
-        households[["block_id"]]
-        .merge(blocks[["x", "y"]], left_on="block_id", right_index=True)
-        .set_index(households.index)
-    )
-    persons["home_x"] = persons["household_id"].map(home_coords["x"])
-    persons["home_y"] = persons["household_id"].map(home_coords["y"])
-
-    # Convert location fields
-    for field in ["workplace_taz", "school_taz"]:
-        try:
-            source_field = (
-                "work_zone_id" if field == "workplace_taz" else "school_zone_id"
-            )
-            persons[field] = pd.to_numeric(
-                persons[source_field], errors="coerce"
-            ).fillna(-1)
-        except KeyError:
-            logger.info(f"Field `{field}` not present in input h5 file")
-
-    # Clean numeric fields
-    persons["worker"] = pd.to_numeric(persons["worker"], errors="coerce").fillna(0)
-    persons["student"] = pd.to_numeric(persons["student"], errors="coerce").fillna(0)
-
-    # Filter invalid records
-    mask = ~persons[asim_zone_id_col].isnull() & (  # Has valid TAZ
-        persons["age"] >= 1.0
-    )  # Not newborn
-
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        mask &= ~(
-            (persons.worker == 1) & (persons.workplace_taz < 0)
-        )  # Valid workplace for workers
-        mask &= ~(
-            (persons.student == 1) & (persons.school_taz < 0)
-        )  # Valid school for students
-
-    persons = persons.loc[mask].dropna()
-
-    # Reset member IDs
-    persons["member_id"] = persons.groupby("household_id")["member_id"].transform(
-        lambda x: np.arange(len(x)) + 1
-    )
-
-    # Clear school/work locations for specific person types
-    workers_mask = persons["ptype"] == 1
-    nonwork_mask = persons.ptype.isin([4, 5])
-
-    # Clear school locations for workers
-    if "school_taz" in persons.columns:
-        before_count = (workers_mask & (persons.school_taz >= 0)).sum()
-        persons.loc[workers_mask, ["school_taz", "school_zone_id"]] = -1
-        after_count = (workers_mask & (persons.school_taz >= 0)).sum()
-        logger.info(
-            f"Workers with school location: {before_count} before, {after_count} after cleaning"
-        )
-
-    # Clear work/school locations for non-workers
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        before_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        before_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
-        persons.loc[
-            nonwork_mask,
-            ["school_taz", "school_zone_id", "workplace_taz", "work_zone_id"],
-        ] = -1
-        after_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        after_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
-
-        logger.info(
-            f"Non-workers/students with school location: {before_school} before, {after_school} after"
-        )
-        logger.info(
-            f"Non-workers/students with work location: {before_work} before, {after_work} after"
-        )
-
-    return persons
-
-
-def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
-    # assign zones
-    households.index = households.index.astype(int)
-    households[asim_zone_id_col] = (
-        blocks[asim_zone_id_col].reindex(households["block_id"]).values
-    )
-    hh_null_taz = (
-        ~(households[asim_zone_id_col].astype(float).astype("Int64") > 0)
-    ).fillna(True)
-
-    households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
-    logger.info("Dropping {0} households without TAZs".format(hh_null_taz.sum()))
-    hh_null_taz_id = households.index[hh_null_taz]
-    households = households[~hh_null_taz]
-
-    # create new column variables
-    s = households.persons
-    households.loc[:, "HHT"] = s.where(s == 1, 4)
-    households["cars"] = households["cars"].astype(int)
-
-    # clean up dataframe structure
-    # TODO: move this to annotate_households.yaml in asim settings
-    #     hh_names_dict = {
-    #         'persons': 'PERSONS',
-    #         'cars': 'VEHICL'}
-    #     households = households.rename(columns=hh_names_dict)
-    if "household_id" in households.columns:
-        households.set_index("household_id", inplace=True)
-    else:
-        households.index.name = "household_id"
-
-    return households, hh_null_taz_id
-
-
-def _update_jobs_table(
-    jobs, blocks, state_fips, county_codes, local_crs, asim_zone_id_col="TAZ"
-):
-    # assign zones
-    jobs[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(jobs["block_id"]).values
-
-    jobs[asim_zone_id_col] = jobs[asim_zone_id_col].astype(str)
-
-    # make sure jobs are only assigned to blocks with land area > 0
-    # so that employment density distributions don't contain Inf/NaN
-    blocks = blocks[["square_meters_land"]]
-    jobs["square_meters_land"] = blocks.reindex(jobs["block_id"])[
-        "square_meters_land"
-    ].values
-    jobs_w_no_land = jobs[jobs["square_meters_land"] == 0]
-    blocks_to_reassign = jobs_w_no_land["block_id"].unique()
-    num_reassigned = len(blocks_to_reassign)
-
-    if num_reassigned > 0:
-
-        logger.info("Reassigning jobs out of blocks with no land area!")
-        blocks_gdf = get_block_geoms(state_fips, county_codes)
-        blocks_gdf.set_index("GEOID", inplace=True)
-        blocks_gdf["square_meters_land"] = blocks["square_meters_land"].reindex(
-            blocks_gdf.index
-        )
-        blocks_gdf = blocks_gdf.to_crs(local_crs)
-
-        for block_id in tqdm(
-            blocks_to_reassign, desc="Redistributing jobs from blocks:"
-        ):
-            candidate_mask = (blocks_gdf.index.values != block_id) & (
-                blocks_gdf["square_meters_land"] > 0
-            )
-            new_block_id = (
-                blocks_gdf[candidate_mask]
-                .distance(blocks_gdf.loc[block_id, "geometry"])
-                .idxmin()
-            )
-
-            jobs.loc[jobs["block_id"] == block_id, "block_id"] = new_block_id
-
-    else:
-        logger.info("No block IDs to reassign in the jobs table!")
-
-    return num_reassigned, jobs
-
-
-def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
-    blocks["TOTEMP"] = (
-        jobs[["block_id", "sector_id"]]
-        .groupby("block_id")["sector_id"]
-        .count()
-        .reindex(blocks.index)
-        .fillna(0)
-    )
-
-    blocks["TOTPOP"] = (
-        households[["block_id", "persons"]]
-        .groupby("block_id")["persons"]
-        .sum()
-        .reindex(blocks.index)
-        .fillna(0)
-    )
-
-    blocks["TOTACRE"] = blocks["square_meters_land"] / 4046.86
-
-    # update blocks (should only have to be run if asim is loading
-    # raw urbansim data that has yet to be touched by pilates)
-    geoid_to_zone_mapping_updated = False
-
-    zone_type = settings["skims_zone_type"]
-    zone_id_col = "{}_{}".format(zone_type, zone_id_col)
-
-    if zone_id_col not in blocks.columns:
-
-        mapping = geoid_to_zone_map(settings, year)
-
-        if zone_type == "block":
-            logger.info("Mapping block IDs")
-            blocks[zone_id_col] = blocks.index.astype(str).replace(mapping)
-
-        elif zone_type == "block_group":
-            logger.info("Mapping blocks to block group IDS")
-            blocks[zone_id_col] = blocks.block_group_id.astype(str).replace(mapping)
-
-        elif zone_type == "taz":
-            logger.info("Mapping block IDs to TAZ")
-            blocks[zone_id_col] = blocks.index.astype(str)
-            blocks[zone_id_col] = blocks[zone_id_col].replace(mapping)
-
-        geoid_to_zone_mapping_updated = True
-
-    else:
-        logger.info(
-            "Blocks table already has zone IDs. Make sure skim zones "
-            "haven't changed."
-        )
-
-    blocks[zone_id_col] = blocks[zone_id_col].astype(str)
-
-    return geoid_to_zone_mapping_updated, blocks
 
 
 def _get_school_enrollment(state_fips, county_codes):
@@ -2002,279 +1711,7 @@ def enrollment_tables(
     return enrollment
 
 
-def _create_land_use_table(
-    settings,
-    region,
-    zones,
-    state_fips,
-    county_codes,
-    local_crs,
-    households,
-    persons,
-    jobs,
-    blocks,
-    asim_zone_id_col="TAZ",
-):
-    logger.info("Creating land use table.")
-    zone_type = settings["skims_zone_type"]
 
-    schools = enrollment_tables(
-        settings, zones, enrollment_type="schools", asim_zone_id_col=asim_zone_id_col
-    )
-    colleges = enrollment_tables(
-        settings, zones, enrollment_type="colleges", asim_zone_id_col=asim_zone_id_col
-    )
-    assert zones.index.name == "TAZ"
-    assert zones.index.inferred_type == "string", "zone_id dtype should be str"
-    for table in [households, persons, jobs, blocks, schools, colleges]:
-        assert pd.api.types.is_string_dtype(
-            table[asim_zone_id_col]
-        ), "zone_id dtype in should be str"
-
-    # create new column variables
-    logger.info("Creating new columns in the land use table.")
-    if zone_type != "taz":
-        if "STATE" in zones.columns:
-            zones.loc[:, "STATE"] = zones["STATE"].astype(str)
-        else:
-            zones.loc[:, "STATE"] = settings["FIPS"][settings["region"]]["state"]
-        try:
-            zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
-        except:
-            print("Skipping COUNTY")
-        try:
-            zones.loc[:, "TRACT"] = zones["TRACT"].astype(str)
-        except:
-            print("Skipping TRACT")
-        try:
-            zones.loc[:, "BLKGRP"] = zones["BLKGRP"].astype(str)
-        except:
-            print("Skipping BLKGRP")
-
-    zones.loc[:, "TOTHH"] = (
-        households[asim_zone_id_col]
-        .groupby(households[asim_zone_id_col])
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "TOTPOP"] = (
-        persons[asim_zone_id_col]
-        .groupby(persons[asim_zone_id_col])
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "EMPRES"] = (
-        households[[asim_zone_id_col, "workers"]]
-        .groupby(asim_zone_id_col)["workers"]
-        .sum()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HHINCQ1"] = (
-        households.loc[households["income"] < 30000, [asim_zone_id_col, "income"]]
-        .groupby(asim_zone_id_col)["income"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HHINCQ2"] = (
-        households.loc[
-            households["income"].between(30000, 59999), [asim_zone_id_col, "income"]
-        ]
-        .groupby(asim_zone_id_col)["income"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HHINCQ3"] = (
-        households.loc[
-            households["income"].between(60000, 99999), [asim_zone_id_col, "income"]
-        ]
-        .groupby(asim_zone_id_col)["income"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HHINCQ4"] = (
-        households.loc[households["income"] >= 100000, [asim_zone_id_col, "income"]]
-        .groupby(asim_zone_id_col)["income"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE0004"] = (
-        persons.loc[persons["age"].between(0, 4), [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE0519"] = (
-        persons.loc[persons["age"].between(5, 19), [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE2044"] = (
-        persons.loc[persons["age"].between(20, 44), [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE4564"] = (
-        persons.loc[persons["age"].between(45, 64), [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE64P"] = (
-        persons.loc[persons["age"] >= 65, [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGE62P"] = (
-        persons.loc[persons["age"] >= 62, [asim_zone_id_col, "age"]]
-        .groupby(asim_zone_id_col)["age"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "SHPOP62P"] = (
-        (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
-    )
-    zones.loc[:, "TOTEMP"] = (
-        jobs[asim_zone_id_col]
-        .groupby(jobs[asim_zone_id_col])
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "RETEMPN"] = (
-        jobs.loc[jobs["sector_id"].isin(["44-45"]), [asim_zone_id_col, "sector_id"]]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "FPSEMPN"] = (
-        jobs.loc[jobs["sector_id"].isin(["52", "54"]), [asim_zone_id_col, "sector_id"]]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HEREMPN"] = (
-        jobs.loc[
-            jobs["sector_id"].isin(["61", "62", "71"]), [asim_zone_id_col, "sector_id"]
-        ]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "AGREMPN"] = (
-        jobs.loc[jobs["sector_id"].isin(["11"]), [asim_zone_id_col, "sector_id"]]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "MWTEMPN"] = (
-        jobs.loc[
-            jobs["sector_id"].isin(["42", "31-33", "32", "48-49"]),
-            [asim_zone_id_col, "sector_id"],
-        ]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "OTHEMPN"] = (
-        jobs.loc[
-            ~jobs["sector_id"].isin(
-                [
-                    "44-45",
-                    "52",
-                    "54",
-                    "61",
-                    "62",
-                    "71",
-                    "11",
-                    "42",
-                    "31-33",
-                    "32",
-                    "48-49",
-                ]
-            ),
-            [asim_zone_id_col, "sector_id"],
-        ]
-        .groupby(asim_zone_id_col)["sector_id"]
-        .count()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "TOTACRE"] = (
-        blocks[["TOTACRE", asim_zone_id_col]]
-        .groupby(asim_zone_id_col)["TOTACRE"]
-        .sum()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "HSENROLL"] = (
-        schools[["enrollment", asim_zone_id_col]]
-        .groupby(asim_zone_id_col)["enrollment"]
-        .sum()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "TOPOLOGY"] = 1  # FIXME
-    zones.loc[:, "employment_density"] = (zones.TOTEMP / zones.TOTACRE).fillna(0.0)
-    zones.loc[:, "pop_density"] = (zones.TOTPOP / zones.TOTACRE).fillna(0.0)
-    zones.loc[:, "hh_density"] = (zones.TOTHH / zones.TOTACRE).fillna(0.0)
-    zones.loc[:, "hq1_density"] = (zones.HHINCQ1 / zones.TOTACRE).fillna(0.0)
-    zones.loc[:, "PRKCST"] = _get_park_cost(
-        zones,
-        [-1.92168743, 4.89511403, 4.2772001, 0.65784643],
-        ["pop_density", "hh_density", "hq1_density", "employment_density"],
-        ["employment_density", "pop_density", "hh_density", "hq1_density"],
-    )
-    zones.loc[:, "OPRKCST"] = _get_park_cost(
-        zones,
-        [-6.17833544, 17.55155703, 2.0786466],
-        ["pop_density", "hh_density", "employment_density"],
-        ["employment_density", "pop_density", "hh_density"],
-    )
-    zones.loc[:, "COLLFTE"] = (
-        colleges[[asim_zone_id_col, "full_time_enrollment"]]
-        .groupby(asim_zone_id_col)["full_time_enrollment"]
-        .sum()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "COLLPTE"] = (
-        colleges[[asim_zone_id_col, "part_time_enrollment"]]
-        .groupby(asim_zone_id_col)["part_time_enrollment"]
-        .sum()
-        .reindex(zones.index)
-        .fillna(0)
-    )
-    zones.loc[:, "TERMINAL"] = 0
-    zones.loc[:, "area_type_metric"] = _compute_area_type_metric(zones)
-    zones.loc[:, "area_type"] = _compute_area_type(zones)
-    zones.loc[:, "TERMINAL"] = 0  # FIXME
-    zones.loc[:, "COUNTY"] = 1  # FIXME
-
-    logger.info(zones.head())
-    logger.info(zones.dtypes)
-
-    return zones
 
 
 def copy_data_to_mutable_location(
@@ -2430,6 +1867,451 @@ def copy_beam_geoms(
         outputs.append(beam_shape_out)
     return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
+
+def _update_persons_table(
+    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
+):
+    """Updates person attributes and assigns zones for ActivitySim processing.
+
+    Args:
+        persons: DataFrame containing person records
+        households: DataFrame containing household records
+        unassigned_households: Series of household IDs without locations
+        blocks: DataFrame containing block/zone information
+        asim_zone_id_col: Column name for zone ID (default: 'TAZ')
+
+    Returns:
+        DataFrame with updated person attributes
+    """
+    # Convert index to int and filter out unassigned persons
+    persons.index = persons.index.astype(int)
+    unassigned_mask = persons.household_id.isin(unassigned_households)
+    logger.info(
+        f"Dropping {unassigned_mask.sum()} people from {unassigned_households.shape[0]} unassigned households"
+    )
+    persons = persons.loc[~unassigned_mask]
+
+    household_zone_map = households["block_id"].map(blocks[asim_zone_id_col])
+    persons[asim_zone_id_col] = (
+        persons["household_id"].map(household_zone_map).astype(str)
+    )
+
+    # Precalculate age ranges and worker/student status
+    persons["age"] = persons["age"].fillna(-1)
+    age_ranges = {
+        "adult": persons.age >= 18,
+        "working_age": persons.age.between(18, 64, inclusive="both"),
+        "senior": persons.age >= 65,
+        "teen": persons.age.between(16, 17, inclusive="both"),
+        "child": persons.age.between(6, 15, inclusive="both"),
+        "young_child": persons.age.between(0, 5, inclusive="both"),
+    }
+
+    # Calculate person types more efficiently
+    conditions = [
+        (
+            age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
+        ),  # type 1
+        (age_ranges["adult"] & (persons.student == 1)),  # type 3
+        (
+            age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
+        ),  # type 4
+        (
+            age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
+        ),  # type 5
+        age_ranges["teen"],  # type 6
+        age_ranges["child"],  # type 7
+        age_ranges["young_child"],  # type 8
+    ]
+    values = [1, 3, 4, 5, 6, 7, 8]
+    persons["ptype"] = np.select(conditions, values, default=0)
+
+    # Calculate employment status
+    conditions = [
+        ((persons.worker == 1) & (persons.age >= 16)),  # type 1
+        ((persons.worker == 0) & (persons.age >= 16)),  # type 3
+        (persons.age < 16),  # type 4
+    ]
+    values = [1, 3, 4]
+    persons["pemploy"] = np.select(conditions, values, default=0)
+
+    # Calculate student status
+    conditions = [
+        (persons.age <= 18),  # type 1
+        ((persons.student == 1) & (persons.age > 18)),  # type 2
+        (persons.student == 0),  # type 3
+    ]
+    values = [1, 2, 3]
+    persons["pstudent"] = np.select(conditions, values, default=0)
+
+    # Add home coordinates efficiently
+    home_coords = (
+        households[["block_id"]]
+        .merge(blocks[["x", "y"]], left_on="block_id", right_index=True)
+        .set_index(households.index)
+    )
+    persons["home_x"] = persons["household_id"].map(home_coords["x"])
+    persons["home_y"] = persons["household_id"].map(home_coords["y"])
+
+    # Convert location fields
+    for field in ["workplace_taz", "school_taz"]:
+        try:
+            source_field = (
+                "work_zone_id" if field == "workplace_taz" else "school_zone_id"
+            )
+            persons[field] = pd.to_numeric(
+                persons[source_field], errors="coerce"
+            ).fillna(-1)
+        except KeyError:
+            logger.info(f"Field `{field}` not present in input h5 file")
+
+    # Clean numeric fields
+    persons["worker"] = pd.to_numeric(persons["worker"], errors="coerce").fillna(0)
+    persons["student"] = pd.to_numeric(persons["student"], errors="coerce").fillna(0)
+
+    # Filter invalid records
+    mask = ~persons[asim_zone_id_col].isnull() & (  # Has valid TAZ
+        persons["age"] >= 1.0
+    )  # Not newborn
+
+    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
+        mask &= ~(
+            (persons.worker == 1) & (persons.workplace_taz < 0)
+        )  # Valid workplace for workers
+        mask &= ~(
+            (persons.student == 1) & (persons.school_taz < 0)
+        )  # Valid school for students
+
+    persons = persons.loc[mask].dropna()
+
+    # Reset member IDs
+    persons["member_id"] = persons.groupby("household_id").cumcount() + 1
+
+    # Clear school/work locations for specific person types
+    workers_mask = persons["ptype"] == 1
+    nonwork_mask = persons.ptype.isin([4, 5])
+
+    # Clear school locations for workers
+    if "school_taz" in persons.columns:
+        before_count = (workers_mask & (persons.school_taz >= 0)).sum()
+        persons.loc[workers_mask, ["school_taz", "school_zone_id"]] = -1
+        after_count = (workers_mask & (persons.school_taz >= 0)).sum()
+        logger.info(
+            f"Workers with school location: {before_count} before, {after_count} after cleaning"
+        )
+
+    # Clear work/school locations for non-workers
+    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
+        before_school = (nonwork_mask & (persons.school_taz > 0)).sum()
+        before_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+        persons.loc[
+            nonwork_mask,
+            ["school_taz", "school_zone_id", "workplace_taz", "work_zone_id"],
+        ] = -1
+        after_school = (nonwork_mask & (persons.school_taz > 0)).sum()
+        after_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+
+        logger.info(
+            f"Non-workers/students with school location: {before_school} before, {after_school} after"
+        )
+        logger.info(
+            f"Non-workers/students with work location: {before_work} before, {after_work} after"
+        )
+
+    return persons
+
+
+def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
+    # assign zones
+    households.index = households.index.astype(int)
+    households[asim_zone_id_col] = (
+        blocks[asim_zone_id_col].reindex(households["block_id"]).values
+    )
+    hh_null_taz = (
+        ~(households[asim_zone_id_col].astype(float).astype("Int64") > 0)
+    ).fillna(True)
+
+    households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
+    logger.info("Dropping {0} households without TAZs".format(hh_null_taz.sum()))
+    hh_null_taz_id = households.index[hh_null_taz]
+    households = households[~hh_null_taz]
+
+    # create new column variables
+    s = households.persons
+    households.loc[:, "HHT"] = s.where(s == 1, 4)
+    households["cars"] = households["cars"].astype(int)
+
+    # clean up dataframe structure
+    # TODO: move this to annotate_households.yaml in asim settings
+    #     hh_names_dict = {
+    #         'persons': 'PERSONS',
+    #         'cars': 'VEHICL'}
+    #     households = households.rename(columns=hh_names_dict)
+    if "household_id" in households.columns:
+        households.set_index("household_id", inplace=True)
+    else:
+        households.index.name = "household_id"
+
+    return households, hh_null_taz_id
+
+
+def _update_jobs_table(
+    jobs, blocks, state_fips, county_codes, local_crs, asim_zone_id_col="TAZ"
+):
+    # assign zones
+    jobs[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(jobs["block_id"]).values
+
+    jobs[asim_zone_id_col] = jobs[asim_zone_id_col].astype(str)
+
+    # make sure jobs are only assigned to blocks with land area > 0
+    # so that employment density distributions don't contain Inf/NaN
+    blocks = blocks[["square_meters_land"]]
+    jobs["square_meters_land"] = blocks.reindex(jobs["block_id"])[
+        "square_meters_land"
+    ].values
+    jobs_w_no_land = jobs[jobs["square_meters_land"] == 0]
+    blocks_to_reassign = jobs_w_no_land["block_id"].unique()
+    num_reassigned = len(blocks_to_reassign)
+
+    if num_reassigned > 0:
+
+        logger.info("Reassigning jobs out of blocks with no land area!")
+        blocks_gdf = get_block_geoms(state_fips, county_codes)
+        blocks_gdf.set_index("GEOID", inplace=True)
+        blocks_gdf["square_meters_land"] = blocks["square_meters_land"].reindex(
+            blocks_gdf.index
+        )
+        blocks_gdf = blocks_gdf.to_crs(local_crs)
+
+        for block_id in tqdm(
+            blocks_to_reassign, desc="Redistributing jobs from blocks:"
+        ):
+            candidate_mask = (blocks_gdf.index.values != block_id) & (
+                blocks_gdf["square_meters_land"] > 0
+            )
+            new_block_id = (
+                blocks_gdf[candidate_mask]
+                .distance(blocks_gdf.loc[block_id, "geometry"])
+                .idxmin()
+            )
+
+            jobs.loc[jobs["block_id"] == block_id, "block_id"] = new_block_id
+
+    else:
+        logger.info("No block IDs to reassign in the jobs table!")
+
+    return num_reassigned, jobs
+
+
+def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
+    blocks["TOTEMP"] = (
+        jobs[["block_id", "sector_id"]]
+        .groupby("block_id")["sector_id"]
+        .count()
+        .reindex(blocks.index)
+        .fillna(0)
+    )
+
+    blocks["TOTPOP"] = (
+        households[["block_id", "persons"]]
+        .groupby("block_id")["persons"]
+        .sum()
+        .reindex(blocks.index)
+        .fillna(0)
+    )
+
+    blocks["TOTACRE"] = blocks["square_meters_land"] / 4046.86
+
+    # update blocks (should only have to be run if asim is loading
+    # raw urbansim data that has yet to be touched by pilates)
+    geoid_to_zone_mapping_updated = False
+
+    zone_type = settings["skims_zone_type"]
+    zone_id_col = "{}_{}".format(zone_type, zone_id_col)
+
+    if zone_id_col not in blocks.columns:
+
+        mapping = geoid_to_zone_map(settings, year)
+
+        if zone_type == "block":
+            logger.info("Mapping block IDs")
+            blocks[zone_id_col] = blocks.index.astype(str).replace(mapping)
+
+        elif zone_type == "block_group":
+            logger.info("Mapping blocks to block group IDS")
+            blocks[zone_id_col] = blocks.block_group_id.astype(str).replace(mapping)
+
+        elif zone_type == "taz":
+            logger.info("Mapping block IDs to TAZ")
+            blocks[zone_id_col] = blocks.index.astype(str)
+            blocks[zone_id_col] = blocks[zone_id_col].replace(mapping)
+
+        geoid_to_zone_mapping_updated = True
+
+    else:
+        logger.info(
+            "Blocks table already has zone IDs. Make sure skim zones "
+            "haven't changed."
+        )
+
+    blocks[zone_id_col] = blocks[zone_id_col].astype(str)
+
+    return geoid_to_zone_mapping_updated, blocks
+
+
+def _create_land_use_table(
+    settings,
+    region,
+    zones,
+    state_fips,
+    county_codes,
+    local_crs,
+    households,
+    persons,
+    jobs,
+    blocks,
+    asim_zone_id_col="TAZ",
+):
+    logger.info("Creating land use table.")
+    zone_type = settings["skims_zone_type"]
+
+    schools = enrollment_tables(
+        settings, zones, enrollment_type="schools", asim_zone_id_col=asim_zone_id_col
+    )
+    colleges = enrollment_tables(
+        settings, zones, enrollment_type="colleges", asim_zone_id_col=asim_zone_id_col
+    )
+    assert zones.index.name == "TAZ"
+    assert zones.index.inferred_type == "string", "zone_id dtype should be str"
+    for table in [households, persons, jobs, blocks, schools, colleges]:
+        assert pd.api.types.is_string_dtype(
+            table[asim_zone_id_col]
+        ), "zone_id dtype in should be str"
+
+    # create new column variables
+    logger.info("Creating new columns in the land use table.")
+    if zone_type != "taz":
+        if "STATE" in zones.columns:
+            zones.loc[:, "STATE"] = zones["STATE"].astype(str)
+        else:
+            zones.loc[:, "STATE"] = settings["FIPS"][settings["region"]]["state"]
+        try:
+            zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
+        except:
+            print("Skipping COUNTY")
+        try:
+            zones.loc[:, "TRACT"] = zones["TRACT"].astype(str)
+        except:
+            print("Skipping TRACT")
+        try:
+            zones.loc[:, "BLKGRP"] = zones["BLKGRP"].astype(str)
+        except:
+            print("Skipping BLKGRP")
+
+
+    # --- Consolidated Persons Aggregation ---
+    logger.info("Aggregating persons data.")
+    persons_agg = persons.assign(
+        AGE0004=persons["age"].between(0, 4),
+        AGE0519=persons["age"].between(5, 19),
+        AGE2044=persons["age"].between(20, 44),
+        AGE4564=persons["age"].between(45, 64),
+        AGE64P=persons["age"] >= 65,
+        AGE62P=persons["age"] >= 62,
+    ).groupby(asim_zone_id_col)[
+        ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
+    ].sum()
+    persons_agg['TOTPOP'] = persons.groupby(asim_zone_id_col).size()
+
+    # --- Consolidated Households Aggregation ---
+    logger.info("Aggregating households data.")
+    households_agg = households.assign(
+        HHINCQ1=(households["income"] < 30000) | (households["income"].isna()),
+        HHINCQ2=households["income"].between(30000, 59999),
+        HHINCQ3=households["income"].between(60000, 99999),
+        HHINCQ4=households["income"] >= 100000,
+    ).groupby(asim_zone_id_col)[
+        ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
+    ].sum()
+    households_agg['TOTHH'] = households.groupby(asim_zone_id_col).size()
+    households_agg.rename(columns={'workers': 'EMPRES'}, inplace=True)
+
+    zones.loc[:, "SHPOP62P"] = (
+        (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
+    )
+
+    # --- Consolidated Jobs Aggregation ---
+    logger.info("Aggregating jobs data.")
+    jobs_agg = jobs.assign(
+        RETEMPN=jobs["sector_id"].isin(["44-45"]),
+        FPSEMPN=jobs["sector_id"].isin(["52", "54"]),
+        HEREMPN=jobs["sector_id"].isin(["61", "62", "71"]),
+        AGREMPN=jobs["sector_id"].isin(["11"]),
+        MWTEMPN=jobs["sector_id"].isin(["42", "31-33", "32", "48-49"]),
+    ).groupby(asim_zone_id_col)[
+        ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
+    ].sum()
+    jobs_agg['TOTEMP'] = jobs.groupby(asim_zone_id_col).size()
+
+    # Calculate OTHEMPN from the aggregated sums
+    sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
+    jobs_agg['OTHEMPN'] = jobs_agg['TOTEMP'] - jobs_agg[sector_columns].sum(axis=1)
+
+    zones.loc[:, "TOTACRE"] = (
+        blocks[["TOTACRE", asim_zone_id_col]]
+        .groupby(asim_zone_id_col)["TOTACRE"]
+        .sum()
+        .reindex(zones.index)
+        .fillna(0)
+    )
+    zones.loc[:, "HSENROLL"] = (
+        schools[["enrollment", asim_zone_id_col]]
+        .groupby(asim_zone_id_col)["enrollment"]
+        .sum()
+        .reindex(zones.index)
+        .fillna(0)
+    )
+    zones.loc[:, "TOPOLOGY"] = 1  # FIXME
+    zones.loc[:, "employment_density"] = (zones.TOTEMP / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, "pop_density"] = (zones.TOTPOP / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, "hh_density"] = (zones.TOTHH / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, "hq1_density"] = (zones.HHINCQ1 / zones.TOTACRE).fillna(0.0)
+    zones.loc[:, "PRKCST"] = _get_park_cost(
+        zones,
+        [-1.92168743, 4.89511403, 4.2772001, 0.65784643],
+        ["pop_density", "hh_density", "hq1_density", "employment_density"],
+        ["employment_density", "pop_density", "hh_density", "hq1_density"],
+    )
+    zones.loc[:, "OPRKCST"] = _get_park_cost(
+        zones,
+        [-6.17833544, 17.55155703, 2.0786466],
+        ["pop_density", "hh_density", "employment_density"],
+        ["employment_density", "pop_density", "hh_density"],
+    )
+    zones.loc[:, "COLLFTE"] = (
+        colleges[[asim_zone_id_col, "full_time_enrollment"]]
+        .groupby(asim_zone_id_col)["full_time_enrollment"]
+        .sum()
+        .reindex(zones.index)
+        .fillna(0)
+    )
+    zones.loc[:, "COLLPTE"] = (
+        colleges[[asim_zone_id_col, "part_time_enrollment"]]
+        .groupby(asim_zone_id_col)["part_time_enrollment"]
+        .sum()
+        .reindex(zones.index)
+        .fillna(0)
+    )
+    zones.loc[:, "TERMINAL"] = 0
+    zones.loc[:, "area_type_metric"] = _compute_area_type_metric(zones)
+    zones.loc[:, "area_type"] = _compute_area_type(zones)
+    zones.loc[:, "TERMINAL"] = 0  # FIXME
+    zones.loc[:, "COUNTY"] = 1  # FIXME
+
+    logger.info(zones.head())
+    logger.info(zones.dtypes)
+
+    return zones
 
 def create_asim_data_from_h5(
     settings,
