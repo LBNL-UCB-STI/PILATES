@@ -80,7 +80,7 @@ def copy_data_to_mutable_location(
         )
         return
 
-    shutil.copytree(beam_production_path, dest, dirs_exist_ok=True)
+    shutil.copytree(beam_production_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
 
     git_hash = provenance_tracker.get_git_hash(beam_production_path)
     input_records.append(
@@ -105,7 +105,7 @@ def copy_data_to_mutable_location(
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
     dest = os.path.join(os.path.abspath(output_dir), "common")
     if os.path.exists(common_config_path):
-        shutil.copytree(common_config_path, dest, dirs_exist_ok=True)
+        shutil.copytree(common_config_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
         input_records.append(
             provenance_tracker.record_repo_input(
                 "beam",
