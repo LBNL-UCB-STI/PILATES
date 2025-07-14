@@ -128,6 +128,12 @@ def get_usim_datastore_fname(settings, io, year=None):
 
 
 class AtlasPostprocessor(GenericPostprocessor):
+    """
+    ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.
+    This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
+    All provenance tracking for output files should be handled here.
+    """
+
     def postprocess(
         self,
         raw_outputs: RecordStore,
@@ -137,17 +143,28 @@ class AtlasPostprocessor(GenericPostprocessor):
         provenance_tracker: FileProvenanceTracker,
         model_run_hash: str,
     ) -> RecordStore:
+        """
+        Postprocess ATLAS outputs: update UrbanSim HDF5 with new vehicle ownership,
+        and add vehicleTypeId to ATLAS vehicle outputs. Handles provenance tracking.
+
+        Steps:
+        1. Start the model run in provenance (should already be started by caller).
+        2. Update UrbanSim HDF5 with new vehicle ownership (atlas_update_h5_vehicle).
+        3. Add vehicleTypeId to ATLAS vehicle outputs (atlas_add_vehileTypeId).
+        4. Complete the model run in provenance and return an empty RecordStore (no outputs at this stage).
+        """
+        logger.info("[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s", state.current_year)
         settings = state.full_settings
         output_year = state.forecast_year
 
-        model_run_hash = provenance_tracker.start_model_run(
-            "atlas_postprocessor",
-            state.current_year,
-            description="ATLAS postprocessing",
-        )
+        # model_run_hash should already be started by caller
 
         atlas_update_h5_vehicle(settings, output_year, state)
+        logger.info("[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership for year %s", output_year)
         atlas_add_vehileTypeId(settings, output_year, state)
+        logger.info("[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs for year %s", output_year)
+
+        # TODO: Add provenance tracking for updated files if needed
 
         input_records = workspace.input_data.get("atlas", RecordStore())
         output_records = RecordStore()
@@ -155,4 +172,5 @@ class AtlasPostprocessor(GenericPostprocessor):
         provenance_tracker.complete_model_run(
             run_hash=model_run_hash, output_records=output_records.all_records()
         )
+        logger.info("[AtlasPostprocessor] Completed provenance model run for ATLAS postprocessing: %s", model_run_hash)
         return RecordStore(recordList=output_records.all_records())

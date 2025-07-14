@@ -4,7 +4,9 @@ from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.beam.runner import BeamRunner
 from pilates.beam.postprocessor import BeamPostprocessor
-
+from pilates.atlas.preprocessor import AtlasPreprocessor
+from pilates.atlas.runner import AtlasRunner
+from pilates.atlas.postprocessor import AtlasPostprocessor
 
 class ModelFactory:
     _registry = {
@@ -17,6 +19,11 @@ class ModelFactory:
             "preprocessor": BeamPreprocessor,
             "runner": BeamRunner,
             "postprocessor": BeamPostprocessor,
+        },
+        "atlas": {
+            "preprocessor": AtlasPreprocessor,
+            "runner": AtlasRunner,
+            "postprocessor": AtlasPostprocessor,
         },
     }
 

@@ -92,6 +92,12 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
 
 
 class UrbansimPostprocessor(GenericPostprocessor):
+    """
+    UrbanSim-specific postprocessor that consolidates all postprocessing steps for the UrbanSim land use model.
+    This class is responsible for any postprocessing needed after the UrbanSim run, such as updating outputs,
+    provenance, or preparing data for downstream models.
+    """
+
     def postprocess(
         self,
         raw_outputs: RecordStore,
@@ -103,6 +109,18 @@ class UrbansimPostprocessor(GenericPostprocessor):
     ) -> RecordStore:
         """
         Postprocess UrbanSim outputs.
+
+        Args:
+            raw_outputs (RecordStore): The raw outputs from the model run.
+            runInfo (ModelRunInfo): Metadata or information about the model run.
+            state (WorkflowState): The workflow state or context object.
+            workspace (Workspace): The workspace object for path management.
+            provenance_tracker (FileProvenanceTracker): The provenance tracker.
+            model_run_hash (str): The unique hash for this postprocessor run.
+
+        Returns:
+            RecordStore: Postprocessed output data.
         """
+        logger.info("[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s", state.current_year)
         # For now, just return the raw outputs
         return raw_outputs
