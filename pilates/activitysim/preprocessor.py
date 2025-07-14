@@ -1742,17 +1742,17 @@ def copy_data_to_mutable_location(
             configs_source_dir, configs_dest_dir
         )
     )
-    shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True)
+    shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
     git_hash = provenance_tracker.get_git_hash(configs_source_dir)
     repo_in = provenance_tracker.record_repo_input(
-        model="beam_preprocessor",
+        model="activitysim_preprocessor",
         repo_path=configs_source_dir,
         short_name="asim_configs_reference",
         description="Reference ActivitySim Config Repo",
         git_hash=git_hash,
     )
     repo_out = provenance_tracker.record_repo_input(
-        model="beam_preprocessor",
+        model="activitysim_preprocessor",
         repo_path=configs_dest_dir,
         short_name="asim_configs",
         description="ActivitySim Config Repo",
