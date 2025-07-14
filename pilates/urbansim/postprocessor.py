@@ -2,6 +2,11 @@ import os
 import logging
 import pandas as pd
 from pilates.utils.io import read_datastore
+from pilates.generic.postprocessor import GenericPostprocessor
+from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
+from pilates.workspace import Workspace
+from workflow_state import WorkflowState
+from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -84,3 +89,20 @@ def create_next_iter_usim_data(settings, year, forecast_year, full_path):
     else:
         # If urbansim is not activated, just log an info message and continue
         logger.info("Urbansim model is not activated, skipping input store path check")
+
+
+class UrbansimPostprocessor(GenericPostprocessor):
+    def postprocess(
+        self,
+        raw_outputs: RecordStore,
+        runInfo: ModelRunInfo,
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: "FileProvenanceTracker",
+        model_run_hash: str,
+    ) -> RecordStore:
+        """
+        Postprocess UrbanSim outputs.
+        """
+        # For now, just return the raw outputs
+        return raw_outputs
