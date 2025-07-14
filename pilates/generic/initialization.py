@@ -85,9 +85,9 @@ class Initialization:
             # ActivitySim config copy
             if model_name == "activitysim":
                 from pilates.activitysim import preprocessor as asim_pre
-
+                activitysim_preprocessor = asim_pre.ActivitysimPreprocessor()
                 asim_input_dir = workspace.get_asim_mutable_data_dir()
-                rec_in, rec_out = asim_pre.copy_data_to_mutable_location(
+                rec_in, rec_out = activitysim_preprocessor.copy_data_to_mutable_location(
                     settings, asim_input_dir, provenance_tracker
                 )
                 initialization_records_in += rec_in

@@ -26,7 +26,6 @@ from pilates.utils.geog import (
 )
 from pilates.utils.io import read_datastore, datastore_path
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -1328,8 +1327,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
     def __init__(self):
         super().__init__()
-        self.required_input_data = ["usim_data_reference", "beam_geoms_reference", "asim_configs_reference"]
-        self.required_output_data = ["usim_data","asim_geoms","asim_configs"]
+        self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
 
     def copy_data_to_mutable_location(
         self,
@@ -1345,7 +1343,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         state: "WorkflowState",
-        workspace: Workspace,
+        workspace: "Workspace",
         provenance_tracker: "FileProvenanceTracker",
     ) -> RecordStore:
         """
@@ -1366,11 +1364,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             skims_fname,
         )
 
-        input_records = workspace.input_data.get("activitysim", RecordStore())
+        input_records = workspace.output_data.get("activitysim", RecordStore())
         input_records_filtered = RecordStore(recordList=[rec for rec in input_records.all_records() if rec.short_name in self.required_input_data])
-        output_records = workspace.output_data.get("activitysim", RecordStore())
-        output_records_filtered = RecordStore(
-            recordList=[rec for rec in output_records.all_records() if rec.short_name in self.required_output_data])
+        output_records = RecordStore()
 
         pre_run_hash = provenance_tracker.start_model_run(
             "activitysim_preprocessor",
@@ -1436,7 +1432,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         all_outputs = (
             ([skim_record] if skim_record else [])
             + data_from_usim
-            + list(output_records_filtered.records.values())
+            + list(output_records.records.values())
         )
 
         provenance_tracker.complete_model_run(
@@ -2322,7 +2318,7 @@ def _create_land_use_table(
 def create_asim_data_from_h5(
     settings,
     state,
-    workspace: Workspace,
+    workspace: "Workspace",
     provenance_tracker: "FileProvenanceTracker",
     warm_start=False,
     model_run_hash: str = None,
