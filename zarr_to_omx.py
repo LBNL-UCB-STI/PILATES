@@ -48,9 +48,17 @@ def main():
 
     # Get zone IDs and time periods
     zone_ids = None
-    if "otaz" in ds.coords:
-        zone_ids = ds.coords["otaz"].values
-        logger.info(f"Found {len(zone_ids)} zones.")
+    if "original_zone_ids" in ds.attrs:
+        zone_ids = np.array(ds.attrs["original_zone_ids"])
+        logger.info(f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones")
+    elif "otaz" in ds.coords:
+        if ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
+            zone_ids = ds.coords["otaz"].values
+            logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+        else:
+            logger.error("Zarr uses zero-based zones but no original zone mapping found!")
+            zone_ids = zone_order(settings, settings.get("start_year", 2015))
+            logger.warning(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
     else:
         logger.warning("No 'otaz' coordinate found in Zarr file.")
 
@@ -66,45 +74,61 @@ def main():
 
     # Add zone mapping if available
     if zone_ids is not None and len(zone_ids) > 0:
-        omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
-        logger.info("Created 'zone_id' mapping in OMX file.")
+        try:
+            zone_ids = np.array(zone_ids, dtype=int)
+            omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
+            logger.info(f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones.")
+        except Exception as e:
+            logger.error(f"Error creating zone mapping in OMX file: {e}.")
+
+    scaled_measures = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT", "FAR"}
 
     written_count = 0
     for key in ds.data_vars:
         if key in exclude_tables:
             logger.info(f"Skipping excluded variable: {key}")
             continue
-        data_array = ds[key]
-        data = data_array.values
-        logger.debug(f"Processing variable '{key}' with shape {data.shape}")
+        try:
+            data_array = ds[key]
+            data = data_array.values
 
-        if data_array.ndim == 2:
-            # Write 2D matrix directly as float32
-            omx_file[key] = np.nan_to_num(data).astype(np.float32)
-            written_count += 1
-            logger.info(f"Wrote 2D matrix '{key}'")
-        elif data_array.ndim == 3:
-            if not time_periods or data_array.shape[-1] != len(time_periods):
-                logger.warning(
-                    f"Period dimension mismatch for 3D variable '{key}': {data_array.shape[-1]} vs expected {len(time_periods)}. Skipping."
-                )
-                continue
-            for t_idx, tp in enumerate(time_periods):
-                new_key = f"{key}__{tp}"
-                slice_data = data[:, :, t_idx]
-                omx_file[new_key] = np.nan_to_num(slice_data).astype(np.float32)
-                # Add attributes for compatibility
-                strsplit = key.rsplit("_", 1)
-                omx_file[new_key].attrs["measure"] = strsplit[-1]
-                omx_file[new_key].attrs["timePeriod"] = tp
-                if len(strsplit) == 2:
-                    omx_file[new_key].attrs["mode"] = strsplit[0]
+            measure_name = key.split("_")[-1] if "_" in key else key
+            needs_descaling = (measure_name in scaled_measures and not key.startswith(("TNC_", "RH_")))
+
+            if data_array.ndim == 2:
+                data_to_write = np.nan_to_num(data).astype(np.float32)
+                if needs_descaling:
+                    data_to_write = data_to_write / 100.0
+                    logger.debug(f"Descaled 2D matrix '{key}' by 100x")
+                omx_file[key] = data_to_write
                 written_count += 1
-            logger.info(f"Wrote {len(time_periods)} slices for 3D variable '{key}'")
-        else:
-            logger.warning(
-                f"Skipping variable '{key}' with unexpected dimension count: {data_array.ndim}"
-            )
+
+            elif data_array.ndim == 3:
+                if not time_periods or data_array.shape[-1] != len(time_periods):
+                    logger.warning(
+                        f"Period dimension mismatch for 3D variable '{key}': {data_array.shape[-1]} vs expected {len(time_periods)}. Skipping."
+                    )
+                    continue
+                for t_idx, tp in enumerate(time_periods):
+                    new_key = f"{key}__{tp}"
+                    slice_data = data[:, :, t_idx]
+                    data_to_write = np.nan_to_num(slice_data).astype(np.float32)
+                    if needs_descaling:
+                        data_to_write = data_to_write / 100.0
+                        logger.debug(f"Descaled 3D slice '{new_key}' by 100x")
+                    omx_file[new_key] = data_to_write
+                    strsplit = key.rsplit("_", 1)
+                    omx_file[new_key].attrs["measure"] = strsplit[-1]
+                    omx_file[new_key].attrs["timePeriod"] = tp
+                    if len(strsplit) == 2:
+                        omx_file[new_key].attrs["mode"] = strsplit[0]
+                    written_count += 1
+            else:
+                logger.warning(
+                    f"Skipping variable '{key}' with unexpected dimension count: {data_array.ndim}"
+                )
+        except Exception as e:
+            logger.error(f"Error writing variable '{key}' to OMX: {e}")
 
     omx_file.close()
     ds.close()
