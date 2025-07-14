@@ -1,13 +1,13 @@
 from typing import Tuple
-
-import pandas as pd
-import logging
 import os
+import shutil
+import logging
+import pandas as pd
 import h5py
 import openmatrix as omx
 import numpy as np
-import shutil
 
+from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.geog import geoid_to_zone_map
 
@@ -109,175 +109,94 @@ def _load_raw_skims(settings, asim_data_dir, skim_format):
     return skims
 
 
-def copy_data_to_mutable_location(
-    settings, output_dir, provenance_tracker
-) -> Tuple[RecordStore, RecordStore]:
-    region = settings["region"]
-    region_id = settings["region_to_region_id"][region]
-    year_specific_model_data_fname = settings.get(
-        "usim_formattable_input_file_name_year", ""
-    ).format(region_id=region_id, start_year=settings["start_year"])
-    model_data_fname = settings["usim_formattable_input_file_name"].format(
-        region_id=region_id
-    )
-    ## TODO: Copy over other file if start year is 2017
-    data_dir = settings["usim_local_data_input_folder"]
-    if os.path.exists(os.path.join(data_dir, year_specific_model_data_fname)) & (
-        settings.get("usim_formattable_input_file_name_year") is not None
-    ):
-        src = os.path.join(data_dir, year_specific_model_data_fname)
-    else:
-        src = os.path.join(data_dir, model_data_fname)
-    dest = os.path.join(output_dir, model_data_fname)
+class UrbansimPreprocessor(GenericPreprocessor):
+    def __init__(self):
+        super().__init__()
+        self.required_input_data = ["usim_data_reference"]
 
-    logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
-    if os.path.exists(src):
-        shutil.copyfile(src, dest)
-    else:
-        # Create an empty HDF5 file if the source does not exist
-        import pandas as pd
-
-        with pd.HDFStore(dest, "w"):
-            pass
-        logger.warning(
-            f"Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
+    def copy_data_to_mutable_location(
+        self,
+        settings,
+        output_dir,
+        provenance_tracker,
+    ) -> Tuple[RecordStore, RecordStore]:
+        region = settings["region"]
+        region_id = settings["region_to_region_id"][region]
+        year_specific_model_data_fname = settings.get(
+            "usim_formattable_input_file_name_year", ""
+        ).format(region_id=region_id, start_year=settings["start_year"])
+        model_data_fname = settings["usim_formattable_input_file_name"].format(
+            region_id=region_id
         )
-    inputs = [
-        provenance_tracker.record_input_file(
-            "urbansim",
-            src,
-            description="Reference urbanSim model data",
-            short_name="usim_data_reference",
-        )
-    ]
-    outputs = [
-        provenance_tracker.record_output_file(
-            "urbansim", dest, description="UrbanSim model data", short_name="usim_data"
-        )
-    ]
-    other_data_fnames = {
-        "hsize_ct_{0}.csv".format(region_id): "hh_size",
-        "income_rates_{0}.csv".format(region_id): "income_rates",
-        "relmap_{0}.csv".format(region_id): "relmap",
-        "schools_2010.csv": "schools",
-        "blocks_school_districts_2010.csv": "school_districts",
-    }
-    for fname, short_name in other_data_fnames.items():
-        src = os.path.join(data_dir, fname)
-        dest = os.path.join(output_dir, fname)
-        if os.path.exists(src):
-            logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
-            shutil.copyfile(src, dest)
-            inputs.append(
-                provenance_tracker.record_input_file(
-                    "urbansim",
-                    src,
-                    description=f"UrbanSim input file: {fname}",
-                    short_name=short_name,
-                )
-            )
-            outputs.append(
-                provenance_tracker.record_output_file(
-                    "urbansim",
-                    dest,
-                    description=f"UrbanSim input file: {fname}",
-                    short_name=short_name,
-                )
-            )
-    return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
-
-
-def add_skims_to_model_data(settings, data_dir=None, skims_dir=None):
-    mapping = geoid_to_zone_map(settings)
-    if not data_dir:
         data_dir = settings["usim_local_data_input_folder"]
-    output_geoid_loc = os.path.join(data_dir, "geoid_to_zone.csv")
-    logger.info("Writing zone mapping to {0}".format(output_geoid_loc))
-    pd.Series(mapping).to_frame("zone_id").rename_axis("GEOID").to_csv(output_geoid_loc)
+        if os.path.exists(os.path.join(data_dir, year_specific_model_data_fname)) & (
+            settings.get("usim_formattable_input_file_name_year") is not None
+        ):
+            src = os.path.join(data_dir, year_specific_model_data_fname)
+        else:
+            src = os.path.join(data_dir, model_data_fname)
+        dest = os.path.join(output_dir, model_data_fname)
 
-    # load skims
-    logger.info("Loading skims from disk")
-    region = settings["region"]
-    region_id = settings["region_to_region_id"][region]
-    skim_format = settings["travel_model"] or "beam"
-    df = _load_raw_skims(settings, skims_dir, skim_format=skim_format)
-    if skims_dir is not None:
-        source = os.path.join(
-            data_dir.replace(
-                settings["usim_local_mutable_data_folder"],
-                settings["asim_local_mutable_data_folder"],
-            ),
-            "skims.omx",
-        )
-        dest = os.path.join(data_dir, "skims_mpo_{0}.omx".format(region_id))
-        shutil.copyfile(source, dest)
-        logger.info("Copying skims from {0} to {1}".format(source, dest))
-
-    ## IF SKIMS DON"T EXIST IN USIM DIRECTORY COPY THEM OVER
-
-    # load datastore
-
-    model_data_fname = settings["usim_formattable_input_file_name"].format(
-        region_id=region_id
-    )
-
-    model_data_fpath = os.path.join(data_dir, model_data_fname)
-    if not os.path.exists(model_data_fpath):
-        raise ValueError("No input data found at {0}".format(model_data_fpath))
-    store = pd.HDFStore(model_data_fpath)
-
-    # add skims
-    store["travel_data"] = df
-    del df
-
-    # update blocks table with zone ID's that match the skims.
-    # note: should only have to be run the first time the
-    # the base year urbansim data is touched by pilates
-    zone_id_col = "zone_id"
-    if zone_id_col not in store["blocks"].columns:
-
-        blocks = store["blocks"].copy()
-        mapping = geoid_to_zone_map(settings)
-        zone_type = settings["skims_zone_type"]
-
-        if zone_type == "block":
-            logger.info("Mapping block IDs")
-            blocks[zone_id_col] = blocks.index.astype(str).replace(mapping)
-
-        elif zone_type == "block_group":
-            logger.info("Mapping blocks to block group IDS")
-            blocks[zone_id_col] = blocks.block_group_id.astype(str).replace(mapping)
-
-        elif zone_type == "taz":
-            logger.info("Mapping block IDs to TAZ")
-            geoid_to_zone_fpath = "pilates/utils/data/{0}/{1}/geoid_to_zone.csv".format(
-                region, skim_format
+        logger.info("Copying input urbansim data from {0} to {1}".format(src, dest))
+        if os.path.exists(src):
+            shutil.copyfile(src, dest)
+        else:
+            # Create an empty HDF5 file if the source does not exist
+            with pd.HDFStore(dest, "w"):
+                pass
+            logger.warning(
+                f"Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
             )
-
-            block_taz = pd.read_csv(
-                geoid_to_zone_fpath, dtype={"GEOID": str, zone_id_col: str}
+        inputs = [
+            provenance_tracker.record_input_file(
+                "urbansim",
+                src,
+                description="Reference urbanSim model data",
+                short_name="usim_data_reference",
             )
-            block_taz = block_taz.set_index("GEOID")[zone_id_col]
-            block_taz.index.name = "block_id"
-            blocks = blocks.join(block_taz)
+        ]
+        outputs = [
+            provenance_tracker.record_output_file(
+                "urbansim", dest, description="UrbanSim model data", short_name="usim_data"
+            )
+        ]
+        other_data_fnames = {
+            "hsize_ct_{0}.csv".format(region_id): "hh_size",
+            "income_rates_{0}.csv".format(region_id): "income_rates",
+            "relmap_{0}.csv".format(region_id): "relmap",
+            "schools_2010.csv": "schools",
+            "blocks_school_districts_2010.csv": "school_districts",
+        }
+        for fname, short_name in other_data_fnames.items():
+            src = os.path.join(data_dir, fname)
+            dest = os.path.join(output_dir, fname)
+            if os.path.exists(src):
+                logger.info("Copying input urbansim file from {0} to {1}".format(src, dest))
+                shutil.copyfile(src, dest)
+                inputs.append(
+                    provenance_tracker.record_input_file(
+                        "urbansim",
+                        src,
+                        description=f"UrbanSim input file: {fname}",
+                        short_name=short_name,
+                    )
+                )
+                outputs.append(
+                    provenance_tracker.record_output_file(
+                        "urbansim",
+                        dest,
+                        description=f"UrbanSim input file: {fname}",
+                        short_name=short_name,
+                    )
+                )
+        return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
-        blocks[zone_id_col] = blocks[zone_id_col].fillna("foo")
-        blocks = blocks[blocks[zone_id_col] != "foo"].copy()
-        blocks[zone_id_col] = blocks[zone_id_col].astype(str)
-
-        logger.info("Write out to the data store.")
-        households = store["households"].copy()
-        persons = store["persons"].copy()
-        jobs = store["jobs"].copy()
-        units = store["residential_units"].copy()
-        assert households["block_id"].isin(blocks.index).all()
-        assert persons["household_id"].isin(households.index).all()
-        assert jobs["block_id"].isin(blocks.index).all()
-        assert units["block_id"].isin(blocks.index).all()
-        store["blocks"] = blocks
-        store["households"] = households
-        store["persons"] = persons
-        store["jobs"] = jobs
-        store["residential_units"] = units
-
-    store.close()
+    def preprocess(
+        self,
+        state,
+        workspace,
+        provenance_tracker,
+    ) -> RecordStore:
+        # For now, just return the input data as the preprocessed data
+        input_records = workspace.input_data.get("urbansim", RecordStore())
+        return input_records
