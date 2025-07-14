@@ -752,8 +752,19 @@ class BeamPreprocessor(GenericPreprocessor):
             "households",
             "beam_plans",
             "linkstats",
-            "beam_plans_out"
+            "beam_plans_out",
         ]
+
+    def copy_data_to_mutable_location(
+        self,
+        settings,
+        output_dir,
+        provenance_tracker: FileProvenanceTracker,
+    ) -> Tuple[RecordStore, RecordStore]:
+        # Delegate to the module-level function
+        from pilates.beam import preprocessor as beam_pre
+
+        return beam_pre.copy_data_to_mutable_location(settings, output_dir, provenance_tracker)
 
     def preprocess(
         self,
@@ -763,22 +774,11 @@ class BeamPreprocessor(GenericPreprocessor):
     ) -> RecordStore:
         """
         Prepares all data needed to run BEAM.
-        - Updates BEAM config with sample size, replanning fraction, etc.
-        - Copies plans from ActivitySim outputs.
-        - Copies vehicle fleet from Atlas outputs.
-
-        Args:
-            state (WorkflowState): The workflow state or context object.
-            workspace (Workspace): The workspace containing input data.
-            provenance_tracker (FileProvenanceTracker): Tracker for file provenance.
-            model_run_hash (str): The unique hash for this preprocessor run.
-
-        Returns:
-            RecordStore: Preprocessed input data for the model.
         """
         settings = state.full_settings
         iteration_number = state.iteration
 
+        # Start by retrieving what Initialization stored
         input_records = workspace.input_data.get("beam", RecordStore())
         output_records = workspace.output_data.get("beam", RecordStore())
 

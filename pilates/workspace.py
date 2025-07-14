@@ -46,14 +46,13 @@ class Workspace:
             return self.output_path
 
     def _setup_directories(self):
-        """Creates output directory structure and copies initial data to mutable locations."""
+        """Creates output directory structure."""
         if not self.output_path:
             logger.info("No output_directory specified. Running in-place.")
             return
 
         os.makedirs(self.full_path, exist_ok=True)
         logger.info(f"Workspace initialized at: {self.full_path}")
-        self._copy_initial_data()
 
     def _copy_initial_data(self):
         """

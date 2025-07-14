@@ -14,6 +14,7 @@ from pilates.generic.model_factory import ModelFactory
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from pilates.utils.provenance import OpenLineageTracker
+from pilates.generic.initialization import Initialization
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -747,6 +748,7 @@ def main():
         provenance_tracker=provenance_tracker,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
+    Initialization.run(settings, workspace, provenance_tracker)
 
     # Initialize Docker/Singularity client if needed
     client = None

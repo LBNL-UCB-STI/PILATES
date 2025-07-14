@@ -1331,6 +1331,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self.required_input_data = ["usim_data_reference", "beam_geoms_reference", "asim_configs_reference"]
         self.required_output_data = ["usim_data","asim_geoms","asim_configs"]
 
+    def copy_data_to_mutable_location(
+        self,
+        settings: dict,
+        output_dir: str,
+        provenance_tracker: FileProvenanceTracker,
+    ) -> Tuple[RecordStore, RecordStore]:
+        # Delegate to module-level function
+        from pilates.activitysim import preprocessor as asim_pre
+
+        return asim_pre.copy_data_to_mutable_location(settings, output_dir, provenance_tracker)
 
     def preprocess(
         self,
@@ -1340,15 +1350,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
-
-        Args:
-            state (WorkflowState): The workflow state or context object.
-            workspace (Workspace): The workspace containing input data.
-            provenance_tracker (FileProvenanceTracker): Tracker for file provenance.
-            model_run_hash (str): The unique hash for this preprocessor run.
-
-        Returns:
-            RecordStore: Preprocessed input data for the model.
         """
         settings = getattr(state, "full_settings", None)
         if settings is None:
@@ -1394,20 +1395,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             skims_loc = create_skims_from_beam(
                 settings, state, output_dir=workspace.get_asim_mutable_data_dir()
             )
-
-        # origin_skims_fname = settings.get("origin_skims_fname", False)
-        # path_to_origin_skims = os.path.join(
-        #     workspace.get_beam_output_dir(), origin_skims_fname
-        # )
-        # if os.path.exists(path_to_origin_skims):
-        #     provenance_tracker.record_input_file(
-        #         "activitysim_preprocessor",
-        #         path_to_origin_skims,
-        #         model_run_id=model_run_hash,
-        #         description="Raw BEAM origin skims",
-        #     )
-
-        # 1. Create skims from BEAM outputs
 
         # Record the skims file as an OUTPUT of the preprocessor
         skim_record = provenance_tracker.record_output_file(
