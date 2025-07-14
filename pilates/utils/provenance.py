@@ -27,7 +27,7 @@ import h5py
 import pandas as pd
 from openlineage.client import set_producer, OpenLineageClient
 from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
-from openlineage.client.run import RunEvent, Run, Job
+from openlineage.client.run import RunEvent, Run, Job, RunState
 from openlineage.client.transport.http import HttpTransport, HttpConfig
 from openlineage.client.transport.file import FileTransport, FileConfig
 from openlineage.client.transport.composite import CompositeTransport, CompositeConfig
@@ -965,7 +965,7 @@ class OpenLineageTracker(FileProvenanceTracker):
                 )
 
         event = RunEvent(
-            eventType="START",
+            eventType=RunState.START,
             eventTime=datetime.now().isoformat(),
             run=Run(runId=run_id_uuid),
             job=Job(
@@ -1015,7 +1015,7 @@ class OpenLineageTracker(FileProvenanceTracker):
                 record.toOutputDataset(self.namespace) for record in output_records
             ]
 
-            event_type = "COMPLETE" if status == "completed" else "FAIL"
+            event_type = RunState.COMPLETE if status == "completed" else RunState.FAIL
             event = RunEvent(
                 eventType=event_type,
                 eventTime=datetime.now().isoformat(),
