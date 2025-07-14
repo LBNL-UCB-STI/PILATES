@@ -31,7 +31,11 @@ def validate_skim(path, dry_run):
             print("Looking at skim {0}".format(table))
             metric = table.split("_")[-3]
             completedTable = table.replace(metric, "TRIPS")
-            nTrips = np.array(sk[completedTable])
+            try:
+                nTrips = np.array(sk[completedTable])
+            except:
+                print("Skipping " + table)
+                continue
             ivt_minutes = np.array(sk[table]) / 100.0
             spd_raw = dist / (ivt_minutes / 60.0)
             ignore = ivt_minutes <= 0
