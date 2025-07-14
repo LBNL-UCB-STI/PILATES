@@ -5,6 +5,9 @@ import os
 import logging
 import numpy as np
 
+from pilates.activitysim.preprocessor import zone_order
+from pilates.utils.io import parse_args_and_settings
+
 try:
     import xarray as xr
 except ImportError:
@@ -25,6 +28,7 @@ def main():
         "--exclude", nargs="*", default=[], help="List of variable names to exclude"
     )
     args = parser.parse_args()
+    settings = parse_args_and_settings()
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
@@ -46,6 +50,13 @@ def main():
     logger.info(f"Opening Zarr skims: {zarr_path}")
     ds = xr.open_zarr(zarr_path)
 
+    logger.info(f"Zarr otaz coordinate: {ds.coords['otaz'].values[:10]}...")  # First 10 values
+    logger.info(f"Zarr otaz attrs: {ds.coords['otaz'].attrs}")
+    logger.info(f"Zarr attrs keys: {list(ds.attrs.keys())}")
+    if "original_zone_ids" in ds.attrs:
+        orig_zones = ds.attrs["original_zone_ids"]
+        logger.info(f"Original zone IDs: {orig_zones[:10]}...")  # First 10 values
+
     # Get zone IDs and time periods
     zone_ids = None
     if "original_zone_ids" in ds.attrs:
@@ -58,7 +69,7 @@ def main():
         else:
             logger.error("Zarr uses zero-based zones but no original zone mapping found!")
             zone_ids = zone_order(settings, settings.get("start_year", 2015))
-            logger.warning(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
+            logger.critical(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
     else:
         logger.warning("No 'otaz' coordinate found in Zarr file.")
 

@@ -1718,19 +1718,23 @@ def write_zarr_skim_as_omx(
         skims_ds = xr.open_zarr(all_skims_path)
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
 
-        # --- Get Zone IDs and Time Periods from Zarr coordinates ---
-        # ActivitySim Zarr skims typically have 'otaz' and 'time_period' coordinates
+        # --- Get Zone IDs from stored attributes ---
         zone_ids = None
-        if "otaz" in skims_ds.coords:
-            # Ensure zone_ids are integers compatible with OMX mapping
-            zone_ids = skims_ds.coords["otaz"].values
-            # Convert to a basic list or array type that openmatrix likes, if necessary
-            # numpy array should be fine
-            logger.info(f"Retrieved {len(zone_ids)} zone IDs from Zarr coordinates.")
+        if "original_zone_ids" in skims_ds.attrs:
+            zone_ids = np.array(skims_ds.attrs["original_zone_ids"])
+            logger.info(f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones")
+        elif "otaz" in skims_ds.coords:
+            # Fallback: check if zones are still original
+            if skims_ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
+                zone_ids = skims_ds.coords["otaz"].values
+                logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+            else:
+                logger.error("Zarr uses zero-based zones but no original zone mapping found!")
+                # Try to reconstruct from settings
+                zone_ids = zone_order(settings, settings.get("start_year", 2015))
+                logger.warning(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
         else:
-            logger.warning(
-                "Zarr skims file does not have 'otaz' coordinate. Zone mapping will NOT be added to OMX."
-            )
+            logger.warning("No zone coordinate found in Zarr file.")
 
         time_periods = []
         if "time_period" in skims_ds.coords:
@@ -1763,98 +1767,66 @@ def write_zarr_skim_as_omx(
         # --- Add Zone Mapping FIRST ---
         if zone_ids is not None and len(zone_ids) > 0:
             try:
-                # Add the 'zone_id' mapping to the OMX file
+                # Ensure zone_ids are integers
+                zone_ids = np.array(zone_ids, dtype=int)
                 new_omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
-                logger.info(
-                    f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones."
-                )
+                logger.info(f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones.")
             except Exception as e:
                 logger.error(f"Error creating zone mapping in OMX file: {e}.")
+
+        # --- Handle Data Scaling ---
+        scaled_measures = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT",
+                           "FAR"}
 
         # --- Write Matrices from Zarr to OMX ---
         logger.info("Writing matrices to OMX file...")
         written_count = 0
-        for key in skims_ds.data_vars:  # Iterate through data variables
+        for key in skims_ds.data_vars:
             if key in exclude_tables:
                 logger.info(f"Skipping excluded variable: {key}")
                 continue
 
             try:
                 data_array = skims_ds[key]
-                data = data_array.values  # Load data into memory
-                logger.debug(
-                    f"Processing variable '{key}' with shape {data.shape}, dtype {data.dtype}."
-                )
+                data = data_array.values
+
+                # Check if this measure needs descaling
+                measure_name = key.split("_")[-1] if "_" in key else key
+                needs_descaling = (measure_name in scaled_measures and
+                                   not key.startswith(("TNC_", "RH_")))
 
                 if data_array.ndim == 2:
-                    # Ensure shape matches expected (zones, zones) if zones were found
-                    expected_shape_2d = (
-                        (len(zone_ids), len(zone_ids)) if zone_ids is not None else None
-                    )
-                    if expected_shape_2d and data_array.shape != expected_shape_2d:
-                        logger.warning(
-                            f"Shape mismatch for 2D variable '{key}': {data_array.shape} vs expected {expected_shape_2d}. Skipping."
-                        )
-                        continue
-
-                    # Write 2D matrix directly
-                    new_omx_file[key] = np.nan_to_num(data)
-                    logger.debug(f"  Wrote 2D matrix '{key}'")
+                    # Write 2D matrix
+                    data_to_write = np.nan_to_num(data).astype(np.float32)
+                    if needs_descaling:
+                        data_to_write = data_to_write / 100.0
+                        logger.debug(f"Descaled 2D matrix '{key}' by 100x")
+                    new_omx_file[key] = data_to_write
                     written_count += 1
 
                 elif data_array.ndim == 3:
-                    # Ensure shape matches expected (zones, zones, periods) if zones and periods were found
-                    expected_shape_3d_prefix = (
-                        (len(zone_ids), len(zone_ids)) if zone_ids is not None else None
-                    )
-                    if (
-                        expected_shape_3d_prefix
-                        and data_array.shape[:2] != expected_shape_3d_prefix
-                    ):
-                        logger.warning(
-                            f"Shape prefix mismatch for 3D variable '{key}': {data_array.shape[:2]} vs expected {expected_shape_3d_prefix}. Skipping."
-                        )
-                        continue
-
-                    if not time_periods or data_array.shape[-1] != len(time_periods):
-                        logger.warning(
-                            f"Period dimension mismatch for 3D variable '{key}': {data_array.shape[-1]} vs expected {len(time_periods)}. Cannot write as OMX slices. Skipping."
-                        )
-                        continue
-
                     # Write slices for each time period
                     for t_idx, tp in enumerate(time_periods):
-                        new_key = (
-                            f"{key}__{tp}"  # Standard OMX format for 3D -> 2D slices
-                        )
+                        new_key = f"{key}__{tp}"
                         slice_data = data[:, :, t_idx]
-                        new_omx_file[new_key] = np.nan_to_num(slice_data)
-                        # logger.debug(f"  Wrote slice '{new_key}'") # Too verbose for debug
+                        data_to_write = np.nan_to_num(slice_data).astype(np.float32)
+                        if needs_descaling:
+                            data_to_write = data_to_write / 100.0
+                            logger.debug(f"Descaled 3D slice '{new_key}' by 100x")
+                        new_omx_file[new_key] = data_to_write
+
+                        # Add attributes
                         strsplit = key.rsplit("_", 1)
                         new_omx_file[new_key].attrs["measure"] = strsplit[-1]
                         new_omx_file[new_key].attrs["timePeriod"] = tp
                         if len(strsplit) == 2:
                             new_omx_file[new_key].attrs["mode"] = strsplit[0]
                         written_count += 1
-                    logger.debug(
-                        f"  Wrote {len(time_periods)} slices for 3D variable '{key}'"
-                    )
-
-                else:
-                    logger.warning(
-                        f"Skipping variable '{key}' with unexpected dimension count: {data_array.ndim}"
-                    )
 
             except Exception as e:
-                logger.error(
-                    f"Error writing variable '{key}' to OMX: {e}. Continuing with next variable."
-                )
+                logger.error(f"Error writing variable '{key}' to OMX: {e}")
 
-        logger.info(
-            f"Finished writing {written_count} matrices to OMX file {target_skims_path}."
-        )
-
-        # Return the path on success
+        logger.info(f"Finished writing {written_count} matrices to OMX file {target_skims_path}.")
         return target_skims_path
 
     except Exception as e:
@@ -1948,6 +1920,16 @@ def _merge_beam_skims_to_zarr(
     try:
         skims_ds = xr.open_zarr(all_skims_path)
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
+
+        # Store original zone IDs BEFORE any preprocessing
+        if "original_zone_ids" not in skims_ds.attrs:
+            # Get the actual zone order from settings, not from preprocessed coordinates
+            original_zone_ids = zone_order(settings, settings.get("start_year", 2015))
+            skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
+            logger.info(f"Stored original zone IDs from settings: {len(original_zone_ids)} zones")
+        else:
+            original_zone_ids = skims_ds.attrs["original_zone_ids"]
+            logger.info("Found existing original zone IDs in Zarr attributes")
     except Exception as e:
         logger.error(
             f"Failed to open target Zarr skims file {all_skims_path}: {e}. Cannot proceed."
