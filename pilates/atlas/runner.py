@@ -357,6 +357,20 @@ class AtlasRunner(GenericRunner):
             discIncent,
         )
 
+        # Read input files from the preprocessor's output RecordStore
+        # (store: RecordStore) and log them as inputs to the run
+        input_records = []
+        for record in store.all_records():
+            if hasattr(record, "file_path"):
+                input_records.append(
+                    provenance_tracker.record_input_file(
+                        model_name,
+                        record.file_path,
+                        description=record.description,
+                        short_name=record.short_name,
+                    )
+                )
+
         model_run_hash = provenance_tracker.start_model_run(
             model_name,
             state.current_year,
