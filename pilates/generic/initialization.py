@@ -28,7 +28,8 @@ class Initialization:
             from pilates.beam import preprocessor as beam_pre
 
             beam_input_dir = workspace.get_beam_mutable_data_dir()
-            rec_in, rec_out = beam_pre.copy_data_to_mutable_location(
+            beam_preprocessor = beam_pre.BeamPreprocessor()
+            rec_in, rec_out = beam_preprocessor.copy_data_to_mutable_location(
                 settings, beam_input_dir, provenance_tracker
             )
             initialization_records_in += rec_in
@@ -55,7 +56,8 @@ class Initialization:
 
                 output_dir = workspace.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
-                rec_in, rec_out = usim_pre.copy_data_to_mutable_location(
+                usim_preprocessor = usim_pre.UrbansimPreprocessor()
+                rec_in, rec_out = usim_preprocessor.copy_data_to_mutable_location(
                     settings, output_dir, provenance_tracker
                 )
                 if model_name in workspace.input_data:
@@ -67,6 +69,8 @@ class Initialization:
                 else:
                     workspace.output_data[model_name] = rec_out
                 have_not_copied_usim_data = False
+                initialization_records_in += rec_in
+                initialization_records_out += rec_out
 
             # Atlas data copy
             if model_name == "atlas":
@@ -108,5 +112,5 @@ class Initialization:
             inputs=initialization_records_in,
         )
         provenance_tracker.complete_model_run(
-            run_hash=init_run_hash, output_records=initialization_records_out
+            run_hash=init_run_hash, output_records=initialization_records_out.all_records()
         )
