@@ -44,6 +44,7 @@ def copy_data_to_mutable_location(
             region,
         )
     )
+
     # If not found, try with "sources/PILATES" in the path (for symlinked or alternate layouts)
     if not os.path.exists(beam_production_path):
         alt_root = os.path.join(pilates_root, "sources", "PILATES")
@@ -501,11 +502,11 @@ def copy_plans_from_asim(
                 updated_persons = pd.read_parquet(asim_persons_path)
                 if beam_plans_path.endswith(".parquet"):
                     original_plans = pd.read_parquet(beam_plans_path).rename(
-                        columns={"tripId": "trip_id"}
+                        columns={"tripId": "trip_id", "personId": "person_id"}
                     )
                 else:
                     original_plans = pd.read_csv(beam_plans_path).rename(
-                        columns={"tripId": "trip_id"}
+                        columns={"tripId": "trip_id", "personId": "person_id"}
                     )
                 updated_plans = pd.read_parquet(asim_plans_path)
             else:
@@ -626,7 +627,8 @@ def copy_plans_from_asim(
         else:
             logger.info("No plans existed already so copying them directly.")
             if asim_plans_path and os.path.exists(asim_plans_path):
-                pd.read_parquet(asim_plans_path).to_parquet(beam_plans_path)
+                pd.read_parquet(asim_plans_path).to_parquet(beam_plans_path) # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
+
                 # Record provenance for the plans file at least
                 plans_record = provenance_tracker.record_output_file(
                     "beam_preprocessor",
@@ -779,8 +781,8 @@ class BeamPreprocessor(GenericPreprocessor):
         iteration_number = state.iteration
 
         # Start by retrieving what Initialization stored
-        input_records = workspace.input_data.get("beam", RecordStore())
-        output_records = workspace.output_data.get("beam", RecordStore())
+        input_records = workspace.output_data.get("beam", RecordStore())
+        output_records = RecordStore()
 
         asim_post_records = (
             provenance_tracker.run_info.get_latest_model_run_output_records(
