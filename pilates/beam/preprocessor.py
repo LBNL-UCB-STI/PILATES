@@ -388,7 +388,7 @@ def copy_plans_from_asim(
                 )
                 if "household_id" in df.columns:
                     df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path)
+                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path, index=True)
             else:
                 logger.error(f"Unsupported file format: {file_format}")
                 return None
@@ -590,9 +590,9 @@ def copy_plans_from_asim(
                 )
                 plans_final.to_csv(beam_plans_path, compression="gzip", index=False)
             else:
-                persons_final.to_parquet(beam_persons_path, index=False)
-                households_final.to_parquet(beam_households_path, index=False)
-                plans_final.to_parquet(beam_plans_path, index=False)
+                persons_final.to_parquet(beam_persons_path, index=True)
+                households_final.to_parquet(beam_households_path, index=True)
+                plans_final.to_parquet(beam_plans_path, index=True)
             # Record provenance for all three files
             persons_record = provenance_tracker.record_output_file(
                 "beam_preprocessor",
