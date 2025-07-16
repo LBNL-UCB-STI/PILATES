@@ -1,4 +1,3 @@
-import sys
 from typing import Tuple
 import logging
 import os
@@ -9,10 +8,6 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 
-# Fix missing imports
-from pilates.urbansim import postprocessor as usim_post
-from pilates.atlas import preprocessor as atlas_pre
-from pilates.atlas import postprocessor as atlas_post
 
 logger = logging.getLogger(__name__)
 
@@ -293,15 +288,13 @@ class AtlasRunner(GenericRunner):
     following the BEAM/ActivitySim pattern.
     """
 
-    def __init__(self, model_name: str):
-        super().__init__(model_name)
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
 
     def run(
         self,
         store: RecordStore,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: FileProvenanceTracker,
     ) -> Tuple[RecordStore, ModelRunInfo]:
         """
         Executes the ATLAS model run.
@@ -322,9 +315,9 @@ class AtlasRunner(GenericRunner):
             - This method only runs the ATLAS container and records provenance for the run.
         """
         logger.info(
-            "[AtlasRunner] Starting ATLAS model run for year %s", state.current_year
+            "[AtlasRunner] Starting ATLAS model run for year %s", self.state.current_year
         )
-        settings = state.full_settings
+        settings = self.state.full_settings
         client = None
         if settings.get("container_manager") == "docker":
             try:
@@ -347,7 +340,7 @@ class AtlasRunner(GenericRunner):
         atlas_cmd = get_atlas_cmd(
             settings,
             freq,
-            state.forecast_year,
+            self.state.forecast_year,
             npe,
             nsample,
             beamac,
@@ -364,7 +357,7 @@ class AtlasRunner(GenericRunner):
         for record in store.all_records():
             if hasattr(record, "file_path"):
                 input_records.append(
-                    provenance_tracker.record_input_file(
+                    self.provenance_tracker.record_input_file(
                         model_name,
                         record.file_path,
                         description=record.description,
@@ -372,17 +365,17 @@ class AtlasRunner(GenericRunner):
                     )
                 )
 
-        model_run_hash = provenance_tracker.start_model_run(
+        model_run_hash = self.provenance_tracker.start_model_run(
             model_name,
-            state.current_year,
-            state.current_inner_iter,
+            self.state.current_year,
+            self.state.current_inner_iter,
             description="ATLAS run",
             inputs=store,
         )
 
         logger.info(
             "[AtlasRunner] Running Atlas vehicle ownership model container for year %s",
-            state.current_year,
+            self.state.current_year,
         )
         success = GenericRunner.run_container(
             client=client,
@@ -394,15 +387,15 @@ class AtlasRunner(GenericRunner):
             working_dir="/",
         )
 
-        provenance_tracker.complete_model_run(
+        self.provenance_tracker.complete_model_run(
             run_hash=model_run_hash, status="completed" if success else "failed"
         )
 
         output_store = RecordStore()
-        run_info = provenance_tracker.run_info.model_runs.get(model_run_hash)
+        run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (success=%s)",
-            state.current_year,
+            self.state.current_year,
             success,
         )
         return output_store, run_info

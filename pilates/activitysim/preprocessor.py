@@ -1326,33 +1326,30 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
 
     def copy_data_to_mutable_location(
         self,
         settings: dict,
         output_dir: str,
-        provenance_tracker: FileProvenanceTracker,
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
         from pilates.activitysim import preprocessor as asim_pre
 
         return asim_pre.copy_data_to_mutable_location(
-            settings, output_dir, provenance_tracker
+            settings, output_dir, self.provenance_tracker
         )
 
     def preprocess(
         self,
-        state: "WorkflowState",
         workspace: "Workspace",
-        provenance_tracker: "FileProvenanceTracker",
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
         """
-        settings = getattr(state, "full_settings", None)
+        settings = getattr(self.state, "full_settings", None)
         if settings is None:
             raise ValueError("Workflow state must have a 'full_settings' attribute.")
 
@@ -1377,16 +1374,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
         output_records = RecordStore()
 
-        pre_run_hash = provenance_tracker.start_model_run(
+        pre_run_hash = self.provenance_tracker.start_model_run(
             "activitysim_preprocessor",
-            year=state.current_year,
-            iteration=state.current_inner_iter,
+            year=self.state.current_year,
+            iteration=self.state.current_inner_iter,
             description="Preprocessing for ActivitySim warm start",
             inputs=input_records_filtered,
         )
 
         if os.path.exists(path_to_beam_skims):
-            input_skims_record = provenance_tracker.record_input_file(
+            input_skims_record = self.provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
                 path_to_beam_skims,
                 short_name="omx_skims",
@@ -1398,11 +1395,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             input_records.add_record(input_skims_record)
         else:
             skims_loc = create_skims_from_beam(
-                settings, state, output_dir=workspace.get_asim_mutable_data_dir()
+                settings, self.state, output_dir=workspace.get_asim_mutable_data_dir()
             )
 
         # Record the skims file as an OUTPUT of the preprocessor
-        skim_record = provenance_tracker.record_output_file(
+        skim_record = self.provenance_tracker.record_output_file(
             "activitysim_preprocessor",
             skims_loc,
             model_run_id=pre_run_hash,
@@ -1410,18 +1407,18 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             description="OD Skims copied over to ASim data directory",
         )
 
-        if state.current_inner_iter > 0:
+        if self.state.current_inner_iter > 0:
             # 2: Re-use existing persons/households/skim cache
-            last_asim_hash = provenance_tracker.run_info.get_latest_model_run(
+            last_asim_hash = self.provenance_tracker.run_info.get_latest_model_run(
                 "activitysim_preprocessor"
             )
-            record_hashes = provenance_tracker.run_info.model_runs[
+            record_hashes = self.provenance_tracker.run_info.model_runs[
                 last_asim_hash
             ].output_record_hashes
             data_from_usim = [
-                provenance_tracker.run_info.file_records.get(h)
+                self.provenance_tracker.run_info.file_records.get(h)
                 for h in record_hashes
-                if h in provenance_tracker.run_info.file_records
+                if h in self.provenance_tracker.run_info.file_records
             ]
             logger.info(
                 f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
@@ -1430,9 +1427,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             # 2. Create ActivitySim input data from UrbanSim H5
             data_from_usim = create_asim_data_from_h5(
                 settings,
-                state,
+                self.state,
                 workspace,
-                provenance_tracker,
+                self.provenance_tracker,
                 model_run_hash=pre_run_hash,
             )
 
@@ -1444,7 +1441,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             + list(output_records.records.values())
         )
 
-        provenance_tracker.complete_model_run(
+        self.provenance_tracker.complete_model_run(
             run_hash=pre_run_hash, output_records=all_outputs
         )
         return RecordStore(recordList=all_outputs)

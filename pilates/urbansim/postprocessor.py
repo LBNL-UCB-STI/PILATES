@@ -3,10 +3,9 @@ import logging
 import pandas as pd
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
+from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
+
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +101,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
         model_run_hash: str,
     ) -> RecordStore:
         """
@@ -113,9 +110,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             runInfo (ModelRunInfo): Metadata or information about the model run.
-            state (WorkflowState): The workflow state or context object.
             workspace (Workspace): The workspace object for path management.
-            provenance_tracker (FileProvenanceTracker): The provenance tracker.
             model_run_hash (str): The unique hash for this postprocessor run.
 
         Returns:
@@ -123,7 +118,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         """
         logger.info(
             "[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s",
-            state.current_year,
+            self.state.current_year,
         )
         # For now, just return the raw outputs
         return raw_outputs

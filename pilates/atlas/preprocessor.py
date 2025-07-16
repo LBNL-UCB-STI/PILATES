@@ -35,15 +35,14 @@ class AtlasPreprocessor(GenericPreprocessor):
     using BEAM skims. All provenance tracking for input files is handled here.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["usim_data"]
 
     def copy_data_to_mutable_location(
         self,
         settings,
         output_dir,
-        provenance_tracker,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         ATLAS does not require copying input files to a mutable location at initialization.
@@ -53,9 +52,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
     def preprocess(
         self,
-        state,
         workspace,
-        provenance_tracker: FileProvenanceTracker,
     ) -> RecordStore:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
@@ -69,31 +66,31 @@ class AtlasPreprocessor(GenericPreprocessor):
         5. Complete the model run in provenance and return a RecordStore of all input/output files.
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
-        settings = state.full_settings
+        settings = self.state.full_settings
         urbansim_output_path = workspace.get_usim_mutable_data_dir()
-        if state.is_start_year():
+        if self.state.is_start_year():
             urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
         else:
             urbansim_output_fname = _get_usim_datastore_fname(
-                settings, io="output", year=state.forecast_year
+                settings, io="output", year=self.state.forecast_year
             )
         urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
 
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
-            "year{}".format(state.year),
+            "year{}".format(self.state.year),
         )
 
         if not os.path.exists(atlas_input_path):
             os.makedirs(atlas_input_path)
             logger.info(
-                f"[AtlasPreprocessor] ATLAS Input Path Created for Year {state.year}: {atlas_input_path}"
+                f"[AtlasPreprocessor] ATLAS Input Path Created for Year {self.state.year}: {atlas_input_path}"
             )
 
-        if state.year != state.start_year:
+        if self.state.year != self.state.start_year:
             old_input_path = os.path.join(
                 workspace.get_atlas_mutable_input_dir(),
-                "year{}".format(state.start_year),
+                "year{}".format(self.state.start_year),
             )
             for f in glob.glob(os.path.join(old_input_path, "*.RData")):
                 if os.path.exists(os.path.join(atlas_input_path, Path(f).name)):
@@ -102,7 +99,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
                 else:
                     logger.info(
-                        f"[AtlasPreprocessor] Moving file {f} to atlas input for year {state.year}"
+                        f"[AtlasPreprocessor] Moving file {f} to atlas input for year {self.state.year}"
                     )
                     shutil.copyfile(f, os.path.join(atlas_input_path, Path(f).name))
 
@@ -115,7 +112,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 f"[AtlasPreprocessor] Recording UrbanSim HDF5 as input: {urbansim_output}"
             )
             input_records.append(
-                provenance_tracker.record_input_file(
+                self.provenance_tracker.record_input_file(
                     "atlas_preprocessor",
                     urbansim_output,
                     description="UrbanSim output for Atlas input preparation",
@@ -139,7 +136,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}"
                 )
                 input_records.append(
-                    provenance_tracker.record_input_file(
+                    self.provenance_tracker.record_input_file(
                         "atlas_preprocessor",
                         expected_beam_skims_path,
                         description="BEAM skims for Atlas accessibility calculation",
@@ -152,9 +149,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                 )
 
         # Now start the model run, passing all input records
-        model_run_hash = provenance_tracker.start_model_run(
+        model_run_hash = self.provenance_tracker.start_model_run(
             "atlas_preprocessor",
-            state.current_year,
+            self.state.current_year,
             description="ATLAS preprocessing",
             inputs=RecordStore(recordList=[r for r in input_records if r is not None]),
         )
@@ -166,14 +163,14 @@ class AtlasPreprocessor(GenericPreprocessor):
         output_records = []
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
-            if not state.is_start_year():
+            if not self.state.is_start_year():
                 try:
                     # prepare households atlas input
-                    households = data["/{}/households".format(state.year)]
+                    households = data["/{}/households".format(self.state.year)]
                     households_csv = "{}/households.csv".format(atlas_input_path)
                     households.to_csv(households_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             households_csv,
                             description="ATLAS households input CSV",
@@ -183,11 +180,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     # prepare blocks atlas input
-                    blocks = data["/{}/blocks".format(state.year)]
+                    blocks = data["/{}/blocks".format(self.state.year)]
                     blocks_csv = "{}/blocks.csv".format(atlas_input_path)
                     blocks.to_csv(blocks_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             blocks_csv,
                             description="ATLAS blocks input CSV",
@@ -197,11 +194,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     # prepare persons atlas input
-                    persons = data["/{}/persons".format(state.year)]
+                    persons = data["/{}/persons".format(self.state.year)]
                     persons_csv = "{}/persons.csv".format(atlas_input_path)
                     persons.to_csv(persons_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             persons_csv,
                             description="ATLAS persons input CSV",
@@ -212,10 +209,10 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                     # prepare dead persons atlas input (RIP)
                     grave_csv = "{}/grave.csv".format(atlas_input_path)
-                    persons = data["/{}/graveyard".format(state.year)]
+                    persons = data["/{}/graveyard".format(self.state.year)]
                     persons.to_csv(grave_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             grave_csv,
                             description="ATLAS graveyard input CSV",
@@ -225,11 +222,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     # prepare residential unit atlas input
-                    residential_units = data["/{}/residential_units".format(state.year)]
+                    residential_units = data["/{}/residential_units".format(self.state.year)]
                     residential_csv = "{}/residential.csv".format(atlas_input_path)
                     residential_units.to_csv(residential_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             residential_csv,
                             description="ATLAS residential units input CSV",
@@ -239,11 +236,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     # prepare jobs atlas input
-                    jobs = data["/{}/jobs".format(state.year)]
+                    jobs = data["/{}/jobs".format(self.state.year)]
                     jobs_csv = "{}/jobs.csv".format(atlas_input_path)
                     jobs.to_csv(jobs_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             jobs_csv,
                             description="ATLAS jobs input CSV",
@@ -253,12 +250,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     logger.info(
-                        f"[AtlasPreprocessor] Prepared ATLAS Year {state.year} input from UrbanSim output."
+                        f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."
                     )
 
                 except Exception as e:
                     logger.error(
-                        f"[AtlasPreprocessor] UrbanSim Year {state.year} Output Was Not Loaded Correctly by ATLAS: {e}"
+                        f"[AtlasPreprocessor] UrbanSim Year {self.state.year} Output Was Not Loaded Correctly by ATLAS: {e}"
                     )
 
             else:
@@ -268,7 +265,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     households_csv = "{}/households.csv".format(atlas_input_path)
                     households.to_csv(households_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             households_csv,
                             description="ATLAS households input CSV",
@@ -282,7 +279,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     blocks_csv = "{}/blocks.csv".format(atlas_input_path)
                     blocks.to_csv(blocks_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             blocks_csv,
                             description="ATLAS blocks input CSV",
@@ -296,7 +293,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     persons_csv = "{}/persons.csv".format(atlas_input_path)
                     persons.to_csv(persons_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             persons_csv,
                             description="ATLAS persons input CSV",
@@ -310,7 +307,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     residential_csv = "{}/residential.csv".format(atlas_input_path)
                     residential_units.to_csv(residential_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             residential_csv,
                             description="ATLAS residential units input CSV",
@@ -324,7 +321,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     jobs_csv = "{}/jobs.csv".format(atlas_input_path)
                     jobs.to_csv(jobs_csv)
                     output_records.append(
-                        provenance_tracker.record_output_file(
+                        self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             jobs_csv,
                             description="ATLAS jobs input CSV",
@@ -334,12 +331,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     logger.info(
-                        f"[AtlasPreprocessor] Prepared ATLAS Year {state.year} input from UrbanSim output."
+                        f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."
                     )
 
                 except Exception as e:
                     logger.error(
-                        f"[AtlasPreprocessor] UrbanSim Year {state.year} Output Was Not Loaded Correctly by ATLAS: {e}"
+                        f"[AtlasPreprocessor] UrbanSim Year {self.state.year} Output Was Not Loaded Correctly by ATLAS: {e}"
                     )
 
         # --- Accessibility calculation (BEAM skims) ---
@@ -360,17 +357,17 @@ class AtlasPreprocessor(GenericPreprocessor):
                 path_list,
                 measure_list,
                 settings,
-                state.forecast_year,
+                self.state.forecast_year,
             )
             logger.info("[AtlasPreprocessor] Accessibility calculation complete.")
 
             # Record accessibility output file
             accessibility_csv = "{}/accessibility_{}_tract.csv".format(
-                atlas_input_path, state.forecast_year
+                atlas_input_path, self.state.forecast_year
             )
             if os.path.exists(accessibility_csv):
                 output_records.append(
-                    provenance_tracker.record_output_file(
+                    self.provenance_tracker.record_output_file(
                         "atlas_preprocessor",
                         accessibility_csv,
                         description="ATLAS accessibility tract-level CSV",
@@ -379,7 +376,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
                 )
 
-        provenance_tracker.complete_model_run(
+        self.provenance_tracker.complete_model_run(
             run_hash=model_run_hash, output_records=output_records
         )
         logger.info(

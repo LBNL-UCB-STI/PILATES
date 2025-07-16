@@ -17,8 +17,8 @@ class ActivitysimRunner(GenericRunner):
     Runner for ActivitySim model.
     """
 
-    def __init__(self, model_name: str):
-        super().__init__(model_name)
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_files = [
             "persons_asim_in",
             "households_asim_in",

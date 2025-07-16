@@ -591,9 +591,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """

@@ -10,6 +10,7 @@ import numpy as np
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.geog import geoid_to_zone_map
+from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -116,15 +117,14 @@ class UrbansimPreprocessor(GenericPreprocessor):
     data needed for the UrbanSim run.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["usim_data_reference"]
 
     def copy_data_to_mutable_location(
         self,
         settings,
         output_dir,
-        provenance_tracker,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy UrbanSim input files from production to mutable location,
@@ -163,7 +163,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 f"[UrbansimPreprocessor] Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
             )
         inputs = [
-            provenance_tracker.record_input_file(
+            self.provenance_tracker.record_input_file(
                 "urbansim",
                 src,
                 description="Reference urbanSim model data",
@@ -171,7 +171,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
         outputs = [
-            provenance_tracker.record_output_file(
+            self.provenance_tracker.record_output_file(
                 "urbansim",
                 dest,
                 description="UrbanSim model data",
@@ -194,7 +194,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 )
                 shutil.copyfile(src, dest)
                 inputs.append(
-                    provenance_tracker.record_input_file(
+                    self.provenance_tracker.record_input_file(
                         "urbansim",
                         src,
                         description=f"UrbanSim input file: {fname}",
@@ -202,7 +202,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                     )
                 )
                 outputs.append(
-                    provenance_tracker.record_output_file(
+                    self.provenance_tracker.record_output_file(
                         "urbansim",
                         dest,
                         description=f"UrbanSim input file: {fname}",
