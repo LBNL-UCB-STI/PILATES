@@ -49,13 +49,20 @@ class UrbansimRunner(GenericRunner):
             - All preprocessing and postprocessing should be handled outside this method.
             - This method only runs the UrbanSim container and records provenance for the run.
         """
-        logger.info("[UrbansimRunner] Starting UrbanSim model run for year %s", state.current_year)
+        logger.info(
+            "[UrbansimRunner] Starting UrbanSim model run for year %s",
+            state.current_year,
+        )
         settings = state.full_settings
         forecast_year = state.forecast_year
 
         # Prepare output file path
-        usim_output_store_name = settings["usim_formattable_output_file_name"].format(year=forecast_year)
-        usim_datastore_fpath = os.path.join(workspace.get_usim_mutable_data_dir(), usim_output_store_name)
+        usim_output_store_name = settings["usim_formattable_output_file_name"].format(
+            year=forecast_year
+        )
+        usim_datastore_fpath = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_output_store_name
+        )
 
         # TODO: Add logic to actually run the UrbanSim container here, similar to AtlasRunner/BeamRunner.
         # For now, just record the output file if it exists.
@@ -71,9 +78,13 @@ class UrbansimRunner(GenericRunner):
             )
             if output_rec:
                 output_records.append(output_rec)
-            logger.info(f"[UrbansimRunner] Recorded UrbanSim output file: {usim_datastore_fpath}")
+            logger.info(
+                f"[UrbansimRunner] Recorded UrbanSim output file: {usim_datastore_fpath}"
+            )
         else:
-            logger.error(f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}")
+            logger.error(
+                f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}"
+            )
 
         # Return empty RecordStore and None for ModelRunInfo for now
         # In the future, this should return the actual outputs and run info

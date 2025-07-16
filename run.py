@@ -153,6 +153,7 @@ def get_usim_cmd(settings, year, forecast_year):
     )
     return usim_cmd
 
+
 def warm_start_activities(
     settings,
     state: WorkflowState,
@@ -361,8 +362,6 @@ def run_land_use(
     return
 
 
-
-
 def run_activity_demand(
     settings,
     state: WorkflowState,
@@ -487,7 +486,6 @@ def main():
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
 
-
     # 2. MAIN WORKFLOW LOOP
     for year in state:
         formatted_print(f"STARTING YEAR {year}")
@@ -507,7 +505,9 @@ def main():
 
         # B. VEHICLE OWNERSHIP MODEL (ATLAS)
         if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-            formatted_print(f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}")
+            formatted_print(
+                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+            )
             logger.info("[Main] Running ATLAS vehicle ownership model.")
 
             # Use ModelFactory for all model/image lookups
@@ -541,19 +541,30 @@ def main():
                         self.start_year = parent_state.start_year
                         self.full_settings = parent_state.full_settings
                         self.is_start_year = lambda: (year == parent_state.start_year)
+
                 atlas_state = AtlasSubState(state, atlas_year)
 
-                logger.info(f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})")
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
+                )
                 # Preprocess
-                input_data = preprocessor.preprocess(atlas_state, workspace, provenance_tracker)
-                logger.info(f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}")
+                input_data = preprocessor.preprocess(
+                    atlas_state, workspace, provenance_tracker
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
+                )
 
-                logger.info(f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}")
+                logger.info(
+                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
+                )
                 # Run
                 raw_outputs, run_info = runner.run(
                     input_data, atlas_state, workspace, provenance_tracker
                 )
-                logger.info(f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}")
+                logger.info(
+                    f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
+                )
 
                 logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
                 # Postprocess
@@ -563,14 +574,23 @@ def main():
                     description="ATLAS postprocessing",
                 )
                 processed_outputs = postprocessor.postprocess(
-                    raw_outputs, run_info, atlas_state, workspace, provenance_tracker, post_run_hash
+                    raw_outputs,
+                    run_info,
+                    atlas_state,
+                    workspace,
+                    provenance_tracker,
+                    post_run_hash,
                 )
                 provenance_tracker.complete_model_run(
                     post_run_hash, output_records=processed_outputs.all_records()
                 )
-                logger.info(f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}")
+                logger.info(
+                    f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
+                )
 
-            logger.info("[run.py] [ATLAS] All ATLAS years complete for this major step.")
+            logger.info(
+                "[run.py] [ATLAS] All ATLAS years complete for this major step."
+            )
             state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
         # C. SUPPLY/DEMAND LOOP

@@ -150,7 +150,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
             src = os.path.join(data_dir, model_data_fname)
         dest = os.path.join(output_dir, model_data_fname)
 
-        logger.info(f"[UrbansimPreprocessor] Copying input urbansim data from {src} to {dest}")
+        logger.info(
+            f"[UrbansimPreprocessor] Copying input urbansim data from {src} to {dest}"
+        )
         if os.path.exists(src):
             shutil.copyfile(src, dest)
         else:
@@ -170,7 +172,10 @@ class UrbansimPreprocessor(GenericPreprocessor):
         ]
         outputs = [
             provenance_tracker.record_output_file(
-                "urbansim", dest, description="UrbanSim model data", short_name="usim_data"
+                "urbansim",
+                dest,
+                description="UrbanSim model data",
+                short_name="usim_data",
             )
         ]
         other_data_fnames = {
@@ -184,7 +189,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
             src = os.path.join(data_dir, fname)
             dest = os.path.join(output_dir, fname)
             if os.path.exists(src):
-                logger.info(f"[UrbansimPreprocessor] Copying input urbansim file from {src} to {dest}")
+                logger.info(
+                    f"[UrbansimPreprocessor] Copying input urbansim file from {src} to {dest}"
+                )
                 shutil.copyfile(src, dest)
                 inputs.append(
                     provenance_tracker.record_input_file(
@@ -202,7 +209,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         short_name=short_name,
                     )
                 )
-        logger.info("[UrbansimPreprocessor] Finished copying UrbanSim input files and recording provenance.")
+        logger.info(
+            "[UrbansimPreprocessor] Finished copying UrbanSim input files and recording provenance."
+        )
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
     def preprocess(
@@ -218,6 +227,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
         Returns:
             RecordStore: The input data for UrbanSim, as prepared by Initialization.
         """
-        logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim: returning input data from workspace.")
+        logger.info(
+            "[UrbansimPreprocessor] Preprocessing for UrbanSim: returning input data from workspace."
+        )
         input_records = workspace.input_data.get("urbansim", RecordStore())
         return input_records

@@ -1325,6 +1325,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
+
     def __init__(self):
         super().__init__()
         self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
@@ -1338,7 +1339,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Delegate to module-level function
         from pilates.activitysim import preprocessor as asim_pre
 
-        return asim_pre.copy_data_to_mutable_location(settings, output_dir, provenance_tracker)
+        return asim_pre.copy_data_to_mutable_location(
+            settings, output_dir, provenance_tracker
+        )
 
     def preprocess(
         self,
@@ -1365,7 +1368,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
 
         input_records = workspace.output_data.get("activitysim", RecordStore())
-        input_records_filtered = RecordStore(recordList=[rec for rec in input_records.all_records() if rec.short_name in self.required_input_data])
+        input_records_filtered = RecordStore(
+            recordList=[
+                rec
+                for rec in input_records.all_records()
+                if rec.short_name in self.required_input_data
+            ]
+        )
         output_records = RecordStore()
 
         pre_run_hash = provenance_tracker.start_model_run(
@@ -1742,7 +1751,12 @@ def copy_data_to_mutable_location(
             configs_source_dir, configs_dest_dir
         )
     )
-    shutil.copytree(configs_source_dir, configs_dest_dir, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
+    shutil.copytree(
+        configs_source_dir,
+        configs_dest_dir,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".git", ".git*"),
+    )
     git_hash = provenance_tracker.get_git_hash(configs_source_dir)
     repo_in = provenance_tracker.record_repo_input(
         model="activitysim_preprocessor",
@@ -2354,7 +2368,9 @@ def create_asim_data_from_h5(
     # Record the H5 datastore as an input to this preprocessor run
     provenance_tracker.record_input_file(
         "activitysim_preprocessor",
-        datastore_path(settings, state.forecast_year, mutable_data_dir=workspace.full_path),
+        datastore_path(
+            settings, state.forecast_year, mutable_data_dir=workspace.full_path
+        ),
         short_name="urbansim_h5",
         model_run_id=model_run_hash,
         description="UrbanSim H5 data store",

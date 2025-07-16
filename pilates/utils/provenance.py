@@ -843,7 +843,9 @@ class OpenLineageTracker(FileProvenanceTracker):
             if os.path.exists(log_path):
                 os.remove(log_path)
 
-            transports_config.append({"type": "file", "log_file_path": log_path, "append": True})
+            transports_config.append(
+                {"type": "file", "log_file_path": log_path, "append": True}
+            )
 
         if use_marquez:
             transports_config.append({"type": "http", "url": marquez_url})
@@ -858,10 +860,17 @@ class OpenLineageTracker(FileProvenanceTracker):
             else:
                 # For a single transport, instantiate it directly
                 config = transports_config[0]
-                if config['type'] == 'file':
-                    final_transport = FileTransport(config=FileConfig(log_file_path=config['log_file_path'], append=config.get('append', True)))
-                elif config['type'] == 'http':
-                    final_transport = HttpTransport(config=HttpConfig(url=config['url']))
+                if config["type"] == "file":
+                    final_transport = FileTransport(
+                        config=FileConfig(
+                            log_file_path=config["log_file_path"],
+                            append=config.get("append", True),
+                        )
+                    )
+                elif config["type"] == "http":
+                    final_transport = HttpTransport(
+                        config=HttpConfig(url=config["url"])
+                    )
 
             if final_transport:
                 self.client = OpenLineageClient(transport=final_transport)
@@ -904,7 +913,9 @@ class OpenLineageTracker(FileProvenanceTracker):
             )
         return facets
 
-    def _format_name(self, name: str, year: Optional[int], iteration: Optional[int]) -> str:
+    def _format_name(
+        self, name: str, year: Optional[int], iteration: Optional[int]
+    ) -> str:
         if self.add_year_to_job_name and year:
             name += f"_{year}"
             if self.add_iteration_to_job_name and iteration:
@@ -999,7 +1010,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         if model_run_info:
             model_name = model_run_info.model
             run_id_uuid = model_run_info.openlineage_id
-            year =  model_run_info.year
+            year = model_run_info.year
             iteration = model_run_info.iteration
             for record_hash in model_run_info.output_record_hashes:
                 if record_hash in self.run_info.file_records:

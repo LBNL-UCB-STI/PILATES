@@ -8,6 +8,7 @@ from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
 from pilates.atlas.postprocessor import AtlasPostprocessor
 
+
 class ModelFactory:
     _registry = {
         "activitysim": {

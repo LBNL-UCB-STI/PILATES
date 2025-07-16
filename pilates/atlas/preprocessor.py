@@ -86,7 +86,9 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         if not os.path.exists(atlas_input_path):
             os.makedirs(atlas_input_path)
-            logger.info(f"[AtlasPreprocessor] ATLAS Input Path Created for Year {state.year}: {atlas_input_path}")
+            logger.info(
+                f"[AtlasPreprocessor] ATLAS Input Path Created for Year {state.year}: {atlas_input_path}"
+            )
 
         if state.year != state.start_year:
             old_input_path = os.path.join(
@@ -109,7 +111,9 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         # Record UrbanSim HDF5 as input
         if os.path.exists(urbansim_output):
-            logger.info(f"[AtlasPreprocessor] Recording UrbanSim HDF5 as input: {urbansim_output}")
+            logger.info(
+                f"[AtlasPreprocessor] Recording UrbanSim HDF5 as input: {urbansim_output}"
+            )
             input_records.append(
                 provenance_tracker.record_input_file(
                     "atlas_preprocessor",
@@ -119,7 +123,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                 )
             )
         else:
-            logger.warning(f"[AtlasPreprocessor] UrbanSim output file not found: {urbansim_output}")
+            logger.warning(
+                f"[AtlasPreprocessor] UrbanSim output file not found: {urbansim_output}"
+            )
 
         # Record BEAM skims as input if needed
         beamac = settings.get("atlas_beamac", 0)
@@ -129,7 +135,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                 beam_output_dir, settings["skims_fname"]
             )
             if os.path.exists(expected_beam_skims_path):
-                logger.info(f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}")
+                logger.info(
+                    f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}"
+                )
                 input_records.append(
                     provenance_tracker.record_input_file(
                         "atlas_preprocessor",
@@ -139,7 +147,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
                 )
             else:
-                logger.warning(f"[AtlasPreprocessor] BEAM skims file not found: {expected_beam_skims_path}")
+                logger.warning(
+                    f"[AtlasPreprocessor] BEAM skims file not found: {expected_beam_skims_path}"
+                )
 
         # Now start the model run, passing all input records
         model_run_hash = provenance_tracker.start_model_run(
@@ -148,7 +158,9 @@ class AtlasPreprocessor(GenericPreprocessor):
             description="ATLAS preprocessing",
             inputs=RecordStore(recordList=[r for r in input_records if r is not None]),
         )
-        logger.info(f"[AtlasPreprocessor] Started provenance model run for ATLAS preprocessing: {model_run_hash}")
+        logger.info(
+            f"[AtlasPreprocessor] Started provenance model run for ATLAS preprocessing: {model_run_hash}"
+        )
 
         # --- Write ATLAS input CSVs and record as outputs ---
         output_records = []
@@ -332,7 +344,9 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         # --- Accessibility calculation (BEAM skims) ---
         if beamac > 0:
-            logger.info("[AtlasPreprocessor] Calculating accessibility using BEAM skims for ATLAS.")
+            logger.info(
+                "[AtlasPreprocessor] Calculating accessibility using BEAM skims for ATLAS."
+            )
             path_list = [
                 "WLK_COM_WLK",
                 "WLK_EXP_WLK",
@@ -351,7 +365,9 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.info("[AtlasPreprocessor] Accessibility calculation complete.")
 
             # Record accessibility output file
-            accessibility_csv = "{}/accessibility_{}_tract.csv".format(atlas_input_path, state.forecast_year)
+            accessibility_csv = "{}/accessibility_{}_tract.csv".format(
+                atlas_input_path, state.forecast_year
+            )
             if os.path.exists(accessibility_csv):
                 output_records.append(
                     provenance_tracker.record_output_file(
@@ -366,7 +382,9 @@ class AtlasPreprocessor(GenericPreprocessor):
         provenance_tracker.complete_model_run(
             run_hash=model_run_hash, output_records=output_records
         )
-        logger.info(f"[AtlasPreprocessor] Completed provenance model run for ATLAS preprocessing: {model_run_hash}")
+        logger.info(
+            f"[AtlasPreprocessor] Completed provenance model run for ATLAS preprocessing: {model_run_hash}"
+        )
         return RecordStore(recordList=output_records)
 
 
@@ -458,6 +476,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
     # open skims file
     import openmatrix as omx
+
     skims_dir = settings["asim_local_mutable_data_folder"]
     skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
 

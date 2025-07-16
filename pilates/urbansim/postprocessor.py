@@ -121,6 +121,9 @@ class UrbansimPostprocessor(GenericPostprocessor):
         Returns:
             RecordStore: Postprocessed output data.
         """
-        logger.info("[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s", state.current_year)
+        logger.info(
+            "[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s",
+            state.current_year,
+        )
         # For now, just return the raw outputs
         return raw_outputs

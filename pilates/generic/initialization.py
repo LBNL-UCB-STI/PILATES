@@ -4,6 +4,7 @@ from pilates.utils.provenance import FileProvenanceTracker
 
 import os
 
+
 class Initialization:
     """
     A dedicated class to handle the initialization of mutable data and
@@ -13,7 +14,9 @@ class Initialization:
     """
 
     @staticmethod
-    def run(settings: dict, workspace: Workspace, provenance_tracker: FileProvenanceTracker) -> None:
+    def run(
+        settings: dict, workspace: Workspace, provenance_tracker: FileProvenanceTracker
+    ) -> None:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
@@ -85,10 +88,13 @@ class Initialization:
             # ActivitySim config copy
             if model_name == "activitysim":
                 from pilates.activitysim import preprocessor as asim_pre
+
                 activitysim_preprocessor = asim_pre.ActivitysimPreprocessor()
                 asim_input_dir = workspace.get_asim_mutable_data_dir()
-                rec_in, rec_out = activitysim_preprocessor.copy_data_to_mutable_location(
-                    settings, asim_input_dir, provenance_tracker
+                rec_in, rec_out = (
+                    activitysim_preprocessor.copy_data_to_mutable_location(
+                        settings, asim_input_dir, provenance_tracker
+                    )
                 )
                 initialization_records_in += rec_in
                 initialization_records_out += rec_out
@@ -112,5 +118,6 @@ class Initialization:
             inputs=initialization_records_in,
         )
         provenance_tracker.complete_model_run(
-            run_hash=init_run_hash, output_records=initialization_records_out.all_records()
+            run_hash=init_run_hash,
+            output_records=initialization_records_out.all_records(),
         )

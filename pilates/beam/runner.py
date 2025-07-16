@@ -10,7 +10,8 @@ from pilates.beam.postprocessor import (
     find_produced_od_skims,
     find_produced_origin_skims,
     find_produced_linkstats,
-    find_latest_beam_iteration, find_produced_plans,
+    find_latest_beam_iteration,
+    find_produced_plans,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState

@@ -73,13 +73,12 @@ def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
     logger.info("expecting linkstats at {0}".format(od_skims_path))
     return od_skims_path
 
+
 def find_produced_plans(beam_output_dir, suffix="csv.gz"):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
     if iteration_dir is None:
         return None
-    od_skims_path = os.path.join(
-        iteration_dir, "{0}.plans.{1}".format(it_num, suffix)
-    )
+    od_skims_path = os.path.join(iteration_dir, "{0}.plans.{1}".format(it_num, suffix))
     logger.info("expecting output plans at {0}".format(od_skims_path))
     return od_skims_path
 
@@ -1722,17 +1721,23 @@ def write_zarr_skim_as_omx(
         zone_ids = None
         if "original_zone_ids" in skims_ds.attrs:
             zone_ids = np.array(skims_ds.attrs["original_zone_ids"])
-            logger.info(f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones")
+            logger.info(
+                f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones"
+            )
         elif "otaz" in skims_ds.coords:
             # Fallback: check if zones are still original
             if skims_ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
                 zone_ids = skims_ds.coords["otaz"].values
                 logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
             else:
-                logger.error("Zarr uses zero-based zones but no original zone mapping found!")
+                logger.error(
+                    "Zarr uses zero-based zones but no original zone mapping found!"
+                )
                 # Try to reconstruct from settings
                 zone_ids = zone_order(settings, settings.get("start_year", 2015))
-                logger.warning(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
+                logger.warning(
+                    f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
+                )
         else:
             logger.warning("No zone coordinate found in Zarr file.")
 
@@ -1770,13 +1775,26 @@ def write_zarr_skim_as_omx(
                 # Ensure zone_ids are integers
                 zone_ids = np.array(zone_ids, dtype=int)
                 new_omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
-                logger.info(f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones.")
+                logger.info(
+                    f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones."
+                )
             except Exception as e:
                 logger.error(f"Error creating zone mapping in OMX file: {e}.")
 
         # --- Handle Data Scaling ---
-        scaled_measures = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT",
-                           "FAR"}
+        scaled_measures = {
+            "TOTIVT",
+            "IVT",
+            "WACC",
+            "IWAIT",
+            "XWAIT",
+            "WAUX",
+            "WEGR",
+            "DTIM",
+            "FERRYIVT",
+            "KEYIVT",
+            "FAR",
+        }
 
         # --- Write Matrices from Zarr to OMX ---
         logger.info("Writing matrices to OMX file...")
@@ -1792,8 +1810,10 @@ def write_zarr_skim_as_omx(
 
                 # Check if this measure needs descaling
                 measure_name = key.split("_")[-1] if "_" in key else key
-                needs_descaling = (measure_name in scaled_measures and
-                                   not key.startswith(("TNC_", "RH_")))
+                needs_descaling = (
+                    measure_name in scaled_measures
+                    and not key.startswith(("TNC_", "RH_"))
+                )
 
                 if data_array.ndim == 2:
                     # Write 2D matrix
@@ -1826,7 +1846,9 @@ def write_zarr_skim_as_omx(
             except Exception as e:
                 logger.error(f"Error writing variable '{key}' to OMX: {e}")
 
-        logger.info(f"Finished writing {written_count} matrices to OMX file {target_skims_path}.")
+        logger.info(
+            f"Finished writing {written_count} matrices to OMX file {target_skims_path}."
+        )
         return target_skims_path
 
     except Exception as e:
@@ -1926,7 +1948,9 @@ def _merge_beam_skims_to_zarr(
             # Get the actual zone order from settings, not from preprocessed coordinates
             original_zone_ids = zone_order(settings, settings.get("start_year", 2015))
             skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
-            logger.info(f"Stored original zone IDs from settings: {len(original_zone_ids)} zones")
+            logger.info(
+                f"Stored original zone IDs from settings: {len(original_zone_ids)} zones"
+            )
         else:
             original_zone_ids = skims_ds.attrs["original_zone_ids"]
             logger.info("Found existing original zone IDs in Zarr attributes")

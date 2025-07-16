@@ -228,6 +228,7 @@ logger = logging.getLogger(__name__)
 #             )
 #     return False
 
+
 ## Atlas vehicle ownership model volume mount defintion, equivalent to
 ## docker run -v atlas_host_input_folder:atlas_container_input_folder
 def get_atlas_docker_vols(settings, workspace: Workspace):
@@ -248,8 +249,6 @@ def get_atlas_docker_vols(settings, workspace: Workspace):
         atlas_host_output_folder: {"bind": atlas_container_output_folder, "mode": "rw"},
     }
     return atlas_docker_vols
-
-
 
 
 ## For Atlas container command
@@ -322,7 +321,9 @@ class AtlasRunner(GenericRunner):
             - All preprocessing and postprocessing should be handled outside this method.
             - This method only runs the ATLAS container and records provenance for the run.
         """
-        logger.info("[AtlasRunner] Starting ATLAS model run for year %s", state.current_year)
+        logger.info(
+            "[AtlasRunner] Starting ATLAS model run for year %s", state.current_year
+        )
         settings = state.full_settings
         client = None
         if settings.get("container_manager") == "docker":
@@ -379,7 +380,10 @@ class AtlasRunner(GenericRunner):
             inputs=store,
         )
 
-        logger.info("[AtlasRunner] Running Atlas vehicle ownership model container for year %s", state.current_year)
+        logger.info(
+            "[AtlasRunner] Running Atlas vehicle ownership model container for year %s",
+            state.current_year,
+        )
         success = GenericRunner.run_container(
             client=client,
             settings=settings,
@@ -396,6 +400,9 @@ class AtlasRunner(GenericRunner):
 
         output_store = RecordStore()
         run_info = provenance_tracker.run_info.model_runs.get(model_run_hash)
-        logger.info("[AtlasRunner] ATLAS model run complete for year %s (success=%s)", state.current_year, success)
+        logger.info(
+            "[AtlasRunner] ATLAS model run complete for year %s (success=%s)",
+            state.current_year,
+            success,
+        )
         return output_store, run_info
-

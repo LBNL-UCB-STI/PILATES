@@ -93,8 +93,10 @@ class Workspace:
                 output_dir = self.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
                 usim_preprocessor = usim_pre.UrbansimPreprocessor()
-                input_store, output_store = usim_preprocessor.copy_data_to_mutable_location(
-                    settings, output_dir, self.provenance_tracker
+                input_store, output_store = (
+                    usim_preprocessor.copy_data_to_mutable_location(
+                        settings, output_dir, self.provenance_tracker
+                    )
                 )
                 if model_name in self.input_data:
                     self.input_data[model_name] += input_store
@@ -119,8 +121,10 @@ class Workspace:
             # ActivitySim config copy
             if model_name == "activitysim":
                 asim_preprocessor = asim_pre.ActivitysimPreprocessor()
-                input_store, output_store = asim_preprocessor.copy_data_to_mutable_location(
-                    settings, base_folder_path, self.provenance_tracker
+                input_store, output_store = (
+                    asim_preprocessor.copy_data_to_mutable_location(
+                        settings, base_folder_path, self.provenance_tracker
+                    )
                 )
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
                 if model_name in self.input_data:

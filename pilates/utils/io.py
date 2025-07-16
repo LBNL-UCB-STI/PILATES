@@ -139,6 +139,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
 
     return settings
 
+
 def datastore_path(settings, year=None, mutable_data_dir=None):
     """
     Returns the path to the land use .H5 data store.
