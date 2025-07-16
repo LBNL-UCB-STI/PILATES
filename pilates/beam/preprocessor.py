@@ -80,7 +80,12 @@ def copy_data_to_mutable_location(
         )
         return
 
-    shutil.copytree(beam_production_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
+    shutil.copytree(
+        beam_production_path,
+        dest,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".git", ".git*"),
+    )
 
     git_hash = provenance_tracker.get_git_hash(beam_production_path)
     input_records.append(
@@ -105,7 +110,12 @@ def copy_data_to_mutable_location(
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
     dest = os.path.join(os.path.abspath(output_dir), "common")
     if os.path.exists(common_config_path):
-        shutil.copytree(common_config_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
+        shutil.copytree(
+            common_config_path,
+            dest,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", ".git*"),
+        )
         input_records.append(
             provenance_tracker.record_repo_input(
                 "beam",
@@ -388,7 +398,9 @@ def copy_plans_from_asim(
                 )
                 if "household_id" in df.columns:
                     df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path, index=True)
+                df.loc[:, ~df.columns.duplicated()].to_parquet(
+                    beam_file_path, index=True
+                )
             else:
                 logger.error(f"Unsupported file format: {file_format}")
                 return None
@@ -422,8 +434,6 @@ def copy_plans_from_asim(
         asim_households_path, asim_households_record = asim_file_paths.get("households")
         asim_persons_path, asim_persons_record = asim_file_paths.get("persons")
         beam_plans_path, beam_plans_record = asim_file_paths.get("beam_plans_out")
-
-
 
         # beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
         beam_households_path = locate_beam_file(
@@ -496,8 +506,16 @@ def copy_plans_from_asim(
                 )
                 updated_plans = pd.read_csv(asim_plans_path)
             elif file_format == "parquet":
-                original_households = pd.read_parquet(beam_households_path)
-                updated_households = pd.read_parquet(asim_households_path)
+                original_households = (
+                    pd.read_parquet(beam_households_path)
+                    .rename(columns={"VEHICL": "cars"})
+                    .rename(columns={"auto_ownership": "cars"})
+                )
+                updated_households = (
+                    pd.read_parquet(asim_households_path)
+                    .rename(columns={"VEHICL": "cars"})
+                    .rename(columns={"auto_ownership": "cars"})
+                )
                 original_persons = pd.read_parquet(beam_persons_path)
                 updated_persons = pd.read_parquet(asim_persons_path)
                 if beam_plans_path.endswith(".parquet"):
@@ -627,7 +645,9 @@ def copy_plans_from_asim(
         else:
             logger.info("No plans existed already so copying them directly.")
             if asim_plans_path and os.path.exists(asim_plans_path):
-                pd.read_parquet(asim_plans_path).to_parquet(beam_plans_path) # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
+                pd.read_parquet(asim_plans_path).to_parquet(
+                    beam_plans_path
+                )  # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
 
                 # Record provenance for the plans file at least
                 plans_record = provenance_tracker.record_output_file(
@@ -653,7 +673,13 @@ def copy_plans_from_asim(
         file_format = settings.get("file_format", "parquet")
 
         # Find ActivitySim output files using provenance tracker
-        required_files = ["beam_plans", "households", "persons", "beam_plans_out", "beam_plans_out  "]
+        required_files = [
+            "beam_plans",
+            "households",
+            "persons",
+            "beam_plans_out",
+            "beam_plans_out  ",
+        ]
         asim_output_records = (
             provenance_tracker.run_info.get_latest_model_run_output_records(
                 "activitysim_postprocessor"
@@ -666,9 +692,11 @@ def copy_plans_from_asim(
 
         asim_file_paths = {}
         for record in input_records.all_records():
-            if (record.short_name.rsplit("_", 2)[0] in required_files) or (record.short_name in required_files):
+            if (record.short_name.rsplit("_", 2)[0] in required_files) or (
+                record.short_name in required_files
+            ):
                 splt = record.short_name.rsplit("_", 2)
-                if len(splt) >1:
+                if len(splt) > 1:
                     if str.isdigit(splt[1]):
                         shortened_name = splt[0]
                     else:
@@ -766,7 +794,9 @@ class BeamPreprocessor(GenericPreprocessor):
         # Delegate to the module-level function
         from pilates.beam import preprocessor as beam_pre
 
-        return beam_pre.copy_data_to_mutable_location(settings, output_dir, provenance_tracker)
+        return beam_pre.copy_data_to_mutable_location(
+            settings, output_dir, provenance_tracker
+        )
 
     def preprocess(
         self,
@@ -793,7 +823,9 @@ class BeamPreprocessor(GenericPreprocessor):
             if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
                 input_records.add_record(record)
 
-        previous_beam_records = provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+        previous_beam_records = (
+            provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+        )
         for record in previous_beam_records:
             if record.short_name in self.required_input_data:
                 input_records.add_record(record)
