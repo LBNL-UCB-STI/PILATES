@@ -80,7 +80,12 @@ def copy_data_to_mutable_location(
         )
         return
 
-    shutil.copytree(beam_production_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
+    shutil.copytree(
+        beam_production_path,
+        dest,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".git", ".git*"),
+    )
 
     git_hash = provenance_tracker.get_git_hash(beam_production_path)
     input_records.append(
@@ -105,7 +110,12 @@ def copy_data_to_mutable_location(
     common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
     dest = os.path.join(os.path.abspath(output_dir), "common")
     if os.path.exists(common_config_path):
-        shutil.copytree(common_config_path, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', '.git*'))
+        shutil.copytree(
+            common_config_path,
+            dest,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", ".git*"),
+        )
         input_records.append(
             provenance_tracker.record_repo_input(
                 "beam",
@@ -388,7 +398,9 @@ def copy_plans_from_asim(
                 )
                 if "household_id" in df.columns:
                     df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(beam_file_path, index=True)
+                df.loc[:, ~df.columns.duplicated()].to_parquet(
+                    beam_file_path, index=True
+                )
             else:
                 logger.error(f"Unsupported file format: {file_format}")
                 return None
@@ -422,8 +434,6 @@ def copy_plans_from_asim(
         asim_households_path, asim_households_record = asim_file_paths.get("households")
         asim_persons_path, asim_persons_record = asim_file_paths.get("persons")
         beam_plans_path, beam_plans_record = asim_file_paths.get("beam_plans_out")
-
-
 
         # beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
         beam_households_path = locate_beam_file(
@@ -496,8 +506,16 @@ def copy_plans_from_asim(
                 )
                 updated_plans = pd.read_csv(asim_plans_path)
             elif file_format == "parquet":
-                original_households = pd.read_parquet(beam_households_path)
-                updated_households = pd.read_parquet(asim_households_path)
+                original_households = (
+                    pd.read_parquet(beam_households_path)
+                    .rename(columns={"VEHICL": "cars"})
+                    .rename(columns={"auto_ownership": "cars"})
+                )
+                updated_households = (
+                    pd.read_parquet(asim_households_path)
+                    .rename(columns={"VEHICL": "cars"})
+                    .rename(columns={"auto_ownership": "cars"})
+                )
                 original_persons = pd.read_parquet(beam_persons_path)
                 updated_persons = pd.read_parquet(asim_persons_path)
                 if beam_plans_path.endswith(".parquet"):
@@ -627,7 +645,9 @@ def copy_plans_from_asim(
         else:
             logger.info("No plans existed already so copying them directly.")
             if asim_plans_path and os.path.exists(asim_plans_path):
-                pd.read_parquet(asim_plans_path).to_parquet(beam_plans_path) # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
+                pd.read_parquet(asim_plans_path).to_parquet(
+                    beam_plans_path
+                )  # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
 
                 # Record provenance for the plans file at least
                 plans_record = provenance_tracker.record_output_file(
@@ -653,7 +673,12 @@ def copy_plans_from_asim(
         file_format = settings.get("file_format", "parquet")
 
         # Find ActivitySim output files using provenance tracker
-        required_files = ["beam_plans", "households", "persons", "beam_plans_out", "beam_plans_out  "]
+        required_files = [
+            "beam_plans",
+            "households",
+            "persons",
+            "beam_plans_out",
+        ]
         asim_output_records = (
             provenance_tracker.run_info.get_latest_model_run_output_records(
                 "activitysim_postprocessor"
@@ -666,9 +691,11 @@ def copy_plans_from_asim(
 
         asim_file_paths = {}
         for record in input_records.all_records():
-            if (record.short_name.rsplit("_", 2)[0] in required_files) or (record.short_name in required_files):
+            if (record.short_name.rsplit("_", 2)[0] in required_files) or (
+                record.short_name in required_files
+            ):
                 splt = record.short_name.rsplit("_", 2)
-                if len(splt) >1:
+                if len(splt) > 1:
                     if str.isdigit(splt[1]):
                         shortened_name = splt[0]
                     else:
@@ -747,8 +774,8 @@ class BeamPreprocessor(GenericPreprocessor):
     Preprocessor for BEAM model.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_data: List[str] = [
             "persons",
             "households",
@@ -761,31 +788,30 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         settings,
         output_dir,
-        provenance_tracker: FileProvenanceTracker,
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to the module-level function
         from pilates.beam import preprocessor as beam_pre
 
-        return beam_pre.copy_data_to_mutable_location(settings, output_dir, provenance_tracker)
+        return beam_pre.copy_data_to_mutable_location(
+            settings, output_dir, self.provenance_tracker
+        )
 
     def preprocess(
         self,
-        state: WorkflowState,
         workspace: "Workspace",
-        provenance_tracker: "FileProvenanceTracker",
     ) -> RecordStore:
         """
         Prepares all data needed to run BEAM.
         """
-        settings = state.full_settings
-        iteration_number = state.iteration
+        settings = self.state.full_settings
+        iteration_number = self.state.iteration
 
         # Start by retrieving what Initialization stored
         input_records = workspace.output_data.get("beam", RecordStore())
         output_records = RecordStore()
 
         asim_post_records = (
-            provenance_tracker.run_info.get_latest_model_run_output_records(
+            self.provenance_tracker.run_info.get_latest_model_run_output_records(
                 "activitysim_postprocessor"
             )
         )
@@ -793,15 +819,17 @@ class BeamPreprocessor(GenericPreprocessor):
             if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
                 input_records.add_record(record)
 
-        previous_beam_records = provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+        previous_beam_records = (
+            self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+        )
         for record in previous_beam_records:
-            if record.short_name in self.required_input_data:
+            if (record.short_name.rsplit('_', 2)[0] in self.required_input_data) and ('_sub' not in record.short_name):
                 input_records.add_record(record)
 
-        model_run_hash = provenance_tracker.start_model_run(
+        model_run_hash = self.provenance_tracker.start_model_run(
             "beam_preprocessor",
-            year=state.current_year,
-            iteration=state.current_inner_iter,
+            year=self.state.current_year,
+            iteration=self.state.current_inner_iter,
             description="Preprocessing for BEAM",
             inputs=input_records,
         )
@@ -815,16 +843,16 @@ class BeamPreprocessor(GenericPreprocessor):
         # Copy vehicle data from Atlas if enabled
         if settings.get("vehicle_ownership_model_enabled"):
             copy_vehicles_from_atlas(
-                settings, workspace, state, provenance_tracker, model_run_hash
+                settings, workspace, self.state, self.provenance_tracker, model_run_hash
             )
 
         # Copy plans from ActivitySim
-        store = copy_plans_from_asim(
+        store =  copy_plans_from_asim(
             input_records,
             settings,
             workspace,
-            state,
-            provenance_tracker,
+            self.state,
+            self.provenance_tracker,
             iteration_number,
             model_run_hash,
         )
@@ -832,7 +860,7 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_prod_repo_record = next(
             (
                 repo
-                for repo in provenance_tracker.run_info.repo_records.values()
+                for repo in self.provenance_tracker.run_info.repo_records.values()
                 if repo.short_name == "beam_prod"
             ),
             None,
@@ -843,18 +871,16 @@ class BeamPreprocessor(GenericPreprocessor):
             store.add_record(beam_prod_repo_record)
         store += output_records
 
-        provenance_tracker.complete_model_run(
+        self.provenance_tracker.complete_model_run(
             run_hash=model_run_hash, output_records=store.all_records()
         )
 
-        last_beam_outputs = (
-            provenance_tracker.run_info.get_latest_model_run_output_records("beam")
-        )
+
         linkstats_record = next(
             (
                 record
-                for record in last_beam_outputs
-                if record.short_name == "beam_prod"
+                for record in previous_beam_records
+                if record.short_name.startswith("linkstats") and ("_sub" not in record.short_name)
             ),
             None,
         )
@@ -866,13 +892,13 @@ class BeamPreprocessor(GenericPreprocessor):
                 "init.linkstats.csv.gz",
             )
             if os.path.exists(linkstats_path):
-                linkstats_record = provenance_tracker.record_output_file(
+                linkstats_record = self.provenance_tracker.record_output_file(
                     "beam_preprocessor",
                     linkstats_path,
-                    state.year,
+                    self.state.year,
                     description="Initialized linkstats file",
                     short_name="linkstats",
-                    state=state,
+                    state=self.state,
                 )
             else:
                 logger.warning(
@@ -883,7 +909,7 @@ class BeamPreprocessor(GenericPreprocessor):
         if linkstats_record:
             logger.info(
                 "[BEAM Preprocessor] Linkstats file at %s added to BEAM input store",
-                linkstats_path,
+                linkstats_record.file_path,
             )
             store.add_record(linkstats_record)
 

@@ -7,6 +7,11 @@ from pilates.beam.postprocessor import BeamPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
 from pilates.atlas.postprocessor import AtlasPostprocessor
+from pilates.urbansim.postprocessor import UrbansimPostprocessor
+from pilates.urbansim.preprocessor import UrbansimPreprocessor
+from pilates.urbansim.runner import UrbansimRunner
+from pilates.utils.provenance import FileProvenanceTracker
+
 
 class ModelFactory:
     _registry = {
@@ -25,13 +30,18 @@ class ModelFactory:
             "runner": AtlasRunner,
             "postprocessor": AtlasPostprocessor,
         },
+        "urbansim": {
+            "preprocessor": UrbansimPreprocessor,
+            "runner": UrbansimRunner,
+            "postprocessor": UrbansimPostprocessor,
+        }
     }
 
-    def get_runner(self, model_name):
-        return self._registry[model_name.lower()]["runner"](model_name)
+    def get_runner(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        return self._registry[model_name.lower()]["runner"](model_name, state, provenance_tracker)
 
-    def get_preprocessor(self, model_name):
-        return self._registry[model_name.lower()]["preprocessor"]()
+    def get_preprocessor(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        return self._registry[model_name.lower()]["preprocessor"](model_name, state, provenance_tracker)
 
-    def get_postprocessor(self, model_name):
-        return self._registry[model_name.lower()]["postprocessor"]()
+    def get_postprocessor(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        return self._registry[model_name.lower()]["postprocessor"](model_name, state, provenance_tracker)

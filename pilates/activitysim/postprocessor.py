@@ -591,9 +591,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -605,18 +603,16 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             runInfo (ModelRunInfo): Metadata or information about the model run.
-            state (WorkflowState): The workflow state or context object.
             workspace (Workspace): The workspace object for path management.
-            provenance_tracker (FileProvenanceTracker): The provenance tracker.
             model_run_hash (str): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.
         """
-        settings = state.full_settings
-        year = state.year
-        forecast_year = state.forecast_year
-        replanning_iteration_number = state.current_inner_iter
+        settings = self.state.full_settings
+        year = self.state.year
+        forecast_year = self.state.forecast_year
+        replanning_iteration_number = self.state.current_inner_iter
         logger.info(
             "Running ActivitySim postprocessor for year %s, forecast year %s",
             year,
@@ -624,10 +620,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         )
 
         # Postprocess
-        model_run_hash = provenance_tracker.start_model_run(
+        model_run_hash = self.provenance_tracker.start_model_run(
             "activitysim_postprocessor",
-            state.current_year,
-            state.current_inner_iter,
+            self.state.current_year,
+            self.state.current_inner_iter,
             description="Post-processing ASIM outputs",
             inputs=raw_outputs,
         )
@@ -652,12 +648,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     iteration_folder_path,
                     record.short_name.replace("_asim_out", "") + ".parquet",
                 )
-                moved_record = provenance_tracker.move_file(
+                moved_record = self.provenance_tracker.move_file(
                     record,
                     source,
                     target,
                     model="activitysim_postprocessor",
-                    state=state,
+                    state=self.state,
                 )
                 processed_records.append(moved_record)
 
@@ -672,13 +668,13 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(r, "file_path")
         ]
 
-        if state.is_enabled(WorkflowState.Stage.land_use):
+        if self.state.is_enabled(WorkflowState.Stage.land_use):
 
             # 2. Prepare tables for integration with UrbanSim
             tables_updated_by_asim = ["households", "persons"]
             asim_output_dict = _prepare_updated_tables(
                 settings,
-                state,
+                self.state,
                 workspace,
                 asim_output_dict,
                 tables_updated_by_asim,
@@ -689,9 +685,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             # This function will handle its own provenance logging.
             next_usim_input_path, usim_record = create_usim_input_data(
                 settings,
-                state,
+                self.state,
                 workspace,
-                provenance_tracker,
+                self.provenance_tracker,
                 runInfo,
                 asim_output_dict,
                 tables_updated_by_asim,

@@ -1,10 +1,13 @@
+from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.generic.model_factory import ModelFactory
 
 import os
 
-class Initialization:
+
+class Initialization(Model):
     """
     A dedicated class to handle the initialization of mutable data and
     provenance recording. This class consolidates input data copying for
@@ -12,8 +15,12 @@ class Initialization:
     GenericPreprocessor interface.
     """
 
-    @staticmethod
-    def run(settings: dict, workspace: Workspace, provenance_tracker: FileProvenanceTracker) -> None:
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
+
+    def run(
+        self, settings: dict, workspace: Workspace
+    ) -> None:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
@@ -22,15 +29,15 @@ class Initialization:
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
+        model_factory = ModelFactory()
 
         # BEAM model initialization
         if settings.get("travel_model") == "beam":
-            from pilates.beam import preprocessor as beam_pre
+            beam_preprocessor = model_factory.get_preprocessor("beam", self.state, self.provenance_tracker)
 
             beam_input_dir = workspace.get_beam_mutable_data_dir()
-            beam_preprocessor = beam_pre.BeamPreprocessor()
             rec_in, rec_out = beam_preprocessor.copy_data_to_mutable_location(
-                settings, beam_input_dir, provenance_tracker
+                settings, beam_input_dir
             )
             initialization_records_in += rec_in
             initialization_records_out += rec_out
@@ -56,9 +63,9 @@ class Initialization:
 
                 output_dir = workspace.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
-                usim_preprocessor = usim_pre.UrbansimPreprocessor()
+                usim_preprocessor = model_factory.get_preprocessor("urbansim", self.state, self.provenance_tracker)
                 rec_in, rec_out = usim_preprocessor.copy_data_to_mutable_location(
-                    settings, output_dir, provenance_tracker
+                    settings, output_dir
                 )
                 if model_name in workspace.input_data:
                     workspace.input_data[model_name] += rec_in
@@ -85,10 +92,13 @@ class Initialization:
             # ActivitySim config copy
             if model_name == "activitysim":
                 from pilates.activitysim import preprocessor as asim_pre
-                activitysim_preprocessor = asim_pre.ActivitysimPreprocessor()
+
+                activitysim_preprocessor = model_factory.get_preprocessor(model_name, self.state, self.provenance_tracker)
                 asim_input_dir = workspace.get_asim_mutable_data_dir()
-                rec_in, rec_out = activitysim_preprocessor.copy_data_to_mutable_location(
-                    settings, asim_input_dir, provenance_tracker
+                rec_in, rec_out = (
+                    activitysim_preprocessor.copy_data_to_mutable_location(
+                        settings, asim_input_dir
+                    )
                 )
                 initialization_records_in += rec_in
                 initialization_records_out += rec_out
@@ -104,13 +114,14 @@ class Initialization:
         # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 
         # Record the combined initialization provenance as a single job.
-        init_run_hash = provenance_tracker.start_model_run(
+        init_run_hash = self.provenance_tracker.start_model_run(
             "initialization",
             year=settings.get("start_year"),
             iteration=0,
             description="Initialization: copying all mutable data",
             inputs=initialization_records_in,
         )
-        provenance_tracker.complete_model_run(
-            run_hash=init_run_hash, output_records=initialization_records_out.all_records()
+        self.provenance_tracker.complete_model_run(
+            run_hash=init_run_hash,
+            output_records=initialization_records_out.all_records(),
         )

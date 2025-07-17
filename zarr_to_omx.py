@@ -50,7 +50,9 @@ def main():
     logger.info(f"Opening Zarr skims: {zarr_path}")
     ds = xr.open_zarr(zarr_path)
 
-    logger.info(f"Zarr otaz coordinate: {ds.coords['otaz'].values[:10]}...")  # First 10 values
+    logger.info(
+        f"Zarr otaz coordinate: {ds.coords['otaz'].values[:10]}..."
+    )  # First 10 values
     logger.info(f"Zarr otaz attrs: {ds.coords['otaz'].attrs}")
     logger.info(f"Zarr attrs keys: {list(ds.attrs.keys())}")
     if "original_zone_ids" in ds.attrs:
@@ -61,15 +63,21 @@ def main():
     zone_ids = None
     if "original_zone_ids" in ds.attrs:
         zone_ids = np.array(ds.attrs["original_zone_ids"])
-        logger.info(f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones")
+        logger.info(
+            f"Using original zone IDs from Zarr attributes: {len(zone_ids)} zones"
+        )
     elif "otaz" in ds.coords:
         if ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
             zone_ids = ds.coords["otaz"].values
             logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
         else:
-            logger.error("Zarr uses zero-based zones but no original zone mapping found!")
+            logger.error(
+                "Zarr uses zero-based zones but no original zone mapping found!"
+            )
             zone_ids = zone_order(settings, settings.get("start_year", 2015))
-            logger.critical(f"Reconstructed zone IDs from settings: {len(zone_ids)} zones")
+            logger.critical(
+                f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
+            )
     else:
         logger.warning("No 'otaz' coordinate found in Zarr file.")
 
@@ -88,11 +96,25 @@ def main():
         try:
             zone_ids = np.array(zone_ids, dtype=int)
             omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
-            logger.info(f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones.")
+            logger.info(
+                f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones."
+            )
         except Exception as e:
             logger.error(f"Error creating zone mapping in OMX file: {e}.")
 
-    scaled_measures = {"TOTIVT", "IVT", "WACC", "IWAIT", "XWAIT", "WAUX", "WEGR", "DTIM", "FERRYIVT", "KEYIVT", "FAR"}
+    scaled_measures = {
+        "TOTIVT",
+        "IVT",
+        "WACC",
+        "IWAIT",
+        "XWAIT",
+        "WAUX",
+        "WEGR",
+        "DTIM",
+        "FERRYIVT",
+        "KEYIVT",
+        "FAR",
+    }
 
     written_count = 0
     for key in ds.data_vars:
@@ -104,7 +126,9 @@ def main():
             data = data_array.values
 
             measure_name = key.split("_")[-1] if "_" in key else key
-            needs_descaling = (measure_name in scaled_measures and not key.startswith(("TNC_", "RH_")))
+            needs_descaling = measure_name in scaled_measures and not key.startswith(
+                ("TNC_", "RH_")
+            )
 
             if data_array.ndim == 2:
                 data_to_write = np.nan_to_num(data).astype(np.float32)

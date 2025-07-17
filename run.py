@@ -1,5 +1,3 @@
-import argparse
-import random
 import warnings
 from datetime import datetime
 import uuid
@@ -19,10 +17,6 @@ from pilates.generic.initialization import Initialization
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-import shutil
-import subprocess
-import multiprocessing
-import psutil
 
 try:
     import docker
@@ -153,6 +147,7 @@ def get_usim_cmd(settings, year, forecast_year):
     )
     return usim_cmd
 
+
 def warm_start_activities(
     settings,
     state: WorkflowState,
@@ -179,15 +174,15 @@ def warm_start_activities(
         )
 
     elif activity_demand_model == "activitysim":
-        runner = factory.get_runner("activitysim")
-        preprocessor = factory.get_preprocessor("activitysim")
+        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
 
         # Preprocess
-        inputData = preprocessor.preprocess(state, workspace, provenance_tracker)
+        inputData = preprocessor.preprocess(workspace)
 
         # Run
         rawOutputs, runInfo = runner.run(
-            inputData, state, workspace, provenance_tracker
+            inputData, workspace
         )
 
         logger.info(
@@ -200,7 +195,7 @@ def warm_start_activities(
             "activitysim_postprocessor",
             state.current_year,
             state.current_inner_iter,
-            message="Post-processing for ActivitySim warm start",
+            description="Post-processing for ActivitySim warm start",
         )
         asim_post.update_usim_inputs_after_warm_start(
             settings,
@@ -361,8 +356,6 @@ def run_land_use(
     return
 
 
-
-
 def run_activity_demand(
     settings,
     state: WorkflowState,
@@ -382,16 +375,16 @@ def run_activity_demand(
             "POLARIS module is not activated due to missing polarisruntime library"
         )
     elif activity_demand_model == "activitysim":
-        preprocessor = factory.get_preprocessor("activitysim")
-        runner = factory.get_runner("activitysim")
-        postprocessor = factory.get_postprocessor("activitysim")
+        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
+        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        postprocessor = factory.get_postprocessor("activitysim", state, provenance_tracker)
 
         # Preprocess
-        input_data = preprocessor.preprocess(state, workspace, provenance_tracker)
+        input_data = preprocessor.preprocess(workspace)
 
         # Run
         raw_outputs, run_info = runner.run(
-            input_data, state, workspace, provenance_tracker
+            input_data, workspace
         )
 
         # Postprocess
@@ -403,7 +396,7 @@ def run_activity_demand(
             inputs=raw_outputs,
         )
         processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, state, workspace, provenance_tracker, post_run_hash
+            raw_outputs, run_info, workspace, post_run_hash
         )
         provenance_tracker.complete_model_run(
             post_run_hash, output_records=processed_outputs.all_records()
@@ -435,20 +428,20 @@ def run_traffic_assignment(
             "POLARIS module is not activated due to missing polarisruntime library"
         )
     elif travel_model == "beam":
-        preprocessor = factory.get_preprocessor("beam")
-        runner = factory.get_runner("beam")
-        postprocessor = factory.get_postprocessor("beam")
+        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker)
+        runner = factory.get_runner("beam", state, provenance_tracker)
+        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker)
 
         # Preprocess
-        input_data = preprocessor.preprocess(state, workspace, provenance_tracker)
+        input_data = preprocessor.preprocess(workspace)
 
         # Run
         raw_outputs, run_info = runner.run(
-            input_data, state, workspace, provenance_tracker
+            input_data, workspace
         )
 
         processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, state, workspace, provenance_tracker
+            raw_outputs, run_info, workspace
         )
 
     else:
@@ -477,7 +470,9 @@ def main():
         provenance_tracker=provenance_tracker,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
-    Initialization.run(settings, workspace, provenance_tracker)
+
+    initialization = Initialization("initialization",state,provenance_tracker)
+    initialization.run(settings, workspace)
 
     # Initialize Docker/Singularity client if needed
     client = None
@@ -486,7 +481,6 @@ def main():
             client = GenericRunner.initialize_docker_client(settings)
         except Exception as e:
             logger.error(f"Failed to initialize Docker client: {e}")
-
 
     # 2. MAIN WORKFLOW LOOP
     for year in state:
@@ -507,14 +501,16 @@ def main():
 
         # B. VEHICLE OWNERSHIP MODEL (ATLAS)
         if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-            formatted_print(f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}")
+            formatted_print(
+                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+            )
             logger.info("[Main] Running ATLAS vehicle ownership model.")
 
             # Use ModelFactory for all model/image lookups
             factory = ModelFactory()
-            preprocessor = factory.get_preprocessor("atlas")
-            runner = factory.get_runner("atlas")
-            postprocessor = factory.get_postprocessor("atlas")
+            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker)
+            runner = factory.get_runner("atlas", state, provenance_tracker)
+            postprocessor = factory.get_postprocessor("atlas", state, provenance_tracker)
 
             # Determine if this is a warm start for ATLAS
             warm_start_atlas = state.is_start_year()
@@ -541,19 +537,32 @@ def main():
                         self.start_year = parent_state.start_year
                         self.full_settings = parent_state.full_settings
                         self.is_start_year = lambda: (year == parent_state.start_year)
+
                 atlas_state = AtlasSubState(state, atlas_year)
 
-                logger.info(f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})")
-                # Preprocess
-                input_data = preprocessor.preprocess(atlas_state, workspace, provenance_tracker)
-                logger.info(f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}")
-
-                logger.info(f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}")
-                # Run
-                raw_outputs, run_info = runner.run(
-                    input_data, atlas_state, workspace, provenance_tracker
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
                 )
-                logger.info(f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}")
+                # Preprocess
+                preprocessor.update_state(atlas_state)
+                input_data = preprocessor.preprocess(
+                    workspace
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
+                )
+
+                logger.info(
+                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
+                )
+                # Run
+                runner.update_state(atlas_state)
+                raw_outputs, run_info = runner.run(
+                    input_data, workspace
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
+                )
 
                 logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
                 # Postprocess
@@ -562,15 +571,23 @@ def main():
                     atlas_state.current_year,
                     description="ATLAS postprocessing",
                 )
+                postprocessor.update_state(atlas_state)
                 processed_outputs = postprocessor.postprocess(
-                    raw_outputs, run_info, atlas_state, workspace, provenance_tracker, post_run_hash
+                    raw_outputs,
+                    run_info,
+                    workspace,
+                    post_run_hash,
                 )
                 provenance_tracker.complete_model_run(
                     post_run_hash, output_records=processed_outputs.all_records()
                 )
-                logger.info(f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}")
+                logger.info(
+                    f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
+                )
 
-            logger.info("[run.py] [ATLAS] All ATLAS years complete for this major step.")
+            logger.info(
+                "[run.py] [ATLAS] All ATLAS years complete for this major step."
+            )
             state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
         # C. SUPPLY/DEMAND LOOP

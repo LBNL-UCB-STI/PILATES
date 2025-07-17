@@ -138,9 +138,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: FileProvenanceTracker,
         model_run_hash: str,
     ) -> RecordStore:
         """
@@ -153,14 +151,17 @@ class AtlasPostprocessor(GenericPostprocessor):
         3. Add vehicleTypeId to ATLAS vehicle outputs (atlas_add_vehileTypeId).
         4. Complete the model run in provenance and return an empty RecordStore (no outputs at this stage).
         """
-        logger.info("[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s", state.current_year)
-        settings = state.full_settings
-        output_year = state.forecast_year
+        logger.info(
+            "[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s",
+            self.state.current_year,
+        )
+        settings = self.state.full_settings
+        output_year = self.state.forecast_year
 
         # --- Record input files ---
         # UrbanSim HDF5 file (input)
         usim_h5_path = os.path.join(
-            state.full_path, settings["usim_local_mutable_data_folder"]
+            self.state.full_path, settings["usim_local_mutable_data_folder"]
         )
         usim_h5_fname = get_usim_datastore_fname(
             settings, io="output", year=output_year
@@ -168,7 +169,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
         usim_input_record = None
         if os.path.exists(usim_h5_file):
-            usim_input_record = provenance_tracker.record_input_file(
+            usim_input_record = self.provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 usim_h5_file,
                 description=f"UrbanSim HDF5 before ATLAS vehicle update for year {output_year}",
@@ -177,12 +178,12 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         # ATLAS output CSV (input)
         atlas_output_path = os.path.join(
-            state.full_path, settings["atlas_host_output_folder"]
+            self.state.full_path, settings["atlas_host_output_folder"]
         )
         atlas_veh_file = os.path.join(atlas_output_path, f"vehicles_{output_year}.csv")
         atlas_veh_input_record = None
         if os.path.exists(atlas_veh_file):
-            atlas_veh_input_record = provenance_tracker.record_input_file(
+            atlas_veh_input_record = self.provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 atlas_veh_file,
                 description=f"ATLAS vehicles CSV before vehicleTypeId for year {output_year}",
@@ -190,16 +191,22 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
         # --- Perform postprocessing steps ---
-        atlas_update_h5_vehicle(settings, output_year, state)
-        logger.info("[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership for year %s", output_year)
-        atlas_add_vehileTypeId(settings, output_year, state)
-        logger.info("[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs for year %s", output_year)
+        atlas_update_h5_vehicle(settings, output_year, self.state)
+        logger.info(
+            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership for year %s",
+            output_year,
+        )
+        atlas_add_vehileTypeId(settings, output_year, self.state)
+        logger.info(
+            "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs for year %s",
+            output_year,
+        )
 
         # --- Record output files ---
         # UrbanSim HDF5 file (output)
         usim_output_record = None
         if os.path.exists(usim_h5_file):
-            usim_output_record = provenance_tracker.record_output_file(
+            usim_output_record = self.provenance_tracker.record_output_file(
                 "atlas_postprocessor",
                 usim_h5_file,
                 description=f"UrbanSim HDF5 after ATLAS vehicle update for year {output_year}",
@@ -212,7 +219,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
         atlas_veh2_output_record = None
         if os.path.exists(atlas_veh2_file):
-            atlas_veh2_output_record = provenance_tracker.record_output_file(
+            atlas_veh2_output_record = self.provenance_tracker.record_output_file(
                 "atlas_postprocessor",
                 atlas_veh2_file,
                 description=f"ATLAS vehicles2 CSV with vehicleTypeId for year {output_year}",
@@ -221,10 +228,15 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         # Collect all input and output records
         input_records = [r for r in [usim_input_record, atlas_veh_input_record] if r]
-        output_records = [r for r in [usim_output_record, atlas_veh2_output_record] if r]
+        output_records = [
+            r for r in [usim_output_record, atlas_veh2_output_record] if r
+        ]
 
-        provenance_tracker.complete_model_run(
+        self.provenance_tracker.complete_model_run(
             run_hash=model_run_hash, output_records=output_records
         )
-        logger.info("[AtlasPostprocessor] Completed provenance model run for ATLAS postprocessing: %s", model_run_hash)
+        logger.info(
+            "[AtlasPostprocessor] Completed provenance model run for ATLAS postprocessing: %s",
+            model_run_hash,
+        )
         return RecordStore(recordList=output_records)

@@ -1,16 +1,19 @@
 from abc import ABC, abstractmethod
 from typing import Any, Tuple
+
+from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
 
 
-class GenericPreprocessor(ABC):
+class GenericPreprocessor(ABC, Model):
     """
     Abstract base class for all model preprocessors.
     Subclasses should implement the preprocess() and copy_data_to_mutable_location() methods.
     """
 
-    def __init__(self):
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
         self.required_input_data: list[str] = []
 
     @abstractmethod
@@ -18,7 +21,6 @@ class GenericPreprocessor(ABC):
         self,
         settings: dict,
         output_dir: str,
-        provenance_tracker: FileProvenanceTracker,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy initial data into a mutable location and record the input and output files as provenance.
@@ -29,9 +31,7 @@ class GenericPreprocessor(ABC):
     @abstractmethod
     def preprocess(
         self,
-        state: "WorkflowState",
         workspace: "Workspace",
-        provenance_tracker: FileProvenanceTracker,
     ) -> RecordStore:
         """
         Preprocess input data for the model.
