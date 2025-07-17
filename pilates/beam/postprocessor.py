@@ -6,6 +6,8 @@ from typing import Optional
 import numpy as np
 import openmatrix as omx
 
+from pilates.utils.provenance import FileProvenanceTracker
+
 try:
     import xarray as xr
 except:
@@ -2622,6 +2624,9 @@ class BeamPostprocessor(GenericPostprocessor):
     """
     Postprocessor for BEAM model.
     """
+    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+        super().__init__(model_name, state, provenance_tracker)
+        self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
 
     def postprocess(
         self,
@@ -2656,7 +2661,7 @@ class BeamPostprocessor(GenericPostprocessor):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
-        if f"raw_od_skims_{self.state.current_year}_{self.state.iteration}" not in raw_output_files:
+        if f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}" not in raw_output_files:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
@@ -2675,7 +2680,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 next(
                     record.file_path
                     for record in raw_outputs.all_records()
-                    if record.short_name == f"raw_od_skims_{self.state.current_year}_{self.state.iteration}"
+                    if record.short_name == f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}"
                 ),
             )
             # Path to the main Zarr skims store, which is an ActivitySim data artifact.
