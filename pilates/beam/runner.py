@@ -7,11 +7,9 @@ from typing import Tuple, List
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo, Record
 from pilates.beam.postprocessor import (
-    find_produced_od_skims,
-    find_produced_origin_skims,
-    find_produced_linkstats,
     find_latest_beam_iteration,
-    find_produced_plans,
+    find_beam_iterations,
+    find_iteration_file
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -63,72 +61,40 @@ class BeamRunner(GenericRunner):
     def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
         super().__init__(model_name, state, provenance_tracker)
 
-    def gather_outputs(self, beam_local_output_folder: str, skimFormat: str = "omx") -> List[Record]:
-        od_skims_path = find_produced_od_skims(beam_local_output_folder, skimFormat)
-        origin_skims_path = find_produced_origin_skims(beam_local_output_folder)
-        linkstats_path = find_produced_linkstats(beam_local_output_folder)
-        plans_out_path = find_produced_plans(beam_local_output_folder)
+    def gather_outputs(self, beam_local_output_folder: str, run_info: ModelRunInfo, skimFormat: str = "omx") -> List[Record]:
+        files_to_get = {
+            "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
+            "raw_origin_skims": ("skimsRidehail",".csv.gz"),
+            "linkstats": ("linkstats", ".csv.gz"),
+            "beam_plans_out": ("plans", ".csv.gz"),
+            "events": ("events", ".csv.gz"),
+            "events_parquet": ("events", ".parquet")
+        }
 
         output_records = []
-        if od_skims_path and os.path.exists(od_skims_path):
-            output_rec = self.provenance_tracker.record_output_file(
-                self.model_name,
-                od_skims_path,
-                year=self.state.forecast_year,
-                short_name="raw_od_skims",
-                model_run_id=self.provenance_tracker.run_info.model_runs.get(self.model_name).unique_id,
-            )
-            if output_rec:
-                output_records.append(output_rec)
-            else:
-                logger.warning(
-                    f"[BEAM Runner] Could not record output file: {od_skims_path}"
-                )
+        paths, last_iter = find_beam_iterations(beam_local_output_folder)
+        for it, path in paths.items():
+            for short_name, (file_name, extension) in files_to_get.items():
+                full_path = find_iteration_file(path, it, file_name, extension)
+                if full_path:
+                    if it == last_iter:
+                        dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
+                    else:
+                        dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
+                    output_rec = self.provenance_tracker.record_output_file(
+                        self.model_name,
+                        full_path,
+                        year=self.state.forecast_year,
+                        short_name=dataset_name,
+                        model_run_id=run_info.unique_id,
+                    )
+                    if output_rec:
+                        output_records.append(output_rec)
+                    else:
+                        logger.warning(
+                            f"[BEAM Runner] Could not record output file: {full_path}"
+                        )
 
-        if origin_skims_path and os.path.exists(origin_skims_path):
-            output_rec = self.provenance_tracker.record_output_file(
-                self.model_name,
-                origin_skims_path,
-                year=self.state.forecast_year,
-                short_name="raw_origin_skims",
-                model_run_id=self.provenance_tracker.run_info.model_runs.get(self.model_name).unique_id,
-            )
-            if output_rec:
-                output_records.append(output_rec)
-            else:
-                logger.warning(
-                    f"[BEAM Runner] Could not record output file: {origin_skims_path}"
-                )
-
-        if linkstats_path and os.path.exists(linkstats_path):
-            output_rec = self.provenance_tracker.record_output_file(
-                self.model_name,
-                linkstats_path,
-                year=self.state.forecast_year,
-                short_name="linkstats",
-                model_run_id=self.provenance_tracker.run_info.model_runs.get(self.model_name).unique_id,
-            )
-            if output_rec:
-                output_records.append(output_rec)
-            else:
-                logger.warning(
-                    f"[BEAM Runner] Could not record output file: {linkstats_path}"
-                )
-
-        if plans_out_path and os.path.exists(plans_out_path):
-            output_rec = self.provenance_tracker.record_output_file(
-                self.model_name,
-                plans_out_path,
-                year=self.state.forecast_year,
-                short_name="beam_plans_out",
-                model_run_id=self.provenance_tracker.run_info.model_runs.get(self.model_name).unique_id,
-            )
-            if output_rec:
-                output_records.append(output_rec)
-            else:
-                logger.warning(
-                    f"[BEAM Runner] Could not record output file: {plans_out_path}"
-                )
         return output_records
 
     def run(
@@ -229,8 +195,8 @@ class BeamRunner(GenericRunner):
                 "[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs."
             )
 
-
-        output_records = self.gather_outputs(new_path, skimFormat)
+        run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
+        output_records = self.gather_outputs(new_path, run_info, skimFormat)
 
         # Record BEAM run completion now that outputs are recorded
         self.provenance_tracker.complete_model_run(
@@ -239,7 +205,7 @@ class BeamRunner(GenericRunner):
 
         output_store = RecordStore(recordList=output_records)
 
-        run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
+
 
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"

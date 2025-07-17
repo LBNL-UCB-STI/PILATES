@@ -678,7 +678,6 @@ def copy_plans_from_asim(
             "households",
             "persons",
             "beam_plans_out",
-            "beam_plans_out  ",
         ]
         asim_output_records = (
             provenance_tracker.run_info.get_latest_model_run_output_records(
@@ -824,7 +823,7 @@ class BeamPreprocessor(GenericPreprocessor):
             self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
         )
         for record in previous_beam_records:
-            if record.short_name in self.required_input_data:
+            if (record.short_name.rsplit('_', 2)[0] in self.required_input_data) and ('_sub' not in record.short_name):
                 input_records.add_record(record)
 
         model_run_hash = self.provenance_tracker.start_model_run(
@@ -848,7 +847,7 @@ class BeamPreprocessor(GenericPreprocessor):
             )
 
         # Copy plans from ActivitySim
-        store = copy_plans_from_asim(
+        store =  copy_plans_from_asim(
             input_records,
             settings,
             workspace,
@@ -876,14 +875,12 @@ class BeamPreprocessor(GenericPreprocessor):
             run_hash=model_run_hash, output_records=store.all_records()
         )
 
-        last_beam_outputs = (
-            self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
-        )
+
         linkstats_record = next(
             (
                 record
-                for record in last_beam_outputs
-                if record.short_name == "beam_prod"
+                for record in previous_beam_records
+                if record.short_name.startswith("linkstats") and ("_sub" not in record.short_name)
             ),
             None,
         )
@@ -912,7 +909,7 @@ class BeamPreprocessor(GenericPreprocessor):
         if linkstats_record:
             logger.info(
                 "[BEAM Preprocessor] Linkstats file at %s added to BEAM input store",
-                linkstats_path,
+                linkstats_record.file_path,
             )
             store.add_record(linkstats_record)
 

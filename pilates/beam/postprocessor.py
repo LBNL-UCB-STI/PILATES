@@ -15,8 +15,7 @@ from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
+
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +78,49 @@ def find_produced_plans(beam_output_dir, suffix="csv.gz"):
     logger.info("expecting output plans at {0}".format(od_skims_path))
     return od_skims_path
 
+def find_beam_iterations(beam_output_dir):
+    iter_dirs = [
+        os.path.join(root, dir)
+        for root, dirs, files in os.walk(beam_output_dir)
+        if not os.path.basename(root).startswith(".")
+        for dir in dirs
+        if dir == "ITERS"
+    ]
+    logger.info("Found ITERS directories: {0}".format(iter_dirs))
+
+    if not iter_dirs:
+        return {}, None
+
+    # Select the most recently modified ITERS directory
+    last_iters_dir = max(iter_dirs, key=os.path.getmtime)
+    logger.info("Using ITERS directory: {0}".format(last_iters_dir))
+
+    iteration_dict = {}
+    it_prefix = "it."
+
+    # Iterate over subdirectories and collect iteration numbers and paths
+    for dir_name in os.listdir(last_iters_dir):
+        if dir_name.startswith(it_prefix):
+            try:
+                it_num = int(dir_name[len(it_prefix):])
+                iteration_dict[it_num] = os.path.join(last_iters_dir, dir_name)
+            except ValueError:
+                logger.warning(f"Skipping non-integer iteration directory: {dir_name}")
+
+    if not iteration_dict:
+        return {}, None
+
+    max_iteration = max(iteration_dict.keys())
+    return iteration_dict, max_iteration
+
+def find_iteration_file(iteration_path: str, iteration: int, file: str, file_type: str="") -> Optional[str]:
+    path = os.path.join(iteration_path, f"{iteration}.{file}{file_type}")
+    if os.path.exists(path):
+        logger.debug(f"Found file at {path}")
+        return path
+    else:
+        logger.warning(f"Could not find file at {path}")
+        return None
 
 def find_produced_origin_skims(beam_output_dir):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
@@ -2585,26 +2627,24 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
-        state: WorkflowState,
         workspace: Workspace,
-        provenance_tracker: "FileProvenanceTracker",
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
         Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
         """
         logger.info("Running BEAM postprocessor...")
-        settings = state.full_settings
+        settings = self.state.full_settings
 
-        zarr_record = provenance_tracker.run_info.get_most_recent_record("zarr_skims")
+        zarr_record = self.provenance_tracker.run_info.get_most_recent_record("zarr_skims")
         if zarr_record:
             raw_outputs.add_record(zarr_record)
             logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
 
-        model_run_hash = provenance_tracker.start_model_run(
+        model_run_hash = self.provenance_tracker.start_model_run(
             "beam_postprocessor",
-            state.current_year,
-            state.current_inner_iter,
+            self.state.current_year,
+            self.state.current_inner_iter,
             description="Post-processing BEAM outputs",
             inputs=raw_outputs,
         )
@@ -2616,7 +2656,7 @@ class BeamPostprocessor(GenericPostprocessor):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
-        if "raw_od_skims" not in raw_output_files:
+        if f"raw_od_skims_{self.state.current_year}_{self.state.iteration}" not in raw_output_files:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
@@ -2635,7 +2675,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 next(
                     record.file_path
                     for record in raw_outputs.all_records()
-                    if record.short_name == "raw_od_skims"
+                    if record.short_name == f"raw_od_skims_{self.state.current_year}_{self.state.iteration}"
                 ),
             )
             # Path to the main Zarr skims store, which is an ActivitySim data artifact.
@@ -2648,12 +2688,12 @@ class BeamPostprocessor(GenericPostprocessor):
                 beam_output_dir=beam_output_dir,
                 settings=settings,
                 override=raw_od_skims_path,
-                provenance_tracker=provenance_tracker,
+                provenance_tracker=self.provenance_tracker,
                 model_run_hash=model_run_hash,
             )
 
             # The main output is the modified Zarr store. Record it.
-            output_rec = provenance_tracker.record_output_file(
+            output_rec = self.provenance_tracker.record_output_file(
                 "beam_postprocessor",
                 all_skims_path,
                 model_run_id=model_run_hash,
@@ -2670,7 +2710,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 all_skims_path, settings, omx_skim_name
             )
             if final_omx_path:
-                omx_rec = provenance_tracker.record_output_file(
+                omx_rec = self.provenance_tracker.record_output_file(
                     "beam_postprocessor",
                     final_omx_path,
                     model_run_id=model_run_hash,
@@ -2680,6 +2720,6 @@ class BeamPostprocessor(GenericPostprocessor):
                     processed_records.append(omx_rec)
 
         output_store = RecordStore(recordList=processed_records)
-        provenance_tracker.complete_model_run(model_run_hash)
+        self.provenance_tracker.complete_model_run(model_run_hash)
 
         return output_store
