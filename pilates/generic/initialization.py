@@ -63,7 +63,7 @@ class Initialization(Model):
 
                 output_dir = workspace.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
-                usim_preprocessor = model_factory.get_preprocessor(model_name, self.state, self.provenance_tracker)
+                usim_preprocessor = model_factory.get_preprocessor("urbansim", self.state, self.provenance_tracker)
                 rec_in, rec_out = usim_preprocessor.copy_data_to_mutable_location(
                     settings, output_dir
                 )
