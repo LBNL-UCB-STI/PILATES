@@ -83,4 +83,4 @@ class UrbansimRunner(GenericRunner):
 
         # Return empty RecordStore and None for ModelRunInfo for now
         # In the future, this should return the actual outputs and run info
-        return RecordStore(), None
+        return RecordStore(), ModelRunInfo()
