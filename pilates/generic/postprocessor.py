@@ -14,6 +14,7 @@ class GenericPostprocessor(ABC, Model):
 
     def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
         super().__init__(model_name, state, provenance_tracker)
+        self.required_input_data: list[str] = []
 
     @abstractmethod
     def postprocess(
