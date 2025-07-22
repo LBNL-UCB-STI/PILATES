@@ -255,11 +255,15 @@ class PilatesRunInfo:
         def get_time(run):
             iso_time = getattr(run, "created_at", None)
             if iso_time:
-                return datetime.fromisoformat(iso_time)
+                return datetime.fromisoformat(iso_time).timestamp()
             else:
+                logger.warning(f"Failed to determine creation time for {run}")
                 return 0.0
-
-        return max(runs, key=get_time)
+        run_times = {run: get_time(self.model_runs[run]) for run in runs}
+        logger.info(f"Looking at model runs for {model_name}: {run_times}")
+        found_run = max(runs, key=lambda r: get_time(self.model_runs[r]))
+        logger.info(f"Latest model run for {model_name} is {found_run} with time {run_times[found_run]}")
+        return found_run
 
     def get_most_recent_record(self, short_name: str) -> Optional[FileRecord]:
         """
@@ -279,6 +283,7 @@ class PilatesRunInfo:
             if iso_time:
                 return datetime.fromisoformat(iso_time)
             else:
+                logger.warning(f"Failed to determine creation time for {record}")
                 return 0.0
 
         return max(records, key=get_time)

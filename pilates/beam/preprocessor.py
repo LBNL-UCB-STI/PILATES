@@ -1,3 +1,4 @@
+import gzip
 import logging
 import os
 import shutil
@@ -523,9 +524,20 @@ def copy_plans_from_asim(
                         columns={"tripId": "trip_id", "personId": "person_id"}
                     )
                 else:
-                    original_plans = pd.read_csv(beam_plans_path).rename(
-                        columns={"tripId": "trip_id", "personId": "person_id"}
-                    )
+                    try:
+                        original_plans = pd.read_csv(beam_plans_path).rename( # WHY IS THIS FAILING!!!!!
+                            columns={"tripId": "trip_id", "personId": "person_id"}
+                        )
+                    except gzip.BadGzipFile:
+                        logger.warning("Bad GZip file... Trying to read it as parquet instead?????")
+                        try:
+                            original_plans = pd.read_parquet(beam_plans_path).rename(
+                                columns={"tripId": "trip_id", "personId": "person_id"}
+                            )
+                            logger.info("That worked!!!")
+                        except Exception as e:
+                            logger.warning(f"That didn't work {e}. Just reading in asim plans")
+                            original_plans = pd.read_parquet(asim_plans_path)
                 updated_plans = pd.read_parquet(asim_plans_path)
             else:
                 raise NotImplementedError
@@ -799,6 +811,7 @@ class BeamPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Prepares all data needed to run BEAM.
@@ -810,11 +823,7 @@ class BeamPreprocessor(GenericPreprocessor):
         input_records = workspace.output_data.get("beam", RecordStore())
         output_records = RecordStore()
 
-        asim_post_records = (
-            self.provenance_tracker.run_info.get_latest_model_run_output_records(
-                "activitysim_postprocessor"
-            )
-        )
+        asim_post_records = previous_records.all_records()
         for record in asim_post_records:
             if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
                 input_records.add_record(record)

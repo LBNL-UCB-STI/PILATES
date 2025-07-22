@@ -216,9 +216,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
     def preprocess(
         self,
-        state,
-        workspace,
-        provenance_tracker,
+        workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Prepares all data needed to run UrbanSim. For now, just returns the input data as the preprocessed data.

@@ -184,8 +184,12 @@ class ActivitysimRunner(GenericRunner):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
+        compiled_asim_this_year = False
+
         # Record ActivitySim run start (Compilation if needed)
         if not self.state.asim_compiled:
+
+            compiled_asim_this_year = True
 
             asim_cmd = self.get_base_asim_cmd(
                 settings, household_sample_size=2500, num_processes=1
@@ -225,6 +229,7 @@ class ActivitysimRunner(GenericRunner):
             )
             if zarr_skims_rec:
                 output_records.append(zarr_skims_rec)
+                logger.info(f"Using zarr skims from ASIM compilation: {zarr_skims_rec.file_path}")
 
             self.provenance_tracker.complete_model_run(
                 asim_compile_run_hash,
@@ -236,27 +241,24 @@ class ActivitysimRunner(GenericRunner):
             if not success:
                 raise RuntimeError("ASim Compilation failed")
             self.state.compile_asim()  # Update state to mark as compiled
-
-        if settings.get("file_format") == "parquet":
-            # Using new ASIM with caching:
-
-            if os.path.exists(all_skims_path):
-                logger.info(
-                    "Using existing ASIM skims cache at: {0}".format(all_skims_path)
-                )
-                skims_record = self.provenance_tracker.record_input_file(
-                    "activitysim",
-                    all_skims_path,
-                    description="ASIM skims cache",
-                    model_run_id=asim_compile_run_hash,
-                    short_name="zarr_skims",
-                    state=self.state,
-                )
-                if skims_record:
-                    filtered_store.remove_record_type("omx_skims")
-                    filtered_store.add_record(skims_record)
+        else:
+            if "beam" in self.provenance_tracker.run_info.models_used:
+                last_beam_post_records = self.provenance_tracker.run_info.get_latest_model_run_output_records(
+                    "beam_postprocessor")
+                zarr_skims_rec = next(r for r in last_beam_post_records if r.short_name == "zarr_skims")
+                logger.info(f"Using zarr skims from last BEAM postprocessor run: {zarr_skims_rec.file_path}")
             else:
-                logger.warning(
+                last_asim_run_hash = self.provenance_tracker.run_info.get_latest_model_run("activitysim")
+                last_asim_run_input_hashes = self.provenance_tracker.run_info.model_runs[last_asim_run_hash].input_record_hashes
+                last_asim_run_input_records = [self.provenance_tracker.run_info.file_records.get(h) for h in last_asim_run_input_hashes]
+                zarr_skims_rec = next(r for r in last_asim_run_input_records if r.short_name == "zarr_skims")
+                logger.info(f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}")
+
+        if zarr_skims_rec:
+            filtered_store.remove_record_type("omx_skims")
+            filtered_store.add_record(zarr_skims_rec)
+        else:
+            logger.warning(
                     "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
                         all_skims_path
                     )

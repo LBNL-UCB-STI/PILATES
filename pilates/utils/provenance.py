@@ -809,7 +809,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         output_path: str,
         folder_name: str = None,
         use_file: bool = True,
-        use_marquez: bool = False,
+        use_marquez: bool = True,
         marquez_url: str = "http://localhost:5002",
         add_year_to_job_name: bool = True,
         add_iteration_to_job_name: bool = True,

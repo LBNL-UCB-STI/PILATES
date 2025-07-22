@@ -1345,6 +1345,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     def preprocess(
         self,
         workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -1410,16 +1411,17 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         if self.state.current_inner_iter > 0:
             # 2: Re-use existing persons/households/skim cache
             last_asim_hash = self.provenance_tracker.run_info.get_latest_model_run(
-                "activitysim_preprocessor"
+                "activitysim"
             )
             record_hashes = self.provenance_tracker.run_info.model_runs[
                 last_asim_hash
-            ].output_record_hashes
+            ].input_record_hashes
             data_from_usim = [
                 self.provenance_tracker.run_info.file_records.get(h)
                 for h in record_hashes
                 if h in self.provenance_tracker.run_info.file_records
             ]
+            data_from_usim = [r for r in data_from_usim if r.short_name in ["households_asim_in", "persons_asim_in"]]
             logger.info(
                 f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
             )

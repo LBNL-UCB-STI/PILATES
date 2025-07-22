@@ -32,6 +32,7 @@ class GenericPreprocessor(ABC, Model):
     def preprocess(
         self,
         workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Preprocess input data for the model.

@@ -52,7 +52,8 @@ class AtlasPreprocessor(GenericPreprocessor):
 
     def preprocess(
         self,
-        workspace,
+        workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs

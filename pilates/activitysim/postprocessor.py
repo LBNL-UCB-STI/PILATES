@@ -714,4 +714,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)
+        self.provenance_tracker.complete_model_run(
+            model_run_hash, output_records=processed_store.all_records()
+        )
         return processed_store

@@ -7,6 +7,7 @@ import tables
 from tables import HDF5ExtError
 
 from pilates.generic.model_factory import ModelFactory
+from pilates.generic.records import RecordStore
 
 # Helper import for model/image lookup and docker client
 from pilates.generic.runner import GenericRunner
@@ -362,7 +363,7 @@ def run_activity_demand(
     client,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
-):
+) -> RecordStore:
     """
     Generate activity plans for the current year.
     """
@@ -374,6 +375,7 @@ def run_activity_demand(
         logger.info(
             "POLARIS module is not activated due to missing polarisruntime library"
         )
+        return RecordStore()
     elif activity_demand_model == "activitysim":
         preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
         runner = factory.get_runner("activitysim", state, provenance_tracker)
@@ -388,25 +390,17 @@ def run_activity_demand(
         )
 
         # Postprocess
-        post_run_hash = provenance_tracker.start_model_run(
-            "activitysim_postprocessor",
-            state.current_year,
-            state.current_inner_iter,
-            description="Post-processing ActivitySim outputs",
-            inputs=raw_outputs,
-        )
         processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, workspace, post_run_hash
+            raw_outputs, run_info, workspace
         )
-        provenance_tracker.complete_model_run(
-            post_run_hash, output_records=processed_outputs.all_records()
-        )
-        # TODO, move complete into the postprocess
+
+        return processed_outputs
 
     else:
         logger.warning(
             f"Unknown or disabled activity demand model: {activity_demand_model}"
         )
+        return RecordStore()
 
 
 def run_traffic_assignment(
@@ -415,6 +409,7 @@ def run_traffic_assignment(
     client,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
+    activity_demand_outputs: RecordStore = None,
 ):
     """
     Run traffic assignment for the current year.
@@ -433,7 +428,7 @@ def run_traffic_assignment(
         postprocessor = factory.get_postprocessor("beam", state, provenance_tracker)
 
         # Preprocess
-        input_data = preprocessor.preprocess(workspace)
+        input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
 
         # Run
         raw_outputs, run_info = runner.run(
@@ -596,6 +591,7 @@ def main():
             for i in range(state.iteration, total_iters):
                 state.iteration = i
                 formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
+                activity_demand_outputs = None
 
                 # C1. ACTIVITY DEMAND
                 if state.should_run(
@@ -605,7 +601,7 @@ def main():
                 ):
                     formatted_print("ACTIVITY DEMAND MODEL")
                     logger.info("[Main] Running ActivitySim activity demand model.")
-                    run_activity_demand(
+                    activity_demand_outputs = run_activity_demand(
                         settings, state, client, workspace, provenance_tracker
                     )
                     state.complete_step(
@@ -623,7 +619,7 @@ def main():
                     formatted_print("TRAFFIC ASSIGNMENT MODEL")
                     logger.info("[Main] Running BEAM traffic assignment model.")
                     run_traffic_assignment(
-                        settings, state, client, workspace, provenance_tracker
+                        settings, state, client, workspace, provenance_tracker, activity_demand_outputs
                     )
                     state.complete_step(
                         WorkflowState.Stage.supply_demand_loop,
