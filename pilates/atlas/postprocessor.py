@@ -133,8 +133,13 @@ class AtlasPostprocessor(GenericPostprocessor):
     This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
     All provenance tracking for output files should be handled here.
     """
-    
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
 
     def postprocess(
@@ -161,7 +166,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             "[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s",
             self.state.current_year,
         )
-        
+
         # Start postprocessor tracking if no hash provided
         if model_run_hash is None:
             model_run_hash = self.provenance_tracker.start_model_run(
@@ -171,7 +176,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 description="Post-processing ATLAS outputs",
                 inputs=raw_outputs,
             )
-        
+
         settings = self.state.full_settings
         output_year = self.state.forecast_year
 

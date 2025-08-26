@@ -13,6 +13,56 @@ Rather than tightly coupling models within a single software process, PILATES or
   * **State Management**: Reliably track and persist the simulation state across different model runs and time steps.
   * **Provenance Tracking**: Record a detailed lineage of all data transformations and model executions for reproducibility.
   * **HPC Ready**: Designed to run efficiently on high-performance computing (HPC) environments.
+  * **Dual Storage Database System**: Store and query simulation data in analytical databases for improved performance and data provenance.
+
+-----
+
+## Database Integration & Dual Storage
+
+PILATES includes a powerful dual storage system that enables analytical database backends for improved performance, scalability, and data provenance. This system is particularly valuable for large-scale simulations and cloud deployments.
+
+### Key Database Features
+
+  * **Dual Storage Architecture**: Automatically stores both raw UrbanSim data and processed ActivitySim inputs, preserving the expensive preprocessing results while maintaining access to original data.
+  * **Database Input Mode**: ActivitySim can read input data directly from the database instead of H5 files, eliminating preprocessing overhead and enabling faster startup times.
+  * **Parallel Uploads**: Efficiently upload large datasets using parallel table operations for improved performance.
+  * **OpenLineage Integration**: Complete data lineage tracking with OpenLineage metadata for full reproducibility.
+  * **Multiple Backends**: Currently supports DuckDB with extensible architecture for other analytical databases.
+
+### Supported Workflows
+
+1. **H5 to Database Extraction**: Convert existing UrbanSim H5 files to database format with dual storage
+   ```bash
+   python pilates/utils/h5_to_database.py --h5-file /path/to/urbansim_data.h5 --settings settings.yaml
+   ```
+
+2. **Run Upload from run_info.json**: Upload completed simulation results including ActivitySim CSV inputs
+   ```bash
+   python pilates/utils/upload_runs.py --run-info /path/to/run_info.json --settings settings.yaml
+   ```
+
+3. **Database Input Mode**: Configure ActivitySim to read from database instead of H5 files
+   ```yaml
+   # settings.yaml
+   database:
+     enabled: true
+     type: duckdb
+     path: pilates/database/region_data.duckdb
+   
+   activitysim_database:
+     enabled: true
+     use_processed_data: true
+     year: 2017
+   ```
+
+### Performance Benefits
+
+- **Faster ActivitySim Startup**: Skip expensive H5 preprocessing by reading pre-processed data from database
+- **Parallel Processing**: Multiple tables uploaded simultaneously for improved throughput
+- **Cloud Ready**: Database backends enable scalable cloud deployments
+- **Memory Efficiency**: Query only needed data subsets instead of loading entire H5 files
+
+For detailed database setup and usage instructions, see [docs/database-setup.md](docs/database-setup.md).
 
 -----
 
@@ -76,6 +126,13 @@ Follow these steps to get PILATES up and running on your local machine.
 1.  Open the `settings.yaml` file.
 2.  Set your container preference: `container_manager: "docker"` or `"singularity"`.
 3.  Update region-specific parameters and computational settings (`num_processors`, `chunk_size`, etc.) as needed.
+4.  (Optional) Configure database integration for improved performance:
+    ```yaml
+    database:
+      enabled: true
+      type: duckdb
+      path: pilates/database/region_data.duckdb
+    ```
 
 ### 4\. Running a Simulation
 
@@ -88,6 +145,18 @@ python run.py -v -p
 -----
 
 ## Advanced Usage
+
+### Database Workflows
+
+Convert existing UrbanSim H5 files for faster ActivitySim processing:
+
+```bash
+# Extract H5 to database with dual storage
+python pilates/utils/h5_to_database.py --h5-file /path/to/urbansim_data.h5 --settings settings.yaml
+
+# Upload completed runs to database
+python pilates/utils/upload_runs.py --run-dir /path/to/run_output --settings settings.yaml
+```
 
 ### Background Process
 

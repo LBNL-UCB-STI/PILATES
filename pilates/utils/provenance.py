@@ -777,7 +777,9 @@ class FileProvenanceTracker(ProvenanceTracker):
                         repo_records=data.get("repo_records", {}),
                         model_runs=data.get("model_runs", {}),
                         config_snapshot=data.get("config_snapshot"),
-                        openlineage_event_metadata=data.get("openlineage_event_metadata", []),
+                        openlineage_event_metadata=data.get(
+                            "openlineage_event_metadata", []
+                        ),
                     )
                     return run_info
             except (json.JSONDecodeError, IOError) as e:
@@ -834,9 +836,11 @@ class OpenLineageTracker(FileProvenanceTracker):
         self.client = None
         self.add_year_to_job_name = add_year_to_job_name
         self.add_iteration_to_job_name = add_iteration_to_job_name
-        
+
         # Initialize configuration snapshot manager
-        workspace_path = os.path.join(output_path, folder_name) if folder_name else output_path
+        workspace_path = (
+            os.path.join(output_path, folder_name) if folder_name else output_path
+        )
         self.config_manager = ConfigSnapshotManager(workspace_path)
 
         # This list will hold configuration dictionaries
@@ -887,14 +891,16 @@ class OpenLineageTracker(FileProvenanceTracker):
         """Override to capture config snapshot during initialization."""
         # Call parent method to set basic fields
         super().initialize_from_settings(settings)
-        
+
         # Create and store config snapshot
         config_snapshot = self.config_manager.create_config_snapshot(settings)
         self.run_info.config_snapshot = config_snapshot
         self._save_run_info()
-        
-        logger.info(f"Created config snapshot {config_snapshot['snapshot_id']} "
-                   f"with hash {config_snapshot['config_content_hash'][:8]}")
+
+        logger.info(
+            f"Created config snapshot {config_snapshot['snapshot_id']} "
+            f"with hash {config_snapshot['config_content_hash'][:8]}"
+        )
 
     def _emit_event(self, event: RunEvent, model_run_id: str = None):
         """
@@ -907,11 +913,11 @@ class OpenLineageTracker(FileProvenanceTracker):
             event_type=event.eventType.value,  # START, COMPLETE, FAIL
             run_uuid=event.run.runId,
             job_name=event.job.name,
-            model_run_id=model_run_id or "unknown"
+            model_run_id=model_run_id or "unknown",
         )
         self.run_info.openlineage_event_metadata.append(event_metadata)
         self._save_run_info()
-        
+
         if self.client:
             try:
                 self.client.emit(event)

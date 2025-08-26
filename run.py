@@ -121,9 +121,6 @@ def find_latest_beam_iteration(beam_output_dir):
     return iter_dirs
 
 
-
-
-
 def warm_start_activities(
     settings,
     state: WorkflowState,
@@ -151,15 +148,15 @@ def warm_start_activities(
 
     elif activity_demand_model == "activitysim":
         runner = factory.get_runner("activitysim", state, provenance_tracker)
-        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor(
+            "activitysim", state, provenance_tracker
+        )
 
         # Preprocess
         inputData = preprocessor.preprocess(workspace)
 
         # Run
-        rawOutputs, runInfo = runner.run(
-            inputData, workspace
-        )
+        rawOutputs, runInfo = runner.run(inputData, workspace)
 
         logger.info(
             "Appending warm start activities/choices to UrbanSim base year input data"
@@ -264,8 +261,6 @@ def run_land_use(
     runner = factory.get_runner("urbansim", state, provenance_tracker)
     postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker)
 
-
-
     # 2. PREPARE URBANSIM DATA
     print_str = "Preparing {0} input data for land use development simulation.".format(
         year
@@ -273,8 +268,6 @@ def run_land_use(
     formatted_print(print_str)
 
     input_data = preprocessor.preprocess(workspace)
-
-
 
     # 3. RUN URBANSIM
     print_str = "Simulating land use development from {0} " "to {1} with {2}.".format(
@@ -318,22 +311,22 @@ def run_activity_demand(
         )
         return RecordStore()
     elif activity_demand_model == "activitysim":
-        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor(
+            "activitysim", state, provenance_tracker
+        )
         runner = factory.get_runner("activitysim", state, provenance_tracker)
-        postprocessor = factory.get_postprocessor("activitysim", state, provenance_tracker)
+        postprocessor = factory.get_postprocessor(
+            "activitysim", state, provenance_tracker
+        )
 
         # Preprocess
         input_data = preprocessor.preprocess(workspace)
 
         # Run
-        raw_outputs, run_info = runner.run(
-            input_data, workspace
-        )
+        raw_outputs, run_info = runner.run(input_data, workspace)
 
         # Postprocess
-        processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, workspace
-        )
+        processed_outputs = postprocessor.postprocess(raw_outputs, run_info, workspace)
 
         return processed_outputs
 
@@ -372,13 +365,9 @@ def run_traffic_assignment(
         input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
 
         # Run
-        raw_outputs, run_info = runner.run(
-            input_data, workspace
-        )
+        raw_outputs, run_info = runner.run(input_data, workspace)
 
-        processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, workspace
-        )
+        processed_outputs = postprocessor.postprocess(raw_outputs, run_info, workspace)
 
     else:
         logger.warning(f"Unknown or disabled travel model: {travel_model}")
@@ -407,7 +396,7 @@ def main():
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
 
-    initialization = Initialization("initialization",state,provenance_tracker)
+    initialization = Initialization("initialization", state, provenance_tracker)
     initialization.run(settings, workspace)
 
     # Initialize Docker/Singularity client if needed
@@ -446,7 +435,9 @@ def main():
             factory = ModelFactory()
             preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker)
             runner = factory.get_runner("atlas", state, provenance_tracker)
-            postprocessor = factory.get_postprocessor("atlas", state, provenance_tracker)
+            postprocessor = factory.get_postprocessor(
+                "atlas", state, provenance_tracker
+            )
 
             # Determine if this is a warm start for ATLAS
             warm_start_atlas = state.is_start_year()
@@ -481,9 +472,7 @@ def main():
                 )
                 # Preprocess
                 preprocessor.update_state(atlas_state)
-                input_data = preprocessor.preprocess(
-                    workspace
-                )
+                input_data = preprocessor.preprocess(workspace)
                 logger.info(
                     f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
                 )
@@ -493,9 +482,7 @@ def main():
                 )
                 # Run
                 runner.update_state(atlas_state)
-                raw_outputs, run_info = runner.run(
-                    input_data, workspace
-                )
+                raw_outputs, run_info = runner.run(input_data, workspace)
                 logger.info(
                     f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
                 )
@@ -560,7 +547,12 @@ def main():
                     formatted_print("TRAFFIC ASSIGNMENT MODEL")
                     logger.info("[Main] Running BEAM traffic assignment model.")
                     run_traffic_assignment(
-                        settings, state, client, workspace, provenance_tracker, activity_demand_outputs
+                        settings,
+                        state,
+                        client,
+                        workspace,
+                        provenance_tracker,
+                        activity_demand_outputs,
                     )
                     state.complete_step(
                         WorkflowState.Stage.supply_demand_loop,

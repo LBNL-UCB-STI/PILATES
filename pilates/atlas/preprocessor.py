@@ -35,7 +35,12 @@ class AtlasPreprocessor(GenericPreprocessor):
     using BEAM skims. All provenance tracking for input files is handled here.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["usim_data"]
 
@@ -227,7 +232,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
 
                     # prepare residential unit atlas input
-                    residential_units = data["/{}/residential_units".format(self.state.year)]
+                    residential_units = data[
+                        "/{}/residential_units".format(self.state.year)
+                    ]
                     residential_csv = "{}/residential.csv".format(atlas_input_path)
                     residential_units.to_csv(residential_csv)
                     output_records.append(

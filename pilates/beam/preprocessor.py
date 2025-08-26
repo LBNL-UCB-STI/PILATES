@@ -525,18 +525,24 @@ def copy_plans_from_asim(
                     )
                 else:
                     try:
-                        original_plans = pd.read_csv(beam_plans_path).rename( # WHY IS THIS FAILING!!!!!
+                        original_plans = pd.read_csv(
+                            beam_plans_path
+                        ).rename(  # WHY IS THIS FAILING!!!!!
                             columns={"tripId": "trip_id", "personId": "person_id"}
                         )
                     except gzip.BadGzipFile:
-                        logger.warning("Bad GZip file... Trying to read it as parquet instead?????")
+                        logger.warning(
+                            "Bad GZip file... Trying to read it as parquet instead?????"
+                        )
                         try:
                             original_plans = pd.read_parquet(beam_plans_path).rename(
                                 columns={"tripId": "trip_id", "personId": "person_id"}
                             )
                             logger.info("That worked!!!")
                         except Exception as e:
-                            logger.warning(f"That didn't work {e}. Just reading in asim plans")
+                            logger.warning(
+                                f"That didn't work {e}. Just reading in asim plans"
+                            )
                             original_plans = pd.read_parquet(asim_plans_path)
                 updated_plans = pd.read_parquet(asim_plans_path)
             else:
@@ -786,7 +792,12 @@ class BeamPreprocessor(GenericPreprocessor):
     Preprocessor for BEAM model.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data: List[str] = [
             "persons",
@@ -832,7 +843,9 @@ class BeamPreprocessor(GenericPreprocessor):
             self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
         )
         for record in previous_beam_records:
-            if (record.short_name.rsplit('_', 2)[0] in self.required_input_data) and ('_sub' not in record.short_name):
+            if (record.short_name.rsplit("_", 2)[0] in self.required_input_data) and (
+                "_sub" not in record.short_name
+            ):
                 input_records.add_record(record)
 
         model_run_hash = self.provenance_tracker.start_model_run(
@@ -856,7 +869,7 @@ class BeamPreprocessor(GenericPreprocessor):
             )
 
         # Copy plans from ActivitySim
-        store =  copy_plans_from_asim(
+        store = copy_plans_from_asim(
             input_records,
             settings,
             workspace,
@@ -884,12 +897,12 @@ class BeamPreprocessor(GenericPreprocessor):
             run_hash=model_run_hash, output_records=store.all_records()
         )
 
-
         linkstats_record = next(
             (
                 record
                 for record in previous_beam_records
-                if record.short_name.startswith("linkstats") and ("_sub" not in record.short_name)
+                if record.short_name.startswith("linkstats")
+                and ("_sub" not in record.short_name)
             ),
             None,
         )

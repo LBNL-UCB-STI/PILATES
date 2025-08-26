@@ -12,7 +12,12 @@ class GenericPreprocessor(ABC, Model):
     Subclasses should implement the preprocess() and copy_data_to_mutable_location() methods.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data: list[str] = []
 

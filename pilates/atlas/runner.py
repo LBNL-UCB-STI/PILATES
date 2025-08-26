@@ -288,7 +288,12 @@ class AtlasRunner(GenericRunner):
     following the BEAM/ActivitySim pattern.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
 
     def run(
@@ -313,10 +318,11 @@ class AtlasRunner(GenericRunner):
             - This method only runs the ATLAS container and records provenance for the run.
         """
         logger.info(
-            "[AtlasRunner] Starting ATLAS model run for year %s", self.state.current_year
+            "[AtlasRunner] Starting ATLAS model run for year %s",
+            self.state.current_year,
         )
         settings = self.state.full_settings
-        
+
         # Start provenance tracking for this run
         model_run_hash = self.provenance_tracker.start_model_run(
             self.model_name,
@@ -330,7 +336,7 @@ class AtlasRunner(GenericRunner):
         vehicle_ownership_model, atlas_image = self.get_model_and_image(
             settings, "vehicle_ownership_model"
         )
-        
+
         atlas_docker_vols = get_atlas_docker_vols(settings, workspace)
         freq = settings.get("vehicle_ownership_freq", False)
         npe = settings.get("atlas_num_processes", False)
@@ -362,7 +368,9 @@ class AtlasRunner(GenericRunner):
                 client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
-                self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
+                self.provenance_tracker.complete_model_run(
+                    model_run_hash, status="failed"
+                )
                 raise
 
         # Execute container
@@ -384,7 +392,9 @@ class AtlasRunner(GenericRunner):
 
             if not success:
                 logger.error("ATLAS container execution failed")
-                self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
+                self.provenance_tracker.complete_model_run(
+                    model_run_hash, status="failed"
+                )
                 return RecordStore(), ModelRunInfo()
 
         except Exception as e:
@@ -396,14 +406,14 @@ class AtlasRunner(GenericRunner):
         output_records = []
         atlas_output_dir = workspace.get_atlas_output_dir()
         output_year = self.state.forecast_year
-        
+
         # TODO: Add comprehensive output file detection
         # ATLAS generates multiple output files that should be recorded
         expected_outputs = [
             f"householdv_{output_year}.csv",
             f"vehicles_{output_year}.csv",
         ]
-        
+
         for output_file in expected_outputs:
             output_path = os.path.join(atlas_output_dir, output_file)
             if os.path.exists(output_path):
@@ -424,19 +434,19 @@ class AtlasRunner(GenericRunner):
 
         # Complete provenance tracking
         self.provenance_tracker.complete_model_run(
-            model_run_hash, 
+            model_run_hash,
             status="completed" if output_records else "failed",
-            output_records=output_records
+            output_records=output_records,
         )
 
         # Create run info
         run_info = ModelRunInfo()
         # TODO: Populate run_info with ATLAS-specific information
-        
+
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (outputs=%d)",
             self.state.current_year,
             len(output_records),
         )
-        
+
         return RecordStore(recordList=output_records), run_info

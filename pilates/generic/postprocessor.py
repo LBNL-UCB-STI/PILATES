@@ -12,7 +12,12 @@ class GenericPostprocessor(ABC, Model):
     Subclasses should implement the postprocess() method.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data: list[str] = []
 

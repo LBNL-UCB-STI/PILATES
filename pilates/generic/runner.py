@@ -25,7 +25,12 @@ class GenericRunner(ABC, Model):
     A generic runner class that can be extended for specific models.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_files = []
         self.required_output_files = []

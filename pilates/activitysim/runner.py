@@ -17,7 +17,12 @@ class ActivitysimRunner(GenericRunner):
     Runner for ActivitySim model.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_files = [
             "persons_asim_in",
@@ -229,7 +234,9 @@ class ActivitysimRunner(GenericRunner):
             )
             if zarr_skims_rec:
                 output_records.append(zarr_skims_rec)
-                logger.info(f"Using zarr skims from ASIM compilation: {zarr_skims_rec.file_path}")
+                logger.info(
+                    f"Using zarr skims from ASIM compilation: {zarr_skims_rec.file_path}"
+                )
 
             self.provenance_tracker.complete_model_run(
                 asim_compile_run_hash,
@@ -244,25 +251,45 @@ class ActivitysimRunner(GenericRunner):
         else:
             if "beam" in self.provenance_tracker.run_info.models_used:
                 last_beam_post_records = self.provenance_tracker.run_info.get_latest_model_run_output_records(
-                    "beam_postprocessor")
-                zarr_skims_rec = next(r for r in last_beam_post_records if r.short_name == "zarr_skims")
-                logger.info(f"Using zarr skims from last BEAM postprocessor run: {zarr_skims_rec.file_path}")
+                    "beam_postprocessor"
+                )
+                zarr_skims_rec = next(
+                    r for r in last_beam_post_records if r.short_name == "zarr_skims"
+                )
+                logger.info(
+                    f"Using zarr skims from last BEAM postprocessor run: {zarr_skims_rec.file_path}"
+                )
             else:
-                last_asim_run_hash = self.provenance_tracker.run_info.get_latest_model_run("activitysim")
-                last_asim_run_input_hashes = self.provenance_tracker.run_info.model_runs[last_asim_run_hash].input_record_hashes
-                last_asim_run_input_records = [self.provenance_tracker.run_info.file_records.get(h) for h in last_asim_run_input_hashes]
-                zarr_skims_rec = next(r for r in last_asim_run_input_records if r.short_name == "zarr_skims")
-                logger.info(f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}")
+                last_asim_run_hash = (
+                    self.provenance_tracker.run_info.get_latest_model_run("activitysim")
+                )
+                last_asim_run_input_hashes = (
+                    self.provenance_tracker.run_info.model_runs[
+                        last_asim_run_hash
+                    ].input_record_hashes
+                )
+                last_asim_run_input_records = [
+                    self.provenance_tracker.run_info.file_records.get(h)
+                    for h in last_asim_run_input_hashes
+                ]
+                zarr_skims_rec = next(
+                    r
+                    for r in last_asim_run_input_records
+                    if r.short_name == "zarr_skims"
+                )
+                logger.info(
+                    f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}"
+                )
 
         if zarr_skims_rec:
             filtered_store.remove_record_type("omx_skims")
             filtered_store.add_record(zarr_skims_rec)
         else:
             logger.warning(
-                    "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
-                        all_skims_path
-                    )
+                "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
+                    all_skims_path
                 )
+            )
 
         new_asim_run_hash = self.provenance_tracker.start_model_run(
             model=activity_demand_model,

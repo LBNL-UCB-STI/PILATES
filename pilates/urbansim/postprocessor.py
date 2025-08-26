@@ -120,7 +120,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
             "[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s",
             self.state.current_year,
         )
-        
+
         # Start postprocessor tracking if no hash provided
         if model_run_hash is None:
             model_run_hash = self.provenance_tracker.start_model_run(
@@ -133,20 +133,20 @@ class UrbansimPostprocessor(GenericPostprocessor):
 
         processed_records = []
         settings = self.state.full_settings
-        
+
         try:
             # Process each raw output file
             for record in raw_outputs.all_records():
                 if record.file_path and os.path.exists(record.file_path):
                     logger.info(f"Processing UrbanSim output: {record.file_path}")
-                    
+
                     # TODO: Add specific UrbanSim postprocessing logic here
                     # This might include:
                     # - Validating output file structure
                     # - Converting formats if needed
                     # - Creating summary statistics
                     # - Preparing data for next model iteration
-                    
+
                     # For now, just record the processed file
                     processed_record = self.provenance_tracker.record_output_file(
                         "urbansim_postprocessor",
@@ -158,7 +158,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
                         state=self.state,
                         source_file_paths=[record.file_path],
                     )
-                    
+
                     if processed_record:
                         processed_records.append(processed_record)
                 else:
@@ -173,7 +173,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
                         settings,
                         self.state.current_year,
                         self.state.forecast_year,
-                        workspace.get_usim_mutable_data_dir()
+                        workspace.get_usim_mutable_data_dir(),
                     )
                     logger.info("Prepared UrbanSim data for next iteration")
                 except Exception as e:

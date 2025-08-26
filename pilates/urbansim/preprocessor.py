@@ -63,9 +63,14 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
             elif skims_fname.endswith("omx"):
                 skims_fname = "skims.omx"
                 mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
-                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(settings['region_id'])
+                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(
+                    settings["region_id"]
+                )
                 logger.info(
-                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+                    "Copying skims from {0} to {1} for urbansim".format(
+                        mutable_skims_location, input_skims_location
+                    )
+                )
                 shutil.copyfile(mutable_skims_location, input_skims_location)
                 skims = omx.open_file(mutable_skims_location, "r")
                 zone_ids = skims.mapping("zone_id").keys()
@@ -79,14 +84,19 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 )
                 skims.close()
                 return out.to_frame()
-            elif skims_fname.endswith('zarr'):
-                beam_output_dir = settings['beam_local_output_folder']
-                skims_fname = settings['skims_fname']
+            elif skims_fname.endswith("zarr"):
+                beam_output_dir = settings["beam_local_output_folder"]
+                skims_fname = settings["skims_fname"]
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings['region_to_region_id'][settings['region']]
-                input_skims_location = os.path.join(usim_data_dir, "skims_mpo_{0}.zarr".format(region_id))
+                region_id = settings["region_to_region_id"][settings["region"]]
+                input_skims_location = os.path.join(
+                    usim_data_dir, "skims_mpo_{0}.zarr".format(region_id)
+                )
                 logger.info(
-                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+                    "Copying skims from {0} to {1} for urbansim".format(
+                        mutable_skims_location, input_skims_location
+                    )
+                )
 
                 # Copy zarr directory (it's a directory, not a single file)
                 if os.path.exists(input_skims_location):
@@ -96,18 +106,22 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 ds = xr.open_zarr(mutable_skims_location)
 
                 # Get zone IDs
-                zone_ids = ds.coords['otaz'].values
+                zone_ids = ds.coords["otaz"].values
                 zone_ids = [str(z) for z in zone_ids]
 
                 # Get AM time period data
-                am_idx = list(ds.coords['time_period'].values).index('AM')
-                travel_time_data = ds['SOV_TIME'].isel(time_period=am_idx).values
+                am_idx = list(ds.coords["time_period"].values).index("AM")
+                travel_time_data = ds["SOV_TIME"].isel(time_period=am_idx).values
 
                 # Create DataFrame
                 index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
                 columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
                 travel_time_mins = np.array(travel_time_data)
-                out = pd.DataFrame(travel_time_mins, index=index, columns=columns).stack().rename('SOV_AM_IVT_mins')
+                out = (
+                    pd.DataFrame(travel_time_mins, index=index, columns=columns)
+                    .stack()
+                    .rename("SOV_AM_IVT_mins")
+                )
 
                 return out.to_frame()
             else:
@@ -154,7 +168,12 @@ class UrbansimPreprocessor(GenericPreprocessor):
     data needed for the UrbanSim run.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["usim_data_reference"]
 
@@ -273,7 +292,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         )
 
         processed_records = []
-        
+
         try:
             # Record provenance for ActivitySim skims if available
             settings = self.state.full_settings
@@ -302,7 +321,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             # - Loading and validating UrbanSim input data
             # - Processing skims in different formats (omx, zarr, csv)
             # - Preparing data transformations needed for the model
-            
+
             # For now, add any existing input records to processed records
             for record in input_records.all_records():
                 if record.file_path and os.path.exists(record.file_path):

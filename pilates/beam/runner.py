@@ -9,7 +9,7 @@ from pilates.generic.records import RecordStore, ModelRunInfo, Record
 from pilates.beam.postprocessor import (
     find_latest_beam_iteration,
     find_beam_iterations,
-    find_iteration_file
+    find_iteration_file,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -51,25 +51,33 @@ def rename_beam_output_directory(
     return new_iteration_output_directory
 
 
-
-
 class BeamRunner(GenericRunner):
     """
     Runner for the BEAM model.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
 
-    def gather_outputs(self, beam_local_output_folder: str, run_info: ModelRunInfo, skimFormat: str = "omx") -> List[Record]:
+    def gather_outputs(
+        self,
+        beam_local_output_folder: str,
+        run_info: ModelRunInfo,
+        skimFormat: str = "omx",
+    ) -> List[Record]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
             "raw_od_skims_zarr": ("activitySimODSkims_current", ".zarr"),
-            "raw_origin_skims": ("skimsRidehail",".csv.gz"),
+            "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
             "beam_plans_out": ("plans", ".csv.gz"),
             "events": ("events", ".csv.gz"),
-            "events_parquet": ("events", ".parquet")
+            "events_parquet": ("events", ".parquet"),
         }
 
         output_records = []
@@ -205,8 +213,6 @@ class BeamRunner(GenericRunner):
         )
 
         output_store = RecordStore(recordList=output_records)
-
-
 
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"

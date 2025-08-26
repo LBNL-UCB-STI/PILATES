@@ -11,8 +11,6 @@ from pilates.utils.provenance import FileProvenanceTracker
 logger = logging.getLogger(__name__)
 
 
-
-
 class UrbansimRunner(GenericRunner):
     """
     Runner for the UrbanSim land use model.
@@ -21,7 +19,12 @@ class UrbansimRunner(GenericRunner):
     following the BEAM/ActivitySim/ATLAS pattern.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_files = ["usim_data"]
 
@@ -37,7 +40,10 @@ class UrbansimRunner(GenericRunner):
             )
         usim_local_mutable_data_folder = os.path.abspath(output_dir)
         usim_docker_vols = {
-            usim_local_mutable_data_folder: {"bind": usim_remote_data_folder, "mode": "rw"}
+            usim_local_mutable_data_folder: {
+                "bind": usim_remote_data_folder,
+                "mode": "rw",
+            }
         }
         return usim_docker_vols
 

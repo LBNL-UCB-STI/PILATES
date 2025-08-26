@@ -15,12 +15,15 @@ class Initialization(Model):
     GenericPreprocessor interface.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+    ):
         super().__init__(model_name, state, provenance_tracker)
 
-    def run(
-        self, settings: dict, workspace: Workspace
-    ) -> None:
+    def run(self, settings: dict, workspace: Workspace) -> None:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
@@ -36,7 +39,7 @@ class Initialization(Model):
             beam_preprocessor = model_factory.get_preprocessor(
                 "beam", self.state, self.provenance_tracker
             )
-    
+
             beam_input_dir = workspace.get_beam_mutable_data_dir()
             result = beam_preprocessor.copy_data_to_mutable_location(
                 settings, beam_input_dir
@@ -102,7 +105,9 @@ class Initialization(Model):
             if model_name == "activitysim":
                 from pilates.activitysim import preprocessor as asim_pre
 
-                activitysim_preprocessor = model_factory.get_preprocessor(model_name, self.state, self.provenance_tracker)
+                activitysim_preprocessor = model_factory.get_preprocessor(
+                    model_name, self.state, self.provenance_tracker
+                )
                 asim_input_dir = workspace.get_asim_mutable_data_dir()
                 rec_in, rec_out = (
                     activitysim_preprocessor.copy_data_to_mutable_location(

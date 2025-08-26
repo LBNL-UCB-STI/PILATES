@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 import logging
 
 from openlineage.client.facet import SchemaField, SchemaDatasetFacet
@@ -236,6 +236,7 @@ class ModelRunInfo(Record):
 @dataclass(kw_only=True)
 class OpenLineageEventMetadata:
     """Lightweight metadata for OpenLineage events without full event payload."""
+
     event_time: str
     event_type: str  # START, COMPLETE, FAIL
     run_uuid: str  # OpenLineage run UUID
@@ -257,7 +258,9 @@ class PilatesRunInfo:
     repo_records: Dict[str, RepoRecord] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
     config_snapshot: Optional[Dict[str, Any]] = None
-    openlineage_event_metadata: List[OpenLineageEventMetadata] = field(default_factory=list)
+    openlineage_event_metadata: List[OpenLineageEventMetadata] = field(
+        default_factory=list
+    )
 
     def get_latest_model_run(self, model_name: str) -> Optional[str]:
         """
@@ -279,10 +282,13 @@ class PilatesRunInfo:
             else:
                 logger.warning(f"Failed to determine creation time for {run}")
                 return 0.0
+
         run_times = {run: get_time(self.model_runs[run]) for run in runs}
         logger.info(f"Looking at model runs for {model_name}: {run_times}")
         found_run = max(runs, key=lambda r: get_time(self.model_runs[r]))
-        logger.info(f"Latest model run for {model_name} is {found_run} with time {run_times[found_run]}")
+        logger.info(
+            f"Latest model run for {model_name} is {found_run} with time {run_times[found_run]}"
+        )
         return found_run
 
     def get_most_recent_record(self, short_name: str) -> Optional[FileRecord]:
