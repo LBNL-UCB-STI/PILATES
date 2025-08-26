@@ -35,33 +35,38 @@ skim_dtypes = {
 }
 
 
-def _load_raw_skims(settings, asim_data_dir, skim_format):
+def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
     skims_fname = settings.get("skims_fname", False)
 
     try:
         if skim_format == "beam":
             if skims_fname.endswith("csv"):
-                path_to_skims = os.path.join(
-                    settings["beam_local_output_folder"], skims_fname
-                )
-                # load skims from disk or url
-                skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
-                skims = skims.loc[
-                    (skims["pathType"] == "SOV") & (skims["timePeriod"] == "AM")
-                ]
-                skims = skims[
-                    ["origin", "destination", "TOTIVT_IVT_minutes", "DIST_meters"]
-                ]
-                skims = skims.rename(
-                    columns={
-                        "origin": "from_zone_id",
-                        "destination": "to_zone_id",
-                        "TOTIVT_IVT_minutes": "SOV_AM_IVT_mins",
-                    }
-                )
+                raise NotImplementedError("DEMOS requires skims in omx format, not csv")
+                # path_to_skims = os.path.join(
+                #     settings["beam_local_output_folder"], skims_fname
+                # )
+                # # load skims from disk or url
+                # skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
+                # skims = skims.loc[
+                #     (skims["pathType"] == "SOV") & (skims["timePeriod"] == "AM")
+                # ]
+                # skims = skims[
+                #     ["origin", "destination", "TOTIVT_IVT_minutes", "DIST_meters"]
+                # ]
+                # skims = skims.rename(
+                #     columns={
+                #         "origin": "from_zone_id",
+                #         "destination": "to_zone_id",
+                #         "TOTIVT_IVT_minutes": "SOV_AM_IVT_mins",
+                #     }
+                # )
             elif skims_fname.endswith("omx"):
                 skims_fname = "skims.omx"
                 mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
+                input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(settings['region_id'])
+                logger.info(
+                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+                shutil.copyfile(mutable_skims_location, input_skims_location)
                 skims = omx.open_file(mutable_skims_location, "r")
                 zone_ids = skims.mapping("zone_id").keys()
                 index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
@@ -74,23 +79,55 @@ def _load_raw_skims(settings, asim_data_dir, skim_format):
                 )
                 skims.close()
                 return out.to_frame()
+            elif skims_fname.endswith('zarr'):
+                beam_output_dir = settings['beam_local_output_folder']
+                skims_fname = settings['skims_fname']
+                mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
+                region_id = settings['region_to_region_id'][settings['region']]
+                input_skims_location = os.path.join(usim_data_dir, "skims_mpo_{0}.zarr".format(region_id))
+                logger.info(
+                    "Copying skims from {0} to {1} for urbansim".format(mutable_skims_location, input_skims_location))
+
+                # Copy zarr directory (it's a directory, not a single file)
+                if os.path.exists(input_skims_location):
+                    shutil.rmtree(input_skims_location)
+                shutil.copytree(mutable_skims_location, input_skims_location)
+
+                ds = xr.open_zarr(mutable_skims_location)
+
+                # Get zone IDs
+                zone_ids = ds.coords['otaz'].values
+                zone_ids = [str(z) for z in zone_ids]
+
+                # Get AM time period data
+                am_idx = list(ds.coords['time_period'].values).index('AM')
+                travel_time_data = ds['SOV_TIME'].isel(time_period=am_idx).values
+
+                # Create DataFrame
+                index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
+                columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
+                travel_time_mins = np.array(travel_time_data)
+                out = pd.DataFrame(travel_time_mins, index=index, columns=columns).stack().rename('SOV_AM_IVT_mins')
+
+                return out.to_frame()
             else:
                 raise NotImplementedError(
                     "Invalid skim format {0}".format(skims_fname.split(".")[-1])
                 )
         elif skim_format == "polaris":
-            path_to_skims = os.path.join(
-                settings["polaris_local_data_folder"], skims_fname
-            )
-            f = h5py.File(path_to_skims, "r")
-            ivtt_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["ivtt"]))
-            cost_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["cost"]))
-            f.close()
-            ivtt_8_9 = pd.DataFrame(ivtt_8_9.stack(), columns=["auto_ivtt_8_9_am"])
-            cost_8_9 = pd.DataFrame(cost_8_9.stack(), columns=["auto_cost_8_9_am"])
-            skims = ivtt_8_9.join(cost_8_9)
-            skims.index.names = ["from_zone_id", "to_zone_id"]
-            skims = skims.reset_index()
+            raise NotImplementedError("DEMOS requires skims in omx format, not polaris")
+            # path_to_skims = os.path.join(
+            #     settings["polaris_local_data_folder"], skims_fname
+            # )
+            # f = h5py.File(path_to_skims, "r")
+            # ivtt_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["ivtt"]))
+            # cost_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["cost"]))
+            # f.close()
+            # ivtt_8_9 = pd.DataFrame(ivtt_8_9.stack(), columns=["auto_ivtt_8_9_am"])
+            # cost_8_9 = pd.DataFrame(cost_8_9.stack(), columns=["auto_cost_8_9_am"])
+            # skims = ivtt_8_9.join(cost_8_9)
+            # skims.index.names = ["from_zone_id", "to_zone_id"]
+            # skims = skims.reset_index()
 
     except KeyError:
         raise KeyError("Couldn't find input skims named {0}".format(skims_fname))
@@ -220,14 +257,26 @@ class UrbansimPreprocessor(GenericPreprocessor):
         previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
-        Prepares all data needed to run UrbanSim. For now, just returns the input data as the preprocessed data.
-        In the future, additional preprocessing steps can be added here.
-
-        Returns:
-            RecordStore: The input data for UrbanSim, as prepared by Initialization.
+        Preprocess UrbanSim data.
+        Returns the input RecordStore from the workspace.
         """
-        logger.info(
-            "[UrbansimPreprocessor] Preprocessing for UrbanSim: returning input data from workspace."
-        )
+        logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
         input_records = workspace.input_data.get("urbansim", RecordStore())
+
+        # Attempt to record provenance for ActivitySim skims if settings are available
+        try:
+            skims_path = os.path.join(
+                workspace.get_asim_mutable_data_dir(),
+                self.state.full_settings["skims_fname"],
+            )
+            self.provenance_tracker.record_input_file(
+                "urbansim_preprocessor",
+                skims_path,
+                description="ActivitySim skims for UrbanSim input",
+                model_run_id=None,
+            )
+        except Exception:
+            # If settings or path are unavailable, skip provenance recording
+            pass
+
         return input_records

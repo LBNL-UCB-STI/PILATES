@@ -121,32 +121,7 @@ def find_latest_beam_iteration(beam_output_dir):
     return iter_dirs
 
 
-def get_usim_docker_vols(settings, output_dir=None):
-    usim_remote_data_folder = settings["usim_client_data_folder"]
-    if output_dir is None:
-        output_dir = settings[
-            "usim_local_data_input_folder"
-        ]  # This seems wrong, should be mutable output dir
-        logger.warning(
-            "get_usim_docker_vols called without output_dir, using usim_local_data_input_folder. Check logic."
-        )
-    usim_local_mutable_data_folder = os.path.abspath(output_dir)
-    usim_docker_vols = {
-        usim_local_mutable_data_folder: {"bind": usim_remote_data_folder, "mode": "rw"}
-    }
-    return usim_docker_vols
 
-
-def get_usim_cmd(settings, year, forecast_year):
-    region = settings["region"]
-    region_id = settings["region_to_region_id"][region]
-    land_use_freq = settings["land_use_freq"]
-    skims_source = settings["travel_model"]
-    formattable_usim_cmd = settings["usim_formattable_command"]
-    usim_cmd = formattable_usim_cmd.format(
-        region_id, year, forecast_year, land_use_freq, skims_source
-    )
-    return usim_cmd
 
 
 def warm_start_activities(
@@ -275,7 +250,7 @@ def forecast_land_use(
 def run_land_use(
     settings,
     year,
-    workflow_state: WorkflowState,
+    state: WorkflowState,
     client,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
@@ -283,15 +258,13 @@ def run_land_use(
 ):
     logger.info("Running land use")
 
-    # 1. PARSE SETTINGS
-    land_use_model, land_use_image = GenericRunner.get_model_and_image(
-        settings, "land_use_model"
-    )
-    usim_docker_vols = get_usim_docker_vols(
-        settings, workspace.get_usim_mutable_data_dir()
-    )
-    forecast_year = workflow_state.forecast_year
-    usim_cmd = get_usim_cmd(settings, year, forecast_year)
+    factory = ModelFactory()
+
+    preprocessor = factory.get_preprocessor("urbansim", state, provenance_tracker)
+    runner = factory.get_runner("urbansim", state, provenance_tracker)
+    postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker)
+
+
 
     # 2. PREPARE URBANSIM DATA
     print_str = "Preparing {0} input data for land use development simulation.".format(
@@ -299,41 +272,9 @@ def run_land_use(
     )
     formatted_print(print_str)
 
-    # Record inputs to UrbanSim preprocessing (skims from ASim output)
-    asim_skims_path = os.path.join(
-        workspace.get_asim_mutable_data_dir(), settings["skims_fname"]
-    )
+    input_data = preprocessor.preprocess(workspace)
 
-    provenance_tracker.record_input_file(
-        land_use_model,
-        asim_skims_path,
-        description="ActivitySim skims for UrbanSim input",
-        model_run_id=model_run_hash,
-    )
 
-    usim_pre.add_skims_to_model_data(
-        settings,
-        workspace.get_usim_mutable_data_dir(),
-        workspace.get_asim_mutable_data_dir(),
-    )
-
-    usim_input_in_run_dir = os.path.join(
-        workspace.get_usim_mutable_data_dir(),
-        usim_post.get_usim_datastore_fname(settings, io="input"),
-    )
-    provenance_tracker.record_input_file(
-        land_use_model,
-        usim_input_in_run_dir,
-        description="UrbanSim input data for forecast",
-        model_run_id=model_run_hash,
-    )
-
-    if is_already_opened_in_write_mode(usim_input_in_run_dir):
-        logger.warning(
-            "Closing h5 files {0} because they were left open. You should really "
-            "figure out where this happened".format(tables.file._open_files.filenames)
-        )
-        tables.file._open_files.close_all()
 
     # 3. RUN URBANSIM
     print_str = "Simulating land use development from {0} " "to {1} with {2}.".format(

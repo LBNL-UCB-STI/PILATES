@@ -11,6 +11,8 @@ from pilates.utils.provenance import FileProvenanceTracker
 logger = logging.getLogger(__name__)
 
 
+
+
 class UrbansimRunner(GenericRunner):
     """
     Runner for the UrbanSim land use model.
@@ -22,6 +24,36 @@ class UrbansimRunner(GenericRunner):
     def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_files = ["usim_data"]
+
+    def get_usim_docker_vols(self, output_dir=None):
+        settings = self.state.full_settings
+        usim_remote_data_folder = settings["usim_client_data_folder"]
+        if output_dir is None:
+            output_dir = settings[
+                "usim_local_data_input_folder"
+            ]  # This seems wrong, should be mutable output dir
+            logger.warning(
+                "get_usim_docker_vols called without output_dir, using usim_local_data_input_folder. Check logic."
+            )
+        usim_local_mutable_data_folder = os.path.abspath(output_dir)
+        usim_docker_vols = {
+            usim_local_mutable_data_folder: {"bind": usim_remote_data_folder, "mode": "rw"}
+        }
+        return usim_docker_vols
+
+    def get_usim_cmd(self):
+        settings = self.state.full_settings
+        year = self.state.current_year
+        forecast_year = self.state.forecast_year
+        region = settings["region"]
+        region_id = settings["region_to_region_id"][region]
+        land_use_freq = settings["land_use_freq"]
+        skims_source = settings["travel_model"]
+        formattable_usim_cmd = settings["usim_formattable_command"]
+        usim_cmd = formattable_usim_cmd.format(
+            region_id, year, forecast_year, land_use_freq, skims_source
+        )
+        return usim_cmd
 
     def run(
         self,
@@ -58,6 +90,15 @@ class UrbansimRunner(GenericRunner):
         usim_datastore_fpath = os.path.join(
             workspace.get_usim_mutable_data_dir(), usim_output_store_name
         )
+
+        # 1. PARSE SETTINGS
+        land_use_model, land_use_image = self.get_model_and_image(
+            settings, "land_use_model"
+        )
+        usim_docker_vols = self.get_usim_docker_vols(
+            settings
+        )
+        usim_cmd = self.get_usim_cmd()
 
         # TODO: Add logic to actually run the UrbanSim container here, similar to AtlasRunner/BeamRunner.
         # For now, just record the output file if it exists.
