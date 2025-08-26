@@ -22,6 +22,9 @@ class Record:
     def __post_init__(self):
         self.openlineage_id = str(uuid.uuid4())
 
+    def __hash__(self):
+        return hash(self.unique_id)
+
 
 class RecordStore:
     """
@@ -36,12 +39,17 @@ class RecordStore:
         recordList: Optional[List[Record]] = None,
     ) -> None:
         if isinstance(recordDict, dict):
+            # Validate that all values are Record instances
+            for key, rec in recordDict.items():
+                if not isinstance(rec, Record):
+                    raise TypeError("All values in recordDict must be Record instances")
             self.records = recordDict
         elif recordDict is not None:
             raise TypeError("recordDict must be a dictionary.")
         else:
             self.records = {}
         if recordList is not None:
+            # Accept a list of Record objects (used by tests and some preprocessors)
             for record in recordList:
                 if not isinstance(record, Record):
                     raise TypeError(
@@ -213,7 +221,7 @@ class RepoRecord(Record):
         )
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, unsafe_hash=True)
 class ModelRunInfo(Record):
     model: str
     year: int

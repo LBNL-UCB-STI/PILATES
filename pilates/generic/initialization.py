@@ -33,17 +33,21 @@ class Initialization(Model):
 
         # BEAM model initialization
         if settings.get("travel_model") == "beam":
-            beam_preprocessor = model_factory.get_preprocessor("beam", self.state, self.provenance_tracker)
-
+            beam_preprocessor = model_factory.get_preprocessor(
+                "beam", self.state, self.provenance_tracker
+            )
+    
             beam_input_dir = workspace.get_beam_mutable_data_dir()
-            rec_in, rec_out = beam_preprocessor.copy_data_to_mutable_location(
+            result = beam_preprocessor.copy_data_to_mutable_location(
                 settings, beam_input_dir
             )
-            initialization_records_in += rec_in
-            initialization_records_out += rec_out
-            # Make available to later preprocess()
-            workspace.input_data["beam"] = rec_in
-            workspace.output_data["beam"] = rec_out
+            if result:
+                rec_in, rec_out = result
+                initialization_records_in += rec_in
+                initialization_records_out += rec_out
+                # Make available to later preprocess()
+                workspace.input_data["beam"] = rec_in
+                workspace.output_data["beam"] = rec_out
 
         # Other models
         for model_key in [
@@ -63,10 +67,14 @@ class Initialization(Model):
 
                 output_dir = workspace.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
-                usim_preprocessor = model_factory.get_preprocessor("urbansim", self.state, self.provenance_tracker)
-                rec_in, rec_out = usim_preprocessor.copy_data_to_mutable_location(
+                usim_preprocessor = model_factory.get_preprocessor(
+                    "urbansim", self.state, self.provenance_tracker
+                )
+                result = usim_preprocessor.copy_data_to_mutable_location(
                     settings, output_dir
                 )
+                if result:
+                    rec_in, rec_out = result
                 if model_name in workspace.input_data:
                     workspace.input_data[model_name] += rec_in
                 else:
@@ -76,8 +84,9 @@ class Initialization(Model):
                 else:
                     workspace.output_data[model_name] = rec_out
                 have_not_copied_usim_data = False
-                initialization_records_in += rec_in
-                initialization_records_out += rec_out
+                if result:
+                    initialization_records_in += rec_in
+                    initialization_records_out += rec_out
 
             # Atlas data copy
             if model_name == "atlas":
@@ -114,14 +123,16 @@ class Initialization(Model):
         # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 
         # Record the combined initialization provenance as a single job.
-        init_run_hash = self.provenance_tracker.start_model_run(
-            "initialization",
-            year=settings.get("start_year"),
-            iteration=0,
-            description="Initialization: copying all mutable data",
-            inputs=initialization_records_in,
-        )
-        self.provenance_tracker.complete_model_run(
-            run_hash=init_run_hash,
-            output_records=initialization_records_out.all_records(),
-        )
+        if self.provenance_tracker is not None:
+            init_run_hash = self.provenance_tracker.start_model_run(
+                "initialization",
+                year=settings.get("start_year"),
+                iteration=0,
+                description="Initialization: copying all mutable data",
+                inputs=initialization_records_in,
+            )
+            self.provenance_tracker.complete_model_run(
+                run_hash=init_run_hash,
+                output_records=initialization_records_out.all_records(),
+            )
+        # If no provenance tracker is supplied, we simply skip provenance logging.

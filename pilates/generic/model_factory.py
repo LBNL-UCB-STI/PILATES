@@ -37,11 +37,11 @@ class ModelFactory:
         }
     }
 
-    def get_runner(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def get_runner(self, model_name, state: "WorkflowState" = None, provenance_tracker: FileProvenanceTracker = None):
         return self._registry[model_name.lower()]["runner"](model_name, state, provenance_tracker)
 
-    def get_preprocessor(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def get_preprocessor(self, model_name, state: "WorkflowState" = None, provenance_tracker: FileProvenanceTracker = None):
         return self._registry[model_name.lower()]["preprocessor"](model_name, state, provenance_tracker)
 
-    def get_postprocessor(self, model_name, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
+    def get_postprocessor(self, model_name, state: "WorkflowState" = None, provenance_tracker: FileProvenanceTracker = None):
         return self._registry[model_name.lower()]["postprocessor"](model_name, state, provenance_tracker)

@@ -64,6 +64,7 @@ class BeamRunner(GenericRunner):
     def gather_outputs(self, beam_local_output_folder: str, run_info: ModelRunInfo, skimFormat: str = "omx") -> List[Record]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
+            "raw_od_skims_zarr": ("activitySimODSkims_current", ".zarr"),
             "raw_origin_skims": ("skimsRidehail",".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
             "beam_plans_out": ("plans", ".csv.gz"),
