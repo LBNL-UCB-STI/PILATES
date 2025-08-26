@@ -27,7 +27,11 @@ import h5py
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from pilates.activitysim.preprocessor import read_zone_geoms
+from pilates.activitysim.preprocessor import (
+    read_zone_geoms,
+    process_raw_h5_files,
+    _create_land_use_table,
+)
 from pilates.utils.database_upload import create_database_manager
 from pilates.generic.records import (
     FileRecord,
@@ -459,25 +463,17 @@ class H5ActivitySimExtractor:
     ) -> Optional[pd.DataFrame]:
         """Generate land_use table using ActivitySim preprocessor logic."""
         try:
-            from pilates.activitysim.preprocessor import _create_land_use_table
-
             region = self.settings["region"]
             FIPS = self.settings["FIPS"][region]
-            state_fips = FIPS["state"]
-            county_codes = FIPS["counties"]
-            local_crs = self.settings["local_crs"][region]
-            zone_type = self.settings["skims_zone_type"]
-            asim_zone_id_col = self.settings["geoms_index_col"]
+            asim_zone_id_col = "TAZ"
+            # TODO: Generalize this or add it to settings.yaml
             input_zone_id_col = self.settings.get("geoms_index_col", "zone_id")
-            try:
-                zones = read_zone_geoms(
-                    self.settings,
-                    year or 2017,
-                    asim_zone_id_col=asim_zone_id_col,
-                    default_zone_id_col=input_zone_id_col,
-                )
-            except Exception as e:
-                print("DFSDFSDFS")
+            zones = read_zone_geoms(
+                self.settings,
+                year or 2017,
+                asim_zone_id_col=asim_zone_id_col,
+                default_zone_id_col=input_zone_id_col,
+            )
 
             # Extract raw data needed for land_use generation
             raw_households = self._extract_table_from_h5(
@@ -496,19 +492,30 @@ class H5ActivitySimExtractor:
                 "Calling ActivitySim preprocessor to generate land_use table..."
             )
 
+            (
+                raw_blocks,
+                raw_persons,
+                raw_households,
+                raw_jobs,
+                num_reassigned,
+                blocks_to_taz_mapping_updated,
+            ) = process_raw_h5_files(
+                raw_blocks,
+                raw_persons,
+                raw_households,
+                raw_jobs,
+                self.settings,
+                year,
+                asim_zone_id_col,
+            )
             land_use_df = _create_land_use_table(
                 self.settings,
-                region,
                 zones,
-                state_fips,
-                county_codes,
-                local_crs,
                 raw_households,
                 raw_persons,
                 raw_jobs,
                 raw_blocks,
             )
-
             return land_use_df
 
         except Exception as e:

@@ -162,6 +162,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
             "region": "sfbay",
             "start_year": 2017,
             "forecast_year": 2017,
+            "geoms_index_col": "taz1454",
             "FIPS": {
                 "sfbay": {
                     "state": "06",

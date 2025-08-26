@@ -2446,11 +2446,7 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
 
 def _create_land_use_table(
     settings,
-    region,
     zones,
-    state_fips,
-    county_codes,
-    local_crs,
     households,
     persons,
     jobs,
@@ -2794,7 +2790,13 @@ def create_asim_data_from_database(
 
 
 def process_raw_h5_files(
-    raw_blocks, raw_persons, raw_households, raw_jobs, settings, year
+    raw_blocks,
+    raw_persons,
+    raw_households,
+    raw_jobs,
+    settings,
+    year,
+    asim_zone_id_col="TAZ",
 ):
     region = settings["region"]
     FIPS = settings["FIPS"][region]
@@ -2812,6 +2814,8 @@ def process_raw_h5_files(
     raw_blocks.rename(
         columns={input_zone_id_col: asim_zone_id_col}, inplace=True
     )  # Rename happens here.
+
+    raw_blocks = raw_blocks.loc[:, ~raw_blocks.columns.duplicated()].copy()
 
     # update households
     raw_households, unassigned_households = _update_households_table(
@@ -2836,7 +2840,7 @@ def process_raw_h5_files(
 
     # update jobs
 
-    num_reassigned, jobs = _update_jobs_table(
+    num_reassigned, raw_jobs = _update_jobs_table(
         raw_jobs, raw_blocks, state_fips, county_codes, local_crs, asim_zone_id_col
     )
 
@@ -2844,7 +2848,7 @@ def process_raw_h5_files(
         raw_blocks,
         raw_persons,
         raw_households,
-        jobs,
+        raw_jobs,
         num_reassigned,
         blocks_to_taz_mapping_updated,
     )
@@ -2861,7 +2865,6 @@ def create_asim_data_from_h5(
     # warm start: year = start_year
     # asim_no_usim: year = start_year
     # normal: year = forecast_year
-
 
     output_dir = workspace.get_asim_mutable_data_dir()
 
@@ -2918,14 +2921,16 @@ def create_asim_data_from_h5(
     jobs = store[os.path.join(table_prefix_yr, "jobs")]
 
     blocks, persons, households, jobs, num_reassigned, blocks_to_taz_mapping_updated = (
-        process_raw_h5_files(blocks, persons, households, jobs, settings, year)
+        process_raw_h5_files(
+            blocks, persons, households, jobs, settings, state.forecast_year
+        )
     )
 
     if blocks_to_taz_mapping_updated:
         blocks_cols = blocks.columns.tolist()
         logger.info(
             "Storing blocks table with {} zone IDs to disk in .h5 datastore!".format(
-                zone_type
+                settings["skims_zone_type"]
             )
         )
         if input_zone_id_col not in blocks_cols:
@@ -2946,11 +2951,7 @@ def create_asim_data_from_h5(
     # create land use table
     land_use = _create_land_use_table(
         settings,
-        region,
         zones,
-        state_fips,
-        county_codes,
-        local_crs,
         households,
         persons,
         jobs,
