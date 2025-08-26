@@ -83,6 +83,15 @@ class UrbansimRunner(GenericRunner):
         settings = self.state.full_settings
         forecast_year = self.state.forecast_year
 
+        # Start provenance tracking for this run
+        run_hash = self.provenance_tracker.start_model_run(
+            self.model_name,
+            self.state.current_year,
+            self.state.current_inner_iter,
+            description="UrbanSim land use model run",
+            inputs=store,
+        )
+
         # Prepare output file path
         usim_output_store_name = settings["usim_formattable_output_file_name"].format(
             year=forecast_year
@@ -91,18 +100,50 @@ class UrbansimRunner(GenericRunner):
             workspace.get_usim_mutable_data_dir(), usim_output_store_name
         )
 
-        # 1. PARSE SETTINGS
+        # Get container configuration
         land_use_model, land_use_image = self.get_model_and_image(
             settings, "land_use_model"
         )
         usim_docker_vols = self.get_usim_docker_vols(
-            settings
+            workspace.get_usim_mutable_data_dir()
         )
         usim_cmd = self.get_usim_cmd()
 
-        # TODO: Add logic to actually run the UrbanSim container here, similar to AtlasRunner/BeamRunner.
-        # For now, just record the output file if it exists.
+        # Initialize container client
+        client = None
+        if settings.get("container_manager") == "docker":
+            try:
+                client = self.initialize_docker_client(settings)
+            except Exception as e:
+                logger.error(f"Failed to initialize Docker client: {e}")
+                self.provenance_tracker.complete_model_run(run_hash, status="failed")
+                raise
 
+        # Execute container
+        try:
+            # TODO: Verify the container working directory and volume mappings are correct
+            # This follows the BEAM/ActivitySim pattern but may need UrbanSim-specific adjustments
+            success = self.run_container(
+                client=client,
+                settings=settings,
+                image=land_use_image,
+                volumes=usim_docker_vols,
+                command=usim_cmd,
+                model_name=self.model_name,
+                working_dir=settings.get("usim_client_base_folder", "/app"),
+            )
+
+            if not success:
+                logger.error("UrbanSim container execution failed")
+                self.provenance_tracker.complete_model_run(run_hash, status="failed")
+                return RecordStore(), ModelRunInfo()
+
+        except Exception as e:
+            logger.error(f"UrbanSim container execution error: {e}")
+            self.provenance_tracker.complete_model_run(run_hash, status="failed")
+            raise
+
+        # Collect outputs
         output_records = []
         if os.path.exists(usim_datastore_fpath):
             output_rec = self.provenance_tracker.record_output_file(
@@ -110,7 +151,8 @@ class UrbansimRunner(GenericRunner):
                 usim_datastore_fpath,
                 year=forecast_year,
                 description="UrbanSim forecast output data",
-                model_run_id=None,  # To be filled in later
+                model_run_id=run_hash,
+                state=self.state,
             )
             if output_rec:
                 output_records.append(output_rec)
@@ -121,7 +163,17 @@ class UrbansimRunner(GenericRunner):
             logger.error(
                 f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}"
             )
+            self.provenance_tracker.complete_model_run(run_hash, status="failed")
+            return RecordStore(), ModelRunInfo()
 
-        # Return empty RecordStore and None for ModelRunInfo for now
-        # In the future, this should return the actual outputs and run info
-        return RecordStore(), ModelRunInfo()
+        # Complete provenance tracking
+        self.provenance_tracker.complete_model_run(
+            run_hash, status="completed", output_records=output_records
+        )
+
+        # Create run info
+        run_info = ModelRunInfo()
+        # TODO: Populate run_info with UrbanSim-specific information
+        # This should include execution time, container info, etc.
+
+        return RecordStore(recordList=output_records), run_info

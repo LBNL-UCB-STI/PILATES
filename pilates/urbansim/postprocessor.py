@@ -102,7 +102,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         raw_outputs: RecordStore,
         runInfo: ModelRunInfo,
         workspace: Workspace,
-        model_run_hash: str,
+        model_run_hash: str = None,
     ) -> RecordStore:
         """
         Postprocess UrbanSim outputs.
@@ -120,5 +120,74 @@ class UrbansimPostprocessor(GenericPostprocessor):
             "[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s",
             self.state.current_year,
         )
-        # For now, just return the raw outputs
-        return raw_outputs
+        
+        # Start postprocessor tracking if no hash provided
+        if model_run_hash is None:
+            model_run_hash = self.provenance_tracker.start_model_run(
+                "urbansim_postprocessor",
+                self.state.current_year,
+                self.state.current_inner_iter,
+                description="Post-processing UrbanSim outputs",
+                inputs=raw_outputs,
+            )
+
+        processed_records = []
+        settings = self.state.full_settings
+        
+        try:
+            # Process each raw output file
+            for record in raw_outputs.all_records():
+                if record.file_path and os.path.exists(record.file_path):
+                    logger.info(f"Processing UrbanSim output: {record.file_path}")
+                    
+                    # TODO: Add specific UrbanSim postprocessing logic here
+                    # This might include:
+                    # - Validating output file structure
+                    # - Converting formats if needed
+                    # - Creating summary statistics
+                    # - Preparing data for next model iteration
+                    
+                    # For now, just record the processed file
+                    processed_record = self.provenance_tracker.record_output_file(
+                        "urbansim_postprocessor",
+                        record.file_path,
+                        year=self.state.forecast_year,
+                        description=f"Processed UrbanSim output: {record.description}",
+                        short_name=f"{record.short_name}_processed",
+                        model_run_id=model_run_hash,
+                        state=self.state,
+                        source_file_paths=[record.file_path],
+                    )
+                    
+                    if processed_record:
+                        processed_records.append(processed_record)
+                else:
+                    logger.warning(f"Raw output file not found: {record.file_path}")
+
+            # Handle data preparation for next iteration if needed
+            if settings.get("land_use_model") == "urbansim":
+                try:
+                    # TODO: Verify this logic is correct for the current workflow
+                    # This function seems to prepare data for the next iteration
+                    create_next_iter_usim_data(
+                        settings,
+                        self.state.current_year,
+                        self.state.forecast_year,
+                        workspace.get_usim_mutable_data_dir()
+                    )
+                    logger.info("Prepared UrbanSim data for next iteration")
+                except Exception as e:
+                    logger.error(f"Error preparing next iteration data: {e}")
+                    # Don't fail the entire postprocessing for this
+
+        except Exception as e:
+            logger.error(f"Error during UrbanSim postprocessing: {e}")
+            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
+            raise
+
+        # Complete postprocessor tracking
+        self.provenance_tracker.complete_model_run(
+            model_run_hash, status="completed", output_records=processed_records
+        )
+
+        return RecordStore(recordList=processed_records)

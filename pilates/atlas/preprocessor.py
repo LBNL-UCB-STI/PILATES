@@ -174,9 +174,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                         self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             households_csv,
+                            year=self.state.year,
                             description="ATLAS households input CSV",
                             short_name="atlas_households_csv",
                             model_run_id=model_run_hash,
+                            state=self.state,
                         )
                     )
 
@@ -188,9 +190,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                         self.provenance_tracker.record_output_file(
                             "atlas_preprocessor",
                             blocks_csv,
+                            year=self.state.year,
                             description="ATLAS blocks input CSV",
                             short_name="atlas_blocks_csv",
                             model_run_id=model_run_hash,
+                            state=self.state,
                         )
                     )
 
