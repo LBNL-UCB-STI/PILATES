@@ -43,9 +43,11 @@ from pilates.generic.records import (
     RecordStore,
     Record,
     PilatesRunInfo,
+    OpenLineageEventMetadata,
 )
 
 from workflow_state import WorkflowState
+from pilates.utils.config_snapshot import ConfigSnapshotManager
 
 logger = logging.getLogger(__name__)
 
@@ -774,6 +776,8 @@ class FileProvenanceTracker(ProvenanceTracker):
                         file_records=data.get("file_records", {}),
                         repo_records=data.get("repo_records", {}),
                         model_runs=data.get("model_runs", {}),
+                        config_snapshot=data.get("config_snapshot"),
+                        openlineage_event_metadata=data.get("openlineage_event_metadata", []),
                     )
                     return run_info
             except (json.JSONDecodeError, IOError) as e:
@@ -830,6 +834,10 @@ class OpenLineageTracker(FileProvenanceTracker):
         self.client = None
         self.add_year_to_job_name = add_year_to_job_name
         self.add_iteration_to_job_name = add_iteration_to_job_name
+        
+        # Initialize configuration snapshot manager
+        workspace_path = os.path.join(output_path, folder_name) if folder_name else output_path
+        self.config_manager = ConfigSnapshotManager(workspace_path)
 
         # This list will hold configuration dictionaries
         transports_config = []
@@ -875,10 +883,35 @@ class OpenLineageTracker(FileProvenanceTracker):
             if final_transport:
                 self.client = OpenLineageClient(transport=final_transport)
 
-    def _emit_event(self, event: RunEvent):
+    def initialize_from_settings(self, settings: Dict[str, Any]):
+        """Override to capture config snapshot during initialization."""
+        # Call parent method to set basic fields
+        super().initialize_from_settings(settings)
+        
+        # Create and store config snapshot
+        config_snapshot = self.config_manager.create_config_snapshot(settings)
+        self.run_info.config_snapshot = config_snapshot
+        self._save_run_info()
+        
+        logger.info(f"Created config snapshot {config_snapshot['snapshot_id']} "
+                   f"with hash {config_snapshot['config_content_hash'][:8]}")
+
+    def _emit_event(self, event: RunEvent, model_run_id: str = None):
         """
         Emits an OpenLineage event using the configured client and transport.
+        Also captures essential event metadata in run_info for database upload.
         """
+        # Capture essential metadata from the event
+        event_metadata = OpenLineageEventMetadata(
+            event_time=event.eventTime,
+            event_type=event.eventType.value,  # START, COMPLETE, FAIL
+            run_uuid=event.run.runId,
+            job_name=event.job.name,
+            model_run_id=model_run_id or "unknown"
+        )
+        self.run_info.openlineage_event_metadata.append(event_metadata)
+        self._save_run_info()
+        
         if self.client:
             try:
                 self.client.emit(event)
@@ -989,7 +1022,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             inputs=input_datasets,
             producer="https://github.com/LBNL-UCB-STI/PILATES",
         )
-        self._emit_event(event)
+        self._emit_event(event, model_run_id)
         return model_run_id
 
     def complete_model_run(
@@ -1042,5 +1075,5 @@ class OpenLineageTracker(FileProvenanceTracker):
                 outputs=output_datasets,
                 producer="https://github.com/LBNL-UCB-STI/PILATES",
             )
-            self._emit_event(event)
+            self._emit_event(event, run_hash)
         super().complete_model_run(run_hash, status, output_records)

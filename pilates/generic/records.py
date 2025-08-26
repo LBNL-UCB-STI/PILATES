@@ -234,6 +234,16 @@ class ModelRunInfo(Record):
 
 
 @dataclass(kw_only=True)
+class OpenLineageEventMetadata:
+    """Lightweight metadata for OpenLineage events without full event payload."""
+    event_time: str
+    event_type: str  # START, COMPLETE, FAIL
+    run_uuid: str  # OpenLineage run UUID
+    job_name: str  # Formatted job name with year/iteration
+    model_run_id: str  # Internal PILATES model run ID
+
+
+@dataclass(kw_only=True)
 class PilatesRunInfo:
     run_id: str
     created_at: str
@@ -246,6 +256,8 @@ class PilatesRunInfo:
     file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
     repo_records: Dict[str, RepoRecord] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
+    config_snapshot: Optional[Dict[str, Any]] = None
+    openlineage_event_metadata: List[OpenLineageEventMetadata] = field(default_factory=list)
 
     def get_latest_model_run(self, model_name: str) -> Optional[str]:
         """
