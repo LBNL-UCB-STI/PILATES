@@ -25,7 +25,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.0.beta.250701merge #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
+  beam: docker://haitamlaarabi/beam:1.0.beta.050925 #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
   activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.0.beta.250701merge #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
+  beam: haitamlaarabi/beam:1.0.beta.050925 #jlaz/beam:1.0.12.parking.4 #zaneedell/beam:1.0.12
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -44,7 +44,7 @@ skims_zone_type: block_group # one of [taz, block_group, block]
 skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
-beam_router_directory: r5/r5-residential-partiallysimplified-ferry
+beam_router_directory: r5/seattle-area-cbg412-ferry-network
 beam_geoms_fname: clipped_tazs.csv
 geoms_index_col: GEOID
 
