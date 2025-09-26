@@ -1,6 +1,7 @@
 #!/bin/bash
 
 singularity cache clean --force
+singularity pull docker://haitamlaarabi/beam:1.0.beta.250925
 
 # Load required modules
 module load gcc/11.4.0
