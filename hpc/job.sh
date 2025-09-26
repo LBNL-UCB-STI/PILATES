@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# singularity cache clean --force
+singularity cache clean --force
 
 # Load required modules
 module load gcc/11.4.0
