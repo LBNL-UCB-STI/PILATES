@@ -60,7 +60,7 @@ geoms_index_col: taz1454
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: calibration--sfbay-pilates--cbg5500-jdeq-FC07-5
+output_run_name: pilates-calibration--cbg5500-jdeq-FC07-5
 
 # URBANSIM
 region_to_region_id:
