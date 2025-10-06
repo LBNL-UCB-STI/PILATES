@@ -627,6 +627,28 @@ class TestStubProvenanceFlow:
             print("   ✅ BEAM runner (stub)")
 
             # ============================================================
+            # PHASE 1 IMPROVEMENT: Validate Provenance Chain
+            # ============================================================
+            print("\n🔍 Validating provenance chain (Phase 1 improvement)...")
+            validation_issues = provenance_tracker.validate_provenance_chain()
+
+            if validation_issues['errors']:
+                print(f"   ❌ Provenance errors found: {len(validation_issues['errors'])}")
+                for error in validation_issues['errors']:
+                    print(f"      - {error}")
+            else:
+                print("   ✅ No provenance errors detected")
+
+            if validation_issues['warnings']:
+                print(f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}")
+                for warning in validation_issues['warnings'][:3]:
+                    print(f"      - {warning}")
+                if len(validation_issues['warnings']) > 3:
+                    print(f"      ... and {len(validation_issues['warnings']) - 3} more")
+            else:
+                print("   ✅ No provenance warnings")
+
+            # ============================================================
             # Verify Complete Provenance Chain
             # ============================================================
             print("\n🔍 Verifying complete provenance chain...")
@@ -971,6 +993,30 @@ class TestStubProvenanceFlow:
                 print("   ✅ Database manager created successfully")
             else:
                 print("   ⚠️  Database manager creation failed")
+
+            # ============================================================
+            # PHASE 1 IMPROVEMENT: Validate Provenance Chain
+            # ============================================================
+            print("\n🔍 Validating provenance chain (Phase 1 improvement)...")
+            validation_issues = provenance_tracker.validate_provenance_chain()
+
+            if validation_issues['errors']:
+                print(f"   ❌ Provenance errors found: {len(validation_issues['errors'])}")
+                for error in validation_issues['errors']:
+                    print(f"      - {error}")
+                # Don't fail test on errors in stub test, just log them
+            else:
+                print("   ✅ No provenance errors detected")
+
+            if validation_issues['warnings']:
+                print(f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}")
+                # Only show first 3 warnings to keep output clean
+                for warning in validation_issues['warnings'][:3]:
+                    print(f"      - {warning}")
+                if len(validation_issues['warnings']) > 3:
+                    print(f"      ... and {len(validation_issues['warnings']) - 3} more")
+            else:
+                print("   ✅ No provenance warnings")
 
             # ============================================================
             # Verify Provenance Tracking

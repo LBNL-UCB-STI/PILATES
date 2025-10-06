@@ -649,6 +649,94 @@ class FileProvenanceTracker(ProvenanceTracker):
             record.unique_id
         )
 
+    def record_input_from_previous_output(
+        self,
+        model: str,
+        file_path: str,
+        producing_model: str = None,
+        description: str = None,
+        model_run_id: str = None,
+        short_name: str = None,
+        state: Optional[WorkflowState] = None,
+    ) -> Optional[FileRecord]:
+        """
+        PHASE 2 IMPROVEMENT #4: Record an input file that was output by a previous model.
+
+        Automatically finds the previous output record and links it, making cross-model
+        linkages explicit and enabling validation.
+
+        Args:
+            model: Name of the current model consuming this file
+            file_path: Path to the input file
+            producing_model: Optional name of model that produced this file (for validation)
+            description: Human-readable description
+            model_run_id: ID of the current model run
+            short_name: Short identifier for this file
+            state: Current workflow state
+
+        Returns:
+            FileRecord for the input, reusing existing record if found
+
+        Example:
+            >>> # ActivitySim reads H5 that ATLAS modified
+            >>> asim_h5_record = tracker.record_input_from_previous_output(
+            ...     "activitysim_preprocessor",
+            ...     usim_h5_file,
+            ...     producing_model="atlas_postprocessor",  # Optional validation
+            ...     model_run_id=asim_pre_hash,
+            ... )
+            >>> # Automatically finds ATLAS's output record and links it!
+        """
+        model = self._normalize_model_name(model)
+
+        # Try to find existing file record
+        file_hash = self._calculate_file_hash(file_path)
+
+        if file_hash in self.run_info.file_records:
+            existing_record = self.run_info.file_records[file_hash]
+
+            # Validate producing model if specified
+            if producing_model:
+                producing_model_normalized = self._normalize_model_name(producing_model)
+                if producing_model_normalized not in existing_record.models:
+                    logger.warning(
+                        f"File {existing_record.short_name} was expected to be produced by "
+                        f"{producing_model}, but it was produced by {existing_record.models}. "
+                        f"This may indicate an unexpected data flow."
+                    )
+
+            # Add current model as consumer
+            if model not in existing_record.models:
+                existing_record.models.append(model)
+
+            # Link to current model run
+            if model_run_id and model_run_id in self.run_info.model_runs:
+                run_info = self.run_info.model_runs[model_run_id]
+                if file_hash not in run_info.input_record_hashes:
+                    run_info.input_record_hashes.append(file_hash)
+
+            self._save_run_info()
+
+            logger.info(
+                f"Linked existing file {existing_record.short_name} as input to {model}"
+            )
+
+            return existing_record
+        else:
+            # Fall back to normal input recording
+            logger.warning(
+                f"File {file_path} not found in previous outputs. "
+                f"Recording as new input. Did you forget to track it as output from {producing_model}?"
+            )
+            return self.record_input_file(
+                model=model,
+                file_path=file_path,
+                description=description,
+                model_run_id=model_run_id,
+                short_name=short_name,
+                state=state,
+            )
+
     def record_input_file(
         self,
         model: str,
@@ -718,9 +806,22 @@ class FileProvenanceTracker(ProvenanceTracker):
         if year:
             file_record.year = year
         if source_file_paths:
-            file_record.source_file_paths = [
-                self._get_relative_path(p) for p in source_file_paths
-            ]
+            # PHASE 1 IMPROVEMENT #2: Validate source_file_paths at record time
+            validated_sources = []
+            for source_path in source_file_paths:
+                rel_path = self._get_relative_path(source_path)
+
+                # Check if this source was previously recorded
+                source_hash = self._calculate_file_hash(source_path)
+                if source_hash not in self.run_info.file_records:
+                    logger.warning(
+                        f"Source file {rel_path} for output {short_name or file_path} "
+                        f"not found in file_records. It may not have been tracked as input/output yet. "
+                        f"This could indicate incomplete provenance tracking."
+                    )
+                validated_sources.append(rel_path)
+
+            file_record.source_file_paths = validated_sources
 
         run_id_producing = model_run_id or self.current_model_run_id
         if run_id_producing:
@@ -732,6 +833,67 @@ class FileProvenanceTracker(ProvenanceTracker):
 
         self._save_run_info()
         return file_record
+
+    def record_output_file_with_inputs(
+        self,
+        model: str,
+        file_path: str,
+        input_records: List[Optional[FileRecord]],
+        year: int = None,
+        description: str = None,
+        short_name: str = None,
+        model_run_id: str = None,
+        state: Optional[WorkflowState] = None,
+        skip_missing: bool = True,
+    ) -> Optional[FileRecord]:
+        """
+        PHASE 1 IMPROVEMENT #1: Convenience method to record output file with automatic source_file_paths.
+
+        This helper reduces boilerplate by automatically extracting file paths from input FileRecords.
+
+        Args:
+            model: Name of the model producing this output
+            file_path: Path to the output file
+            input_records: List of FileRecords that were inputs to this transformation.
+                          None values are automatically filtered out.
+            year: Year associated with this output
+            description: Human-readable description
+            short_name: Short identifier for this file
+            model_run_id: ID of the model run producing this output
+            state: Current workflow state
+            skip_missing: Whether to skip if file doesn't exist
+
+        Returns:
+            FileRecord for the output, or None if file doesn't exist and skip_missing=True
+
+        Example:
+            >>> usim_output_record = tracker.record_output_file_with_inputs(
+            ...     "atlas_postprocessor",
+            ...     usim_h5_file,
+            ...     input_records=[usim_input_record, atlas_hh_input_record],
+            ...     year=2017,
+            ...     description="UrbanSim H5 after ATLAS vehicle update",
+            ...     short_name="usim_h5_updated",
+            ...     model_run_id=model_run_hash,
+            ...     state=state,
+            ... )
+        """
+        # Extract file paths from input records, filtering out None values
+        source_file_paths = [
+            rec.file_path for rec in input_records if rec is not None
+        ]
+
+        return self.record_output_file(
+            model=model,
+            file_path=file_path,
+            year=year,
+            description=description,
+            short_name=short_name,
+            source_file_paths=source_file_paths,
+            model_run_id=model_run_id,
+            state=state,
+            skip_missing=skip_missing,
+        )
 
     def _save_run_info(self, data_to_save: PilatesRunInfo = None):
         import dataclasses
@@ -756,6 +918,111 @@ class FileProvenanceTracker(ProvenanceTracker):
                 logger.warning(f"Could not reload run_info.json for get_run_info: {e}")
                 return dataclasses.asdict(self.run_info)
         return dataclasses.asdict(self.run_info)
+
+    def validate_provenance_chain(self) -> Dict[str, List[str]]:
+        """
+        PHASE 1 IMPROVEMENT #3: Validate the completeness of provenance tracking.
+
+        Checks for common provenance issues:
+        - Outputs without source_file_paths (incomplete lineage)
+        - Model runs without inputs or outputs
+        - Orphaned file records (not referenced by any model run)
+        - Broken source_file_paths references
+
+        Returns:
+            Dict with 'warnings' and 'errors' keys containing validation issues.
+            Warnings indicate potential issues that may be acceptable.
+            Errors indicate definite problems that should be fixed.
+
+        Example:
+            >>> issues = tracker.validate_provenance_chain()
+            >>> if issues['errors']:
+            ...     logger.error(f"Provenance errors: {issues['errors']}")
+            >>> if issues['warnings']:
+            ...     logger.warning(f"Provenance warnings: {issues['warnings']}")
+        """
+        issues = {'warnings': [], 'errors': []}
+
+        # Check 1: All outputs should have source_file_paths (except initial inputs)
+        for file_hash, file_record in self.run_info.file_records.items():
+            # Check if this file is an output of any model run
+            is_output = any(
+                file_hash in run.output_record_hashes
+                for run in self.run_info.model_runs.values()
+            )
+            # Check if this file is ONLY an output (not also an input)
+            is_input = any(
+                file_hash in run.input_record_hashes
+                for run in self.run_info.model_runs.values()
+            )
+
+            # If it's an output but never used as input, it should have sources
+            # (unless it's a pure initial input that's also marked as output, which is rare)
+            if is_output and not file_record.source_file_paths:
+                # Don't warn about files that are ALSO inputs (likely initial data)
+                if not is_input:
+                    issues['warnings'].append(
+                        f"Output file '{file_record.short_name}' ({file_record.file_path}) "
+                        f"has no source_file_paths. Lineage may be incomplete."
+                    )
+
+        # Check 2: All model runs should have inputs and outputs
+        for run_hash, model_run in self.run_info.model_runs.items():
+            if not model_run.input_record_hashes:
+                issues['warnings'].append(
+                    f"Model run '{model_run.model}' (year {model_run.year}, iter {model_run.iteration}) "
+                    f"has no input records. This may indicate incomplete tracking."
+                )
+            if not model_run.output_record_hashes:
+                issues['warnings'].append(
+                    f"Model run '{model_run.model}' (year {model_run.year}, iter {model_run.iteration}) "
+                    f"has no output records. This may indicate incomplete tracking."
+                )
+
+        # Check 3: Orphaned file records (not referenced by any model run)
+        all_referenced_hashes = set()
+        for model_run in self.run_info.model_runs.values():
+            all_referenced_hashes.update(model_run.input_record_hashes)
+            all_referenced_hashes.update(model_run.output_record_hashes)
+
+        orphaned = set(self.run_info.file_records.keys()) - all_referenced_hashes
+        if orphaned:
+            for file_hash in orphaned:
+                record = self.run_info.file_records[file_hash]
+                issues['warnings'].append(
+                    f"File '{record.short_name}' ({record.file_path}) "
+                    f"is not referenced by any model run. It may have been recorded but never used."
+                )
+
+        # Check 4: Broken source_file_paths references
+        for file_hash, file_record in self.run_info.file_records.items():
+            if file_record.source_file_paths:
+                for source_path in file_record.source_file_paths:
+                    # Check if source exists in file_records
+                    # Need to check both absolute and relative paths
+                    source_found = any(
+                        rec.file_path == source_path or
+                        self._get_relative_path(rec.file_path) == source_path
+                        for rec in self.run_info.file_records.values()
+                    )
+                    if not source_found:
+                        issues['errors'].append(
+                            f"File '{file_record.short_name}' references source '{source_path}' "
+                            f"which is not in file_records. This indicates a broken provenance chain."
+                        )
+
+        # Check 5: Model runs with status='failed' should be flagged
+        failed_runs = [
+            f"{run.model} (year {run.year})"
+            for run in self.run_info.model_runs.values()
+            if run.status == 'failed'
+        ]
+        if failed_runs:
+            issues['warnings'].append(
+                f"Found {len(failed_runs)} failed model runs: {', '.join(failed_runs)}"
+            )
+
+        return issues
 
     def _initialize_run_info(self) -> PilatesRunInfo:
 
