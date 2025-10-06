@@ -9,6 +9,7 @@ import numpy as np
 import openmatrix as omx
 
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.zarr_versioning import VersionedZarrStore
 
 try:
     import xarray as xr
@@ -2211,11 +2212,21 @@ def _merge_beam_skims_to_zarr(
     override=None,
     provenance_tracker=None,
     model_run_hash=None,
+    state=None,
+    run_id=None,
 ):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
     Handles TNC consolidation if enabled.
     Records provenance for all skims lineage.
+    Creates zarr version snapshots for skim evolution tracking.
+
+    Parameters
+    ----------
+    state : WorkflowState, optional
+        Current workflow state (for year/iteration tracking)
+    run_id : str, optional
+        PILATES run ID (for zarr snapshot tracking)
     """
     logger.info(f"Starting merge of current BEAM skims into Zarr at {all_skims_path}")
 
@@ -2549,6 +2560,47 @@ def _merge_beam_skims_to_zarr(
         partial_skims_ds.close()
     if skims_ds:
         skims_ds.close()
+
+    # Step 7: Create zarr version snapshot after successful merge
+    if merge_successful and state is not None and run_id is not None:
+        try:
+            logger.info("Creating zarr version snapshot after BEAM merge...")
+
+            # Get database path from settings
+            database_path = settings.get("database", {}).get("path")
+            if database_path:
+                # Initialize zarr version manager
+                zarr_base_path = os.path.dirname(database_path)
+                zarr_manager = VersionedZarrStore(zarr_base_path)
+
+                # Get parent snapshot ID from previous iteration
+                # Look for previous snapshot in manifest
+                previous_snapshots = zarr_manager.get_snapshots_for_run(run_id)
+                parent_snapshot_id = None
+                if previous_snapshots:
+                    # Get the most recent snapshot
+                    parent_snapshot_id = previous_snapshots[-1]["snapshot_id"]
+
+                # Determine BEAM partial zarr path
+                beam_partial_zarr_path = None
+                if input_format == "zarr" and current_skims_path:
+                    beam_partial_zarr_path = current_skims_path
+
+                # Create snapshot after BEAM iteration
+                snapshot_id = zarr_manager.create_snapshot_from_beam(
+                    run_id=run_id,
+                    year=state.current_year,
+                    iteration=state.current_inner_iter,
+                    beam_partial_zarr_path=beam_partial_zarr_path,
+                    merged_full_zarr_path=all_skims_path,
+                    parent_snapshot_id=parent_snapshot_id,
+                    provenance_tracker=provenance_tracker,
+                )
+                logger.info(f"Created zarr snapshot: {snapshot_id}")
+            else:
+                logger.debug("Database path not configured, skipping zarr snapshot creation")
+        except Exception as e:
+            logger.warning(f"Failed to create zarr snapshot: {e}. Continuing without snapshot.")
 
     # Return the path to the new OMX skims *if* a new one was found and processed.
     # This is used by the caller to check if skims were updated.
@@ -3261,6 +3313,8 @@ class BeamPostprocessor(GenericPostprocessor):
                 override=raw_od_skims_path,
                 provenance_tracker=self.provenance_tracker,
                 model_run_hash=model_run_hash,
+                state=self.state,
+                run_id=self.provenance_tracker.run_info.run_id if self.provenance_tracker else None,
             )
 
             # The main output is the modified Zarr store. Record it.

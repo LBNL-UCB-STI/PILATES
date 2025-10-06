@@ -149,11 +149,16 @@ class DuckDBManager(DatabaseManager):
             """
             )
 
+            # Create sequence for openlineage_events
+            conn.execute(
+                "CREATE SEQUENCE IF NOT EXISTS openlineage_events_id_seq START 1"
+            )
+
             # Create openlineage_events table - lightweight event metadata
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS openlineage_events (
-                    id INTEGER PRIMARY KEY,
+                    id INTEGER PRIMARY KEY DEFAULT nextval('openlineage_events_id_seq'),
                     run_id VARCHAR,
                     model_run_id VARCHAR,
                     event_time TIMESTAMP,
@@ -164,6 +169,35 @@ class DuckDBManager(DatabaseManager):
                     FOREIGN KEY (model_run_id) REFERENCES model_runs(unique_id)
                 )
             """
+            )
+
+            # Create schema_version table for tracking database schema evolution
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    description VARCHAR,
+                    pilates_version VARCHAR
+                )
+            """
+            )
+
+            # Record current schema version
+            current_version = 1
+            pilates_version = "1.0.0"  # Update this with actual PILATES version
+            conn.execute(
+                """
+                INSERT INTO schema_version (version, description, pilates_version)
+                SELECT ?, ?, ?
+                WHERE NOT EXISTS (SELECT 1 FROM schema_version WHERE version = ?)
+            """,
+                [
+                    current_version,
+                    "Initial schema with metadata, provenance, and dual storage support",
+                    pilates_version,
+                    current_version,
+                ],
             )
 
             # Create sequences for auto-incrementing IDs
@@ -580,11 +614,600 @@ class DuckDBManager(DatabaseManager):
             )
 
             logger.info("DuckDB database initialized successfully")
+
+            # Add documentation comments to schema
+            self._add_schema_documentation()
+
+            # Create summary views for easy querying
+            self.create_summary_views()
+
             return True
 
         except Exception as e:
             logger.error(f"Failed to initialize DuckDB database: {e}")
             return False
+
+    def _add_schema_documentation(self) -> None:
+        """
+        Add SQL COMMENT statements documenting all tables and columns.
+
+        This provides in-database documentation that can be queried and
+        is preserved during database exports/imports.
+        """
+        try:
+            conn = self._get_connection()
+
+            # ============================================================
+            # METADATA TABLES
+            # ============================================================
+
+            # runs table
+            conn.execute("COMMENT ON TABLE runs IS 'Top-level PILATES simulation runs with configuration and execution metadata'")
+            conn.execute("COMMENT ON COLUMN runs.run_id IS 'Unique identifier for this PILATES run (UUID format)'")
+            conn.execute("COMMENT ON COLUMN runs.created_at IS 'Timestamp when the run was initiated'")
+            conn.execute("COMMENT ON COLUMN runs.start_year IS 'First simulation year in this run'")
+            conn.execute("COMMENT ON COLUMN runs.end_year IS 'Final simulation year in this run'")
+            conn.execute("COMMENT ON COLUMN runs.models_used IS 'Array of model names executed in this run (e.g., urbansim, activitysim, beam, atlas)'")
+            conn.execute("COMMENT ON COLUMN runs.settings_hash IS 'SHA256 hash of settings dictionary for deduplication and comparison'")
+            conn.execute("COMMENT ON COLUMN runs.code_version IS 'Git commit hash of PILATES code used for this run'")
+            conn.execute("COMMENT ON COLUMN runs.hostname IS 'Machine/server where this run was executed'")
+            conn.execute("COMMENT ON COLUMN runs.config_snapshot_id IS 'Foreign key to config_snapshots table containing complete configuration state'")
+            conn.execute("COMMENT ON COLUMN runs.config_content_hash IS 'Hash of complete configuration snapshot including all config files'")
+            conn.execute("COMMENT ON COLUMN runs.uploaded_at IS 'Timestamp when run metadata was uploaded to database'")
+
+            # config_snapshots table
+            conn.execute("COMMENT ON TABLE config_snapshots IS 'Complete configuration snapshots for reproducibility, including all config files and git hashes'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.snapshot_id IS 'Unique identifier for this configuration snapshot (UUID)'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.created_timestamp IS 'When this configuration snapshot was created'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.config_content_hash IS 'SHA256 hash of complete configuration for deduplication'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.git_hashes IS 'JSON object with git commit hashes for PILATES and each model component (beam, activitysim, etc.)'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.config_files IS 'JSON object containing complete contents of all configuration files (BEAM .conf, ActivitySim .yaml, etc.)'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.pilates_settings IS 'JSON object with relevant PILATES settings from settings.yaml'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.beam_config IS 'Name of BEAM configuration file used (e.g., sfbay-pilates-base-omx.conf)'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.asim_subdir IS 'ActivitySim configuration subdirectory used'")
+            conn.execute("COMMENT ON COLUMN config_snapshots.region IS 'Geographic region for this configuration (e.g., sfbay, austin, seattle)'")
+
+            # file_records table
+            conn.execute("COMMENT ON TABLE file_records IS 'Individual datasets with complete provenance lineage, linking files across model stages'")
+            conn.execute("COMMENT ON COLUMN file_records.unique_id IS 'File content hash (SHA256) serving as unique identifier'")
+            conn.execute("COMMENT ON COLUMN file_records.run_id IS 'Foreign key to runs table indicating which run produced/used this file'")
+            conn.execute("COMMENT ON COLUMN file_records.openlineage_id IS 'OpenLineage dataset UUID for cross-system lineage tracking'")
+            conn.execute("COMMENT ON COLUMN file_records.file_path IS 'Absolute or relative path to the file on disk'")
+            conn.execute("COMMENT ON COLUMN file_records.created_at IS 'Timestamp when file was created or first recorded'")
+            conn.execute("COMMENT ON COLUMN file_records.short_name IS 'Human-readable identifier for this dataset (e.g., urbansim_h5, activitysim_beam_plans)'")
+            conn.execute("COMMENT ON COLUMN file_records.description IS 'Detailed description of file contents and purpose'")
+            conn.execute("COMMENT ON COLUMN file_records.year IS 'Simulation year this file corresponds to (NULL if not year-specific)'")
+            conn.execute("COMMENT ON COLUMN file_records.models IS 'Array of model names that have touched/processed this file'")
+            conn.execute("COMMENT ON COLUMN file_records.producing_run_id IS 'OpenLineage ID of the model run that produced this file'")
+            conn.execute("COMMENT ON COLUMN file_records.consuming_run_ids IS 'Array of OpenLineage IDs for model runs that consumed this file'")
+            conn.execute("COMMENT ON COLUMN file_records.source_file_paths IS 'Array of file paths that were inputs to create this file (immediate lineage)'")
+            conn.execute("COMMENT ON COLUMN file_records.metadata IS 'JSON object with additional file metadata (size, format, row count, etc.)'")
+            conn.execute("COMMENT ON COLUMN file_records.schema IS 'JSON array describing file schema (column names, types, descriptions)'")
+            conn.execute("COMMENT ON COLUMN file_records.exists IS 'Boolean indicating if file still exists on disk'")
+
+            # model_runs table
+            conn.execute("COMMENT ON TABLE model_runs IS 'Individual model execution records tracking each model component run with inputs/outputs'")
+            conn.execute("COMMENT ON COLUMN model_runs.unique_id IS 'Unique identifier for this model execution (hash of model+year+iteration+timestamp)'")
+            conn.execute("COMMENT ON COLUMN model_runs.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN model_runs.openlineage_id IS 'OpenLineage run UUID for this specific model execution'")
+            conn.execute("COMMENT ON COLUMN model_runs.model IS 'Model component name (urbansim, activitysim, beam, atlas, etc.)'")
+            conn.execute("COMMENT ON COLUMN model_runs.year IS 'Simulation year for this model execution'")
+            conn.execute("COMMENT ON COLUMN model_runs.iteration IS 'Inner iteration number (for supply-demand loops)'")
+            conn.execute("COMMENT ON COLUMN model_runs.description IS 'Human-readable description of this model run stage'")
+            conn.execute("COMMENT ON COLUMN model_runs.created_at IS 'Timestamp when model execution started'")
+            conn.execute("COMMENT ON COLUMN model_runs.completed_at IS 'Timestamp when model execution finished'")
+            conn.execute("COMMENT ON COLUMN model_runs.status IS 'Execution status: completed, failed, or running'")
+            conn.execute("COMMENT ON COLUMN model_runs.input_record_hashes IS 'Array of file_records.unique_id values for input files'")
+            conn.execute("COMMENT ON COLUMN model_runs.output_record_hashes IS 'Array of file_records.unique_id values for output files'")
+
+            # openlineage_events table
+            conn.execute("COMMENT ON TABLE openlineage_events IS 'Lightweight OpenLineage event metadata for integration with external lineage systems'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.id IS 'Auto-incrementing event ID'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.model_run_id IS 'Foreign key to specific model execution'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.event_time IS 'Timestamp when event occurred'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.event_type IS 'Event type: START, COMPLETE, or FAIL'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.run_uuid IS 'OpenLineage run UUID (matches model_runs.openlineage_id)'")
+            conn.execute("COMMENT ON COLUMN openlineage_events.job_name IS 'Formatted job name with model, year, and iteration'")
+
+            # ============================================================
+            # RAW URBANSIM DATA TABLES
+            # ============================================================
+
+            # urbansim_households_raw table
+            conn.execute("COMMENT ON TABLE urbansim_households_raw IS 'Raw household data directly from UrbanSim H5 outputs, preserving original structure'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.file_record_id IS 'Foreign key to file_records for provenance tracking'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.openlineage_id IS 'OpenLineage dataset ID for this data'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.household_id IS 'Unique household identifier from UrbanSim'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.building_id IS 'Building where household resides (links to buildings table)'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.persons IS 'Number of people in household'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.income IS 'Annual household income in dollars'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.cars IS 'Number of vehicles owned by household'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.block_id IS 'Census block ID where household resides'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.age_of_head IS 'Age of household head'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.children IS 'Number of children in household'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.workers IS 'Number of workers in household'")
+
+            # urbansim_persons_raw table
+            conn.execute("COMMENT ON TABLE urbansim_persons_raw IS 'Raw person-level data from UrbanSim H5 outputs'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.file_record_id IS 'Foreign key to file_records for provenance tracking'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.person_id IS 'Unique person identifier from UrbanSim'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.household_id IS 'Household this person belongs to (links to households table)'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.age IS 'Person age in years'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.worker IS 'Worker status (0=non-worker, 1=worker)'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.student IS 'Student status (0=non-student, 1=student)'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.race_id IS 'Race/ethnicity category identifier'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.sex IS 'Sex (1=male, 2=female)'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.work_zone_id IS 'TAZ where person works'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.school_zone_id IS 'TAZ where person attends school'")
+
+            # urbansim_jobs_raw table
+            conn.execute("COMMENT ON TABLE urbansim_jobs_raw IS 'Raw employment/job data from UrbanSim H5 outputs'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.job_id IS 'Unique job identifier'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.building_id IS 'Building where job is located'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.sector_id IS 'Employment sector/industry category'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.home_based_status IS 'Whether job is home-based (0=no, 1=yes)'")
+
+            # urbansim_blocks_raw table
+            conn.execute("COMMENT ON TABLE urbansim_blocks_raw IS 'Raw census block geographic data from UrbanSim'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.block_id IS 'Census block FIPS code'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.block_group_id IS 'Census block group FIPS code'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.zone_id IS 'Zone identifier (may be TAZ or other)'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.taz_zone_id IS 'Traffic Analysis Zone identifier'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.square_meters_land IS 'Land area in square meters'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.x IS 'X coordinate in local projection'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.y IS 'Y coordinate in local projection'")
+
+            # urbansim_buildings_raw table
+            conn.execute("COMMENT ON TABLE urbansim_buildings_raw IS 'Raw building data from UrbanSim including built environment characteristics'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.building_id IS 'Unique building identifier'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.parcel_id IS 'Parcel where building is located'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.building_type_id IS 'Building type category (residential, commercial, etc.)'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.sqft IS 'Building square footage'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.year_built IS 'Year building was constructed'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.stories IS 'Number of stories/floors'")
+
+            # urbansim_parcels_raw table
+            conn.execute("COMMENT ON TABLE urbansim_parcels_raw IS 'Raw parcel/lot data from UrbanSim land use model'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.parcel_id IS 'Unique parcel identifier'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.zone_id IS 'Zone where parcel is located'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.land_value IS 'Assessed land value in dollars'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.total_sqft IS 'Total parcel area in square feet'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.county_id IS 'County FIPS code'")
+
+            # ============================================================
+            # PROCESSED ACTIVITYSIM DATA TABLES
+            # ============================================================
+
+            # activitysim_households table
+            conn.execute("COMMENT ON TABLE activitysim_households IS 'Processed household data ready for ActivitySim consumption, transformed from UrbanSim outputs'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.household_id IS 'Unique household identifier (matches UrbanSim)'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.TAZ IS 'Traffic Analysis Zone where household resides (ActivitySim format)'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.persons IS 'Number of persons (mapped from UrbanSim PERSONS column)'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.income IS 'Annual household income in dollars'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.cars IS 'Vehicle ownership (mapped from UrbanSim auto_ownership)'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.HHT IS 'Household type category for ActivitySim'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.workers IS 'Number of workers (mapped from UrbanSim num_workers)'")
+
+            # activitysim_persons table
+            conn.execute("COMMENT ON TABLE activitysim_persons IS 'Processed person-level data for ActivitySim, including synthetic person attributes'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.person_id IS 'Unique person identifier (matches UrbanSim)'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.household_id IS 'Household this person belongs to'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.TAZ IS 'Home TAZ (matches household TAZ)'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.age IS 'Person age in years'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.worker IS 'Worker status for ActivitySim'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.student IS 'Student status for ActivitySim'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.ptype IS 'Person type category (full-time worker, part-time, student, etc.)'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.pemploy IS 'Employment status category'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.pstudent IS 'Student enrollment category'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.member_id IS 'Person number within household (mapped from UrbanSim PNUM)'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.workplace_taz IS 'TAZ of workplace location'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.school_taz IS 'TAZ of school location'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.home_x IS 'X coordinate of home location'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.home_y IS 'Y coordinate of home location'")
+
+            # activitysim_land_use table
+            conn.execute("COMMENT ON TABLE activitysim_land_use IS 'Processed land use/zonal data for ActivitySim including demographics, employment, and accessibility'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.TAZ IS 'Traffic Analysis Zone identifier (mapped from UrbanSim ZONE)'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTPOP IS 'Total population in TAZ'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTHH IS 'Total households in TAZ'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTEMP IS 'Total employment in TAZ'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTACRE IS 'Total acres in TAZ'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.area_type IS 'Area type category (urban core, suburban, rural, etc.)'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.employment_density IS 'Jobs per acre'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.pop_density IS 'Population per acre'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.hh_density IS 'Households per acre'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE0004 IS 'Population aged 0-4 years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE0519 IS 'Population aged 5-19 years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE2044 IS 'Population aged 20-44 years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE4564 IS 'Population aged 45-64 years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE64P IS 'Population aged 65+ years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGE62P IS 'Population aged 62+ years'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HHINCQ1 IS 'Households in income quartile 1 (lowest)'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HHINCQ2 IS 'Households in income quartile 2'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HHINCQ3 IS 'Households in income quartile 3'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HHINCQ4 IS 'Households in income quartile 4 (highest)'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.EMPRES IS 'Residential employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.RETEMPN IS 'Retail employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.FPSEMPN IS 'Financial and professional services employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HEREMPN IS 'Health, education, and recreational employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.AGREMPN IS 'Agricultural and natural resources employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.MWTEMPN IS 'Manufacturing, wholesale, and transportation employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.OTHEMPN IS 'Other employment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.HSENROLL IS 'High school enrollment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.COLLFTE IS 'College full-time enrollment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.COLLPTE IS 'College part-time enrollment'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.PRKCST IS 'Daily parking cost in dollars'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.OPRKCST IS 'Off-peak parking cost in dollars'")
+
+            # activitysim_data_generic table
+            conn.execute("COMMENT ON TABLE activitysim_data_generic IS 'Generic storage for additional ActivitySim input tables (accessibility, skims, etc.) in JSON format'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.id IS 'Auto-incrementing database row ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.file_record_id IS 'Foreign key to file_records'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.run_id IS 'Foreign key to parent PILATES run'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.table_name IS 'Name of the ActivitySim table stored here'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.data_json IS 'Complete table data serialized as JSON for flexible schema support'")
+
+            logger.info("Schema documentation comments added successfully")
+
+        except Exception as e:
+            # Log warning but don't fail initialization if comments fail
+            logger.warning(f"Failed to add schema documentation: {e}")
+
+    def create_summary_views(self) -> bool:
+        """
+        Create simplified database views for non-technical users.
+
+        These views provide easy-to-query summaries without needing to
+        understand the full database schema or write complex joins.
+
+        Returns:
+            bool: True if views created successfully
+        """
+        try:
+            conn = self._get_connection()
+
+            # View 1: Run Summary
+            # Simple overview of all simulation runs
+            conn.execute("""
+                CREATE OR REPLACE VIEW run_summary AS
+                SELECT
+                    r.run_id,
+                    r.created_at as run_date,
+                    r.start_year,
+                    r.end_year,
+                    r.end_year - r.start_year + 1 as num_years,
+                    array_to_string(r.models_used, ', ') as models,
+                    cs.region,
+                    cs.beam_config as beam_configuration,
+                    r.hostname as server,
+                    (SELECT COUNT(*) FROM file_records WHERE file_records.run_id = r.run_id) as file_count,
+                    (SELECT COUNT(*) FROM model_runs WHERE model_runs.run_id = r.run_id) as model_execution_count,
+                    r.code_version
+                FROM runs r
+                LEFT JOIN config_snapshots cs ON r.config_snapshot_id = cs.snapshot_id
+                ORDER BY r.created_at DESC
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW run_summary IS
+                'Simplified summary of all PILATES runs with key metadata and counts'
+            """)
+
+            # View 2: Data Lineage Summary
+            # Easy view of file relationships
+            conn.execute("""
+                CREATE OR REPLACE VIEW data_lineage_summary AS
+                SELECT
+                    f.short_name as dataset_name,
+                    f.description,
+                    f.year,
+                    f.file_path,
+                    array_to_string(f.models, ' → ') as processing_chain,
+                    array_length(f.source_file_paths, 1) as num_input_files,
+                    r.run_id,
+                    r.created_at as run_date,
+                    cs.region
+                FROM file_records f
+                JOIN runs r ON f.run_id = r.run_id
+                LEFT JOIN config_snapshots cs ON r.config_snapshot_id = cs.snapshot_id
+                ORDER BY f.created_at DESC
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW data_lineage_summary IS
+                'Complete data lineage showing how files were processed across model stages'
+            """)
+
+            # View 3: Model Performance Summary
+            # How long each model takes to run
+            conn.execute("""
+                CREATE OR REPLACE VIEW model_performance_summary AS
+                SELECT
+                    mr.model,
+                    mr.year,
+                    mr.run_id,
+                    COUNT(*) as execution_count,
+                    AVG(EXTRACT(EPOCH FROM (mr.completed_at - mr.created_at)) / 60.0) as avg_runtime_minutes,
+                    MIN(EXTRACT(EPOCH FROM (mr.completed_at - mr.created_at)) / 60.0) as min_runtime_minutes,
+                    MAX(EXTRACT(EPOCH FROM (mr.completed_at - mr.created_at)) / 60.0) as max_runtime_minutes,
+                    SUM(CASE WHEN mr.status = 'completed' THEN 1 ELSE 0 END) as successful_runs,
+                    SUM(CASE WHEN mr.status = 'failed' THEN 1 ELSE 0 END) as failed_runs
+                FROM model_runs mr
+                WHERE mr.completed_at IS NOT NULL AND mr.created_at IS NOT NULL
+                GROUP BY mr.model, mr.year, mr.run_id
+                ORDER BY mr.model, mr.year
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW model_performance_summary IS
+                'Model execution performance metrics including runtime and success rates'
+            """)
+
+            # View 4: Household Demographics Summary
+            # Aggregated household statistics per run
+            conn.execute("""
+                CREATE OR REPLACE VIEW household_demographics_summary AS
+                SELECT
+                    h.run_id,
+                    COUNT(DISTINCT h.household_id) as total_households,
+                    AVG(h.income) as avg_income,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY h.income) as median_income,
+                    AVG(h.cars) as avg_vehicles_per_hh,
+                    AVG(h.persons) as avg_household_size,
+                    AVG(h.workers) as avg_workers_per_hh,
+                    SUM(CASE WHEN h.cars = 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_zero_vehicle,
+                    SUM(CASE WHEN h.cars >= 2 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_multi_vehicle
+                FROM activitysim_households h
+                GROUP BY h.run_id
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW household_demographics_summary IS
+                'Aggregated household demographic statistics by run'
+            """)
+
+            # View 5: TAZ Level Summary
+            # Key metrics at the TAZ level for mapping and analysis
+            conn.execute("""
+                CREATE OR REPLACE VIEW taz_summary AS
+                SELECT
+                    lu.run_id,
+                    lu.TAZ,
+                    lu.TOTPOP as population,
+                    lu.TOTHH as households,
+                    lu.TOTEMP as employment,
+                    lu.TOTACRE as acres,
+                    ROUND(lu.pop_density, 2) as pop_per_acre,
+                    ROUND(lu.employment_density, 2) as jobs_per_acre,
+                    ROUND(lu.hh_density, 2) as hh_per_acre,
+                    lu.area_type,
+                    CASE
+                        WHEN lu.TOTHH > 0 THEN ROUND(lu.TOTEMP * 1.0 / lu.TOTHH, 2)
+                        ELSE NULL
+                    END as jobs_per_household,
+                    ROUND(lu.PRKCST, 2) as daily_parking_cost
+                FROM activitysim_land_use lu
+                WHERE lu.TOTPOP > 0  -- Filter to populated TAZs only
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW taz_summary IS
+                'Traffic Analysis Zone level summary statistics for mapping and spatial analysis'
+            """)
+
+            # View 6: Run Comparison Helper
+            # Makes it easy to compare key metrics across runs
+            conn.execute("""
+                CREATE OR REPLACE VIEW run_comparison AS
+                SELECT
+                    r.run_id,
+                    r.created_at as run_date,
+                    cs.region,
+                    r.start_year,
+                    r.end_year,
+                    (SELECT COUNT(DISTINCT h.household_id) FROM activitysim_households h WHERE h.run_id = r.run_id) as total_households,
+                    (SELECT AVG(h.income) FROM activitysim_households h WHERE h.run_id = r.run_id) as avg_income,
+                    (SELECT AVG(h.cars) FROM activitysim_households h WHERE h.run_id = r.run_id) as avg_vehicles,
+                    (SELECT SUM(lu.TOTPOP) FROM activitysim_land_use lu WHERE lu.run_id = r.run_id) as total_population,
+                    (SELECT SUM(lu.TOTEMP) FROM activitysim_land_use lu WHERE lu.run_id = r.run_id) as total_employment
+                FROM runs r
+                LEFT JOIN config_snapshots cs ON r.config_snapshot_id = cs.snapshot_id
+                ORDER BY r.created_at DESC
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW run_comparison IS
+                'Side-by-side comparison of key metrics across different runs'
+            """)
+
+            # View 7: Employment by Sector
+            # Summarize employment distribution
+            conn.execute("""
+                CREATE OR REPLACE VIEW employment_by_sector AS
+                SELECT
+                    lu.run_id,
+                    SUM(lu.EMPRES) as residential,
+                    SUM(lu.RETEMPN) as retail,
+                    SUM(lu.FPSEMPN) as financial_professional,
+                    SUM(lu.HEREMPN) as health_education_recreation,
+                    SUM(lu.AGREMPN) as agricultural,
+                    SUM(lu.MWTEMPN) as manufacturing_warehouse_transport,
+                    SUM(lu.OTHEMPN) as other,
+                    SUM(lu.TOTEMP) as total_employment
+                FROM activitysim_land_use lu
+                GROUP BY lu.run_id
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW employment_by_sector IS
+                'Employment distribution by industry sector'
+            """)
+
+            # View 8: Recent Activity Log
+            # Show recent model executions for monitoring
+            conn.execute("""
+                CREATE OR REPLACE VIEW recent_activity AS
+                SELECT
+                    mr.created_at as execution_time,
+                    mr.model,
+                    mr.year,
+                    mr.iteration,
+                    mr.status,
+                    ROUND(EXTRACT(EPOCH FROM (mr.completed_at - mr.created_at)) / 60.0, 1) as runtime_minutes,
+                    r.run_id,
+                    cs.region
+                FROM model_runs mr
+                JOIN runs r ON mr.run_id = r.run_id
+                LEFT JOIN config_snapshots cs ON r.config_snapshot_id = cs.snapshot_id
+                WHERE mr.created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                ORDER BY mr.created_at DESC
+            """)
+
+            conn.execute("""
+                COMMENT ON VIEW recent_activity IS
+                'Recent model executions from the last 7 days for monitoring purposes'
+            """)
+
+            logger.info("Summary views created successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create summary views: {e}")
+            return False
+
+    def generate_validation_report(self) -> Dict[str, Any]:
+        """
+        Generate data quality validation report.
+
+        Returns:
+            dict: Validation report with errors, warnings, and statistics
+        """
+        try:
+            conn = self._get_connection()
+
+            report = {
+                "generated_at": datetime.now().isoformat(),
+                "errors": [],
+                "warnings": [],
+                "statistics": {},
+                "recommendations": []
+            }
+
+            # Check 1: Orphaned file records (run_id doesn't exist in runs)
+            orphaned = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM file_records fr
+                LEFT JOIN runs r ON fr.run_id = r.run_id
+                WHERE r.run_id IS NULL
+            """).fetchone()[0]
+
+            if orphaned > 0:
+                report["errors"].append(f"{orphaned} file records reference non-existent runs")
+
+            # Check 2: Model runs without completion time
+            incomplete = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM model_runs
+                WHERE status = 'completed' AND completed_at IS NULL
+            """).fetchone()[0]
+
+            if incomplete > 0:
+                report["warnings"].append(f"{incomplete} model runs marked complete but missing completion time")
+
+            # Check 3: Duplicate household IDs within a run
+            dupes = conn.execute("""
+                SELECT run_id, household_id, COUNT(*) as dup_count
+                FROM activitysim_households
+                GROUP BY run_id, household_id
+                HAVING COUNT(*) > 1
+            """).fetchall()
+
+            if dupes:
+                report["errors"].append(f"{len(dupes)} duplicate household_id values found")
+
+            # Check 4: Missing foreign key relationships
+            missing_hh = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM activitysim_persons p
+                LEFT JOIN activitysim_households h
+                    ON p.household_id = h.household_id AND p.run_id = h.run_id
+                WHERE h.household_id IS NULL
+            """).fetchone()[0]
+
+            if missing_hh > 0:
+                report["errors"].append(f"{missing_hh} persons reference non-existent households")
+
+            # Statistics
+            report["statistics"] = {
+                "total_runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
+                "total_file_records": conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0],
+                "total_model_runs": conn.execute("SELECT COUNT(*) FROM model_runs").fetchone()[0],
+                "failed_model_runs": conn.execute("SELECT COUNT(*) FROM model_runs WHERE status = 'failed'").fetchone()[0],
+            }
+
+            # Try to count data records (may not exist in all databases)
+            try:
+                report["statistics"]["total_households"] = conn.execute(
+                    "SELECT COUNT(*) FROM activitysim_households"
+                ).fetchone()[0]
+                report["statistics"]["total_persons"] = conn.execute(
+                    "SELECT COUNT(*) FROM activitysim_persons"
+                ).fetchone()[0]
+            except:
+                pass
+
+            # Recommendations
+            if report["errors"]:
+                report["recommendations"].append("Address data integrity errors before using database for analysis")
+            if report["statistics"].get("failed_model_runs", 0) > 0:
+                report["recommendations"].append("Investigate failed model runs using recent_activity view")
+
+            return report
+
+        except Exception as e:
+            logger.error(f"Failed to generate validation report: {e}")
+            return {
+                "generated_at": datetime.now().isoformat(),
+                "errors": [f"Validation failed: {str(e)}"],
+                "warnings": [],
+                "statistics": {},
+                "recommendations": []
+            }
 
     def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
         """
@@ -2047,6 +2670,336 @@ class DuckDBManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Failed to retrieve raw parcels data: {e}")
             return None
+
+    def export_data_dictionary(
+        self, output_path: str, format: str = "markdown", include_stats: bool = True
+    ) -> bool:
+        """
+        Export complete data dictionary documenting database schema.
+
+        Args:
+            output_path: Path where documentation should be written
+            format: Output format - 'markdown', 'json', 'csv', or 'html'
+            include_stats: Include row counts and data statistics
+
+        Returns:
+            bool: True if export successful
+
+        The data dictionary includes:
+        - All tables with descriptions
+        - All columns with types and descriptions
+        - Foreign key relationships
+        - Index information
+        - Row counts and data ranges (if include_stats=True)
+        """
+        try:
+            conn = self._get_connection()
+
+            # Query schema information from DuckDB system tables
+            schema_query = """
+                SELECT
+                    t.table_name,
+                    t.comment as table_comment,
+                    c.column_name,
+                    c.data_type,
+                    c.comment as column_comment,
+                    c.is_nullable,
+                    c.column_default
+                FROM duckdb_tables() t
+                LEFT JOIN duckdb_columns() c
+                    ON t.table_name = c.table_name
+                    AND t.schema_name = c.schema_name
+                WHERE t.schema_name = 'main'
+                    AND t.table_name NOT LIKE 'duckdb_%'
+                    AND t.table_name NOT LIKE 'sqlite_%'
+                ORDER BY t.table_name, c.column_index
+            """
+
+            schema_df = conn.execute(schema_query).fetchdf()
+
+            # Get foreign key constraints
+            fk_query = """
+                SELECT
+                    fk_table,
+                    fk_columns,
+                    pk_table,
+                    pk_columns
+                FROM duckdb_constraints()
+                WHERE constraint_type = 'FOREIGN KEY'
+            """
+            try:
+                fk_df = conn.execute(fk_query).fetchdf()
+            except:
+                # Older DuckDB versions may not support this
+                fk_df = pd.DataFrame()
+
+            # Get row counts if requested
+            row_counts = {}
+            if include_stats:
+                for table_name in schema_df["table_name"].unique():
+                    try:
+                        count = conn.execute(
+                            f"SELECT COUNT(*) FROM {table_name}"
+                        ).fetchone()[0]
+                        row_counts[table_name] = count
+                    except:
+                        row_counts[table_name] = None
+
+            # Export based on format
+            if format == "markdown":
+                return self._export_markdown_dictionary(
+                    output_path, schema_df, fk_df, row_counts
+                )
+            elif format == "json":
+                return self._export_json_dictionary(
+                    output_path, schema_df, fk_df, row_counts
+                )
+            elif format == "csv":
+                return self._export_csv_dictionary(
+                    output_path, schema_df, fk_df, row_counts
+                )
+            elif format == "html":
+                return self._export_html_dictionary(
+                    output_path, schema_df, fk_df, row_counts
+                )
+            else:
+                logger.error(f"Unsupported format: {format}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to export data dictionary: {e}")
+            return False
+
+    def _export_markdown_dictionary(
+        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+    ) -> bool:
+        """Export data dictionary as Markdown."""
+        try:
+            with open(output_path, "w") as f:
+                f.write("# PILATES Database Data Dictionary\n\n")
+                f.write("Auto-generated schema documentation for the PILATES database.\n\n")
+                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+                f.write("## Table of Contents\n\n")
+
+                # Group by table category
+                metadata_tables = ["runs", "config_snapshots", "file_records", "model_runs", "openlineage_events"]
+                urbansim_tables = [t for t in schema_df["table_name"].unique() if "urbansim" in t and "_raw" in t]
+                activitysim_tables = [t for t in schema_df["table_name"].unique() if "activitysim" in t]
+
+                f.write("### Metadata Tables\n")
+                for table in metadata_tables:
+                    if table in schema_df["table_name"].values:
+                        f.write(f"- [{table}](#{table.replace('_', '-')})\n")
+
+                f.write("\n### UrbanSim Raw Data Tables\n")
+                for table in urbansim_tables:
+                    f.write(f"- [{table}](#{table.replace('_', '-')})\n")
+
+                f.write("\n### ActivitySim Processed Data Tables\n")
+                for table in activitysim_tables:
+                    f.write(f"- [{table}](#{table.replace('_', '-')})\n")
+
+                f.write("\n---\n\n")
+
+                # Document each table
+                for table_name in schema_df["table_name"].unique():
+                    table_data = schema_df[schema_df["table_name"] == table_name]
+                    table_comment = table_data.iloc[0]["table_comment"]
+
+                    f.write(f"## {table_name}\n\n")
+
+                    if table_comment:
+                        f.write(f"**Description:** {table_comment}\n\n")
+
+                    if table_name in row_counts and row_counts[table_name] is not None:
+                        f.write(f"**Row Count:** {row_counts[table_name]:,}\n\n")
+
+                    # Column table
+                    f.write("| Column | Type | Nullable | Description |\n")
+                    f.write("|--------|------|----------|-------------|\n")
+
+                    for _, row in table_data.iterrows():
+                        col_name = row["column_name"]
+                        col_type = row["data_type"]
+                        nullable = "Yes" if row["is_nullable"] == "YES" else "No"
+                        col_desc = row["column_comment"] or ""
+
+                        # Escape pipe characters in description
+                        col_desc = col_desc.replace("|", "\\|")
+
+                        f.write(f"| {col_name} | {col_type} | {nullable} | {col_desc} |\n")
+
+                    # Foreign keys
+                    if not fk_df.empty:
+                        table_fks = fk_df[fk_df["fk_table"] == table_name]
+                        if not table_fks.empty:
+                            f.write("\n**Foreign Keys:**\n\n")
+                            for _, fk in table_fks.iterrows():
+                                f.write(f"- `{fk['fk_columns']}` → `{fk['pk_table']}.{fk['pk_columns']}`\n")
+
+                    f.write("\n---\n\n")
+
+                logger.info(f"Markdown data dictionary exported to {output_path}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to export markdown dictionary: {e}")
+            return False
+
+    def _export_json_dictionary(
+        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+    ) -> bool:
+        """Export data dictionary as JSON."""
+        try:
+            tables = {}
+
+            for table_name in schema_df["table_name"].unique():
+                table_data = schema_df[schema_df["table_name"] == table_name]
+
+                columns = []
+                for _, row in table_data.iterrows():
+                    columns.append({
+                        "name": row["column_name"],
+                        "type": row["data_type"],
+                        "nullable": row["is_nullable"] == "YES",
+                        "default": row["column_default"],
+                        "description": row["column_comment"]
+                    })
+
+                # Get foreign keys for this table
+                fks = []
+                if not fk_df.empty:
+                    table_fks = fk_df[fk_df["fk_table"] == table_name]
+                    for _, fk_row in table_fks.iterrows():
+                        fks.append({
+                            "column": fk_row["fk_columns"],
+                            "references_table": fk_row["pk_table"],
+                            "references_column": fk_row["pk_columns"]
+                        })
+
+                tables[table_name] = {
+                    "description": table_data.iloc[0]["table_comment"],
+                    "row_count": row_counts.get(table_name),
+                    "columns": columns,
+                    "foreign_keys": fks
+                }
+
+            dictionary = {
+                "database": "PILATES",
+                "generated_at": datetime.now().isoformat(),
+                "tables": tables
+            }
+
+            with open(output_path, "w") as f:
+                json.dump(dictionary, f, indent=2, default=str)
+
+            logger.info(f"JSON data dictionary exported to {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to export JSON dictionary: {e}")
+            return False
+
+    def _export_csv_dictionary(
+        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+    ) -> bool:
+        """Export data dictionary as CSV."""
+        try:
+            # Add row counts to schema
+            schema_with_counts = schema_df.copy()
+            schema_with_counts["row_count"] = schema_with_counts["table_name"].map(row_counts)
+
+            # Export to CSV
+            schema_with_counts.to_csv(output_path, index=False)
+
+            logger.info(f"CSV data dictionary exported to {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to export CSV dictionary: {e}")
+            return False
+
+    def _export_html_dictionary(
+        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+    ) -> bool:
+        """Export data dictionary as HTML."""
+        try:
+            html = []
+            html.append("<!DOCTYPE html>")
+            html.append("<html><head>")
+            html.append("<title>PILATES Database Data Dictionary</title>")
+            html.append("<style>")
+            html.append("body { font-family: Arial, sans-serif; margin: 40px; }")
+            html.append("h1 { color: #2c3e50; }")
+            html.append("h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }")
+            html.append("table { border-collapse: collapse; width: 100%; margin: 20px 0; }")
+            html.append("th { background-color: #3498db; color: white; padding: 12px; text-align: left; }")
+            html.append("td { border: 1px solid #ddd; padding: 10px; }")
+            html.append("tr:nth-child(even) { background-color: #f2f2f2; }")
+            html.append(".table-desc { font-style: italic; color: #555; margin: 10px 0; }")
+            html.append(".row-count { color: #16a085; font-weight: bold; }")
+            html.append(".fk-section { margin-top: 15px; padding: 10px; background-color: #ecf0f1; }")
+            html.append("</style></head><body>")
+
+            html.append("<h1>PILATES Database Data Dictionary</h1>")
+            html.append(f"<p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>")
+
+            # Table of contents
+            html.append("<h2>Table of Contents</h2>")
+            html.append("<ul>")
+            for table_name in schema_df["table_name"].unique():
+                html.append(f'<li><a href="#{table_name}">{table_name}</a></li>')
+            html.append("</ul>")
+
+            # Each table
+            for table_name in schema_df["table_name"].unique():
+                table_data = schema_df[schema_df["table_name"] == table_name]
+                table_comment = table_data.iloc[0]["table_comment"]
+
+                html.append(f'<h2 id="{table_name}">{table_name}</h2>')
+
+                if table_comment:
+                    html.append(f'<p class="table-desc">{table_comment}</p>')
+
+                if table_name in row_counts and row_counts[table_name] is not None:
+                    html.append(f'<p class="row-count">Row Count: {row_counts[table_name]:,}</p>')
+
+                html.append("<table>")
+                html.append("<tr><th>Column</th><th>Type</th><th>Nullable</th><th>Description</th></tr>")
+
+                for _, row in table_data.iterrows():
+                    html.append("<tr>")
+                    html.append(f"<td><strong>{row['column_name']}</strong></td>")
+                    html.append(f"<td>{row['data_type']}</td>")
+                    nullable = "Yes" if row['is_nullable'] == 'YES' else "No"
+                    html.append(f"<td>{nullable}</td>")
+                    html.append(f"<td>{row['column_comment'] or ''}</td>")
+                    html.append("</tr>")
+
+                html.append("</table>")
+
+                # Foreign keys
+                if not fk_df.empty:
+                    table_fks = fk_df[fk_df["fk_table"] == table_name]
+                    if not table_fks.empty:
+                        html.append('<div class="fk-section">')
+                        html.append("<strong>Foreign Keys:</strong><ul>")
+                        for _, fk in table_fks.iterrows():
+                            html.append(f"<li><code>{fk['fk_columns']}</code> → <code>{fk['pk_table']}.{fk['pk_columns']}</code></li>")
+                        html.append("</ul></div>")
+
+            html.append("</body></html>")
+
+            with open(output_path, "w") as f:
+                f.write("\n".join(html))
+
+            logger.info(f"HTML data dictionary exported to {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to export HTML dictionary: {e}")
+            return False
 
     def close(self):
         """Close DuckDB connection."""

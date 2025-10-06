@@ -8,6 +8,7 @@ from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.zarr_versioning import VersionedZarrStore
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,31 @@ class ActivitysimRunner(GenericRunner):
                 logger.info(
                     f"Using zarr skims from ASIM compilation: {zarr_skims_rec.file_path}"
                 )
+
+            # Create initial zarr version snapshot after compilation
+            if success and os.path.exists(all_skims_path):
+                try:
+                    logger.info("Creating initial zarr version snapshot after ActivitySim compilation...")
+
+                    # Get database path from settings
+                    database_path = settings.get("database", {}).get("path")
+                    if database_path:
+                        # Initialize zarr version manager
+                        zarr_base_path = os.path.dirname(database_path)
+                        zarr_manager = VersionedZarrStore(zarr_base_path)
+
+                        # Create initialization snapshot (iteration -1)
+                        snapshot_id = zarr_manager.create_snapshot_from_initialization(
+                            run_id=self.provenance_tracker.run_info.run_id,
+                            year=self.state.current_year,
+                            source_zarr_path=all_skims_path,
+                            provenance_tracker=self.provenance_tracker,
+                        )
+                        logger.info(f"Created initial zarr snapshot: {snapshot_id}")
+                    else:
+                        logger.debug("Database path not configured, skipping zarr snapshot creation")
+                except Exception as e:
+                    logger.warning(f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.")
 
             self.provenance_tracker.complete_model_run(
                 asim_compile_run_hash,

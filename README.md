@@ -64,6 +64,91 @@ PILATES includes a powerful dual storage system that enables analytical database
 
 For detailed database setup and usage instructions, see [docs/database-setup.md](docs/database-setup.md).
 
+### Database Documentation & Schema
+
+PILATES includes comprehensive database documentation features to support sharing databases with external developers and program managers:
+
+**Automatic Documentation Features:**
+- **SQL COMMENT statements** on all tables and 200+ columns - documentation lives in the database
+- **Summary views** for non-technical users (8 pre-built views like `run_summary`, `data_lineage_summary`, etc.)
+- **Multi-format exports** - Generate schema docs in Markdown, JSON, CSV, and HTML formats
+- **Validation reports** - Automated data quality checks
+- **Schema versioning** - Track database evolution over time
+
+**Export Database Documentation:**
+```bash
+# Quick export using helper script
+./export_database_docs.sh database.duckdb
+
+# Or use Python directly for custom formats
+python pilates/utils/export_data_dictionary.py \
+    --database database.duckdb \
+    --output docs/schema.html \
+    --format html
+```
+
+**Query Using Summary Views:**
+```sql
+-- Easy queries without complex SQL
+SELECT * FROM run_summary;
+SELECT * FROM data_lineage_summary;
+SELECT * FROM household_demographics_summary;
+SELECT * FROM taz_summary WHERE population > 1000;
+```
+
+**Test Database with Examples:**
+```bash
+# Run stub test and save database for examination
+./run_stub_test_with_output.sh
+
+# Examine the test database
+duckdb ./test_output/activitysim_beam/test_database.duckdb
+
+# View documentation
+open ./test_output/activitysim_beam/documentation/schema.html
+```
+
+For complete documentation guide, see [docs/database_documentation_guide.md](docs/database_documentation_guide.md).
+
+**For Developers: Adding Database Documentation**
+
+When adding new tables or fields to the database schema, follow these steps to maintain comprehensive documentation:
+
+1. **Add SQL COMMENT statements** in `pilates/utils/duckdb_manager.py`:
+   ```python
+   # In _add_schema_documentation() method
+
+   # Add table comment
+   conn.execute("COMMENT ON TABLE my_new_table IS 'Brief description of what this table stores'")
+
+   # Add column comments
+   conn.execute("COMMENT ON COLUMN my_new_table.my_column IS 'Description of this column and its values'")
+   ```
+
+2. **Follow naming conventions**:
+   - Use clear, descriptive table/column names
+   - Prefix raw tables with model name (e.g., `urbansim_households_raw`)
+   - Prefix processed tables with destination (e.g., `activitysim_households`)
+
+3. **Add to summary views** (if applicable) in `create_summary_views()`:
+   ```python
+   # If your table should be easily accessible to non-technical users,
+   # create a summary view that simplifies the query
+   ```
+
+4. **Test your documentation**:
+   ```bash
+   # Verify comments are visible
+   duckdb database.duckdb -c "SELECT comment FROM duckdb_columns() WHERE table_name = 'my_new_table'"
+
+   # Test export
+   python pilates/utils/export_data_dictionary.py --database database.duckdb --output test.html --format html
+   ```
+
+5. **Update examples** in `docs/example_queries.sql` if your table/field enables new analysis workflows
+
+Documentation is automatically included in all database exports and visible to anyone querying the database!
+
 -----
 
 ## Integrated Simulation Models
