@@ -155,6 +155,7 @@ def datastore_path(settings, year=None, mutable_data_dir=None):
         data_loc = os.path.join(
             mutable_data_dir, settings["usim_local_mutable_data_folder"]
         )
+        os.makedirs(data_loc, exist_ok=True)
     if year is None:
         usim_datastore = settings["usim_formattable_input_file_name"].format(
             region_id=region_id

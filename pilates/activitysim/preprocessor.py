@@ -2884,11 +2884,21 @@ def create_asim_data_from_h5(
         default_zone_id_col=input_zone_id_col,
     )
 
+    urbansim_enabled = settings.get("land_use_model") is not None
+    is_base_year = (
+        (state.forecast_year == settings["start_year"]) or warm_start or not urbansim_enabled
+    )
+
+    if is_base_year:
+        mdir = None
+    else:
+        mdir = workspace.full_path
+
     # Record the H5 datastore as an input to this preprocessor run
     provenance_tracker.record_input_file(
         "activitysim_preprocessor",
         datastore_path(
-            settings, state.forecast_year, mutable_data_dir=workspace.full_path
+            settings, state.forecast_year, mutable_data_dir=mdir
         ),
         short_name="urbansim_h5",
         model_run_id=model_run_hash,
@@ -2898,8 +2908,8 @@ def create_asim_data_from_h5(
     store, table_prefix_yr = read_datastore(
         settings,
         state.forecast_year,
-        warm_start=warm_start,
-        mutable_data_dir=workspace.full_path,
+        warm_start,
+        mutable_data_dir=mdir,
     )
 
     logger.info(

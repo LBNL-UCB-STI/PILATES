@@ -389,71 +389,64 @@ class H5ActivitySimExtractor:
         Returns:
             Dictionary mapping table names to DataFrames
         """
-        logger.info(f"Extracting processed ActivitySim inputs from {self.h5_path}")
+        logger.info(f"Extracting and processing ActivitySim inputs from {self.h5_path}")
         if year:
             logger.info(f"Target year: {year}")
 
-        # Auto-detect structure
-        table_prefix = self._detect_h5_structure(year)
-        if table_prefix:
-            logger.info(f"Using year-prefixed format: /{table_prefix}/[table]")
-        else:
-            logger.info("Using root-level format: /[table]")
+        # Instead of just extracting, we need to process the raw data
+        # to get the same results as create_asim_data_from_h5.
 
-        # First, analyze what's available
-        table_info = self._get_h5_table_info()
-        logger.info(f"Found {len(table_info)} datasets in H5 file")
+        raw_households = self._extract_table_from_h5("households", year, table_type="raw")
+        raw_persons = self._extract_table_from_h5("persons", year, table_type="raw")
+        raw_jobs = self._extract_table_from_h5("jobs", year, table_type="raw")
+        raw_blocks = self._extract_table_from_h5("blocks", year, table_type="raw")
 
-        # Log some key tables found for debugging
-        key_tables = ["households", "persons", "land_use", "blocks"]
-        for key_table in key_tables:
-            found_paths = [path for path in table_info.keys() if key_table in path]
-            if found_paths:
-                logger.info(f"  {key_table} found at: {found_paths}")
+        if raw_households is None or raw_persons is None or raw_blocks is None:
+            logger.error("Cannot process ActivitySim inputs: missing raw households, persons, or blocks data.")
+            return {}
 
-        extracted_data = {}
+        asim_zone_id_col = "TAZ"  # This should probably come from settings
 
-        # Extract standard ActivitySim tables (processed data)
-        for table_name in self.ACTIVITYSIM_TABLES:
-            df = self._extract_table_from_h5(table_name, year, table_type="processed")
-            if df is not None:
-                extracted_data[table_name] = df
-                logger.info(f"Extracted processed {table_name}: {len(df)} records")
+        (
+            processed_blocks,
+            processed_persons,
+            processed_households,
+            processed_jobs,
+            num_reassigned,
+            blocks_to_taz_mapping_updated,
+        ) = process_raw_h5_files(
+            raw_blocks,
+            raw_persons,
+            raw_households,
+            raw_jobs,
+            self.settings,
+            year,
+            asim_zone_id_col,
+        )
 
-                # Optionally save as CSV
-                if save_csv and output_dir:
-                    os.makedirs(output_dir, exist_ok=True)
-                    csv_path = os.path.join(output_dir, f"{table_name}_processed.csv")
-                    df.to_csv(csv_path, index=False)
-                    logger.info(f"Saved processed {table_name} to {csv_path}")
+        extracted_data = {
+            "households": processed_households,
+            "persons": processed_persons,
+        }
 
-        # Extract optional tables that exist
-        for table_name in self.OPTIONAL_TABLES:
-            df = self._extract_table_from_h5(table_name, year, table_type="processed")
-            if df is not None:
-                extracted_data[table_name] = df
-                logger.info(f"Extracted optional table {table_name}: {len(df)} records")
+        # Generate land_use table
+        logger.info("Generating land_use table from processed data...")
+        land_use_df = self._generate_land_use_table(year)
+        if land_use_df is not None:
+            extracted_data["land_use"] = land_use_df
+            logger.info(f"Generated land_use table: {len(land_use_df)} records")
 
-                if save_csv and output_dir:
-                    csv_path = os.path.join(output_dir, f"{table_name}_processed.csv")
-                    df.to_csv(csv_path, index=False)
-
-        # Generate land_use table if not present but we have raw data
-        if "land_use" not in extracted_data:
-            logger.info("land_use table not found in H5, generating from raw data...")
-            land_use_df = self._generate_land_use_table(year)
-            if land_use_df is not None:
-                extracted_data["land_use"] = land_use_df
-                logger.info(f"Generated land_use table: {len(land_use_df)} records")
-
-                if save_csv and output_dir:
-                    csv_path = os.path.join(output_dir, "land_use_processed.csv")
-                    land_use_df.to_csv(csv_path, index=False)
-                    logger.info(f"Saved generated land_use to {csv_path}")
+        # Optionally save as CSV
+        if save_csv and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            for table_name, df in extracted_data.items():
+                csv_path = os.path.join(output_dir, f"{table_name}_processed.csv")
+                df.to_csv(csv_path, index=True)
+                logger.info(f"Saved processed {table_name} to {csv_path}")
 
         self.extracted_tables = extracted_data
         logger.info(
-            f"Successfully extracted {len(extracted_data)} processed ActivitySim tables"
+            f"Successfully extracted and processed {len(extracted_data)} ActivitySim tables"
         )
 
         return extracted_data
