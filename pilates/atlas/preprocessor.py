@@ -153,6 +153,31 @@ class AtlasPreprocessor(GenericPreprocessor):
                 logger.warning(
                     f"[AtlasPreprocessor] BEAM skims file not found: {expected_beam_skims_path}"
                 )
+        else:
+            # FIX ATLAS ISSUE 3: Track .RData accessibility files when NOT using BEAM skims
+            logger.info(
+                "[AtlasPreprocessor] atlas_beamac=0, looking for .RData accessibility files"
+            )
+            # Look for .RData files in the year-specific input directory
+            import glob
+            year_input_dir = os.path.join(
+                workspace.get_atlas_mutable_input_dir(), f"year{self.state.year}"
+            )
+            if os.path.exists(year_input_dir):
+                rdata_files = glob.glob(os.path.join(year_input_dir, "*.RData"))
+                for rdata_file in rdata_files:
+                    if "access" in os.path.basename(rdata_file).lower():
+                        logger.info(
+                            f"[AtlasPreprocessor] Recording accessibility .RData file: {rdata_file}"
+                        )
+                        input_records.append(
+                            self.provenance_tracker.record_input_file(
+                                "atlas_preprocessor",
+                                rdata_file,
+                                description="ATLAS accessibility data (RData)",
+                                short_name="atlas_rdata_accessibility",
+                            )
+                        )
 
         # Now start the model run, passing all input records
         model_run_hash = self.provenance_tracker.start_model_run(

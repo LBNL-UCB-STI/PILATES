@@ -14,7 +14,7 @@ travel_model_freq: 1
 vehicle_ownership_freq: 6
 
 # simulation platforms (leave blank to turn off)
-land_use_model:
+land_use_model: off  # Using database input mode instead of UrbanSim
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model:
@@ -132,6 +132,21 @@ polaris_skim_keys:
 
 # MEP
 mep_local_output_folder: pilates/postprocessing/MEP/
+
+# DATABASE CONFIGURATION
+# Enable database storage and retrieval for dual storage workflow
+database:
+  enabled: true
+  type: duckdb
+  path: pilates/database/sfbay_pilates_data.duckdb
+
+# ACTIVITYSIM DATABASE INPUT CONFIGURATION
+# Enable database input mode for ActivitySim (bypasses H5 processing)
+activitysim_database:
+  enabled: true
+  use_processed_data: true  # Use pre-processed ActivitySim data (fast path)
+  year: 2017  # Match start_year for data retrieval
+  # config_hash: ""  # Optional: match specific UrbanSim configuration
 
 # ACTIVITYSIM
 household_sample_size: 275000  # zero means no sampling, whole pop.

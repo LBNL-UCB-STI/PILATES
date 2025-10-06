@@ -212,6 +212,19 @@ class AtlasPostprocessor(GenericPostprocessor):
                 state=self.state,
             )
 
+        # FIX ATLAS ISSUE 1: Track householdv CSV (used to update UrbanSim H5)
+        atlas_hh_file = os.path.join(atlas_output_path, f"householdv_{output_year}.csv")
+        atlas_hh_input_record = None
+        if os.path.exists(atlas_hh_file):
+            atlas_hh_input_record = self.provenance_tracker.record_input_file(
+                "atlas_postprocessor",
+                atlas_hh_file,
+                description=f"ATLAS household vehicle counts for year {output_year}",
+                short_name="atlas_householdv_input",
+                model_run_id=model_run_hash,
+                state=self.state,
+            )
+
         # --- Perform postprocessing steps ---
         atlas_update_h5_vehicle(settings, output_year, self.state)
         logger.info(
@@ -225,9 +238,17 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
 
         # --- Record output files ---
-        # UrbanSim HDF5 file (output)
+        # FIX ATLAS ISSUE 2: Build source file lists for proper lineage
+
+        # UrbanSim HDF5 file (output) - sources: original H5 + householdv CSV
         usim_output_record = None
         if os.path.exists(usim_h5_file):
+            source_files_h5 = []
+            if usim_input_record:
+                source_files_h5.append(usim_h5_file)  # Original H5
+            if atlas_hh_input_record:
+                source_files_h5.append(atlas_hh_file)  # householdv data
+
             usim_output_record = self.provenance_tracker.record_output_file(
                 "atlas_postprocessor",
                 usim_h5_file,
@@ -236,14 +257,19 @@ class AtlasPostprocessor(GenericPostprocessor):
                 short_name="usim_h5_updated",
                 model_run_id=model_run_hash,
                 state=self.state,
+                source_file_paths=source_files_h5,
             )
 
-        # ATLAS vehicles2 CSV (output)
+        # ATLAS vehicles2 CSV (output) - source: vehicles CSV
         atlas_veh2_file = os.path.join(
             atlas_output_path, f"vehicles2_{output_year}.csv"
         )
         atlas_veh2_output_record = None
         if os.path.exists(atlas_veh2_file):
+            source_files_v2 = []
+            if atlas_veh_input_record:
+                source_files_v2.append(atlas_veh_file)
+
             atlas_veh2_output_record = self.provenance_tracker.record_output_file(
                 "atlas_postprocessor",
                 atlas_veh2_file,
@@ -252,10 +278,11 @@ class AtlasPostprocessor(GenericPostprocessor):
                 short_name="atlas_vehicles2_output",
                 model_run_id=model_run_hash,
                 state=self.state,
+                source_file_paths=source_files_v2,
             )
 
         # Collect all input and output records
-        input_records = [r for r in [usim_input_record, atlas_veh_input_record] if r]
+        input_records = [r for r in [usim_input_record, atlas_veh_input_record, atlas_hh_input_record] if r]
         output_records = [
             r for r in [usim_output_record, atlas_veh2_output_record] if r
         ]
