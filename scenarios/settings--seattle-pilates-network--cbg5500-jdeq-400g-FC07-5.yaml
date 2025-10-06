@@ -5,7 +5,7 @@
 ############################
 
 # scenario defs
-region: sfbay
+region: seattle
 scenario: base
 start_year: 2017
 end_year: 2018
@@ -25,28 +25,28 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.0.beta.1
-  activitysim: docker://zaneedell/activitysim:0.1.11
+  beam: docker://haitamlaarabi/beam:1.0.beta.251005
+  activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
 # docker settings
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.0.beta.1
-  activitysim: zaneedell/activitysim:0.1.4
+  beam: haitamlaarabi/beam:1.0.beta.251005
+  activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
 pull_latest: False
 
 # skim settings
-skims_zone_type: taz # one of [taz, block_group, block]
-skims_fname: as-base-skims-sfbay-taz.omx
+skims_zone_type: block_group # one of [taz, block_group, block]
+skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
-origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
-beam_router_directory: r5/sfbay-area-cbg5500-network
+origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
+beam_router_directory: r5/seattle-area-cbg412-ferry-network
 beam_geoms_fname: clipped_tazs.csv
-geoms_index_col: taz1454
+geoms_index_col: GEOID
 
 # region_zone_type:
 #   austin: block_groups # one of [taz, block_groups, block]
@@ -60,7 +60,7 @@ geoms_index_col: taz1454
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: pilates-network--cbg5500-jdeq-400g-FC08-0
+output_run_name: pilates-network--cbg412ferry-jdeq-FC07-5
 
 # URBANSIM
 region_to_region_id:
@@ -99,16 +99,15 @@ atlas_discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
 
 
-
 # BEAM 
-beam_config: scenarios/network-calibration/sfbay-pilates-network--cbg5500-jdeq-FC08-0.conf # OR austin-pilates-base.conf
+beam_config: scenarios/network-calibration/seattle-pilates-network--cbg412ferry-jdeq-FC07-5.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "400g"
+beam_memory: "600g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
@@ -120,6 +119,7 @@ beam_simulated_hwy_paths:
   - SOV
   - HOV2
   - HOV3
+file_format: "parquet"
 
 # POLARIS
 polaris_local_data_folder: pilates/polaris/data
