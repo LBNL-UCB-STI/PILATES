@@ -79,11 +79,6 @@ def test_recordstore_invalid_initialization():
     with pytest.raises(TypeError):
         RecordStore(recordDict=["not", "a", "dict"])
 
-    # Passing a list with a non-Record item should raise TypeError
-    with pytest.raises(TypeError):
-        RecordStore(
-            recordList=[Record(unique_id="uid")],
-        )  # Valid, but let's add a bad item
     # The above line passes a correct Record; to trigger error we need a bad item:
     with pytest.raises(TypeError):
         RecordStore(recordList=[object()])

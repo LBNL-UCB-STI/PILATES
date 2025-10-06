@@ -51,12 +51,7 @@ class RecordStore:
         if recordList is not None:
             # Accept a list of Record objects (used by tests and some preprocessors)
             for record in recordList:
-                if not isinstance(record, Record):
-                    raise TypeError(
-                        "All items in recordList must be instances of Record."
-                    )
-                if record.unique_id:
-                    self.records[record.unique_id] = record
+                self.add_record(record)
 
     def __add__(self, other: "RecordStore") -> "RecordStore":
         """
@@ -77,6 +72,8 @@ class RecordStore:
         return self
 
     def add_record(self, record: Record) -> "RecordStore":
+        if not isinstance(record, Record):
+            raise TypeError("All items in recordList must be instances of Record.")
         if record.unique_id:
             self.records[record.unique_id] = record
         return self
@@ -110,6 +107,9 @@ class FileRecord(Record):
     producing_run_id: Optional[str] = None
     consuming_run_ids: List[str] = field(default_factory=list)
     schema: Optional[List[Dict[str, str]]] = field(default_factory=list)
+
+    def __hash__(self):
+        return hash(self.unique_id)
 
     def _create_schema(self):
         facets = {}
@@ -180,6 +180,9 @@ class RepoRecord(Record):
     repo_path: Optional[str] = None
     description: Optional[str] = None
     accessed_at: Optional[str] = None
+
+    def __hash__(self):
+        return hash(self.unique_id)
 
     def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
         """
