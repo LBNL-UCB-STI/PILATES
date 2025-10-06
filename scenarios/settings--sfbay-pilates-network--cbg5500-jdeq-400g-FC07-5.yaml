@@ -26,7 +26,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   beam: docker://haitamlaarabi/beam:1.0.beta.251005
-  activitysim: docker://zaneedell/activitysim:0.1.11
+  activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
 # docker settings
@@ -34,7 +34,7 @@ docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
   beam: haitamlaarabi/beam:1.0.beta.251005
-  activitysim: zaneedell/activitysim:0.1.4
+  activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
 pull_latest: False
@@ -99,7 +99,6 @@ atlas_discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1
 atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
 
 
-
 # BEAM 
 beam_config: scenarios/network-calibration/sfbay-pilates-network--cbg5500-jdeq-FC07-5.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
@@ -108,7 +107,7 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "400g"
+beam_memory: "600g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
 replan_hh_samp_size: 0
