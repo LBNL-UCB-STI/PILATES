@@ -43,7 +43,7 @@ from pilates.generic.records import (
     RecordStore,
     Record,
     PilatesRunInfo,
-    OpenLineageEventMetadata,
+    OpenLineageEventMetadata, H5TableRecord, H5FileRecord,
 )
 
 from workflow_state import WorkflowState
@@ -554,6 +554,116 @@ class FileProvenanceTracker(ProvenanceTracker):
 
         return schema_info
 
+    def _create_h5_table_records(
+            self,
+            h5_file_path: str,
+            h5_file_record: "H5FileRecord",
+            state: Optional[WorkflowState] = None,
+            updated_table_names: Optional[List[str]] = None,
+            source_file_paths: Optional[List[str]] = None,
+    ) -> List["H5TableRecord"]:
+        """
+        Creates H5TableRecord objects for all tables within an H5 file.
+        Reuses unique_ids from source files for unchanged tables.
+        """
+        # Build a lookup of existing table records from source files
+        source_table_lookup = {}
+        if source_file_paths and updated_table_names is not None:
+            source_table_lookup = self._build_source_table_lookup(source_file_paths)
+
+        table_records = []
+        try:
+            import os
+
+            file_mtime = os.path.getmtime(h5_file_path)
+
+            with pd.HDFStore(h5_file_path, mode="r") as store:
+                for table_name in store.keys():
+                    try:
+                        # Get just the first row for schema
+                        df_sample = store.select(table_name, stop=1)
+
+                        # Get table info for metadata hash
+                        try:
+                            storer = store.get_storer(table_name)
+                            nrows = storer.nrows if storer else len(df_sample.index) if len(df_sample) > 0 else 0
+                        except Exception:
+                            # Fallback: try to get nrows another way
+                            try:
+                                nrows = len(store.select(table_name, start=0, stop=None))
+                            except Exception:
+                                nrows = None  # Give up gracefully
+
+                        # Check if this table was updated
+                        table_was_updated = (
+                                updated_table_names is None or
+                                table_name in updated_table_names or
+                                table_name.lstrip('/') in updated_table_names
+                        )
+
+                        if not table_was_updated and table_name in source_table_lookup:
+                            # Reuse the unique_id from the source table
+                            source_table = source_table_lookup[table_name]
+                            table_hash = source_table.unique_id
+                            logger.debug(f"Reusing unique_id for unchanged table '{table_name}': {table_hash}")
+                        else:
+                            # Create new hash for updated/new tables
+                            fingerprint = (
+                                f"{table_name}:"
+                                f"{nrows}:"
+                                f"{len(df_sample.columns)}:"
+                                f"{file_mtime}"
+                            )
+                            table_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
+
+                        schema = [
+                            {"name": col, "type": str(dtype)}
+                            for col, dtype in df_sample.dtypes.items()
+                        ]
+
+                        table_record = H5TableRecord(
+                            unique_id=table_hash,
+                            h5_file_unique_id=h5_file_record.unique_id,
+                            table_name=table_name,
+                            file_path=f"{h5_file_path}/{table_name}",
+                            created_at=datetime.now().isoformat(),
+                            short_name=f"{h5_file_record.short_name}_{table_name}",
+                            description=f"Table '{table_name}' from H5 file '{h5_file_record.short_name}'",
+                            models=h5_file_record.models,
+                            schema=schema,
+                            metadata={
+                                "table_name": table_name,
+                                "source_h5_file": h5_file_record.file_path,
+                                "nrows": nrows,
+                                "ncols": len(df_sample.columns),
+                                "file_modified": file_mtime,
+                                "was_updated": table_was_updated,
+                            },
+                            source_file_paths=h5_file_record.source_file_paths if not table_was_updated else [],
+                        )
+                        table_records.append(table_record)
+                    except Exception as e:
+                        logger.warning(f"Could not read table '{table_name}' from H5 file {h5_file_path}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to create H5TableRecords for {h5_file_path}: {e}")
+        return table_records
+
+    def _build_source_table_lookup(self, source_file_paths: List[str]) -> Dict[str, "H5TableRecord"]:
+        """
+        Builds a lookup dictionary of table_name -> H5TableRecord from source files.
+        """
+        table_lookup = {}
+        for source_path in source_file_paths:
+            source_hash = self._calculate_file_hash(source_path)
+            if source_hash in self.run_info.file_records:
+                source_record = self.run_info.file_records[source_hash]
+                if isinstance(source_record, H5FileRecord):
+                    for table_record in source_record.table_records:
+                        # Store by table name (normalize the leading slash)
+                        table_lookup[table_record.table_name] = table_record
+                        table_lookup[table_record.table_name.lstrip('/')] = table_record
+        return table_lookup
+
     def _get_or_create_file_record(
         self,
         file_path: str,
@@ -561,37 +671,73 @@ class FileProvenanceTracker(ProvenanceTracker):
         description: Optional[str] = None,
         short_name: Optional[str] = None,
         state: Optional[WorkflowState] = None,
-    ) -> Optional[FileRecord]:
+        source_file_paths: Optional[List[str]] = None,
+        updated_children: Optional[List[str]] = None,
+    ) -> Optional[Union["FileRecord", "H5FileRecord"]]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return None
-        if os.path.isdir(path_to_use):
-            file_hash = self._calculate_path_hash(path_to_use, state)
-        else:
+
+        if path_to_use.endswith((".h5", ".hdf5")):
             file_hash = self._calculate_file_hash(path_to_use, state)
-        if not file_hash:
-            logger.warning(
-                f"Could not calculate hash for {file_path}, cannot create record."
+            if not file_hash:
+                logger.warning(f"Could not calculate hash for H5 file {file_path}")
+                return None
+            if file_hash in self.run_info.file_records:
+                return self.run_info.file_records[file_hash]
+            h5_file_record = H5FileRecord(
+                unique_id=file_hash,
+                file_path=relative_path,
+                created_at=datetime.now().isoformat(),
+                short_name=short_name or os.path.splitext(os.path.basename(file_path))[0],
+                metadata=self._load_metadata(path_to_use),
+                description=description,
+                year = state.current_year if state else None,
+                models=[]
             )
-            return None
+            table_records = self._create_h5_table_records(
+                file_path,
+                h5_file_record,
+                state=state,
+                updated_table_names=updated_children,  # NEW
+                source_file_paths=source_file_paths  # NEW
+            )
 
-        if file_hash in self.run_info.file_records:
-            return self.run_info.file_records[file_hash]
+            # Store table records in file_records AND save their IDs in the H5FileRecord
+            for table_record in table_records:
+                self.run_info.file_records[table_record.unique_id] = table_record
 
-        metadata = self._load_metadata(path_to_use)
-        schema = self._get_schema_from_file(path_to_use)
+            h5_file_record.table_record_ids = [tr.unique_id for tr in table_records]
 
-        file_record = FileRecord(
-            unique_id=file_hash,
-            file_path=relative_path,
-            created_at=datetime.now().isoformat(),
-            short_name=short_name,
-            metadata=metadata,
-            description=description,
-            schema=schema,
-        )
-        self.run_info.file_records[file_hash] = file_record
-        return file_record
+            return h5_file_record
+        else:
+            if os.path.isdir(path_to_use):
+                file_hash = self._calculate_path_hash(path_to_use, state)
+            else:
+                file_hash = self._calculate_file_hash(path_to_use, state)
+            if not file_hash:
+                logger.warning(
+                    f"Could not calculate hash for {file_path}, cannot create record."
+                )
+                return None
+
+            if file_hash in self.run_info.file_records:
+                return self.run_info.file_records[file_hash]
+
+            metadata = self._load_metadata(path_to_use)
+            schema = self._get_schema_from_file(path_to_use)
+
+            file_record = FileRecord(
+                unique_id=file_hash,
+                file_path=relative_path,
+                created_at=datetime.now().isoformat(),
+                short_name=short_name,
+                metadata=metadata,
+                description=description,
+                schema=schema,
+            )
+            self.run_info.file_records[file_hash] = file_record
+            return file_record
 
     def rename_directory(self, old_directory_name, new_directory_name):
         """
@@ -791,6 +937,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         short_name: str = None,
         source_file_paths: list = None,
         state: Optional[WorkflowState] = None,
+        updated_children: Optional[List[str]] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(

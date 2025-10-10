@@ -249,6 +249,13 @@ class AtlasPostprocessor(GenericPostprocessor):
             if atlas_hh_input_record:
                 source_files_h5.append(atlas_hh_file)  # householdv data
 
+            warm_start = settings.get("warm_start", False)
+            if not warm_start:
+                updated_table = "/{}/households".format(output_year)
+            # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
+            else:
+                updated_table = "households"
+
             usim_output_record = self.provenance_tracker.record_output_file(
                 "atlas_postprocessor",
                 usim_h5_file,
@@ -258,6 +265,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 model_run_id=model_run_hash,
                 state=self.state,
                 source_file_paths=source_files_h5,
+                updated_children=[updated_table]
             )
 
         # ATLAS vehicles2 CSV (output) - source: vehicles CSV

@@ -14,7 +14,7 @@ import pandas as pd
 
 import duckdb
 
-from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata
+from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord
 from pilates.utils.database import (
     DatabaseManager,
     DatabaseUploadError,
@@ -154,6 +154,7 @@ class DuckDBManager(DatabaseManager):
                 "CREATE SEQUENCE IF NOT EXISTS openlineage_events_id_seq START 1"
             )
 
+
             # Create openlineage_events table - lightweight event metadata
             conn.execute(
                 """
@@ -240,6 +241,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim household data columns
                     household_id INTEGER,
@@ -271,6 +273,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim person data columns
                     person_id INTEGER,
@@ -300,6 +303,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim job data columns
                     job_id INTEGER,
@@ -324,6 +328,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim block data columns
                     block_id VARCHAR,
@@ -351,6 +356,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim building data columns
                     building_id INTEGER,
@@ -373,10 +379,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS urbansim_parcels_raw (
-                    id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_parcels_raw_id_seq'),
-                    file_record_id VARCHAR,
-                    run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Raw UrbanSim parcel data columns
                     parcel_id INTEGER,
@@ -402,10 +406,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('activitysim_households_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
-                    openlineage_id VARCHAR,
-                    
-                    -- Household data columns (will be dynamically created based on actual data)
-                    household_id INTEGER,
+                                        openlineage_id VARCHAR,
+                                        table_openlineage_id VARCHAR,                    household_id INTEGER,
                     TAZ VARCHAR,
                     persons INTEGER,
                     income FLOAT,
@@ -429,6 +431,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Person data columns (will be dynamically created based on actual data)
                     person_id INTEGER,
@@ -462,6 +465,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- Land use data columns (will be dynamically created based on actual data)
                     TAZ VARCHAR,
@@ -515,7 +519,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id VARCHAR,
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
-                    table_name VARCHAR,
+                    table_openlineage_id VARCHAR,
                     
                     -- JSON storage for flexible schema
                     data_json JSON,
@@ -1209,6 +1213,59 @@ class DuckDBManager(DatabaseManager):
                 "recommendations": []
             }
 
+    def check_dataset_exists_by_hash(self, unique_id: str) -> bool:
+        """Check if a dataset exists by its unique_id (hash)."""
+        try:
+            conn = self._get_connection()
+            result = conn.execute(
+                "SELECT 1 FROM file_records WHERE unique_id = ? LIMIT 1",
+                [unique_id],
+            ).fetchone()
+
+            return result is not None
+
+        except Exception as e:
+            logger.error(f"Failed to check dataset existence {unique_id}: {e}")
+            return False
+
+    def upload_file_record(self, file_record: FileRecord, run_id: str) -> bool:
+        """
+        Upload a single file record to the database.
+        """
+        try:
+            conn = self._get_connection()
+            conn.execute(
+                """
+                INSERT INTO file_records (
+                    unique_id, run_id, openlineage_id, file_path, created_at,
+                    short_name, description, year, models, producing_run_id,
+                    consuming_run_ids, source_file_paths, metadata, schema, exists
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (unique_id) DO NOTHING
+            """,
+                [
+                    file_record.unique_id,
+                    run_id,
+                    file_record.openlineage_id,
+                    file_record.file_path,
+                    file_record.created_at,
+                    file_record.short_name,
+                    file_record.description,
+                    file_record.year,
+                    file_record.models,
+                    file_record.producing_run_id,
+                    file_record.consuming_run_ids,
+                    file_record.source_file_paths,
+                    json.dumps(file_record.metadata),
+                    json.dumps(file_record.schema),
+                    file_record.exists,
+                ],
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
+            return False
+
     def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
         """
         Upload complete run data to DuckDB.
@@ -1353,17 +1410,17 @@ class DuckDBManager(DatabaseManager):
                 conn.execute(
                     """
                     INSERT INTO openlineage_events (
-                        run_id, model_run_id, event_time, event_type,
+                        id, run_id, model_run_id, event_time, event_type,
                         run_uuid, job_name
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
                 """,
                     [
                         run_info.run_id,
-                        event_metadata.model_run_id,
-                        event_metadata.event_time,
-                        event_metadata.event_type,
-                        event_metadata.run_uuid,
-                        event_metadata.job_name,
+                        event_metadata["model_run_id"],
+                        event_metadata["event_time"],
+                        event_metadata["event_type"],
+                        event_metadata["run_uuid"],
+                        event_metadata["job_name"],
                     ],
                 )
 
@@ -1478,6 +1535,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """
         Store raw UrbanSim data in the appropriate database table.
@@ -1488,6 +1546,7 @@ class DuckDBManager(DatabaseManager):
             file_record_id: File record unique ID
             run_id: PILATES run ID
             openlineage_id: OpenLineage dataset ID
+            table_openlineage_id: OpenLineage dataset ID for the table
 
         Returns:
             bool: True if storage successful
@@ -1497,27 +1556,27 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "persons":
                 return self._store_persons_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "jobs":
                 return self._store_jobs_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "blocks":
                 return self._store_blocks_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "buildings":
                 return self._store_buildings_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "parcels":
                 return self._store_parcels_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             else:
                 # Store in generic table for other raw data
@@ -1543,6 +1602,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """
         Store ActivitySim data in the appropriate database table.
@@ -1553,6 +1613,7 @@ class DuckDBManager(DatabaseManager):
             file_record_id: File record unique ID
             run_id: PILATES run ID
             openlineage_id: OpenLineage dataset ID
+            table_openlineage_id: OpenLineage dataset ID for the table
 
         Returns:
             bool: True if storage successful
@@ -1562,15 +1623,15 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "persons":
                 return self._store_persons_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             elif table_name == "land_use":
                 return self._store_land_use_data(
-                    conn, df, file_record_id, run_id, openlineage_id
+                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
                 )
             else:
                 # Store in generic table for other ActivitySim inputs
@@ -1591,6 +1652,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store households data in activitysim_households table using efficient bulk loading."""
         try:
@@ -1599,6 +1661,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns
             expected_cols = [
@@ -1615,13 +1678,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM activitysim_households WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM activitysim_households WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1648,6 +1711,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store persons data in activitysim_persons table using efficient bulk loading."""
         try:
@@ -1656,6 +1720,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns
             expected_cols = [
@@ -1679,13 +1744,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM activitysim_persons WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM activitysim_persons WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1712,6 +1777,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store land use data in activitysim_land_use table using efficient bulk loading."""
         try:
@@ -1720,6 +1786,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns - land use tables have many columns
             expected_cols = [
@@ -1761,13 +1828,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM activitysim_land_use WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM activitysim_land_use WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1795,6 +1862,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store generic ActivitySim data in JSON format."""
         try:
@@ -1803,16 +1871,16 @@ class DuckDBManager(DatabaseManager):
 
             # Insert data
             conn.execute(
-                "DELETE FROM activitysim_data_generic WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM activitysim_data_generic WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
             conn.execute(
                 """
                 INSERT INTO activitysim_data_generic (
-                    file_record_id, run_id, openlineage_id, table_name, data_json
-                ) VALUES (?, ?, ?, ?, ?)
+                    file_record_id, run_id, openlineage_id, table_name, data_json, table_openlineage_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-                [file_record_id, run_id, openlineage_id, table_name, data_json],
+                [file_record_id, run_id, openlineage_id, table_name, data_json, table_openlineage_id],
             )
 
             logger.info(
@@ -1832,6 +1900,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw households data in urbansim_households_raw table using efficient bulk loading."""
         try:
@@ -1840,6 +1909,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = [
@@ -1858,13 +1928,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_households_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_households_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1891,6 +1961,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw persons data in urbansim_persons_raw table using efficient bulk loading."""
         try:
@@ -1899,6 +1970,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = [
@@ -1917,13 +1989,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_persons_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_persons_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1950,6 +2022,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw jobs data in urbansim_jobs_raw table using efficient bulk loading."""
         try:
@@ -1958,6 +2031,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = ["job_id", "building_id", "sector_id", "home_based_status"]
@@ -1966,13 +2040,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_jobs_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_jobs_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -1999,6 +2073,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw blocks data in urbansim_blocks_raw table using efficient bulk loading."""
         try:
@@ -2007,6 +2082,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = [
@@ -2031,13 +2107,13 @@ class DuckDBManager(DatabaseManager):
                 df_copy["block_id"] = df_copy["block_id"].astype(str)
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_blocks_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_blocks_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -2064,6 +2140,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw buildings data in urbansim_buildings_raw table using efficient bulk loading."""
         try:
@@ -2072,6 +2149,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = [
@@ -2087,13 +2165,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_buildings_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_buildings_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration
@@ -2120,6 +2198,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
+        table_openlineage_id: str,
     ) -> bool:
         """Store raw parcels data in urbansim_parcels_raw table using efficient bulk loading."""
         try:
@@ -2128,6 +2207,7 @@ class DuckDBManager(DatabaseManager):
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
             df_copy["openlineage_id"] = openlineage_id
+            df_copy["table_openlineage_id"] = table_openlineage_id
 
             # Handle column mapping and missing columns for raw data
             expected_cols = [
@@ -2142,13 +2222,13 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this openlineage_id
+            # Delete existing data for this table_openlineage_id
             conn.execute(
-                "DELETE FROM urbansim_parcels_raw WHERE openlineage_id = ?",
-                [openlineage_id],
+                "DELETE FROM urbansim_parcels_raw WHERE table_openlineage_id = ?",
+                [table_openlineage_id],
             )
 
             # Bulk insert using DuckDB's DataFrame integration

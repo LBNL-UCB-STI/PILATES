@@ -3,6 +3,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union, Any
 import logging
+import hashlib
 
 from openlineage.client.facet import SchemaField, SchemaDatasetFacet
 from openlineage.client.run import Dataset, InputDataset, OutputDataset
@@ -20,7 +21,8 @@ class Record:
     openlineage_id: Optional[str] = None
 
     def __post_init__(self):
-        self.openlineage_id = str(uuid.uuid4())
+        if self.openlineage_id is None:
+            self.openlineage_id = str(uuid.uuid4())
 
     def __hash__(self):
         return hash(self.unique_id)
@@ -89,7 +91,7 @@ class RecordStore:
     def get_record(self, unique_id: str) -> Optional[Record]:
         return self.records.get(unique_id)
 
-    def all_records(self) -> List[Union["FileRecord", "RepoRecord"]]:
+    def all_records(self) -> List[Union["FileRecord", "RepoRecord", "H5FileRecord", "H5TableRecord"]]:
         return list(self.records.values())
 
     def all_unique_ids(self) -> List[str]:
@@ -176,6 +178,90 @@ class FileRecord(Record):
 
 
 @dataclass(kw_only=True)
+class H5TableRecord(FileRecord):
+    """
+    Represents a table within an H5 file.
+    Inherits from FileRecord but adds specific H5 context.
+    """
+    h5_file_unique_id: str  # Unique ID of the parent H5FileRecord
+    table_name: str
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Ensure unique_id is based on table content hash, not file_path
+        # This will be set during creation in the postprocessor
+        if self.unique_id is None:
+            # A placeholder unique_id if not explicitly provided, will be overwritten by hash
+            self.unique_id = str(uuid.uuid4())
+
+
+@dataclass(kw_only=True)
+class H5FileRecord(Record):
+    """
+    Represents an H5 file container, holding references to its internal tables.
+    """
+    file_path: str
+    models: List[str] = field(default_factory=list)
+    description: Optional[str] = None
+    year: Optional[int] = None
+    metadata: dict = field(default_factory=dict)
+    table_record_ids: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Ensure unique_id is based on the hash of the H5 file content
+        # This will be set during creation in the postprocessor
+        if self.unique_id is None:
+            # A placeholder unique_id if not explicitly provided, will be overwritten by hash
+            self.unique_id = str(uuid.uuid4())
+
+    def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
+        """
+        Converts the H5FileRecord to an OpenLineage Dataset.
+        """
+        return Dataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
+            },
+        )
+
+    def toInputDataset(self, namespace: Optional[str] = "default") -> InputDataset:
+        """
+        Converts the H5FileRecord to an OpenLineage InputDataset.
+        """
+        return InputDataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
+            },
+        )
+
+    def toOutputDataset(self, namespace: Optional[str] = "default") -> OutputDataset:
+        """
+        Converts the H5FileRecord to an OpenLineage OutputDataset.
+        """
+        return OutputDataset(
+            namespace=namespace,
+            name=self.short_name or self.file_path,
+            facets={
+                "filePath": self.file_path,
+                "description": self.description or "",
+                "year": self.year,
+                "metadata": self.metadata,
+            },
+        )
+
+
+@dataclass(kw_only=True)
 class RepoRecord(Record):
     repo_path: Optional[str] = None
     description: Optional[str] = None
@@ -257,7 +343,7 @@ class PilatesRunInfo:
     settings_hash: Optional[str] = None
     code_version: Optional[str] = None
     hostname: Optional[str] = None
-    file_records: Dict[str, "FileRecord"] = field(default_factory=dict)
+    file_records: Dict[str, Union["FileRecord", "H5FileRecord", "H5TableRecord"]] = field(default_factory=dict)
     repo_records: Dict[str, RepoRecord] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
     config_snapshot: Optional[Dict[str, Any]] = None

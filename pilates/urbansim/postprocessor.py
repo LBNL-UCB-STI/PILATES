@@ -135,6 +135,7 @@ def create_next_iter_usim_data(
                     short_name=f"usim_input_merged_{forecast_year}",
                     model_run_id=model_run_hash,
                     source_file_paths=[new_input_store_path, output_store_path],
+                    updated_children=updated_tables,
                 )
                 logger.info(
                     f"Recorded merged input H5 for provenance: {input_store_path}"

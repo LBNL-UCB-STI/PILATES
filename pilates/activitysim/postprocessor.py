@@ -480,6 +480,7 @@ def create_usim_input_data(
         description="New UrbanSim input data for next iteration",
         model_run_id=model_run_hash,
         source_file_paths=all_source_paths,
+        updated_children=updated_tables,  # Pass the list you already track!
     )
 
     return input_store_path, output_record

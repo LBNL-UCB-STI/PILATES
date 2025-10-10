@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import uuid
+import hashlib
 from datetime import datetime
 from typing import Dict, Any, Optional
 import pandas as pd
@@ -195,6 +196,91 @@ def _upload_activitysim_csv_data(
         logger.error(f"Failed to upload ActivitySim CSV data: {e}")
         return False
 
+def _upload_h5_data(
+    file_path: str, run_info: PilatesRunInfo, db_manager: DatabaseManager, file_record: FileRecord
+) -> bool:
+    """
+    Upload data from an H5 file to the database.
+    """
+    try:
+        import h5py
+
+        with h5py.File(file_path, "r") as f:
+            for table_name in f.keys():
+                logger.info(f"Reading table '{table_name}' from H5 file: {file_path}")
+                try:
+                    df = pd.read_hdf(file_path, key=table_name)
+
+                    # Calculate hash of the table data
+                    table_hash = hashlib.sha256(df.to_csv().encode()).hexdigest()
+
+                    # Create a FileRecord for the table
+                    table_file_record = FileRecord(
+                        unique_id=table_hash,
+                        openlineage_id=str(uuid.uuid4()),
+                        file_path=f"{file_path}/{table_name}",
+                        created_at=datetime.now().isoformat(),
+                        short_name=f"{file_record.short_name}_{table_name}",
+                        description=f"Table '{table_name}' from H5 file '{file_record.short_name}'",
+                        models=file_record.models,
+                        schema=[
+                            {"name": col, "type": str(dtype)}
+                            for col, dtype in df.dtypes.items()
+                        ],
+                        metadata={
+                            "table_name": table_name,
+                            "source_h5_file": file_record.file_path,
+                        },
+                        source_file_paths=[file_record.unique_id],
+                    )
+
+                    # Check if the table data already exists
+                    if db_manager.check_dataset_exists_by_hash(table_file_record.unique_id):
+                        logger.info(f"Skipping table upload, dataset already exists: {table_name}")
+                        continue
+
+                    # Upload the table's FileRecord
+                    db_manager.upload_file_record(table_file_record, run_info.run_id)
+
+                    db_manager.store_urbansim_raw_data(
+                            table_name,
+                            df,
+                            table_file_record.unique_id,
+                            run_info.run_id,
+                            file_record.openlineage_id,
+                            table_file_record.openlineage_id,
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not read table '{table_name}' from H5 file: {e}")
+        return True
+    except ImportError:
+        logger.error("h5py is required to upload H5 files. Please install it.")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to upload H5 file {file_path}: {e}")
+        return False
+
+def _upload_data_from_file_records(
+    run_info: PilatesRunInfo, db_manager: DatabaseManager
+) -> bool:
+    """
+    Upload data from file records to the database.
+    """
+    try:
+        for file_record in run_info.file_records.values():
+            if file_record.file_path.endswith(".h5"):
+                logger.info(f"Found H5 file: {file_record.file_path}")
+                _upload_h5_data(file_record.file_path, run_info, db_manager, file_record)
+            elif file_record.file_path.endswith(".csv"):
+                # This is a CSV file.
+                logger.info(f"Found CSV file: {file_record.file_path}")
+                # TODO: Implement generic CSV upload
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to upload data from file records: {e}")
+        return False
+
 
 def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) -> bool:
     """
@@ -298,7 +384,11 @@ def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) ->
                 run_info_path, run_info, db_manager
             )
 
-            if metadata_success and data_success:
+            # Upload data from file records
+            record_data_success = _upload_data_from_file_records(run_info, db_manager)
+
+
+            if metadata_success and data_success and record_data_success:
                 logger.info(
                     f"Successfully uploaded ALL data (metadata + CSV files) for run {run_info.run_id}"
                 )
