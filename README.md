@@ -1,194 +1,58 @@
 <p align="center"><img src="logo_multi.png" width="700" alt="PILATES Logo"></p>
 
-**PILATES** (**P**latform for **I**ntegrated **L**anduse **A**nd **T**ransportation **E**xperiments and **S**imulation) is a framework for orchestrating containerized microsimulation applications to model the co-evolution of land use and transportation systems. It is designed for long-term regional forecasting, enabling researchers and planners to simulate complex urban dynamics over time by linking specialized models that operate at different time scales.
+**PILATES** (**P**latform for **I**ntegrated **L**anduse **A**nd **T**ransportation **E**xperiments and **S**imulation) is a framework for orchestrating containerized microsimulation models to study the co-evolution of land use and transportation systems. Designed for long-term regional forecasting, PILATES enables researchers and planners to simulate complex urban dynamics over multi-decade periods by linking specialized models that operate at different time scales.
 
-Rather than tightly coupling models within a single software process, PILATES orchestrates them in a containerized environment. This modular structure allows it to leverage the behavioral sophistication of existing models with minimal modification.
-
------
-
-## Key Features
-
-  * **Integrated Microsimulation**: Orchestrate multiple containerized models like UrbanSim, ActivitySim, and BEAM in a cohesive workflow.
-  * **Flexible Workflows**: Configure various combinations of land use and transportation models and set their execution frequency to study different feedback loops.
-  * **State Management**: Reliably track and persist the simulation state across different model runs and time steps.
-  * **Provenance Tracking**: Record a detailed lineage of all data transformations and model executions for reproducibility.
-  * **HPC Ready**: Designed to run efficiently on high-performance computing (HPC) environments.
-  * **Dual Storage Database System**: Store and query simulation data in analytical databases for improved performance and data provenance.
-
------
-
-## Database Integration & Dual Storage
-
-PILATES includes a powerful dual storage system that enables analytical database backends for improved performance, scalability, and data provenance. This system is particularly valuable for large-scale simulations and cloud deployments.
-
-### Key Database Features
-
-  * **Dual Storage Architecture**: Automatically stores both raw UrbanSim data and processed ActivitySim inputs, preserving the expensive preprocessing results while maintaining access to original data.
-  * **Database Input Mode**: ActivitySim can read input data directly from the database instead of H5 files, eliminating preprocessing overhead and enabling faster startup times.
-  * **Parallel Uploads**: Efficiently upload large datasets using parallel table operations for improved performance.
-  * **OpenLineage Integration**: Complete data lineage tracking with OpenLineage metadata for full reproducibility.
-  * **Multiple Backends**: Currently supports DuckDB with extensible architecture for other analytical databases.
-
-### Supported Workflows
-
-1. **H5 to Database Extraction**: Convert existing UrbanSim H5 files to database format with dual storage
-   ```bash
-   python pilates/utils/h5_to_database.py --h5-file /path/to/urbansim_data.h5 --settings settings.yaml
-   ```
-
-2. **Run Upload from run_info.json**: Upload completed simulation results including ActivitySim CSV inputs
-   ```bash
-   python pilates/utils/upload_runs.py --run-info /path/to/run_info.json --settings settings.yaml
-   ```
-
-3. **Database Input Mode**: Configure ActivitySim to read from database instead of H5 files
-   ```yaml
-   # settings.yaml
-   database:
-     enabled: true
-     type: duckdb
-     path: pilates/database/region_data.duckdb
-   
-   activitysim_database:
-     enabled: true
-     use_processed_data: true
-     year: 2017
-   ```
-
-### Performance Benefits
-
-- **Faster ActivitySim Startup**: Skip expensive H5 preprocessing by reading pre-processed data from database
-- **Parallel Processing**: Multiple tables uploaded simultaneously for improved throughput
-- **Cloud Ready**: Database backends enable scalable cloud deployments
-- **Memory Efficiency**: Query only needed data subsets instead of loading entire H5 files
-
-For detailed database setup and usage instructions, see [docs/database-setup.md](docs/database-setup.md).
-
-### Database Documentation & Schema
-
-PILATES includes comprehensive database documentation features to support sharing databases with external developers and program managers:
-
-**Automatic Documentation Features:**
-- **SQL COMMENT statements** on all tables and 200+ columns - documentation lives in the database
-- **Summary views** for non-technical users (8 pre-built views like `run_summary`, `data_lineage_summary`, etc.)
-- **Multi-format exports** - Generate schema docs in Markdown, JSON, CSV, and HTML formats
-- **Validation reports** - Automated data quality checks
-- **Schema versioning** - Track database evolution over time
-
-**Export Database Documentation:**
-```bash
-# Quick export using helper script
-./export_database_docs.sh database.duckdb
-
-# Or use Python directly for custom formats
-python pilates/utils/export_data_dictionary.py \
-    --database database.duckdb \
-    --output docs/schema.html \
-    --format html
-```
-
-**Query Using Summary Views:**
-```sql
--- Easy queries without complex SQL
-SELECT * FROM run_summary;
-SELECT * FROM data_lineage_summary;
-SELECT * FROM household_demographics_summary;
-SELECT * FROM taz_summary WHERE population > 1000;
-```
-
-**Test Database with Examples:**
-```bash
-# Run stub test and save database for examination
-./run_stub_test_with_output.sh
-
-# Examine the test database
-duckdb ./test_output/activitysim_beam/test_database.duckdb
-
-# View documentation
-open ./test_output/activitysim_beam/documentation/schema.html
-```
-
-For complete documentation guide, see [docs/database_documentation_guide.md](docs/database_documentation_guide.md).
-
-**For Developers: Adding Database Documentation**
-
-When adding new tables or fields to the database schema, follow these steps to maintain comprehensive documentation:
-
-1. **Add SQL COMMENT statements** in `pilates/utils/duckdb_manager.py`:
-   ```python
-   # In _add_schema_documentation() method
-
-   # Add table comment
-   conn.execute("COMMENT ON TABLE my_new_table IS 'Brief description of what this table stores'")
-
-   # Add column comments
-   conn.execute("COMMENT ON COLUMN my_new_table.my_column IS 'Description of this column and its values'")
-   ```
-
-2. **Follow naming conventions**:
-   - Use clear, descriptive table/column names
-   - Prefix raw tables with model name (e.g., `urbansim_households_raw`)
-   - Prefix processed tables with destination (e.g., `activitysim_households`)
-
-3. **Add to summary views** (if applicable) in `create_summary_views()`:
-   ```python
-   # If your table should be easily accessible to non-technical users,
-   # create a summary view that simplifies the query
-   ```
-
-4. **Test your documentation**:
-   ```bash
-   # Verify comments are visible
-   duckdb database.duckdb -c "SELECT comment FROM duckdb_columns() WHERE table_name = 'my_new_table'"
-
-   # Test export
-   python pilates/utils/export_data_dictionary.py --database database.duckdb --output test.html --format html
-   ```
-
-5. **Update examples** in `docs/example_queries.sql` if your table/field enables new analysis workflows
-
-Documentation is automatically included in all database exports and visible to anyone querying the database!
+Rather than tightly coupling models within a single software process, PILATES orchestrates them in a containerized environment. This modular architecture allows it to leverage the behavioral sophistication of existing specialized models with minimal modification, while providing robust state management and reproducibility.
 
 -----
 
 ## Integrated Simulation Models
 
-PILATES integrates several leading simulation models to create a comprehensive forecasting tool. Each model handles a different aspect of the urban system.
+PILATES integrates several leading microsimulation models to create a comprehensive forecasting platform:
 
-  * **[UrbanSim](https://github.com/UDST/urbansim)**: A microsimulation platform for modeling the long-term evolution of metropolitan areas. It simulates the choices of households and businesses regarding location, as well as the decisions of real estate developers, to predict changes in land use, demographics, and economic conditions over periods of years or decades.
+  * **[UrbanSim](https://github.com/UDST/urbansim)**: Models long-term metropolitan evolution by simulating household and business location choices, real estate development, and land use changes over periods of years or decades.
 
-  * **[ATLAS](https://doi.org/10.1080/03081060.2024.2353784)**: A household vehicle fleet microsimulation model that focuses on fleet dynamics, including vehicle purchase, replacement, and technology choice (e.g., electric vs. internal combustion engine vehicles). ATLAS provides detailed insights into fleet turnover and technology adoption over time.
+  * **[ATLAS](https://doi.org/10.1080/03081060.2024.2353784)**: Simulates household vehicle fleet dynamics, including vehicle purchase, replacement, and technology adoption (e.g., electric vs. internal combustion vehicles).
 
-  * **[ActivitySim](https://github.com/ActivitySim/activitysim)**: An agent-based travel demand model that simulates the daily activities and travel patterns of a synthetic population. It generates individual travel plans, including the purpose, destination, time of day, and mode of travel for each trip, which serve as the demand input for the transport network model.
+  * **[ActivitySim](https://github.com/ActivitySim/activitysim)**: Generates daily activity-based travel demand by simulating individual travel decisions including trip purpose, destination, time of day, and mode choice for a synthetic population.
 
-  * **[BEAM](https://github.com/LBNL-UCB-STI/beam)**: The **B**ehavior, **E**nergy, **A**utonomy, and **M**obility modeling framework. BEAM is an agent-based transportation simulation model that executes the travel plans generated by ActivitySim on a detailed road network. It simulates traffic congestion, transit operations, and the use of emerging modes like ride-hail, producing network performance metrics (skims) that are fed back to the demand models.
+  * **[BEAM](https://github.com/LBNL-UCB-STI/beam)**: The **B**ehavior, **E**nergy, **A**utonomy, and **M**obility framework simulates agent-based transportation on detailed road networks, modeling traffic congestion, transit operations, and emerging mobility services to produce network performance metrics.
 
 -----
 
 ## Simulation Scenarios
 
-PILATES can be configured to run various simulation scenarios, from simple network analysis to fully integrated long-term forecasting.
+PILATES supports various simulation configurations to match different research and planning needs:
 
-1.  **BEAM Only**: This configuration is useful for detailed analysis of network performance using a fixed set of travel plans. It allows for studying the impacts of new infrastructure, operational strategies, or mobility services without the complexity of a dynamic demand model.
+1.  **BEAM Only**: Detailed network performance analysis using fixed travel plans. Ideal for studying infrastructure impacts, operational strategies, or new mobility services.
 
-2.  **ActivitySim + BEAM**: This represents a standard agent-based travel demand model. ActivitySim generates daily travel demand, which BEAM then simulates on the network. The resulting network travel times are fed back to ActivitySim in a loop until a stable equilibrium is reached, providing a detailed snapshot of a typical day.
+2.  **ActivitySim + BEAM**: Agent-based travel demand modeling with network feedback. ActivitySim generates daily travel demand, BEAM simulates it on the network, and the resulting travel times feed back until equilibrium is reached.
 
-3.  **UrbanSim + ActivitySim + BEAM**: This workflow enables the study of feedback between land use and transportation. UrbanSim simulates long-term changes (e.g., over a 5-year period), the results of which are used to generate daily travel demand in ActivitySim/BEAM. The resulting changes in accessibility from the transport model can then inform the next UrbanSim simulation period.
+3.  **UrbanSim + ActivitySim + BEAM**: Long-term land use and transportation co-evolution. UrbanSim simulates multi-year changes, which inform ActivitySim/BEAM travel demand modeling. Changes in accessibility from the transport model inform the next UrbanSim period.
 
-4.  **UrbanSim + ATLAS + ActivitySim + BEAM**: This is the most comprehensive configuration, capturing the co-evolution of land use, transport, and vehicle technology. It adds ATLAS to the simulation loop to model how changes in the transportation system and household location influence the types of vehicles people own, which in turn affects energy consumption and emissions.
+4.  **UrbanSim + ATLAS + ActivitySim + BEAM**: Comprehensive modeling of land use, transportation, and vehicle technology co-evolution, including how system changes influence household vehicle choices and their effects on energy consumption and emissions.
+
+-----
+
+## Key Features
+
+  * **Modular Architecture**: Containerized models (Docker/Singularity) can be mixed and matched to create custom simulation workflows
+  * **Flexible Temporal Coupling**: Configure execution frequency of different models to study various feedback loops and time horizons
+  * **State Management**: Automated tracking and persistence of simulation state across model runs and time steps
+  * **Reproducibility**: Complete provenance tracking of data transformations and model executions
+  * **High-Performance Computing**: Optimized for HPC environments with parallel processing support
+  * **Database Integration**: Optional analytical database backend for improved performance and data management
 
 -----
 
 ## Getting Started
 
-Follow these steps to get PILATES up and running on your local machine.
+### Prerequisites
 
-### 1\. Prerequisites
+  * Container runtime: **Docker** or **Singularity**
+  * **Anaconda** or **Miniconda** for Python environment management
 
-  * A container runtime: **Docker** or **Singularity**
-  * **Anaconda** or **Miniconda** to manage the Python environment
-
-### 2\. Installation
+### Installation
 
 1.  **Clone the repository:**
 
@@ -203,229 +67,93 @@ Follow these steps to get PILATES up and running on your local machine.
     conda env create -f environment.yml
     conda activate pilates
     ```
-3.  **Download the input data:**
 
- Various types of raw input data are required for the different models. See [lawrencium-setup.md](lawrencium-setup.md#download-data) for instructions on how to download and prepare the input data.
-### 3\. Configuration
+3.  **Download input data:**
 
-1.  Open the `settings.yaml` file.
-2.  Set your container preference: `container_manager: "docker"` or `"singularity"`.
-3.  Update region-specific parameters and computational settings (`num_processors`, `chunk_size`, etc.) as needed.
-4.  (Optional) Configure database integration for improved performance:
-    ```yaml
-    database:
-      enabled: true
-      type: duckdb
-      path: pilates/database/region_data.duckdb
-    ```
+    Various raw input data files are required for the different models. See [lawrencium-setup.md](lawrencium-setup.md#download-data) for instructions.
 
-### 4\. Running a Simulation
+### Configuration
 
-Execute the main script from the root directory. Use the `-p` flag to pull the latest container images before the first run.
+1.  Edit `settings.yaml` to configure your simulation:
+    - Set container preference: `container_manager: "docker"` or `"singularity"`
+    - Update region-specific parameters
+    - Adjust computational settings (`num_processors`, `chunk_size`, etc.)
+
+### Running a Simulation
+
+Execute the main script from the root directory. Use the `-p` flag to pull the latest container images before the first run:
 
 ```bash
 python run.py -v -p
 ```
 
------
+## Advanced Features
 
-## Advanced Usage
+### Database Integration
 
-### Database Workflows
+PILATES includes an optional database backend for improved performance and scalability. The database system supports:
 
-Convert existing UrbanSim H5 files for faster ActivitySim processing:
+- Direct database input to ActivitySim, eliminating expensive H5 preprocessing
+- Dual storage architecture preserving both raw and processed data
+- Parallel data uploads for large-scale simulations
+- Complete data lineage tracking with OpenLineage metadata
+- Automatic schema documentation and data quality validation
 
-```bash
-# Extract H5 to database with dual storage
-python pilates/utils/h5_to_database.py --h5-file /path/to/urbansim_data.h5 --settings settings.yaml
-
-# Upload completed runs to database
-python pilates/utils/upload_runs.py --run-dir /path/to/run_output --settings settings.yaml
-```
-
-### Background Process
-
-To run PILATES as a background process, use `nohup`:
-
-```bash
-nohup python run.py -v &
-```
-
-The output will be saved to `nohup.out`.
+For detailed setup and usage instructions, see [docs/database-setup.md](docs/database-setup.md) and [docs/database_documentation_guide.md](docs/database_documentation_guide.md).
 
 ### HPC Execution
 
-For HPC environments, specialized scripts are available in the `hpc/` directory.
+For high-performance computing environments, specialized scripts are available in the `hpc/` directory. For detailed instructions on setting up PILATES on the Lawrencium cluster, see [lawrencium-setup.md](lawrencium-setup.md).
 
 ```bash
 cd hpc
 ./job_runner.sh [options]
 ```
 
-For detailed instructions on setting up PILATES on the Lawrencium cluster, see [`lawrencium-setup.md`](https://www.google.com/search?q=lawrencium-setup.md).
+### Background Execution
+
+To run PILATES as a background process:
+
+```bash
+nohup python run.py -v &
+```
+
+Output will be saved to `nohup.out`.
 
 -----
 
-## Preprocessor/Runner/Postprocessor Pattern
+## Architecture
 
-PILATES uses a consistent preprocessor/runner/postprocessor pattern to implement model execution. This pattern provides a structured approach to handling data preparation, model execution, and output processing for various simulation models.
+PILATES uses a consistent preprocessor/runner/postprocessor pattern for model execution, providing a structured approach to data preparation, model execution, and output processing. This pattern enables:
 
-### Pattern Overview
+- Modular development and testing of individual components
+- Reusability across different simulation models
+- Clear separation of concerns for maintainability
+- Integrated provenance tracking for reproducibility
 
-The pattern consists of three main components:
-
-1. **Preprocessor**: Prepares input data for the model by:
-   - Copying data to mutable locations
-   - Recording provenance of input files
-   - Performing any necessary data transformations
-
-2. **Runner**: Executes the core model functionality by:
-   - Running containerized simulations (Docker or Singularity)
-   - Managing input/output data flow
-   - Tracking model execution progress
-
-3. **Postprocessor**: Processes the raw outputs from the model by:
-   - Validating results
-   - Transforming data into standard formats
-   - Recording provenance of output files
-
-### Workflow Diagram
-
-```
-WorkflowState --> Initializes --> Preprocessor
-Preprocessor --> Prepared Data --> Runner
-Runner --> Raw Outputs --> Postprocessor
-Postprocessor --> Processed Data --> Workspace
-Workspace --> Stores Data --> Provenance Tracker
-Provenance Tracker --> Next Stage --> WorkflowState
-```
-
-### Implementing for a New Model
-
-To implement the pattern for a new model, you need to create three classes that extend the generic abstract classes:
-
-1. **Preprocessor Implementation**:
-   - Extend `GenericPreprocessor`
-   - Implement `copy_data_to_mutable_location()` to copy model-specific data
-   - Implement `preprocess()` to prepare data for the model run
-
-2. **Runner Implementation**:
-   - Extend `GenericRunner`
-   - Implement `run()` to execute the model using containers
-   - Handle model-specific container configuration
-
-3. **Postprocessor Implementation**:
-   - Extend `GenericPostprocessor`
-   - Implement `postprocess()` to process raw outputs
-   - Validate and transform data into standard formats
-
-### Example Implementation
-
-For a new model called "my_model", you would create:
-
-```python
-# my_model/preprocessor.py
-from pilates.generic.preprocessor import GenericPreprocessor
-
-class MyModelPreprocessor(GenericPreprocessor):
-    def copy_data_to_mutable_location(self, settings, output_dir):
-        # Implement data copying logic
-        pass
-
-    def preprocess(self, workspace, previous_records=RecordStore()):
-        # Implement preprocessing logic
-        pass
-
-# my_model/runner.py
-from pilates.generic.runner import GenericRunner
-
-class MyModelRunner(GenericRunner):
-    def run(self, store, workspace):
-        # Implement model execution logic
-        pass
-
-# my_model/postprocessor.py
-from pilates.generic.postprocessor import GenericPostprocessor
-
-class MyModelPostprocessor(GenericPostprocessor):
-    def postprocess(self, raw_outputs, runInfo, workspace, model_run_hash):
-        # Implement postprocessing logic
-        pass
-```
-
-### Registering the Model
-
-Register the model classes in the `ModelFactory`:
-
-```python
-# pilates/generic/model_factory.py
-class ModelFactory:
-    _registry = {
-        # Other models...
-        "my_model": {
-            "preprocessor": MyModelPreprocessor,
-            "runner": MyModelRunner,
-            "postprocessor": MyModelPostprocessor,
-        }
-    }
-```
-
-### Component Interaction
-
-1. **Preprocessor-Workspace Interaction**:
-   - The preprocessor uses the workspace to get paths for mutable data directories
-   - It copies input data to these locations and records the files in the provenance tracker
-
-2. **Runner-Workspace Interaction**:
-   - The runner uses the workspace to access prepared input data
-   - It executes the model in a container environment
-   - Outputs are stored back in the workspace
-
-3. **Postprocessor-Workspace Interaction**:
-   - The postprocessor reads raw outputs from the workspace
-   - Processes them into standardized formats
-   - Records the processed outputs in the provenance tracker
-
-### Provenance Tracking
-
-Provenance tracking is integrated throughout the pattern:
-
-- Preprocessors record input file locations and metadata
-- Runners track execution parameters and container information
-- Postprocessors document output file generation and transformations
-
-This comprehensive tracking enables full reproducibility of simulations.
-
-### Benefits of the Pattern
-
-1. **Modularity**: Each component can be developed and tested independently
-2. **Reusability**: Components can be reused across different models
-3. **Maintainability**: Clear separation of concerns improves code organization
-4. **Provenance**: Integrated tracking supports reproducibility
-
-This pattern is a key enabler of PILATES' flexibility and extensibility, allowing it to integrate diverse simulation models while maintaining a consistent framework for execution and data management.
+For implementation details and guidance on integrating new models, see [docs/architecture.md](docs/architecture.md).
 
 -----
 
-## Contributing and Support
+## Contributing
 
-We welcome contributions! For bug reports, feature requests, and support questions, please use the [GitHub issue tracker](https://www.google.com/search?q=https://github.com/LBNL-UCB-STI/PILATES/issues).
-
-Please see our (forthcoming) `CONTRIBUTING.md` for guidelines on making changes and our code style.
+We welcome contributions! Please use the [GitHub issue tracker](https://github.com/LBNL-UCB-STI/PILATES/issues) for bug reports, feature requests, and support questions.
 
 ### How to Contribute
 
-1.  **Fork** the repository.
-2.  Create a new feature branch (`git checkout -b feature/my-amazing-feature`).
-3.  Commit your changes (`git commit -m 'Add amazing feature'`).
-4.  Push to the branch (`git push origin feature/my-amazing-feature`).
-5.  Open a **Pull Request**.
+1.  Fork the repository
+2.  Create a feature branch (`git checkout -b feature/my-feature`)
+3.  Commit your changes (`git commit -m 'Add new feature'`)
+4.  Push to the branch (`git push origin feature/my-feature`)
+5.  Open a Pull Request
+
+Please see our (forthcoming) `CONTRIBUTING.md` for detailed guidelines.
 
 -----
 
 ## Citation
 
-If you use PILATES in your research, please cite the software release:
+If you use PILATES in your research, please cite:
 
 ```bibtex
 @misc{pilates_2024,
@@ -443,4 +171,4 @@ If you use PILATES in your research, please cite the software release:
 
 ## License
 
-This project is licensed under an MIT. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
