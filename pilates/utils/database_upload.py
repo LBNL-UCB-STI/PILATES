@@ -379,6 +379,22 @@ def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) ->
 
             logger.info(f"Successfully uploaded run metadata for {run_info.run_id}")
 
+            # Upload Zarr manifest data if available
+            for file_record in run_info.file_records.values():
+                if file_record.short_name and file_record.short_name.startswith("zarr_manifest_"):
+                    run_directory = os.path.dirname(run_info_path)
+                    manifest_full_path = os.path.join(run_directory, file_record.file_path)
+                    if os.path.exists(manifest_full_path):
+                        try:
+                            with open(manifest_full_path, 'r') as mf:
+                                manifest_content = json.load(mf)
+                            db_manager.upload_zarr_manifest_data(run_info.run_id, manifest_content)
+                            logger.info(f"Uploaded Zarr manifest data from {file_record.file_name}")
+                        except Exception as e:
+                            logger.error(f"Failed to upload Zarr manifest data from {file_record.file_path}: {e}")
+                    else:
+                        logger.warning(f"Zarr manifest file not found at {manifest_full_path}")
+
             # Try to upload ActivitySim CSV data if present
             data_success = _upload_activitysim_csv_data(
                 run_info_path, run_info, db_manager

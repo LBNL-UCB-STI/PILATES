@@ -14,7 +14,7 @@ import pandas as pd
 
 import duckdb
 
-from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord
+from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord, H5FileRecord, H5TableRecord
 from pilates.utils.database import (
     DatabaseManager,
     DatabaseUploadError,
@@ -109,6 +109,7 @@ class DuckDBManager(DatabaseManager):
                 """
                 CREATE TABLE IF NOT EXISTS file_records (
                     unique_id VARCHAR PRIMARY KEY, -- File hash
+                    record_type VARCHAR, -- 'file', 'h5_container', 'h5_table'
                     run_id VARCHAR,
                     openlineage_id VARCHAR UNIQUE,
                     file_path VARCHAR,
@@ -123,6 +124,46 @@ class DuckDBManager(DatabaseManager):
                     metadata JSON,
                     schema JSON,
                     exists BOOLEAN DEFAULT TRUE,
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                )
+            """
+            )
+
+            # Create h5_table_records table for H5 file-table relationships
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS h5_table_records (
+                    unique_id VARCHAR PRIMARY KEY,
+                    h5_file_unique_id VARCHAR,
+                    table_name VARCHAR,
+                    FOREIGN KEY (unique_id) REFERENCES file_records(unique_id),
+                    FOREIGN KEY (h5_file_unique_id) REFERENCES file_records(unique_id)
+                )
+            """
+            )
+
+            # Create zarr_snapshots table for versioned Zarr manifest data
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS zarr_snapshots (
+                    snapshot_id VARCHAR PRIMARY KEY,
+                    run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
+                    snapshot_type VARCHAR,
+                    model VARCHAR,
+                    parent_snapshot_id VARCHAR,
+                    created_at TIMESTAMP,
+                    full_skims_path VARCHAR,
+                    full_skims_n_variables INTEGER,
+                    full_skims_n_chunks INTEGER,
+                    full_skims_total_size_mb FLOAT,
+                    partial_skims_path VARCHAR,
+                    partial_skims_n_variables INTEGER,
+                    partial_skims_n_chunks INTEGER,
+                    partial_skims_total_size_mb FLOAT,
+                    changed_chunks INTEGER,
+                    chunk_manifest JSON,
                     FOREIGN KEY (run_id) REFERENCES runs(run_id)
                 )
             """
@@ -379,6 +420,9 @@ class DuckDBManager(DatabaseManager):
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS urbansim_parcels_raw (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_parcels_raw_id_seq'),
+                    file_record_id VARCHAR,
+                    run_id VARCHAR,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -419,7 +463,8 @@ class DuckDBManager(DatabaseManager):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     
                     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id),
+                    UNIQUE (household_id, run_id)
                 )
             """
             )
@@ -453,7 +498,8 @@ class DuckDBManager(DatabaseManager):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     
                     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id),
+                    UNIQUE (person_id, run_id)
                 )
             """
             )
@@ -506,7 +552,8 @@ class DuckDBManager(DatabaseManager):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     
                     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+                    FOREIGN KEY (run_id) REFERENCES runs(run_id),
+                    UNIQUE (TAZ, run_id)
                 )
             """
             )
@@ -520,6 +567,7 @@ class DuckDBManager(DatabaseManager):
                     run_id VARCHAR,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
+                    table_name VARCHAR,
                     
                     -- JSON storage for flexible schema
                     data_json JSON,
@@ -674,6 +722,7 @@ class DuckDBManager(DatabaseManager):
             # file_records table
             conn.execute("COMMENT ON TABLE file_records IS 'Individual datasets with complete provenance lineage, linking files across model stages'")
             conn.execute("COMMENT ON COLUMN file_records.unique_id IS 'File content hash (SHA256) serving as unique identifier'")
+            conn.execute("COMMENT ON COLUMN file_records.record_type IS 'Type of record: file, h5_container, or h5_table'")
             conn.execute("COMMENT ON COLUMN file_records.run_id IS 'Foreign key to runs table indicating which run produced/used this file'")
             conn.execute("COMMENT ON COLUMN file_records.openlineage_id IS 'OpenLineage dataset UUID for cross-system lineage tracking'")
             conn.execute("COMMENT ON COLUMN file_records.file_path IS 'Absolute or relative path to the file on disk'")
@@ -688,6 +737,33 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN file_records.metadata IS 'JSON object with additional file metadata (size, format, row count, etc.)'")
             conn.execute("COMMENT ON COLUMN file_records.schema IS 'JSON array describing file schema (column names, types, descriptions)'")
             conn.execute("COMMENT ON COLUMN file_records.exists IS 'Boolean indicating if file still exists on disk'")
+
+            # h5_table_records table
+            conn.execute("COMMENT ON TABLE h5_table_records IS 'Stores the relationship between H5 container files and the tables within them'")
+            conn.execute("COMMENT ON COLUMN h5_table_records.unique_id IS 'Unique ID of the table record, foreign key to file_records.unique_id'")
+            conn.execute("COMMENT ON COLUMN h5_table_records.h5_file_unique_id IS 'Unique ID of the parent H5 container file, foreign key to file_records.unique_id'")
+            conn.execute("COMMENT ON COLUMN h5_table_records.table_name IS 'Name of the table within the H5 file'")
+
+            # zarr_snapshots table
+            conn.execute("COMMENT ON TABLE zarr_snapshots IS 'Detailed metadata for each versioned Zarr skim snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.snapshot_id IS 'Unique identifier for this Zarr snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.run_id IS 'Foreign key to runs table'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.year IS 'Simulation year of the snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.iteration IS 'Simulation iteration of the snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.snapshot_type IS 'Type of snapshot (e.g., initialization, merged)'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.model IS 'Model that produced this snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.parent_snapshot_id IS 'ID of the previous snapshot in the lineage'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.created_at IS 'Timestamp when the snapshot was created'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.full_skims_path IS 'Relative path to the full skims Zarr store'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.full_skims_n_variables IS 'Number of variables in the full skims Zarr store'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.full_skims_n_chunks IS 'Number of chunks in the full skims Zarr store'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.full_skims_total_size_mb IS 'Total size of the full skims Zarr store in MB'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.partial_skims_path IS 'Relative path to the partial skims Zarr store (if applicable)'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.partial_skims_n_variables IS 'Number of variables in the partial skims Zarr store (if applicable)'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.partial_skims_n_chunks IS 'Number of chunks in the partial skims Zarr store (if applicable)'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.partial_skims_total_size_mb IS 'Total size of the partial skims Zarr store in MB (if applicable)'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.changed_chunks IS 'Number of chunks changed from the parent snapshot'")
+            conn.execute("COMMENT ON COLUMN zarr_snapshots.chunk_manifest IS 'JSON object containing the chunk-level manifest for the full skims'")
 
             # model_runs table
             conn.execute("COMMENT ON TABLE model_runs IS 'Individual model execution records tracking each model component run with inputs/outputs'")
@@ -714,6 +790,13 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN openlineage_events.run_uuid IS 'OpenLineage run UUID (matches model_runs.openlineage_id)'")
             conn.execute("COMMENT ON COLUMN openlineage_events.job_name IS 'Formatted job name with model, year, and iteration'")
 
+            # schema_version table
+            conn.execute("COMMENT ON TABLE schema_version IS 'Tracks the evolution of the database schema over time'")
+            conn.execute("COMMENT ON COLUMN schema_version.version IS 'Integer representing the schema version number'")
+            conn.execute("COMMENT ON COLUMN schema_version.applied_at IS 'Timestamp when this schema version was applied'")
+            conn.execute("COMMENT ON COLUMN schema_version.description IS 'A brief description of the changes in this schema version'")
+            conn.execute("COMMENT ON COLUMN schema_version.pilates_version IS 'The version of the PILATES application that introduced this schema'")
+
             # ============================================================
             # RAW URBANSIM DATA TABLES
             # ============================================================
@@ -723,7 +806,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.file_record_id IS 'Foreign key to file_records for provenance tracking'")
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_households_raw.openlineage_id IS 'OpenLineage dataset ID for this data'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_households_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.household_id IS 'Unique household identifier from UrbanSim'")
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.building_id IS 'Building where household resides (links to buildings table)'")
             conn.execute("COMMENT ON COLUMN urbansim_households_raw.persons IS 'Number of people in household'")
@@ -739,7 +823,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.file_record_id IS 'Foreign key to file_records for provenance tracking'")
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_persons_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.person_id IS 'Unique person identifier from UrbanSim'")
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.household_id IS 'Household this person belongs to (links to households table)'")
             conn.execute("COMMENT ON COLUMN urbansim_persons_raw.age IS 'Person age in years'")
@@ -755,7 +840,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.job_id IS 'Unique job identifier'")
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.building_id IS 'Building where job is located'")
             conn.execute("COMMENT ON COLUMN urbansim_jobs_raw.sector_id IS 'Employment sector/industry category'")
@@ -766,7 +852,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.block_id IS 'Census block FIPS code'")
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.block_group_id IS 'Census block group FIPS code'")
             conn.execute("COMMENT ON COLUMN urbansim_blocks_raw.zone_id IS 'Zone identifier (may be TAZ or other)'")
@@ -780,7 +867,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.building_id IS 'Unique building identifier'")
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.parcel_id IS 'Parcel where building is located'")
             conn.execute("COMMENT ON COLUMN urbansim_buildings_raw.building_type_id IS 'Building type category (residential, commercial, etc.)'")
@@ -793,7 +881,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.openlineage_id IS 'OpenLineage dataset ID for the parent H5 file'")
+            conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.table_openlineage_id IS 'OpenLineage dataset ID for this specific table within the H5 file'")
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.parcel_id IS 'Unique parcel identifier'")
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.zone_id IS 'Zone where parcel is located'")
             conn.execute("COMMENT ON COLUMN urbansim_parcels_raw.land_value IS 'Assessed land value in dollars'")
@@ -809,7 +898,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN activitysim_households.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN activitysim_households.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN activitysim_households.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN activitysim_households.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.openlineage_id IS 'OpenLineage dataset ID for the parent file'")
+            conn.execute("COMMENT ON COLUMN activitysim_households.table_openlineage_id IS 'OpenLineage dataset ID for this specific table'")
             conn.execute("COMMENT ON COLUMN activitysim_households.household_id IS 'Unique household identifier (matches UrbanSim)'")
             conn.execute("COMMENT ON COLUMN activitysim_households.TAZ IS 'Traffic Analysis Zone where household resides (ActivitySim format)'")
             conn.execute("COMMENT ON COLUMN activitysim_households.persons IS 'Number of persons (mapped from UrbanSim PERSONS column)'")
@@ -823,7 +913,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN activitysim_persons.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN activitysim_persons.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN activitysim_persons.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN activitysim_persons.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.openlineage_id IS 'OpenLineage dataset ID for the parent file'")
+            conn.execute("COMMENT ON COLUMN activitysim_persons.table_openlineage_id IS 'OpenLineage dataset ID for this specific table'")
             conn.execute("COMMENT ON COLUMN activitysim_persons.person_id IS 'Unique person identifier (matches UrbanSim)'")
             conn.execute("COMMENT ON COLUMN activitysim_persons.household_id IS 'Household this person belongs to'")
             conn.execute("COMMENT ON COLUMN activitysim_persons.TAZ IS 'Home TAZ (matches household TAZ)'")
@@ -844,7 +935,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN activitysim_land_use.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN activitysim_land_use.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN activitysim_land_use.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN activitysim_land_use.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.openlineage_id IS 'OpenLineage dataset ID for the parent file'")
+            conn.execute("COMMENT ON COLUMN activitysim_land_use.table_openlineage_id IS 'OpenLineage dataset ID for this specific table'")
             conn.execute("COMMENT ON COLUMN activitysim_land_use.TAZ IS 'Traffic Analysis Zone identifier (mapped from UrbanSim ZONE)'")
             conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTPOP IS 'Total population in TAZ'")
             conn.execute("COMMENT ON COLUMN activitysim_land_use.TOTHH IS 'Total households in TAZ'")
@@ -882,7 +974,8 @@ class DuckDBManager(DatabaseManager):
             conn.execute("COMMENT ON COLUMN activitysim_data_generic.id IS 'Auto-incrementing database row ID'")
             conn.execute("COMMENT ON COLUMN activitysim_data_generic.file_record_id IS 'Foreign key to file_records'")
             conn.execute("COMMENT ON COLUMN activitysim_data_generic.run_id IS 'Foreign key to parent PILATES run'")
-            conn.execute("COMMENT ON COLUMN activitysim_data_generic.openlineage_id IS 'OpenLineage dataset ID'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.openlineage_id IS 'OpenLineage dataset ID for the parent file'")
+            conn.execute("COMMENT ON COLUMN activitysim_data_generic.table_openlineage_id IS 'OpenLineage dataset ID for this specific table'")
             conn.execute("COMMENT ON COLUMN activitysim_data_generic.table_name IS 'Name of the ActivitySim table stored here'")
             conn.execute("COMMENT ON COLUMN activitysim_data_generic.data_json IS 'Complete table data serialized as JSON for flexible schema support'")
 
@@ -1350,33 +1443,67 @@ class DuckDBManager(DatabaseManager):
 
             # 3. Upload file records
             for file_record in run_info.file_records.values():
+                # The item can be a dict (from JSON) or a dataclass object.
+                # This logic handles both cases.
+                def get_val(rec, key, default=None):
+                    if isinstance(rec, dict):
+                        return rec.get(key, default)
+                    return getattr(rec, key, default)
+
+                is_h5_table = get_val(file_record, "h5_file_unique_id") is not None
+                is_h5_container = get_val(file_record, "table_record_ids") is not None
+
+                record_type = "file"
+                if is_h5_table:
+                    record_type = "h5_table"
+                elif is_h5_container:
+                    record_type = "h5_container"
+
+                # Insert common fields into file_records table
                 conn.execute(
                     """
                     INSERT INTO file_records (
-                        unique_id, run_id, openlineage_id, file_path, created_at,
+                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
                         short_name, description, year, models, producing_run_id,
                         consuming_run_ids, source_file_paths, metadata, schema, exists
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (unique_id) DO NOTHING
-                """,
+                    """,
                     [
-                        file_record.unique_id,
+                        get_val(file_record, "unique_id"),
+                        record_type,
                         run_info.run_id,
-                        file_record.openlineage_id,
-                        file_record.file_path,
-                        file_record.created_at,
-                        file_record.short_name,
-                        file_record.description,
-                        file_record.year,
-                        file_record.models,
-                        file_record.producing_run_id,
-                        file_record.consuming_run_ids,
-                        file_record.source_file_paths,
-                        json.dumps(file_record.metadata),
-                        json.dumps(file_record.schema),
-                        file_record.exists,
+                        get_val(file_record, "openlineage_id"),
+                        get_val(file_record, "file_path"),
+                        get_val(file_record, "created_at"),
+                        get_val(file_record, "short_name"),
+                        get_val(file_record, "description"),
+                        get_val(file_record, "year"),
+                        get_val(file_record, "models", []),
+                        get_val(file_record, "producing_run_id"),
+                        get_val(file_record, "consuming_run_ids", []),
+                        get_val(file_record, "source_file_paths", []),
+                        json.dumps(get_val(file_record, "metadata", {})),
+                        json.dumps(get_val(file_record, "schema", [])),
+                        get_val(file_record, "exists", True),
                     ],
                 )
+
+                # If it's an H5 table, insert into the new h5_table_records table
+                if is_h5_table:
+                    conn.execute(
+                        """
+                        INSERT INTO h5_table_records (
+                            unique_id, h5_file_unique_id, table_name
+                        ) VALUES (?, ?, ?)
+                        ON CONFLICT (unique_id) DO NOTHING
+                        """,
+                        [
+                            get_val(file_record, "unique_id"),
+                            get_val(file_record, "h5_file_unique_id"),
+                            get_val(file_record, "table_name"),
+                        ],
+                    )
 
             # 4. Upload model runs
             for model_run in run_info.model_runs.values():
@@ -1437,6 +1564,275 @@ class DuckDBManager(DatabaseManager):
                 pass
             logger.error(f"Failed to upload run data for {run_info.run_id}: {e}")
             raise DatabaseUploadError(f"Upload failed: {e}")
+
+    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
+        """
+        Upload complete run data to DuckDB.
+
+        Args:
+            run_info: Complete PILATES run information
+
+        Returns:
+            bool: True if upload successful
+        """
+        try:
+            conn = self._get_connection()
+
+            # Start transaction
+            conn.begin()
+
+            # 1. Upload config snapshot if present
+            config_snapshot_id = None
+            if run_info.config_snapshot:
+                config_snapshot_id = run_info.config_snapshot.get("snapshot_id")
+
+                # Check if config snapshot already exists
+                existing = conn.execute(
+                    "SELECT snapshot_id FROM config_snapshots WHERE snapshot_id = ?",
+                    [config_snapshot_id],
+                ).fetchone()
+
+                if not existing:
+                    conn.execute(
+                        """
+                        INSERT INTO config_snapshots (
+                            snapshot_id, created_timestamp, config_content_hash,
+                            git_hashes, config_files, pilates_settings,
+                            beam_config, asim_subdir, region
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        [
+                            config_snapshot_id,
+                            run_info.config_snapshot.get("created_timestamp"),
+                            run_info.config_snapshot.get("config_content_hash"),
+                            json.dumps(run_info.config_snapshot.get("git_hashes", {})),
+                            json.dumps(
+                                run_info.config_snapshot.get("config_files", {})
+                            ),
+                            json.dumps(
+                                run_info.config_snapshot.get("pilates_settings", {})
+                            ),
+                            run_info.config_snapshot.get("beam_config"),
+                            run_info.config_snapshot.get("asim_subdir"),
+                            run_info.config_snapshot.get("region"),
+                        ],
+                    )
+                    logger.info(f"Uploaded config snapshot {config_snapshot_id}")
+
+            # 2. Upload main run record
+            conn.execute(
+                """
+                INSERT INTO runs (
+                    run_id, created_at, start_year, end_year, models_used,
+                    settings_hash, code_version, hostname, config_snapshot_id,
+                    config_content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (run_id) DO NOTHING
+            """,
+                [
+                    run_info.run_id,
+                    run_info.created_at,
+                    run_info.start_year,
+                    run_info.end_year,
+                    run_info.models_used,
+                    run_info.settings_hash,
+                    run_info.code_version,
+                    run_info.hostname,
+                    config_snapshot_id,
+                    (
+                        run_info.config_snapshot.get("config_content_hash")
+                        if run_info.config_snapshot
+                        else None
+                    ),
+                ],
+            )
+
+            # 3. Upload file records
+            for file_record in run_info.file_records.values():
+                # The item can be a dict (from JSON) or a dataclass object.
+                # This logic handles both cases.
+                def get_val(rec, key, default=None):
+                    if isinstance(rec, dict):
+                        return rec.get(key, default)
+                    return getattr(rec, key, default)
+
+                is_h5_table = get_val(file_record, "h5_file_unique_id") is not None
+                is_h5_container = get_val(file_record, "table_record_ids") is not None
+
+                record_type = "file"
+                if is_h5_table:
+                    record_type = "h5_table"
+                elif is_h5_container:
+                    record_type = "h5_container"
+
+                # Insert common fields into file_records table
+                conn.execute(
+                    """
+                    INSERT INTO file_records (
+                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                        short_name, description, year, models, producing_run_id,
+                        consuming_run_ids, source_file_paths, metadata, schema, exists
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (unique_id) DO NOTHING
+                    """,
+                    [
+                        get_val(file_record, "unique_id"),
+                        record_type,
+                        run_info.run_id,
+                        get_val(file_record, "openlineage_id"),
+                        get_val(file_record, "file_path"),
+                        get_val(file_record, "created_at"),
+                        get_val(file_record, "short_name"),
+                        get_val(file_record, "description"),
+                        get_val(file_record, "year"),
+                        get_val(file_record, "models", []),
+                        get_val(file_record, "producing_run_id"),
+                        get_val(file_record, "consuming_run_ids", []),
+                        get_val(file_record, "source_file_paths", []),
+                        json.dumps(get_val(file_record, "metadata", {})),
+                        json.dumps(get_val(file_record, "schema", [])),
+                        get_val(file_record, "exists", True),
+                    ],
+                )
+
+                # If it's an H5 table, insert into the new h5_table_records table
+                if is_h5_table:
+                    conn.execute(
+                        """
+                        INSERT INTO h5_table_records (
+                            unique_id, h5_file_unique_id, table_name
+                        ) VALUES (?, ?, ?)
+                        ON CONFLICT (unique_id) DO NOTHING
+                        """,
+                        [
+                            get_val(file_record, "unique_id"),
+                            get_val(file_record, "h5_file_unique_id"),
+                            get_val(file_record, "table_name"),
+                        ],
+                    )
+
+            # 4. Upload model runs
+            for model_run in run_info.model_runs.values():
+                conn.execute(
+                    """
+                    INSERT INTO model_runs (
+                        unique_id, run_id, openlineage_id, model, year, iteration,
+                        description, created_at, completed_at, status,
+                        input_record_hashes, output_record_hashes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (unique_id) DO NOTHING
+                """,
+                    [
+                        model_run.unique_id,
+                        run_info.run_id,
+                        model_run.openlineage_id,
+                        model_run.model,
+                        model_run.year,
+                        model_run.iteration,
+                        model_run.description,
+                        model_run.created_at,
+                        model_run.completed_at,
+                        model_run.status,
+                        model_run.input_record_hashes,
+                        model_run.output_record_hashes,
+                    ],
+                )
+
+            # 5. Upload OpenLineage event metadata
+            for event_metadata in run_info.openlineage_event_metadata:
+                conn.execute(
+                    """
+                    INSERT INTO openlineage_events (
+                        id, run_id, model_run_id, event_time, event_type,
+                        run_uuid, job_name
+                    ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
+                """,
+                    [
+                        run_info.run_id,
+                        event_metadata["model_run_id"],
+                        event_metadata["event_time"],
+                        event_metadata["event_type"],
+                        event_metadata["run_uuid"],
+                        event_metadata["job_name"],
+                    ],
+                )
+
+            # Commit transaction
+            conn.commit()
+
+            logger.info(f"Successfully uploaded run data for {run_info.run_id}")
+            return True
+
+        except Exception as e:
+            try:
+                conn.rollback()
+            except:
+                pass
+            logger.error(f"Failed to upload run data for {run_info.run_id}: {e}")
+            raise DatabaseUploadError(f"Upload failed: {e}")
+
+    def upload_zarr_manifest_data(self, run_id: str, manifest_data: dict) -> bool:
+        """
+        Uploads detailed Zarr manifest data (snapshots) to the zarr_snapshots table.
+
+        Args:
+            run_id: The PILATES run ID associated with this manifest.
+            manifest_data: The parsed content of the manifest.json file.
+
+        Returns:
+            bool: True if upload successful, False otherwise.
+        """
+        try:
+            conn = self._get_connection()
+            conn.begin()
+
+            for snapshot_id, snapshot in manifest_data.get("snapshots", {}).items():
+                full_skims = snapshot.get("full_skims", {})
+                partial_skims = snapshot.get("partial_skims", {})
+
+                conn.execute(
+                    """
+                    INSERT INTO zarr_snapshots (
+                        snapshot_id, run_id, year, iteration, snapshot_type, model,
+                        parent_snapshot_id, created_at, full_skims_path,
+                        full_skims_n_variables, full_skims_n_chunks, full_skims_total_size_mb,
+                        partial_skims_path, partial_skims_n_variables, partial_skims_n_chunks,
+                        partial_skims_total_size_mb, changed_chunks, chunk_manifest
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (snapshot_id) DO NOTHING
+                    """,
+                    [
+                        snapshot_id,
+                        run_id,
+                        snapshot.get("year"),
+                        snapshot.get("iteration"),
+                        snapshot.get("snapshot_type"),
+                        snapshot.get("model"),
+                        snapshot.get("parent_snapshot"),
+                        snapshot.get("created_at"),
+                        full_skims.get("path"),
+                        full_skims.get("n_variables"),
+                        full_skims.get("n_chunks"),
+                        full_skims.get("total_size_mb"),
+                        partial_skims.get("path"),
+                        partial_skims.get("n_variables"),
+                        partial_skims.get("n_chunks"),
+                        partial_skims.get("total_size_mb"),
+                        full_skims.get("changed_chunks"),
+                        json.dumps(full_skims.get("chunk_manifest", {})),
+                    ],
+                )
+            conn.commit()
+            logger.info(f"Successfully uploaded Zarr manifest data for run {run_id}")
+            return True
+
+        except Exception as e:
+            try:
+                conn.rollback()
+            except:
+                pass
+            logger.error(f"Failed to upload Zarr manifest data for run {run_id}: {e}")
+            return False
 
     def get_run_by_id(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve run information by run ID."""
@@ -1535,7 +1931,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
-        table_openlineage_id: str,
+        table_openlineage_id: Optional[str] = None,
     ) -> bool:
         """
         Store raw UrbanSim data in the appropriate database table.
@@ -1545,12 +1941,14 @@ class DuckDBManager(DatabaseManager):
             df: DataFrame containing the raw data
             file_record_id: File record unique ID
             run_id: PILATES run ID
-            openlineage_id: OpenLineage dataset ID
-            table_openlineage_id: OpenLineage dataset ID for the table
+            openlineage_id: OpenLineage dataset ID for the parent H5 file
+            table_openlineage_id: OpenLineage dataset ID for this specific table. Defaults to openlineage_id.
 
         Returns:
             bool: True if storage successful
         """
+        if table_openlineage_id is None:
+            table_openlineage_id = openlineage_id
         try:
             conn = self._get_connection()
 
@@ -1602,7 +2000,7 @@ class DuckDBManager(DatabaseManager):
         file_record_id: str,
         run_id: str,
         openlineage_id: str,
-        table_openlineage_id: str,
+        table_openlineage_id: Optional[str] = None,
     ) -> bool:
         """
         Store ActivitySim data in the appropriate database table.
@@ -1612,12 +2010,14 @@ class DuckDBManager(DatabaseManager):
             df: DataFrame containing the data
             file_record_id: File record unique ID
             run_id: PILATES run ID
-            openlineage_id: OpenLineage dataset ID
-            table_openlineage_id: OpenLineage dataset ID for the table
+            openlineage_id: OpenLineage dataset ID for the parent file
+            table_openlineage_id: OpenLineage dataset ID for this specific table. Defaults to openlineage_id.
 
         Returns:
             bool: True if storage successful
         """
+        if table_openlineage_id is None:
+            table_openlineage_id = openlineage_id
         try:
             conn = self._get_connection()
 
@@ -1681,18 +2081,13 @@ class DuckDBManager(DatabaseManager):
             insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM activitysim_households WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("households_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_households ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM households_temp_data
+                ON CONFLICT (household_id, run_id) DO NOTHING
             """
             )
             conn.unregister("households_temp_data")
@@ -1747,18 +2142,13 @@ class DuckDBManager(DatabaseManager):
             insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM activitysim_persons WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("persons_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_persons ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM persons_temp_data
+                ON CONFLICT (person_id, run_id) DO NOTHING
             """
             )
             conn.unregister("persons_temp_data")
@@ -1831,18 +2221,13 @@ class DuckDBManager(DatabaseManager):
             insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM activitysim_land_use WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("land_use_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_land_use ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM land_use_temp_data
+                ON CONFLICT (TAZ, run_id) DO NOTHING
             """
             )
             conn.unregister("land_use_temp_data")

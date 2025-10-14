@@ -1418,15 +1418,6 @@ class OpenLineageTracker(FileProvenanceTracker):
                     dataset = file_record.toInputDataset(self.namespace)
                     input_datasets.append(dataset)
         input_names = [dataset.name for dataset in input_datasets]
-        for record in inputs.records.values():
-            dataset = record.toInputDataset(self.namespace)
-            if dataset.name not in input_names:
-                input_datasets.append(dataset)
-                logger.info(f"Adding input dataset {dataset.name} to run inputs.")
-            else:
-                logger.warning(
-                    f"Input dataset {dataset.name} already exists in the run inputs, skipping duplicate."
-                )
 
         event = RunEvent(
             eventType=RunState.START,

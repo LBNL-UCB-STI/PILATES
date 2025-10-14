@@ -3328,22 +3328,41 @@ class BeamPostprocessor(GenericPostprocessor):
             if output_rec:
                 processed_records.append(output_rec)
 
-        # Optionally, if other files are produced (e.g., an OMX version of the skims), record them too.
-        if settings.get("write_final_skims_as_omx"):
-            omx_skim_name = settings.get("final_omx_skim_name", "skims.omx")
-            target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
-            final_omx_path = write_zarr_skim_as_omx(
-                all_skims_path, settings, omx_skim_name
+        # At the end of all processing, record the final state of the Zarr store
+        self.tracker.record_output_file(
+            model=self.name,
+            file_path=self.zarr_store.path,
+            short_name="zarr_skims_final",
+            description="Final Zarr skims store after all BEAM post-processing.",
+            model_run_id=self.run_hash,
+            state=self.state,
+        )
+
+        if self.settings.get("write_skims_to_omx", False):
+            logger.info("Writing skims to OMX file...")
+            # Exclude TRIPS and FAILURES from the final skims file
+            # These are intermediate and not needed by ActivitySim
+            # Also exclude REJECTIONPROB as it's TNC-specific and not a standard skim
+            vars_to_exclude = []
+            for key in skims_ds.data_vars:
+                if key.endswith(f"_TRIPS") or key.endswith(f"_FAILURES") or key.endswith(f"_REJECTIONPROB"):
+                    vars_to_exclude.append(key)
+
+            final_omx_path = write_zarr_skim_as_omx_new(
+                self.zarr_store.path,
+                self.settings,
+                self.settings["skims_fname"],
+                exclude_tables=vars_to_to_exclude
             )
             if final_omx_path:
-                omx_rec = self.provenance_tracker.record_output_file(
-                    "beam_postprocessor",
-                    final_omx_path,
-                    model_run_id=model_run_hash,
-                    description="Final skims converted to OMX format.",
+                self.tracker.record_output_file(
+                    model=self.name,
+                    file_path=final_omx_path,
+                    short_name="final_skims_omx",
+                    description="Final skims converted to OMX format for ActivitySim.",
+                    model_run_id=self.run_hash,
+                    state=self.state,
                 )
-                if omx_rec:
-                    processed_records.append(omx_rec)
 
         output_store = RecordStore(recordList=processed_records)
         self.provenance_tracker.complete_model_run(model_run_hash)

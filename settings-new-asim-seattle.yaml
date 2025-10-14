@@ -15,7 +15,7 @@ vehicle_ownership_freq: 1
 supply_demand_iters: 6
 
 # simulation platforms (leave blank to turn off)
-land_use_model: off  # Using database input mode instead of UrbanSim
+land_use_model: # urbansim
 travel_model: beam
 activity_demand_model: activitysim
 vehicle_ownership_model: #  atlas

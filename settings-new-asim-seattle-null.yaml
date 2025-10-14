@@ -7,11 +7,12 @@
 # scenario defs
 region: seattle
 scenario: base
-start_year: 2017
+start_year: 2018
 end_year: 2025
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
+supply_demand_iters: 6
 
 # simulation platforms (leave blank to turn off)
 land_use_model: # urbansim
@@ -26,7 +27,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   activitysim: docker://zaneedell/activitysim:0.2.5
-  beam: docker://zaneedell/beam:1.0.11
+  beam: docker://zaneedell/beam:1.0.12
   polaris:
 
 # docker settings
@@ -60,7 +61,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: new-asim-new-map-v5-null
+output_run_name: new-asim-new-map-v6-null
 
 # URBANSIM
 region_to_region_id:
@@ -102,6 +103,9 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 # BEAM 
 beam_config: seattle-pilates.conf # OR austin-pilates-base.conf
+beam_skims_shapefile: shape/block-groups-32048.shp
+skim_zone_source_id_col: sk_zone
+skim_zone_geoid_col: geoid10
 beam_sample: 1.0
 beam_replanning_portion: 1.0
 beam_local_input_folder: pilates/beam/production/
@@ -109,7 +113,6 @@ beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
 beam_memory: "180g"
-skim_zone_source_id_col: objectid
 replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
@@ -132,6 +135,21 @@ polaris_skim_keys:
 
 # MEP
 mep_local_output_folder: pilates/postprocessing/MEP/
+
+# DATABASE CONFIGURATION
+# Enable database storage and retrieval for dual storage workflow
+database:
+  enabled: true
+  type: duckdb
+  path: pilates/database/seattle_pilates_data.duckdb
+
+# ACTIVITYSIM DATABASE INPUT CONFIGURATION
+# Enable database input mode for ActivitySim (bypasses H5 processing)
+activitysim_database:
+  enabled: true
+  use_processed_data: true  # Use pre-processed ActivitySim data (fast path)
+  year: 2018  # Match start_year for data retrieval
+  # config_hash: ""  # Optional: match specific UrbanSim configuration
 
 # ACTIVITYSIM
 household_sample_size: 250000  # zero means no sampling, whole pop.
