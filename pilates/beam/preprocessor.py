@@ -234,15 +234,15 @@ def copy_vehicles_from_atlas(
             atlas_vehicle_file_loc, beam_vehicles_path
         )
     )
-    provenance_tracker.record_input_file(
+    input_record = provenance_tracker.record_input_file(
         "beam_preprocessor", atlas_vehicle_file_loc, model_run_id=model_run_hash
     )
     shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
-    provenance_tracker.record_output_file(
+    provenance_tracker.record_output_file_with_inputs(
         "beam_preprocessor",
         beam_vehicles_path,
+        input_records=[input_record],
         model_run_id=model_run_hash,
-        source_file_paths=[atlas_vehicle_file_loc],
     )
 
 
@@ -360,15 +360,8 @@ def copy_plans_from_asim(
         else:
             source_run_id = None
 
-        # Always record the ActivitySim file as an input to the BEAM preprocessor run
-        provenance_tracker.record_input_file(
-            "beam_preprocessor",
-            asim_file_path,
-            short_name=beam_file_name,
-            description=f"ActivitySim output for BEAM: {beam_file_name}",
-            model_run_id=model_run_hash,
-            source_run_id=source_run_id,
-        )
+        # The input_record is already passed in, so we use it directly.
+        provenance_tracker.record_input_record(input_record, model_run_id)
 
         if os.path.exists(asim_file_path):
             if file_format == "csv":
@@ -407,12 +400,12 @@ def copy_plans_from_asim(
                 return None
 
             # Record the copied file as an output of the preprocessor
-            record = provenance_tracker.record_output_file(
+            record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_file_path,
+                input_records=[input_record],
                 description=f"Copied from ActivitySim output: {beam_file_name}",
                 short_name=beam_file_name + "_beam_in",
-                source_file_paths=[asim_file_path],
                 model_run_id=model_run_hash,
             )
             return record
@@ -630,33 +623,36 @@ def copy_plans_from_asim(
                 households_final.to_parquet(beam_households_path, index=True)
                 plans_final.to_parquet(beam_plans_path, index=True)
             # Record provenance for all three files
-            persons_record = provenance_tracker.record_output_file(
+            _, asim_persons_record = asim_file_paths.get("persons", (None, None))
+            persons_record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_persons_path,
+                input_records=[asim_persons_record],
                 description="Merged persons for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
-                source_file_paths=[asim_persons_path] if asim_persons_path else [],
                 short_name="persons_beam_in",
             )
-            households_record = provenance_tracker.record_output_file(
+            _, asim_households_record = asim_file_paths.get(
+                "households", (None, None)
+            )
+            households_record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_households_path,
+                input_records=[asim_households_record],
                 description="Merged households for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
-                source_file_paths=(
-                    [asim_households_path] if asim_households_path else []
-                ),
                 short_name="households_beam_in",
             )
-            plans_record = provenance_tracker.record_output_file(
+            _, asim_plans_record = asim_file_paths.get("beam_plans", (None, None))
+            plans_record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_plans_path,
+                input_records=[asim_plans_record],
                 description="Merged plans for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
-                source_file_paths=[asim_plans_path] if asim_plans_path else [],
                 short_name="plans_beam_in",
             )
             record_list = [plans_record, households_record, persons_record]
@@ -668,13 +664,14 @@ def copy_plans_from_asim(
                 )  # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
 
                 # Record provenance for the plans file at least
-                plans_record = provenance_tracker.record_output_file(
+                _, asim_plans_record = asim_file_paths.get("beam_plans", (None, None))
+                plans_record = provenance_tracker.record_output_file_with_inputs(
                     "beam_preprocessor",
                     beam_plans_path,
+                    input_records=[asim_plans_record],
                     description="Copied plans for BEAM input (no merge)",
                     model_run_id=model_run_hash,
                     state=state,
-                    source_file_paths=[asim_plans_path],
                     short_name="plans_beam_in",
                 )
                 record_list = [plans_record]

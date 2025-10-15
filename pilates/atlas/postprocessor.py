@@ -243,11 +243,11 @@ class AtlasPostprocessor(GenericPostprocessor):
         # UrbanSim HDF5 file (output) - sources: original H5 + householdv CSV
         usim_output_record = None
         if os.path.exists(usim_h5_file):
-            source_files_h5 = []
-            if usim_input_record:
-                source_files_h5.append(usim_h5_file)  # Original H5
-            if atlas_hh_input_record:
-                source_files_h5.append(atlas_hh_file)  # householdv data
+            input_records_for_h5 = [
+                rec
+                for rec in [usim_input_record, atlas_hh_input_record]
+                if rec
+            ]
 
             warm_start = settings.get("warm_start", False)
             if not warm_start:
@@ -256,16 +256,16 @@ class AtlasPostprocessor(GenericPostprocessor):
             else:
                 updated_table = "households"
 
-            usim_output_record = self.provenance_tracker.record_output_file(
+            usim_output_record = self.provenance_tracker.record_output_file_with_inputs(
                 "atlas_postprocessor",
                 usim_h5_file,
+                input_records=input_records_for_h5,
                 year=output_year,
                 description=f"UrbanSim HDF5 after ATLAS vehicle update for year {output_year}",
                 short_name="usim_h5_updated",
                 model_run_id=model_run_hash,
                 state=self.state,
-                source_file_paths=source_files_h5,
-                updated_children=[updated_table]
+                updated_children=[updated_table],
             )
 
         # ATLAS vehicles2 CSV (output) - source: vehicles CSV
@@ -274,19 +274,21 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
         atlas_veh2_output_record = None
         if os.path.exists(atlas_veh2_file):
-            source_files_v2 = []
-            if atlas_veh_input_record:
-                source_files_v2.append(atlas_veh_file)
+            input_records_for_v2 = [
+                rec for rec in [atlas_veh_input_record] if rec
+            ]
 
-            atlas_veh2_output_record = self.provenance_tracker.record_output_file(
-                "atlas_postprocessor",
-                atlas_veh2_file,
-                year=output_year,
-                description=f"ATLAS vehicles2 CSV with vehicleTypeId for year {output_year}",
-                short_name="atlas_vehicles2_output",
-                model_run_id=model_run_hash,
-                state=self.state,
-                source_file_paths=source_files_v2,
+            atlas_veh2_output_record = (
+                self.provenance_tracker.record_output_file_with_inputs(
+                    "atlas_postprocessor",
+                    atlas_veh2_file,
+                    input_records=input_records_for_v2,
+                    year=output_year,
+                    description=f"ATLAS vehicles2 CSV with vehicleTypeId for year {output_year}",
+                    short_name="atlas_vehicles2_output",
+                    model_run_id=model_run_hash,
+                    state=self.state,
+                )
             )
 
         # Collect all input and output records

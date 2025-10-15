@@ -2895,11 +2895,9 @@ def create_asim_data_from_h5(
         mdir = workspace.full_path
 
     # Record the H5 datastore as an input to this preprocessor run
-    provenance_tracker.record_input_file(
+    h5_input_record = provenance_tracker.record_input_file(
         "activitysim_preprocessor",
-        datastore_path(
-            settings, state.forecast_year, mutable_data_dir=mdir
-        ),
+        datastore_path(settings, state.forecast_year, mutable_data_dir=mdir),
         short_name="urbansim_h5",
         model_run_id=model_run_hash,
         description="UrbanSim H5 data store",
@@ -2970,32 +2968,32 @@ def create_asim_data_from_h5(
 
     households.to_csv(os.path.join(output_dir, "households.csv"))
     logger.info("Saved households data to households.csv")
-    households_record = provenance_tracker.record_output_file(
+    households_record = provenance_tracker.record_output_file_with_inputs(
         "activitysim_preprocessor",
         os.path.join(output_dir, "households.csv"),
+        input_records=[h5_input_record],
         short_name="households_asim_in",
         description="activitysim households input based on UrbanSim .h5",
-        source_file_paths=[store._path],
         model_run_id=model_run_hash,
     )
     persons.to_csv(os.path.join(output_dir, "persons.csv"))
     logger.info("Saved persons data to persons.csv")
-    persons_record = provenance_tracker.record_output_file(
+    persons_record = provenance_tracker.record_output_file_with_inputs(
         "activitysim_preprocessor",
         os.path.join(output_dir, "persons.csv"),
+        input_records=[h5_input_record],
         short_name="persons_asim_in",
         description="activitysim persons input based on UrbanSim .h5",
-        source_file_paths=[store._path],
         model_run_id=model_run_hash,
     )
     land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
     logger.info("Saved land use data to land_use.csv")
-    land_use_record = provenance_tracker.record_output_file(
+    land_use_record = provenance_tracker.record_output_file_with_inputs(
         "activitysim_preprocessor",
         os.path.join(output_dir, "land_use.csv"),
+        input_records=[h5_input_record],
         short_name="land_use_asim_in",
         description="activitysim land use input based on UrbanSim .h5",
-        source_file_paths=[store._path],
         model_run_id=model_run_hash,
     )
 

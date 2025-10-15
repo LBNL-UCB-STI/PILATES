@@ -986,29 +986,21 @@ class FileProvenanceTracker(ProvenanceTracker):
         model: str,
         file_path: str,
         input_records: List[Optional[FileRecord]],
-        year: int = None,
-        description: str = None,
-        short_name: str = None,
-        model_run_id: str = None,
-        state: Optional[WorkflowState] = None,
-        skip_missing: bool = True,
+        **kwargs,
     ) -> Optional[FileRecord]:
         """
         PHASE 1 IMPROVEMENT #1: Convenience method to record output file with automatic source_file_paths.
 
         This helper reduces boilerplate by automatically extracting file paths from input FileRecords.
+        It also accepts any other keyword arguments and passes them through to `record_output_file`.
 
         Args:
             model: Name of the model producing this output
             file_path: Path to the output file
             input_records: List of FileRecords that were inputs to this transformation.
                           None values are automatically filtered out.
-            year: Year associated with this output
-            description: Human-readable description
-            short_name: Short identifier for this file
-            model_run_id: ID of the model run producing this output
-            state: Current workflow state
-            skip_missing: Whether to skip if file doesn't exist
+            **kwargs: Additional keyword arguments to pass to `record_output_file`
+                      (e.g., year, description, short_name, model_run_id, state, updated_children).
 
         Returns:
             FileRecord for the output, or None if file doesn't exist and skip_missing=True
@@ -1023,6 +1015,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             ...     short_name="usim_h5_updated",
             ...     model_run_id=model_run_hash,
             ...     state=state,
+            ...     updated_children=['/2017/households']
             ... )
         """
         # Extract file paths from input records, filtering out None values
@@ -1030,16 +1023,13 @@ class FileProvenanceTracker(ProvenanceTracker):
             rec.file_path for rec in input_records if rec is not None
         ]
 
+        # Add extracted source paths to kwargs, overriding if present
+        kwargs['source_file_paths'] = source_file_paths
+
         return self.record_output_file(
             model=model,
             file_path=file_path,
-            year=year,
-            description=description,
-            short_name=short_name,
-            source_file_paths=source_file_paths,
-            model_run_id=model_run_id,
-            state=state,
-            skip_missing=skip_missing,
+            **kwargs,
         )
 
     def _save_run_info(self, data_to_save: PilatesRunInfo = None):
