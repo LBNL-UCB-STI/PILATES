@@ -2214,7 +2214,8 @@ def _merge_beam_skims_to_zarr(
     model_run_hash=None,
     state=None,
     run_id=None,
-):
+    existing_zarr_manager = None,
+) -> (Optional[str], Optional[VersionedZarrStore]):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
     Handles TNC consolidation if enabled.
@@ -2561,6 +2562,8 @@ def _merge_beam_skims_to_zarr(
     if skims_ds:
         skims_ds.close()
 
+    zarr_manager = existing_zarr_manager
+
     # Step 7: Create zarr version snapshot after successful merge
     if merge_successful and state is not None and run_id is not None:
         try:
@@ -2571,7 +2574,8 @@ def _merge_beam_skims_to_zarr(
             if database_path:
                 # Initialize zarr version manager
                 zarr_base_path = os.path.dirname(database_path)
-                zarr_manager = VersionedZarrStore(zarr_base_path)
+                if existing_zarr_manager is None:
+                    zarr_manager = VersionedZarrStore(zarr_base_path)
 
                 # Get parent snapshot ID from previous iteration
                 # Look for previous snapshot in manifest
@@ -2601,15 +2605,17 @@ def _merge_beam_skims_to_zarr(
                 logger.debug("Database path not configured, skipping zarr snapshot creation")
         except Exception as e:
             logger.warning(f"Failed to create zarr snapshot: {e}. Continuing without snapshot.")
+    else:
+        zarr_manager = existing_zarr_manager
 
     # Return the path to the new OMX skims *if* a new one was found and processed.
     # This is used by the caller to check if skims were updated.
     if partialSkims is not None and merge_successful:
-        return current_skims_path
+        return current_skims_path, zarr_manager
 
     else:  # partialSkims is None or writing failed
         logger.warning("No new OMX skims found, returning None.")
-        return None  # No new skims to indicate success/failure for
+        return None, zarr_manager  # No new skims to indicate success/failure for
 
 
 def _process_all_tnc_logic_zarr(
@@ -3229,6 +3235,7 @@ class BeamPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
+        self.zarr_manager = None
 
     def postprocess(
         self,
@@ -3305,7 +3312,7 @@ class BeamPostprocessor(GenericPostprocessor):
             beam_output_dir = workspace.get_beam_output_dir()
 
             # Call the main merging and post-processing logic for Zarr skims
-            updated_skims_path = _merge_beam_skims_to_zarr(
+            updated_skims_path, updated_zarr_store = _merge_beam_skims_to_zarr(
                 all_skims_path=all_skims_path,
                 iteration_skims_path=raw_od_skims_path,
                 beam_output_dir=beam_output_dir,
@@ -3316,6 +3323,8 @@ class BeamPostprocessor(GenericPostprocessor):
                 state=self.state,
                 run_id=self.provenance_tracker.run_info.run_id if self.provenance_tracker else None,
             )
+
+            self.zarr_manager = updated_zarr_store
 
             # The main output is the modified Zarr store. Record it.
             output_rec = self.provenance_tracker.record_output_file(
@@ -3328,41 +3337,44 @@ class BeamPostprocessor(GenericPostprocessor):
             if output_rec:
                 processed_records.append(output_rec)
 
-        # At the end of all processing, record the final state of the Zarr store
-        self.tracker.record_output_file(
-            model=self.name,
-            file_path=self.zarr_store.path,
-            short_name="zarr_skims_final",
-            description="Final Zarr skims store after all BEAM post-processing.",
-            model_run_id=self.run_hash,
-            state=self.state,
-        )
+            # At the end of all processing, record the final state of the Zarr store
+            self.provenance_tracker.record_output_file(
+                model="beam_postprocessor",
+                file_path=updated_zarr_store.path,
+                short_name="zarr_skims_final",
+                description="Final Zarr skims store after all BEAM post-processing.",
+                model_run_id=model_run_hash,
+                state=self.state,
+            )
 
         if self.settings.get("write_skims_to_omx", False):
             logger.info("Writing skims to OMX file...")
-            # Exclude TRIPS and FAILURES from the final skims file
-            # These are intermediate and not needed by ActivitySim
-            # Also exclude REJECTIONPROB as it's TNC-specific and not a standard skim
-            vars_to_exclude = []
-            for key in skims_ds.data_vars:
-                if key.endswith(f"_TRIPS") or key.endswith(f"_FAILURES") or key.endswith(f"_REJECTIONPROB"):
-                    vars_to_exclude.append(key)
+            try:
+                # Exclude TRIPS and FAILURES from the final skims file
+                # These are intermediate and not needed by ActivitySim
+                # Also exclude REJECTIONPROB as it's TNC-specific and not a standard skim
+                vars_to_exclude = []
+                for key in skims_ds.data_vars:
+                    if key.endswith(f"_TRIPS") or key.endswith(f"_FAILURES") or key.endswith(f"_REJECTIONPROB"):
+                        vars_to_exclude.append(key)
 
-            final_omx_path = write_zarr_skim_as_omx_new(
-                self.zarr_store.path,
-                self.settings,
-                self.settings["skims_fname"],
-                exclude_tables=vars_to_to_exclude
-            )
-            if final_omx_path:
-                self.tracker.record_output_file(
-                    model=self.name,
-                    file_path=final_omx_path,
-                    short_name="final_skims_omx",
-                    description="Final skims converted to OMX format for ActivitySim.",
-                    model_run_id=self.run_hash,
-                    state=self.state,
+                final_omx_path = write_zarr_skim_as_omx_new(
+                    self.zarr_manager.path,
+                    self.settings,
+                    self.settings["skims_fname"],
+                    exclude_tables=vars_to_to_exclude
                 )
+                if final_omx_path:
+                    self.provenance_tracker.record_output_file(
+                        model=self.name,
+                        file_path=final_omx_path,
+                        short_name="final_skims_omx",
+                        description="Final skims converted to OMX format for ActivitySim.",
+                        model_run_id=self.run_hash,
+                        state=self.state,
+                    )
+            except Exception as e:
+                logger.error(e)
 
         output_store = RecordStore(recordList=processed_records)
         self.provenance_tracker.complete_model_run(model_run_hash)
