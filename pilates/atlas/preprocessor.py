@@ -50,10 +50,48 @@ class AtlasPreprocessor(GenericPreprocessor):
         output_dir,
     ) -> Tuple[RecordStore, RecordStore]:
         """
-        ATLAS does not require copying input files to a mutable location at initialization.
-        Returns empty RecordStores.
+        Copy ATLAS input files from the production directory to the run's mutable input directory,
+        recording provenance for both the source and the copied files.
         """
-        return RecordStore(), RecordStore()
+        input_records = []
+        output_records = []
+        source_dir = "pilates/atlas/atlas_input"
+        start_year = settings["start_year"]
+        year_specific_output_dir = os.path.join(output_dir, f"year{start_year}")
+
+        logger.info(f"[AtlasPreprocessor] Copying files from {source_dir} to {year_specific_output_dir}")
+
+        for root, dirs, files in os.walk(source_dir):
+            for filename in files:
+                if "readme" in filename.lower():
+                    continue
+
+                source_path = os.path.join(root, filename)
+                relative_path = os.path.relpath(source_path, source_dir)
+                dest_path = os.path.join(year_specific_output_dir, relative_path)
+
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy(source_path, dest_path)
+
+                short_name = os.path.splitext(filename)[0]
+
+                input_rec = self.provenance_tracker.record_input_file(
+                    self.model_name,
+                    source_path,
+                    description=f"ATLAS input file: {filename}",
+                    short_name=short_name,
+                )
+                output_rec = self.provenance_tracker.record_output_file(
+                    self.model_name,
+                    dest_path,
+                    description=f"Mutable ATLAS input file: {filename}",
+                    short_name=short_name,
+                )
+                input_records.append(input_rec)
+                output_records.append(output_rec)
+
+        logger.info(f"[AtlasPreprocessor] Finished copying {len(output_records)} files.")
+        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
 
     def preprocess(
         self,
@@ -159,7 +197,6 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "[AtlasPreprocessor] atlas_beamac=0, looking for .RData accessibility files"
             )
             # Look for .RData files in the year-specific input directory
-            import glob
             year_input_dir = os.path.join(
                 workspace.get_atlas_mutable_input_dir(), f"year{self.state.year}"
             )

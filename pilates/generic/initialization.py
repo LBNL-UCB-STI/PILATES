@@ -95,11 +95,15 @@ class Initialization(Model):
             if model_name == "atlas":
                 input_dir = workspace.get_atlas_mutable_input_dir()
                 os.makedirs(input_dir, exist_ok=True)
-                from pilates.atlas import preprocessor as atlas_pre
-
-                atlas_pre.copy_data_to_mutable_location(settings, input_dir)
+                atlas_preprocessor = model_factory.get_preprocessor(
+                    "atlas", self.state, self.provenance_tracker
+                )
+                rec_in, rec_out = atlas_preprocessor.copy_data_to_mutable_location(
+                    settings, input_dir
+                )
+                initialization_records_in += rec_in
+                initialization_records_out += rec_out
                 os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
-                # No input/output records for atlas currently
 
             # ActivitySim config copy
             if model_name == "activitysim":
