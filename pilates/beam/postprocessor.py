@@ -3241,7 +3241,6 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -3257,13 +3256,14 @@ class BeamPostprocessor(GenericPostprocessor):
             raw_outputs.add_record(zarr_record)
             logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
 
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "beam_postprocessor",
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="Post-processing BEAM outputs",
-            inputs=raw_outputs,
-        )
+        if model_run_hash is None:
+            model_run_hash = self.provenance_tracker.start_model_run(
+                "beam_postprocessor",
+                self.state.current_year,
+                self.state.current_inner_iter,
+                description="Post-processing BEAM outputs",
+                inputs=raw_outputs,
+            )
 
         raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
@@ -3338,14 +3338,15 @@ class BeamPostprocessor(GenericPostprocessor):
                 processed_records.append(output_rec)
 
             # At the end of all processing, record the final state of the Zarr store
-            self.provenance_tracker.record_output_file(
-                model="beam_postprocessor",
-                file_path=updated_zarr_store.path,
-                short_name="zarr_skims_final",
-                description="Final Zarr skims store after all BEAM post-processing.",
-                model_run_id=model_run_hash,
-                state=self.state,
-            )
+            if updated_zarr_store and updated_zarr_store.path:
+                self.provenance_tracker.record_output_file(
+                    model="beam_postprocessor",
+                    file_path=updated_zarr_store.path,
+                    short_name="zarr_skims_final",
+                    description="Final Zarr skims store after all BEAM post-processing.",
+                    model_run_id=model_run_hash,
+                    state=self.state,
+                )
 
         if settings.get("write_skims_to_omx", False) or settings.get("land_use_model") == "urbansim":
             logger.info("Writing skims to OMX file for UrbanSim or other downstream models...")
@@ -3378,7 +3379,7 @@ class BeamPostprocessor(GenericPostprocessor):
 
                     if final_omx_path:
                         # Record the new OMX as an output, with lineage to the Zarr input
-                        self.provenance_tracker.record_output_file_with_inputs(
+                        omx_output_record = self.provenance_tracker.record_output_file_with_inputs(
                             model=self.model_name,
                             file_path=final_omx_path,
                             input_records=[zarr_input_record],
@@ -3387,10 +3388,14 @@ class BeamPostprocessor(GenericPostprocessor):
                             model_run_id=model_run_hash,
                             state=self.state,
                         )
+                        if omx_output_record:
+                            processed_records.append(omx_output_record)
                 except Exception as e:
                     logger.error(f"Failed to write skims to OMX: {e}")
 
         output_store = RecordStore(recordList=processed_records)
-        self.provenance_tracker.complete_model_run(model_run_hash)
+        self.provenance_tracker.complete_model_run(
+            model_run_hash, status="completed", output_records=output_store.all_records()
+        )
 
         return output_store
