@@ -206,6 +206,7 @@ class H5FileRecord(Record):
     year: Optional[int] = None
     metadata: dict = field(default_factory=dict)
     table_record_ids: List[str] = field(default_factory=list)
+    source_file_paths: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         super().__post_init__()
