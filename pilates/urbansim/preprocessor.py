@@ -276,13 +276,12 @@ class UrbansimPreprocessor(GenericPreprocessor):
         previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
-        Preprocess UrbanSim data.
-        Returns the input RecordStore from the workspace.
+        Preprocess UrbanSim data, including copying necessary skims.
         """
         logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
+        settings = self.state.full_settings
         input_records = workspace.input_data.get("urbansim", RecordStore())
 
-        # Start preprocessor run tracking
         model_run_hash = self.provenance_tracker.start_model_run(
             "urbansim_preprocessor",
             self.state.current_year,
@@ -291,50 +290,60 @@ class UrbansimPreprocessor(GenericPreprocessor):
             inputs=input_records,
         )
 
-        processed_records = []
+        processed_records = RecordStore()
 
         try:
-            # Record provenance for ActivitySim skims if available
-            settings = self.state.full_settings
+            # Copy skims from ActivitySim output to UrbanSim input
             if "skims_fname" in settings:
-                skims_path = os.path.join(
+                source_skims_path = os.path.join(
                     workspace.get_asim_mutable_data_dir(),
                     settings["skims_fname"],
                 )
-                if os.path.exists(skims_path):
-                    skims_record = self.provenance_tracker.record_input_file(
+                
+                region_id = settings["region_to_region_id"][settings["region"]]
+                dest_skims_fname = f"skims_mpo_{region_id}.omx"
+                dest_skims_path = os.path.join(
+                    workspace.get_usim_mutable_data_dir(), dest_skims_fname
+                )
+
+                if os.path.exists(source_skims_path):
+                    logger.info(f"Copying skims from {source_skims_path} to {dest_skims_path}")
+                    shutil.copy(source_skims_path, dest_skims_path)
+                    
+                    # Record the source skims as an input to this step
+                    skims_input_rec = self.provenance_tracker.record_input_file(
                         "urbansim_preprocessor",
-                        skims_path,
+                        source_skims_path,
                         description="ActivitySim skims for UrbanSim input",
-                        short_name="asim_skims",
+                        short_name="asim_skims_input",
                         model_run_id=model_run_hash,
-                        state=self.state,
                     )
-                    if skims_record:
-                        processed_records.append(skims_record)
-                        logger.info(f"Recorded skims input: {skims_path}")
+                    # Record the copied skims as an output of this step
+                    skims_output_rec = self.provenance_tracker.record_output_file_with_inputs(
+                        "urbansim_preprocessor",
+                        dest_skims_path,
+                        input_records=[skims_input_rec],
+                        description="Copied skims for UrbanSim consumption",
+                        short_name="usim_skims_input",
+                        model_run_id=model_run_hash,
+                    )
+                    if skims_output_rec:
+                        processed_records.add_record(skims_output_rec)
                 else:
-                    logger.warning(f"Skims file not found: {skims_path}")
+                    logger.warning(f"Skims file not found at source: {source_skims_path}")
 
-            # TODO: Add other UrbanSim-specific preprocessing logic here
-            # This might include:
-            # - Loading and validating UrbanSim input data
-            # - Processing skims in different formats (omx, zarr, csv)
-            # - Preparing data transformations needed for the model
-
-            # For now, add any existing input records to processed records
+            # Pass through any existing input records
             for record in input_records.all_records():
                 if record.file_path and os.path.exists(record.file_path):
-                    processed_records.append(record)
+                    processed_records.add_record(record)
 
         except Exception as e:
             logger.error(f"Error during UrbanSim preprocessing: {e}")
             self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
             raise
 
-        # Complete preprocessor tracking
         self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=processed_records
+            model_run_hash, status="completed", output_records=processed_records.all_records()
         )
 
-        return RecordStore(recordList=processed_records)
+        return processed_records

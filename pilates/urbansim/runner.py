@@ -144,11 +144,13 @@ class UrbansimRunner(GenericRunner):
             if not success:
                 logger.error("UrbanSim container execution failed")
                 self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-                return RecordStore(), ModelRunInfo()
+                run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
+                return RecordStore(), run_info
 
         except Exception as e:
             logger.error(f"UrbanSim container execution error: {e}")
             self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
+            run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
             raise
 
         # Collect outputs

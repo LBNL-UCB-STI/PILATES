@@ -503,6 +503,22 @@ class FileProvenanceTracker(ProvenanceTracker):
             )
         return flat_schema
 
+    def _get_sparse_schema_for_wide_csv(self, file_path: str) -> List[Dict[str, str]]:
+        """Reads a wide CSV, converts to long format, and returns the sparse schema."""
+        try:
+            df = pd.read_csv(file_path, index_col=0)
+            df_long = df.stack().reset_index()
+            df_long.columns = ['taz', 'tract', 'proportion']
+            df_long = df_long[df_long['proportion'] > 0]
+            
+            schema_info = []
+            for col_name, col_type in df_long.dtypes.items():
+                schema_info.append({"name": col_name, "type": str(col_type)})
+            return schema_info
+        except Exception as e:
+            logger.warning(f"Could not generate sparse schema for {file_path}: {e}")
+            return []
+
     def _get_schema_from_file(self, file_path: str) -> List[Dict[str, str]]:
         """
         Infers the schema from a .csv or .parquet file.
@@ -514,6 +530,10 @@ class FileProvenanceTracker(ProvenanceTracker):
             A list of dictionaries, where each dictionary represents a field
             in the schema (e.g., [{'name': 'col1', 'type': 'int64'}]).
         """
+        if "taz_to_tract" in os.path.basename(file_path):
+            logger.info(f"Generating sparse schema for wide file: {file_path}")
+            return self._get_sparse_schema_for_wide_csv(file_path)
+
         schema_info = []
         try:
             if file_path.endswith(".csv") | file_path.endswith(".csv.gz"):
