@@ -156,6 +156,20 @@ class ActivitysimRunner(GenericRunner):
         asim_subdir = settings["region_to_asim_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
+        # Get from your config
+        output_directory = settings['output_directory']  # "/global/scratch/users/$USER/pilates-output"
+
+        # Expand $USER if needed
+        output_directory = os.path.expandvars(output_directory)
+
+        # Create shared cache and tmp at the base pilates-output level
+        shared_cache_dir = os.path.join(output_directory, "shared_cache")
+        shared_tmp_dir = os.path.join(output_directory, "tmp")
+
+        # Create them
+        os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
+        os.makedirs(shared_tmp_dir, exist_ok=True)
+
         # start docker client
         client = None  # Initialize client to None
         if settings.get("container_manager") == "docker":
@@ -170,6 +184,12 @@ class ActivitysimRunner(GenericRunner):
         asim_docker_vols = self.get_asim_docker_vols(
             settings, working_dir=workspace.full_path
         )
+
+        asim_docker_vols.update({
+            shared_tmp_dir: {"bind": "/tmp", "mode": "rw"},
+            shared_cache_dir: {"bind": "/app/numba_cache", "mode": "rw"},
+        })
+
         activity_demand_model, activity_demand_image = self.get_model_and_image(
             settings, "activity_demand_model"
         )
@@ -229,8 +249,8 @@ class ActivitysimRunner(GenericRunner):
                 working_dir=asim_workdir,
                 args=additional_args,
                 environment={
-                    "NUMBA_CACHE_DIR": "/app/output/cache/numba",
-                    "XDG_CACHE_HOME": "/app/output/cache",
+                    "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
+                    "XDG_CACHE_HOME": "/app/numba_cache",
                 }
             )
 
@@ -351,8 +371,8 @@ class ActivitysimRunner(GenericRunner):
             working_dir=asim_workdir,
             args=additional_args,
             environment={
-                "NUMBA_CACHE_DIR": "/app/output/cache/numba",
-                "XDG_CACHE_HOME": "/app/output/cache",
+                "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
+                "XDG_CACHE_HOME": "/app/numba_cache",
             }
         )
 
