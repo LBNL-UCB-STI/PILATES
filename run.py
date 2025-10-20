@@ -209,6 +209,8 @@ def forecast_land_use(
     run_land_use(
         settings,
         year,
+        workflow_state.forecast_year,
+        land_use_model,
         workflow_state,
         client,
         workspace,
@@ -225,15 +227,8 @@ def forecast_land_use(
     )
 
     if os.path.exists(usim_datastore_fpath):
-        provenance_tracker.complete_model_run(usim_run_hash, status="completed")
-        # Record UrbanSim output file
-        provenance_tracker.record_output_file(
-            land_use_model,
-            usim_datastore_fpath,
-            year=workflow_state.forecast_year,
-            description="UrbanSim forecast output data",
-            model_run_id=usim_run_hash,
-        )
+        # The postprocessor now handles its own completion
+        pass
     else:
         logger.critical(
             "No UrbanSim output data found at {0}. It probably did not finish successfully.".format(
@@ -247,6 +242,8 @@ def forecast_land_use(
 def run_land_use(
     settings,
     year,
+    forecast_year,
+    land_use_model,
     state: WorkflowState,
     client,
     workspace: Workspace,
@@ -262,31 +259,21 @@ def run_land_use(
     postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker)
 
     # 2. PREPARE URBANSIM DATA
-    print_str = "Preparing {0} input data for land use development simulation.".format(
-        year
-    )
+    print_str = f"Preparing {year} input data for land use development simulation."
     formatted_print(print_str)
 
     input_data = preprocessor.preprocess(workspace)
 
     # 3. RUN URBANSIM
-    print_str = "Simulating land use development from {0} " "to {1} with {2}.".format(
-        year, forecast_year, land_use_model
-    )
+    print_str = f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
     formatted_print(print_str)
-    provenance_tracker.start_model_run(model_run_hash)
 
-    GenericRunner.run_container(
-        client=client,
-        settings=settings,
-        image=land_use_image,
-        volumes=usim_docker_vols,
-        command=usim_cmd,
-        model_name=land_use_model,
-        working_dir=settings["usim_client_base_folder"],
-    )
+    raw_outputs, run_info = runner.run(input_data, workspace)
+
+    # 4. POSTPROCESS URBANSIM OUTPUTS
+    postprocessor.postprocess(raw_outputs, workspace, model_run_hash=model_run_hash)
+
     logger.info("Done!")
-    # Completion is recorded in forecast_land_use
 
     return
 
