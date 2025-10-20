@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 
 
@@ -11,6 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 def get_usim_datastore_fname(settings, io, year=None):
+    """Construct the UrbanSim datastore filename based on settings.
+
+    Args:
+        settings (dict): The simulation settings.
+        io (str): The direction of I/O, either 'input' or 'output'.
+        year (int, optional): The simulation year. Required if io is 'output'.
+
+    Returns:
+        str: The formatted UrbanSim datastore filename.
+    """
     if io == "output":
         datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
     elif io == "input":
@@ -28,132 +38,112 @@ def get_usim_datastore_fname(settings, io, year=None):
 
 def create_next_iter_usim_data(
     settings,
-    year,
     forecast_year,
-    full_path,
-    provenance_tracker=None,
-    model_run_hash=None,
+    mutable_data_dir,
+    provenance_tracker,
+    model_run_hash,
 ):
-    data_dir = settings["usim_local_mutable_data_folder"]
-
-    # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
-    # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
-    # it will be overwritten in the next step.
+    """Merge UrbanSim outputs with previous inputs to create the input for the next iteration."""
+    # Define paths
     input_datastore_name = get_usim_datastore_fname(settings, io="input")
-    input_store_path = os.path.join(data_dir, input_datastore_name)
+    input_store_path = os.path.join(mutable_data_dir, input_datastore_name)
+    archive_fname = f"input_data_for_{forecast_year}_outputs.h5"
+    archived_input_store_path = input_store_path.replace(input_datastore_name, archive_fname)
 
-    # First check if urbansim model is activated
-    if settings.get("land_use_model") == "urbansim":
-        if os.path.exists(input_store_path):
-            archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
-            logger.info(
-                "Moving urbansim inputs from the previous iteration to {0}".format(
-                    archive_fname
+    if not os.path.exists(input_store_path):
+        logger.error(f"Input store path {input_store_path} does not exist. Cannot create next iteration data.")
+        return
+
+    # --- Provenance Step 1: Record initial inputs ---
+    # Record the original input H5 that will be archived
+    source_input_container = provenance_tracker.record_h5_input_container(
+        "urbansim_postprocessor",
+        input_store_path,
+        description=f"UrbanSim input H5 before archiving for year {forecast_year}",
+        short_name=f"usim_input_pre_archive_{forecast_year}",
+        model_run_id=model_run_hash,
+    )
+
+    # Record the UrbanSim output H5 from the current run
+    output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=mutable_data_dir)
+    output_container = provenance_tracker.record_h5_input_container(
+        "urbansim_postprocessor",
+        output_store._path,
+        description=f"UrbanSim output H5 for year {forecast_year}",
+        short_name=f"usim_output_{forecast_year}",
+        model_run_id=model_run_hash,
+    )
+
+    # --- File Operation: Archive the original input file ---
+    logger.info(f"Archiving previous iteration's inputs to {archive_fname}")
+    os.rename(input_store_path, archived_input_store_path)
+
+    # --- Provenance Step 2: Record the archived file as an intermediate output ---
+    archived_container = provenance_tracker.record_h5_output_container(
+        "urbansim_postprocessor",
+        archived_input_store_path,
+        input_records=[source_input_container],
+        description=f"Archived UrbanSim input H5 for year {forecast_year}",
+        short_name=f"usim_input_archive_{forecast_year}",
+        model_run_id=model_run_hash,
+    )
+
+    # --- Merge and Provenance Step 3: Create new input file table by table ---
+    logger.info("Merging results back into new UrbanSim input store!")
+    final_table_records = []
+    with pd.HDFStore(str(archived_input_store_path), "r") as archived_store, \
+         pd.HDFStore(str(input_store_path), "w") as new_store:
+
+        processed_tables = set()
+
+        # Copy tables from the current run's output
+        for h5_key in output_store.keys():
+            table_name = h5_key.split('/')[-1]
+            if os.path.join("/", table_prefix_year, table_name) == h5_key:
+                # Record source table from output_store
+                source_table = provenance_tracker.record_h5_table_input(
+                    "urbansim_postprocessor", output_container, h5_key, model_run_id=model_run_hash
                 )
-            )
-            new_input_store_path = input_store_path.replace(
-                input_datastore_name, archive_fname
-            )
-
-            # FIX ISSUE 1: Record the input H5 BEFORE it's renamed to archive
-            if provenance_tracker:
-                input_archive_record = provenance_tracker.record_input_file(
-                    "urbansim_postprocessor",
-                    input_store_path,
-                    description=f"UrbanSim input H5 before archiving to year {forecast_year}",
-                    short_name=f"usim_input_pre_archive_{forecast_year}",
-                    model_run_id=model_run_hash,
+                # Copy data and record output table
+                new_store[table_name] = output_store[h5_key]
+                output_table = provenance_tracker.record_h5_table_output(
+                    "urbansim_postprocessor", None, table_name, [source_table], model_run_id=model_run_hash
                 )
+                final_table_records.append(output_table)
+                processed_tables.add(table_name)
 
-            os.rename(input_store_path, new_input_store_path)
-
-            # FIX ISSUE 1: Record the archived file as an output
-            if provenance_tracker:
-                archived_input_record = (
-                    provenance_tracker.record_output_file_with_inputs(
-                        "urbansim_postprocessor",
-                        new_input_store_path,
-                        input_records=[input_archive_record],
-                        year=forecast_year,
-                        description=f"Archived UrbanSim input H5 for year {forecast_year} outputs",
-                        short_name=f"usim_input_archive_{forecast_year}",
-                        model_run_id=model_run_hash,
-                    )
+        # Copy missing tables from the archived (original) input store
+        for h5_key in archived_store.keys():
+            table_name = h5_key.split('/')[-1]
+            if table_name not in processed_tables:
+                logger.info(f"Copying '{table_name}' from archived input to new input store!")
+                # Record source table from archived_store
+                source_table = provenance_tracker.record_h5_table_input(
+                    "urbansim_postprocessor", archived_container, h5_key, model_run_id=model_run_hash
                 )
-            og_input_store = pd.HDFStore(str(new_input_store_path))
-            new_input_store = pd.HDFStore(str(input_store_path))
-            assert len(new_input_store.keys()) == 0
-            updated_tables = []
-
-            # load last iter output data
-            # output_datastore_name = _get_usim_datastore_fname(settings, 'output', forecast_year)
-            # output_store_path = os.path.join(data_dir, output_datastore_name)
-
-            # copy usim outputs into new input data store
-            logger.info("Merging results back into UrbanSim and storing as .h5!")
-            output_store, table_prefix_year = read_datastore(
-                settings, forecast_year, mutable_data_dir=full_path
-            )
-
-            # Track the UrbanSim output H5 as an input to this merge process
-            output_store_path = output_store._path
-            output_store_record = None
-            if provenance_tracker and os.path.exists(output_store_path):
-                output_store_record = provenance_tracker.record_input_file(
-                    "urbansim_postprocessor",
-                    output_store_path,
-                    description=f"UrbanSim output H5 for year {forecast_year}",
-                    short_name=f"usim_output_{forecast_year}",
-                    model_run_id=model_run_hash,
+                # Copy data and record output table
+                new_store[table_name] = archived_store[h5_key]
+                output_table = provenance_tracker.record_h5_table_output(
+                    "urbansim_postprocessor", None, table_name, [source_table], model_run_id=model_run_hash
                 )
+                final_table_records.append(output_table)
 
-            for h5_key in output_store.keys():
-                table_name = h5_key.split("/")[-1]
-                if os.path.join("/", table_prefix_year, table_name) == h5_key:
-                    updated_tables.append(table_name)
-                    new_input_store[table_name] = output_store[h5_key]
+        assert set(new_store.keys()) == set(archived_store.keys())
 
-            # copy missing tables from original usim inputs into new input data store
-            for h5_key in og_input_store.keys():
-                table_name = h5_key.split("/")[-1]
-                if table_name not in updated_tables:
-                    logger.info(
-                        "Copying {0} input table to output store!".format(table_name)
-                    )
-                    new_input_store[table_name] = og_input_store[h5_key]
+    output_store.close()
 
-            assert new_input_store.keys() == og_input_store.keys()
-            og_input_store.close()
-            new_input_store.close()
-            output_store.close()
-
-            # FIX ISSUE 2: Record the newly created input H5 as an output
-            # This file will be used as input for the NEXT UrbanSim run
-            if provenance_tracker:
-                input_records_for_merge = [
-                    rec
-                    for rec in [archived_input_record, output_store_record]
-                    if rec
-                ]
-                provenance_tracker.record_output_file_with_inputs(
-                    "urbansim_postprocessor",
-                    input_store_path,
-                    input_records=input_records_for_merge,
-                    year=forecast_year,
-                    description=f"Merged UrbanSim input H5 for next iteration (from year {forecast_year} outputs)",
-                    short_name=f"usim_input_merged_{forecast_year}",
-                    model_run_id=model_run_hash,
-                    updated_children=updated_tables,
-                )
-                logger.info(
-                    f"Recorded merged input H5 for provenance: {input_store_path}"
-                )
-        else:
-            logger.error(f"Input store path {input_store_path} does not exist")
-            return  # or handle this case appropriately
-    else:
-        # If urbansim is not activated, just log an info message and continue
-        logger.info("Urbansim model is not activated, skipping input store path check")
+    # --- Provenance Step 4: Record the final merged HDF5 container ---
+    provenance_tracker.record_h5_output_container(
+        "urbansim_postprocessor",
+        input_store_path,
+        input_records=[archived_container, output_container],
+        table_records=final_table_records,
+        year=forecast_year,
+        description=f"Merged UrbanSim input H5 for next iteration (from year {forecast_year} outputs)",
+        short_name=f"usim_input_merged_{forecast_year}",
+        model_run_id=model_run_hash,
+    )
+    logger.info(f"Recorded merged input H5 for provenance: {input_store_path}")
 
 
 class UrbansimPostprocessor(GenericPostprocessor):
@@ -166,18 +156,18 @@ class UrbansimPostprocessor(GenericPostprocessor):
     def postprocess(
         self,
         raw_outputs: RecordStore,
-        runInfo: ModelRunInfo,
         workspace: Workspace,
-        model_run_hash: str = None,
+        runInfo: Optional[ModelRunInfo] = None,
+        model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
         Postprocess UrbanSim outputs.
 
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
-            runInfo (ModelRunInfo): Metadata or information about the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (str): The unique hash for this postprocessor run.
+            runInfo (Optional[ModelRunInfo]): Metadata about the model run. Not used by this processor.
+            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.
@@ -187,7 +177,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
             self.state.current_year,
         )
 
-        # Start postprocessor tracking if no hash provided
         if model_run_hash is None:
             model_run_hash = self.provenance_tracker.start_model_run(
                 "urbansim_postprocessor",
@@ -197,55 +186,21 @@ class UrbansimPostprocessor(GenericPostprocessor):
                 inputs=raw_outputs,
             )
 
-        processed_records = []
         settings = self.state.full_settings
+        processed_records = []
 
         try:
-            # Process each raw output file
-            for record in raw_outputs.all_records():
-                if record.file_path and os.path.exists(record.file_path):
-                    logger.info(f"Processing UrbanSim output: {record.file_path}")
-
-                    # TODO: Add specific UrbanSim postprocessing logic here
-                    # This might include:
-                    # - Validating output file structure
-                    # - Converting formats if needed
-                    # - Creating summary statistics
-                    # - Preparing data for next model iteration
-
-                    # For now, just record the processed file
-                    processed_record = self.provenance_tracker.record_output_file_with_inputs(
-                        "urbansim_postprocessor",
-                        record.file_path,
-                        input_records=[record],
-                        year=self.state.forecast_year,
-                        description=f"Processed UrbanSim output: {record.description}",
-                        short_name=f"{record.short_name}_processed",
-                        model_run_id=model_run_hash,
-                        state=self.state,
-                    )
-
-                    if processed_record:
-                        processed_records.append(processed_record)
-                else:
-                    logger.warning(f"Raw output file not found: {record.file_path}")
-
-            # Handle data preparation for next iteration if needed
             if settings.get("land_use_model") == "urbansim":
-                try:
-                    # Prepare data for next iteration with provenance tracking
-                    create_next_iter_usim_data(
-                        settings,
-                        self.state.current_year,
-                        self.state.forecast_year,
-                        workspace.get_usim_mutable_data_dir(),
-                        provenance_tracker=self.provenance_tracker,
-                        model_run_hash=model_run_hash,
-                    )
-                    logger.info("Prepared UrbanSim data for next iteration")
-                except Exception as e:
-                    logger.error(f"Error preparing next iteration data: {e}")
-                    # Don't fail the entire postprocessing for this
+                create_next_iter_usim_data(
+                    settings,
+                    self.state.forecast_year,
+                    workspace.get_usim_mutable_data_dir(),
+                    provenance_tracker=self.provenance_tracker,
+                    model_run_hash=model_run_hash,
+                )
+                logger.info("Prepared UrbanSim data for next iteration")
+            else:
+                logger.info("Urbansim model is not activated, skipping postprocessing.")
 
         except Exception as e:
             logger.error(f"Error during UrbanSim postprocessing: {e}")
@@ -253,8 +208,9 @@ class UrbansimPostprocessor(GenericPostprocessor):
             raise
 
         # Complete postprocessor tracking
+        # Note: The output records are created within create_next_iter_usim_data
         self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=processed_records
+            model_run_hash, status="completed", output_records=[]
         )
 
         return RecordStore(recordList=processed_records)

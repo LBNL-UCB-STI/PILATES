@@ -591,8 +591,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     def postprocess(
         self,
         raw_outputs: RecordStore,
-        runInfo: ModelRunInfo,
         workspace: Workspace,
+        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -603,9 +603,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
-            runInfo (ModelRunInfo): Metadata or information about the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (str): The unique hash for this postprocessor run.
+            runInfo (Optional[ModelRunInfo]): Metadata or information about the model run.
+            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.

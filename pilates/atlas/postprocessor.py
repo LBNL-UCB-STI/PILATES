@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -14,18 +14,32 @@ logger = logging.getLogger(__name__)
 
 
 def atlas_update_h5_vehicle(
-    settings, output_year, state: WorkflowState, warm_start=False
+    settings: dict,
+    output_year: int,
+    h5_file_path: str,
+    household_v_csv_path: str,
 ):
-    # use atlas outputs in year provided and update "cars" & "hh_cars"
-    # columns in urbansim h5 files
-    logger.info("ATLAS is updating urbansim outputs for Year {}".format(output_year))
+    """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
 
-    # read and format atlas vehicle ownership output
-    atlas_output_path = os.path.join(
-        state.full_path, settings["atlas_host_output_folder"]
-    )  # 'pilates/atlas/atlas_output'  #
-    fname = "householdv_{}.csv".format(output_year)
-    df = pd.read_csv(os.path.join(atlas_output_path, fname))
+    Reads vehicle ownership data from the given CSV file and updates the 'cars'
+    and 'hh_cars' columns in the 'households' table within the specified HDF5 file.
+
+    Args:
+        settings (dict): The simulation settings.
+        output_year (int): The forecast year being processed.
+        h5_file_path (str): The absolute path to the UrbanSim HDF5 file to update.
+        household_v_csv_path (str): The absolute path to the ATLAS householdv CSV file.
+    """
+    if not os.path.exists(h5_file_path) or not os.path.exists(household_v_csv_path):
+        logger.error(
+            f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
+        )
+        return
+
+    logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
+
+    # Read and format ATLAS vehicle ownership output
+    df = pd.read_csv(household_v_csv_path)
     df = (
         df.rename(columns={"nvehicles": "cars"})
         .set_index("household_id")
@@ -35,63 +49,66 @@ def atlas_update_h5_vehicle(
         df["cars"], bins=[-0.5, 0.5, 1.5, np.inf], labels=["none", "one", "two or more"]
     )
 
-    # set which h5 file to update
-    h5path = os.path.join(state.full_path, settings["usim_local_mutable_data_folder"])
-    if warm_start:
-        h5fname = get_usim_datastore_fname(settings, io="input")
-    else:
-        h5fname = get_usim_datastore_fname(settings, io="output", year=output_year)
+    logger.info(f"Writing updated household vehicle info to h5 file {h5_file_path}")
 
-    logger.info("Writing updated household vehicle info to h5 file {0}".format(h5fname))
+    # Read original h5 files and update
+    with pd.HDFStore(h5_file_path, mode="r+") as h5:
+        warm_start = settings.get("warm_start", False)
+        key = f"/{output_year}/households" if not warm_start else "households"
 
-    # read original h5 files
-    with pd.HDFStore(os.path.join(h5path, h5fname), mode="r+") as h5:
+        try:
+            olddf = h5[key]
+        except KeyError:
+            logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
+            return
 
-        # if in main loop, update "model_data_*.h5", which has three layers ({$year}/households/cars)
-        if not warm_start:
-            key = "/{}/households".format(output_year)
-        # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
-        else:
-            key = "households"
-
-        olddf = h5[key]
         olddf.index = olddf.index.astype(int)
         olddf = olddf.reindex(df.index.astype(int))
 
         if olddf.shape[0] != df.shape[0]:
-            logger.error("ATLAS household_id mismatch found - NOT update h5 datastore")
+            logger.error("ATLAS household_id mismatch found - NOT updating h5 datastore")
         else:
             olddf["cars"] = df["cars"].values
             olddf["hh_cars"] = df["hh_cars"].values
             for col in olddf.columns:
                 if olddf[col].dtype.name == "category":
-                    logger.info(
-                        "Converting column {0} from category to str".format(col)
-                    )
+                    logger.info(f"Converting column {col} from category to str")
                     olddf[col] = olddf[col].astype(str)
             h5[key] = olddf
-            logger.info("ATLAS update h5 datastore table {0} - done".format(key))
+            logger.info(f"ATLAS update h5 datastore table {key} - done")
 
 
-def atlas_add_vehileTypeId(settings, output_year, state):
-    # add a "vehicleTypeId" column in atlas output vehicles_{$year}.csv,
-    # write as vehicles2_{$year}.csv
-    # which will be read by beam preprocessor
-    # vehicleTypeId = conc "bodytype"-"vintage_category"-"pred_power"
+def atlas_add_vehileTypeId(
+    settings: dict,
+    output_year: int,
+    vehicles_csv_path: str,
+    output_vehicles2_csv_path: str,
+):
+    """Add a 'vehicleTypeId' column to the ATLAS vehicles CSV.
 
-    atlas_output_path = os.path.join(
-        state.full_path, settings["atlas_host_output_folder"]
-    )
-    fname = "vehicles_{}.csv".format(output_year)
+    Reads the main ATLAS vehicles output, creates a composite 'vehicleTypeId'
+    column for BEAM, and writes the result to a new 'vehicles2_{year}.csv' file.
 
-    # read original atlas output "vehicles_*.csv" as dataframe
-    df = pd.read_csv(os.path.join(atlas_output_path, fname))
+    Args:
+        settings (dict): The simulation settings.
+        output_year (int): The forecast year being processed.
+        vehicles_csv_path (str): Path to the input ATLAS vehicles CSV file.
+        output_vehicles2_csv_path (str): Path to write the output CSV file to.
+    """
+    if not os.path.exists(vehicles_csv_path):
+        logger.error(
+            f"[AtlasPostprocessor] Missing input file for vehicleTypeId addition: {vehicles_csv_path}"
+        )
+        return
 
-    # atlas:v1.0.6 can generate continuous modelyear
+    # Read original ATLAS output "vehicles_*.csv" as dataframe
+    df = pd.read_csv(vehicles_csv_path)
+
+    # ATLAS:v1.0.6 can generate continuous modelyear
     df["modelyear"] = df["modelyear"].astype(int)
 
-    # add "vehicleTypeId" column in dataframe for BEAM
-    # for prior-2015-model vehicles, vehicleTypeId is *_*_2015
+    # Add "vehicleTypeId" column in dataframe for BEAM
+    # For prior-2015-model vehicles, vehicleTypeId is *_*_2015
     df["vehicleTypeId"] = (
         df[["bodytype", "pred_power", "modelyear"]].astype(str).agg("_".join, axis=1)
     )
@@ -102,16 +119,21 @@ def atlas_add_vehileTypeId(settings, output_year, state):
         + "_2015"
     )
 
-    # write to a new file vehicles2_*.csv
-    # because original file cannot be overwritten (root-owned)
-    # may revise later
-    df.to_csv(
-        os.path.join(atlas_output_path, "vehicles2_{}.csv".format(output_year)),
-        index=False,
-    )
+    # Write to a new file vehicles2_*.csv
+    df.to_csv(output_vehicles2_csv_path, index=False)
 
 
 def get_usim_datastore_fname(settings, io, year=None):
+    """Construct the UrbanSim datastore filename based on settings.
+
+    Args:
+        settings (dict): The simulation settings.
+        io (str): The direction of I/O, either 'input' or 'output'.
+        year (int, optional): The simulation year. Required if io is 'output'.
+
+    Returns:
+        str: The formatted UrbanSim datastore filename.
+    """
     if io == "output":
         datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
     elif io == "input":
@@ -145,9 +167,9 @@ class AtlasPostprocessor(GenericPostprocessor):
     def postprocess(
         self,
         raw_outputs: RecordStore,
-        runInfo: ModelRunInfo,
         workspace: Workspace,
-        model_run_hash: str = None,
+        runInfo: Optional[ModelRunInfo] = None,
+        model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
         Postprocess ATLAS outputs: update UrbanSim HDF5 with new vehicle ownership,
@@ -155,19 +177,18 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         Args:
             raw_outputs (RecordStore): The raw outputs from the ATLAS model run.
-            runInfo (ModelRunInfo): Metadata about the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (str): The unique hash for this postprocessor run.
+            runInfo (Optional[ModelRunInfo]): Metadata about the model run. Not used by this processor.
+            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: Processed output data.
+            RecordStore: A RecordStore containing records for the generated output files.
         """
         logger.info(
             "[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s",
             self.state.current_year,
         )
 
-        # Start postprocessor tracking if no hash provided
         if model_run_hash is None:
             model_run_hash = self.provenance_tracker.start_model_run(
                 "atlas_postprocessor",
@@ -179,123 +200,87 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         settings = self.state.full_settings
         output_year = self.state.forecast_year
+        output_records = []
 
-        # --- Record input files ---
-        # UrbanSim HDF5 file (input)
+        # --- HDF5 Update and Provenance ---
         usim_h5_path = workspace.get_usim_mutable_data_dir()
-        usim_h5_fname = get_usim_datastore_fname(
-            settings, io="output", year=output_year
-        )
+        usim_h5_fname = get_usim_datastore_fname(settings, io="output", year=output_year)
         usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
-        usim_input_record = None
-        if os.path.exists(usim_h5_file):
-            usim_input_record = self.provenance_tracker.record_input_file(
+        atlas_hh_file = os.path.join(workspace.get_atlas_output_dir(), f"householdv_{output_year}.csv")
+
+        if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
+            # 1. Record H5 container and householdv.csv as inputs
+            h5_container_input_record = self.provenance_tracker.record_h5_input_container(
                 "atlas_postprocessor",
                 usim_h5_file,
-                description=f"UrbanSim HDF5 before ATLAS vehicle update for year {output_year}",
-                short_name="usim_h5_input",
+                description=f"UrbanSim HDF5 before ATLAS update for year {output_year}",
+                short_name="usim_h5_before_update",
                 model_run_id=model_run_hash,
-                state=self.state,
             )
-
-        # ATLAS output CSV (input)
-        atlas_output_path = workspace.get_atlas_output_dir()
-        atlas_veh_file = os.path.join(atlas_output_path, f"vehicles_{output_year}.csv")
-        atlas_veh_input_record = None
-        if os.path.exists(atlas_veh_file):
-            atlas_veh_input_record = self.provenance_tracker.record_input_file(
-                "atlas_postprocessor",
-                atlas_veh_file,
-                description=f"ATLAS vehicles CSV before vehicleTypeId for year {output_year}",
-                short_name="atlas_vehicles_input",
-                model_run_id=model_run_hash,
-                state=self.state,
-            )
-
-        # FIX ATLAS ISSUE 1: Track householdv CSV (used to update UrbanSim H5)
-        atlas_hh_file = os.path.join(atlas_output_path, f"householdv_{output_year}.csv")
-        atlas_hh_input_record = None
-        if os.path.exists(atlas_hh_file):
             atlas_hh_input_record = self.provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 atlas_hh_file,
                 description=f"ATLAS household vehicle counts for year {output_year}",
                 short_name="atlas_householdv_input",
                 model_run_id=model_run_hash,
-                state=self.state,
             )
 
-        # --- Perform postprocessing steps ---
-        atlas_update_h5_vehicle(settings, output_year, self.state)
-        logger.info(
-            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership for year %s",
-            output_year,
-        )
-        atlas_add_vehileTypeId(settings, output_year, self.state)
-        logger.info(
-            "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs for year %s",
-            output_year,
-        )
+            # 2. Define the table to be updated
+            table_name = f"/{output_year}/households" if not settings.get("warm_start") else "households"
 
-        # --- Record output files ---
-        # FIX ATLAS ISSUE 2: Build source file lists for proper lineage
-
-        # UrbanSim HDF5 file (output) - sources: original H5 + householdv CSV
-        usim_output_record = None
-        if os.path.exists(usim_h5_file):
-            input_records_for_h5 = [
-                rec
-                for rec in [usim_input_record, atlas_hh_input_record]
-                if rec
-            ]
-
-            warm_start = settings.get("warm_start", False)
-            if not warm_start:
-                updated_table = "/{}/households".format(output_year)
-            # if in warm start, update "custom_mpo_***.h5", which has two layers (households/cars)
-            else:
-                updated_table = "households"
-
-            usim_output_record = self.provenance_tracker.record_output_file_with_inputs(
+            # 3. Record the source table as an input
+            source_table_record = self.provenance_tracker.record_h5_table_input(
                 "atlas_postprocessor",
-                usim_h5_file,
-                input_records=input_records_for_h5,
-                year=output_year,
-                description=f"UrbanSim HDF5 after ATLAS vehicle update for year {output_year}",
-                short_name="usim_h5_updated",
+                h5_container_record=h5_container_input_record,
+                table_name=table_name,
+                description=f"Source households table before update",
+                short_name="households_table_before_update",
                 model_run_id=model_run_hash,
-                state=self.state,
-                updated_children=[updated_table],
             )
 
-        # ATLAS vehicles2 CSV (output) - source: vehicles CSV
-        atlas_veh2_file = os.path.join(
-            atlas_output_path, f"vehicles2_{output_year}.csv"
-        )
-        atlas_veh2_output_record = None
-        if os.path.exists(atlas_veh2_file):
-            input_records_for_v2 = [
-                rec for rec in [atlas_veh_input_record] if rec
-            ]
+            # 4. Perform the update
+            atlas_update_h5_vehicle(settings, output_year, usim_h5_file, atlas_hh_file)
+            logger.info("[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership.")
 
-            atlas_veh2_output_record = (
-                self.provenance_tracker.record_output_file_with_inputs(
+            # 5. Record the updated table as an output
+            updated_table_record = self.provenance_tracker.record_h5_table_output(
+                "atlas_postprocessor",
+                h5_container_record=h5_container_input_record, # The container path is the same
+                table_name=table_name,
+                input_records=[source_table_record, atlas_hh_input_record],
+                description=f"Updated households table after ATLAS run",
+                short_name="households_table_after_update",
+                model_run_id=model_run_hash,
+            )
+            output_records.append(updated_table_record)
+
+        # --- vehicleTypeId addition and Provenance ---
+        atlas_veh_file = os.path.join(workspace.get_atlas_output_dir(), f"vehicles_{output_year}.csv")
+        atlas_veh2_file = os.path.join(workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv")
+
+        if os.path.exists(atlas_veh_file):
+            atlas_add_vehileTypeId(settings, output_year, atlas_veh_file, atlas_veh2_file)
+            logger.info("[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs.")
+
+            atlas_veh_input_record = self.provenance_tracker.record_input_file(
+                "atlas_postprocessor",
+                atlas_veh_file,
+                description=f"ATLAS vehicles CSV before vehicleTypeId addition",
+                short_name="atlas_vehicles_input",
+                model_run_id=model_run_hash,
+            )
+
+            if os.path.exists(atlas_veh2_file):
+                atlas_veh2_output_record = self.provenance_tracker.record_output_file_with_inputs(
                     "atlas_postprocessor",
                     atlas_veh2_file,
-                    input_records=input_records_for_v2,
+                    input_records=[atlas_veh_input_record],
                     year=output_year,
-                    description=f"ATLAS vehicles2 CSV with vehicleTypeId for year {output_year}",
+                    description=f"ATLAS vehicles2 CSV with vehicleTypeId",
                     short_name="atlas_vehicles2_output",
                     model_run_id=model_run_hash,
-                    state=self.state,
                 )
-            )
-
-        # Collect all input and output records
-        input_records = [r for r in [usim_input_record, atlas_veh_input_record, atlas_hh_input_record] if r]
-        output_records = [
-            r for r in [usim_output_record, atlas_veh2_output_record] if r
-        ]
+                output_records.append(atlas_veh2_output_record)
 
         self.provenance_tracker.complete_model_run(
             model_run_hash, status="completed", output_records=output_records
