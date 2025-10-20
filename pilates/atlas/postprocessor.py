@@ -1,11 +1,11 @@
-from typing import Any
+from typing import Any, Optional
 import logging
 import os
 
 import numpy as np
 import pandas as pd
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker

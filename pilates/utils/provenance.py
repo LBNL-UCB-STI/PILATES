@@ -22,8 +22,6 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 
-import attr
-import h5py
 import pandas as pd
 from openlineage.client import set_producer, OpenLineageClient
 from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
@@ -152,8 +150,6 @@ class ProvenanceTracker:
             "output_files_by_model": {},
             "run_status": {},
         }
-        # This needs to be updated to reflect the new data structure
-        # For now, we can count files based on the models that touched them
         input_counts = {}
         output_counts = {}
         for fr in self.run_info.file_records.values():
@@ -395,7 +391,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         elif os.path.isdir(abs_file_path):
             return self._calculate_directory_hash(abs_file_path, state)
         else:
-            logger.error(f"Could not calculate hash for {abs_file_path}: {e}")
+            logger.error(f"Could not calculate hash for {abs_file_path}")
             return None
 
     def _calculate_file_hash(
@@ -448,20 +444,8 @@ class FileProvenanceTracker(ProvenanceTracker):
             return abs_path
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
-        self.run_info.start_year = settings.get("start_year")
-        self.run_info.end_year = settings.get("end_year")
+        super().initialize_from_settings(settings)
         self.run_info.settings_hash = self._calculate_settings_hash(settings)
-        models_used = []
-        model_keys = [
-            "land_use_model",
-            "vehicle_ownership_model",
-            "activity_demand_model",
-            "travel_model",
-        ]
-        for key in model_keys:
-            if settings.get(key):
-                models_used.append(settings[key])
-        self.run_info.models_used = list(set(models_used))
         self._save_run_info()
         logger.info("FileProvenanceTracker initialized with settings.")
 
@@ -505,9 +489,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         try:
             with pd.HDFStore(file_path, mode="r") as store:
                 for table_name in store.keys():
-                    # CORRECTED: Use 'stop=1' to read just the first row
                     df_sample = store.select(table_name, stop=1)
-
                     for col_name, col_type in df_sample.dtypes.items():
                         flat_schema.append(
                             {
@@ -519,7 +501,6 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.warning(
                 f"Could not read HDF5 schema from {file_path} using pandas: {e}"
             )
-
         return flat_schema
 
     def _get_schema_from_file(self, file_path: str) -> List[Dict[str, str]]:
@@ -551,70 +532,33 @@ class FileProvenanceTracker(ProvenanceTracker):
                 return self._get_schema_from_h5(file_path)
         except Exception as e:
             logger.warning(f"Could not automatically infer schema for {file_path}: {e}")
-
         return schema_info
 
     def _create_h5_table_records(
             self,
             h5_file_path: str,
             h5_file_record: "H5FileRecord",
-            state: Optional[WorkflowState] = None,
-            updated_table_names: Optional[List[str]] = None,
-            source_file_paths: Optional[List[str]] = None,
     ) -> List["H5TableRecord"]:
-        """
-        Creates H5TableRecord objects for all tables within an H5 file.
-        Reuses unique_ids from source files for unchanged tables.
-        """
-        # Build a lookup of existing table records from source files
-        source_table_lookup = {}
-        if source_file_paths and updated_table_names is not None:
-            source_table_lookup = self._build_source_table_lookup(source_file_paths)
-
         table_records = []
         try:
-            import os
-
             file_mtime = os.path.getmtime(h5_file_path)
-
             with pd.HDFStore(h5_file_path, mode="r") as store:
                 for table_name in store.keys():
                     try:
-                        # Get just the first row for schema
                         df_sample = store.select(table_name, stop=1)
-
-                        # Get table info for metadata hash
                         try:
                             storer = store.get_storer(table_name)
-                            nrows = storer.nrows if storer else len(df_sample.index) if len(df_sample) > 0 else 0
+                            nrows = storer.nrows if storer else 0
                         except Exception:
-                            # Fallback: try to get nrows another way
-                            try:
-                                nrows = len(store.select(table_name, start=0, stop=None))
-                            except Exception:
-                                nrows = None  # Give up gracefully
+                            nrows = 0
 
-                        # Check if this table was updated
-                        table_was_updated = (
-                                updated_table_names is None or
-                                table_name in updated_table_names or
-                                table_name.lstrip('/') in updated_table_names
+                        fingerprint = (
+                            f"{table_name}:"
+                            f"{nrows}:"
+                            f"{len(df_sample.columns)}:"
+                            f"{file_mtime}"
                         )
-
-                        if not table_was_updated and table_name in source_table_lookup:
-                            # Reuse the unique_id from the source table
-                            source_table = source_table_lookup[table_name]
-                            table_hash = source_table.unique_id
-                            logger.debug(f"Reusing unique_id for unchanged table '{table_name}': {table_hash}")
-                        else:
-                            # Create new hash for updated/new tables
-                            fingerprint = (
-                                f"{table_name}:"
-                                f"{nrows}:"
-                                f"{len(df_sample.columns)}:"
-                                f"{file_mtime}"
-                            )
-                            table_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
+                        table_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
 
                         schema = [
                             {"name": col, "type": str(dtype)}
@@ -625,9 +569,9 @@ class FileProvenanceTracker(ProvenanceTracker):
                             unique_id=table_hash,
                             h5_file_unique_id=h5_file_record.unique_id,
                             table_name=table_name,
-                            file_path=f"{h5_file_path}/{table_name}",
+                            file_path=f"{h5_file_record.file_path}{table_name}",
                             created_at=datetime.now().isoformat(),
-                            short_name=f"{h5_file_record.short_name}_{table_name}",
+                            short_name=f"{h5_file_record.short_name}{table_name.replace('/', '_')}",
                             description=f"Table '{table_name}' from H5 file '{h5_file_record.short_name}'",
                             models=h5_file_record.models,
                             schema=schema,
@@ -637,9 +581,8 @@ class FileProvenanceTracker(ProvenanceTracker):
                                 "nrows": nrows,
                                 "ncols": len(df_sample.columns),
                                 "file_modified": file_mtime,
-                                "was_updated": table_was_updated,
                             },
-                            source_file_paths=h5_file_record.source_file_paths if not table_was_updated else [],
+                            source_file_paths=h5_file_record.source_file_paths,
                         )
                         table_records.append(table_record)
                     except Exception as e:
@@ -647,22 +590,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         except Exception as e:
             logger.error(f"Failed to create H5TableRecords for {h5_file_path}: {e}")
         return table_records
-
-    def _build_source_table_lookup(self, source_file_paths: List[str]) -> Dict[str, "H5TableRecord"]:
-        """
-        Builds a lookup dictionary of table_name -> H5TableRecord from source files.
-        """
-        table_lookup = {}
-        for source_path in source_file_paths:
-            source_hash = self._calculate_file_hash(source_path)
-            if source_hash in self.run_info.file_records:
-                source_record = self.run_info.file_records[source_hash]
-                if isinstance(source_record, H5FileRecord):
-                    for table_record in source_record.table_records:
-                        # Store by table name (normalize the leading slash)
-                        table_lookup[table_record.table_name] = table_record
-                        table_lookup[table_record.table_name.lstrip('/')] = table_record
-        return table_lookup
 
     def _get_or_create_file_record(
         self,
@@ -672,7 +599,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         short_name: Optional[str] = None,
         state: Optional[WorkflowState] = None,
         source_file_paths: Optional[List[str]] = None,
-        updated_children: Optional[List[str]] = None,
     ) -> Optional[Union["FileRecord", "H5FileRecord"]]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
@@ -692,23 +618,18 @@ class FileProvenanceTracker(ProvenanceTracker):
                 short_name=short_name or os.path.splitext(os.path.basename(file_path))[0],
                 metadata=self._load_metadata(path_to_use),
                 description=description,
-                year = state.current_year if state else None,
-                models=[]
+                year=state.current_year if state else None,
+                models=[],
+                source_file_paths=source_file_paths or []
             )
             table_records = self._create_h5_table_records(
                 file_path,
                 h5_file_record,
-                state=state,
-                updated_table_names=updated_children,  # NEW
-                source_file_paths=source_file_paths  # NEW
             )
-
-            # Store table records in file_records AND save their IDs in the H5FileRecord
             for table_record in table_records:
                 self.run_info.file_records[table_record.unique_id] = table_record
-
             h5_file_record.table_record_ids = [tr.unique_id for tr in table_records]
-
+            self.run_info.file_records[file_hash] = h5_file_record
             return h5_file_record
         else:
             if os.path.isdir(path_to_use):
@@ -735,9 +656,97 @@ class FileProvenanceTracker(ProvenanceTracker):
                 metadata=metadata,
                 description=description,
                 schema=schema,
+                source_file_paths=source_file_paths or []
             )
             self.run_info.file_records[file_hash] = file_record
             return file_record
+
+    def record_h5_input_container(self, model: str, file_path: str, **kwargs) -> Optional[H5FileRecord]:
+        """Records an HDF5 file as an input container.
+
+        This is a convenience wrapper around `record_input_file` that ensures the created
+        record is an H5FileRecord, which includes records for all its internal tables.
+
+        Args:
+            model (str): The name of the model consuming this input.
+            file_path (str): The path to the HDF5 file.
+            **kwargs: Additional arguments passed to `record_input_file`.
+
+        Returns:
+            Optional[H5FileRecord]: The created or retrieved H5FileRecord, or None.
+        """
+        record = self.record_input_file(model, file_path, **kwargs)
+        if record and not isinstance(record, H5FileRecord):
+            logger.error(f"Recorded H5 container for {file_path}, but it was not an H5FileRecord.")
+            return None
+        return record
+
+    def record_h5_table_input(self, model_name: str, h5_container_record: H5FileRecord, table_name: str, model_run_id: str, **kwargs) -> Optional[H5TableRecord]:
+        """Records a specific table from an HDF5 container as a model input.
+
+        Finds the table record within the container and links it as an input to the specified model run.
+
+        Args:
+            model_name (str): The name of the model consuming this table.
+            h5_container_record (H5FileRecord): The record for the parent HDF5 file.
+            table_name (str): The name/path of the table within the HDF5 file.
+            model_run_id (str): The ID of the model run that is consuming this table.
+            **kwargs: Additional arguments (not currently used).
+
+        Returns:
+            Optional[H5TableRecord]: The found and recorded H5TableRecord, or None.
+        """
+        if not h5_container_record:
+            logger.error("No H5 container record provided to record table input.")
+            return None
+        for table_id in h5_container_record.table_record_ids:
+            if table_id in self.run_info.file_records:
+                table_record = self.run_info.file_records[table_id]
+                if table_record.table_name == table_name:
+                    self.record_input_record(table_record, model_run_id)
+                    logger.info(f"Recorded H5 table '{table_name}' as input to run {model_run_id}")
+                    return table_record
+        logger.warning(f"Could not find table '{table_name}' in container {h5_container_record.short_name} to record as input.")
+        return None
+
+    def record_h5_table_output(self, model_name: str, h5_container_record: H5FileRecord, table_name: str, input_records: List[Record], model_run_id: str, **kwargs) -> Optional[H5TableRecord]:
+        """Records a newly created or updated HDF5 table as a model output.
+
+        Creates a new H5TableRecord, links it to its input records, and registers it
+        as an output of the specified model run.
+
+        Args:
+            model_name (str): The name of the model producing this table.
+            h5_container_record (H5FileRecord): The record for the parent HDF5 file.
+            table_name (str): The name/path of the table within the HDF5 file.
+            input_records (List[Record]): A list of input records that produced this output table.
+            model_run_id (str): The ID of the model run that produced this table.
+            **kwargs: Additional keyword arguments to pass to the H5TableRecord constructor.
+
+        Returns:
+            Optional[H5TableRecord]: The newly created H5TableRecord.
+        """
+        # Create a new unique ID for the output table based on its inputs and timestamp
+        input_hashes = "".join(sorted([rec.unique_id for rec in input_records if rec]))
+        fingerprint = f"{h5_container_record.unique_id}:{table_name}:{input_hashes}:{datetime.now().isoformat()}"
+        table_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
+
+        output_table_record = H5TableRecord(
+            unique_id=table_hash,
+            h5_file_unique_id=h5_container_record.unique_id,
+            table_name=table_name,
+            file_path=f"{h5_container_record.file_path}{table_name}",
+            created_at=datetime.now().isoformat(),
+            models=[model_name],
+            source_file_paths=[rec.file_path for rec in input_records if rec],
+            producing_run_id=model_run_id,
+            **kwargs
+        )
+        self.run_info.file_records[table_hash] = output_table_record
+        if model_run_id in self.run_info.model_runs:
+            self.run_info.model_runs[model_run_id].output_record_hashes.append(table_hash)
+        logger.info(f"Recorded new H5 table output '{table_name}' with hash {table_hash}")
+        return output_table_record
 
     def rename_directory(self, old_directory_name, new_directory_name):
         """
@@ -791,9 +800,10 @@ class FileProvenanceTracker(ProvenanceTracker):
     def record_input_record(self, record: Record, model_run_id: str = None):
         if model_run_id is None:
             model_run_id = self.current_model_run_id
-        self.run_info.model_runs[model_run_id].input_record_hashes.append(
-            record.unique_id
-        )
+        if model_run_id in self.run_info.model_runs:
+            self.run_info.model_runs[model_run_id].input_record_hashes.append(
+                record.unique_id
+            )
 
     def record_input_from_previous_output(
         self,
@@ -806,8 +816,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
         """
-        PHASE 2 IMPROVEMENT #4: Record an input file that was output by a previous model.
-
         Automatically finds the previous output record and links it, making cross-model
         linkages explicit and enabling validation.
 
@@ -897,7 +905,7 @@ class FileProvenanceTracker(ProvenanceTracker):
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, short_name=short_name, state=state
+            file_path, skip_missing, description, short_name=short_name, state=state, source_file_paths=source_file_paths
         )
         if not file_record:
             return None
@@ -937,11 +945,10 @@ class FileProvenanceTracker(ProvenanceTracker):
         short_name: str = None,
         source_file_paths: list = None,
         state: Optional[WorkflowState] = None,
-        updated_children: Optional[List[str]] = None,
     ) -> Optional[FileRecord]:
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, short_name, state=state
+            file_path, skip_missing, description, short_name, state=state, source_file_paths=source_file_paths
         )
         if not file_record:
             return None
@@ -952,23 +959,6 @@ class FileProvenanceTracker(ProvenanceTracker):
             file_record.description = description
         if year:
             file_record.year = year
-        if source_file_paths:
-            # PHASE 1 IMPROVEMENT #2: Validate source_file_paths at record time
-            validated_sources = []
-            for source_path in source_file_paths:
-                rel_path = self._get_relative_path(source_path)
-
-                # Check if this source was previously recorded
-                source_hash = self._calculate_file_hash(source_path)
-                if source_hash not in self.run_info.file_records:
-                    logger.warning(
-                        f"Source file {rel_path} for output {short_name or file_path} "
-                        f"not found in file_records. It may not have been tracked as input/output yet. "
-                        f"This could indicate incomplete provenance tracking."
-                    )
-                validated_sources.append(rel_path)
-
-            file_record.source_file_paths = validated_sources
 
         run_id_producing = model_run_id or self.current_model_run_id
         if run_id_producing:
@@ -989,8 +979,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         **kwargs,
     ) -> Optional[FileRecord]:
         """
-        PHASE 1 IMPROVEMENT #1: Convenience method to record output file with automatic source_file_paths.
-
         This helper reduces boilerplate by automatically extracting file paths from input FileRecords.
         It also accepts any other keyword arguments and passes them through to `record_output_file`.
 

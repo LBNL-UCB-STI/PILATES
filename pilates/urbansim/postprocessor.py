@@ -1,9 +1,11 @@
 import os
 import logging
+from typing import Optional
+
 import pandas as pd
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 
 
