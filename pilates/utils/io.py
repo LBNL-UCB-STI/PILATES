@@ -146,15 +146,12 @@ def datastore_path(settings, year=None, mutable_data_dir=None):
     If `year` is None, returns the base year data store.
     If `year` is specified, returns the forecast year data store.
     """
-    # TODO: Reuse this code below
     region = settings["region"]
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
         data_loc = settings["usim_local_data_input_folder"]
     else:
-        data_loc = os.path.join(
-            mutable_data_dir, settings["usim_local_mutable_data_folder"]
-        )
+        data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
         os.makedirs(data_loc, exist_ok=True)
     if year is None:
         usim_datastore = settings["usim_formattable_input_file_name"].format(
@@ -169,24 +166,12 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     """
     Access to the land use .H5 data store
     """
-    # If `year` is the start year of the whole simulation, or `warm_start` is
-    # True, or if urbansim is turned off entirely, then land use forecasting
-    # has been skipped. This is useful for
-    # generating "warm start" skims for the base year. In this case, the
-    # ActivitySim inputs must be created from the base year land use *inputs*
-    # since no land use outputs have been created yet.
-    #
-    # Otherwise, `year` indicates the forecast year, i.e. the simulation year
-    # land use *outputs* to load.
-
     region = settings["region"]
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
         data_loc = settings["usim_local_data_input_folder"]
     else:
-        data_loc = os.path.join(
-            mutable_data_dir, settings["usim_local_mutable_data_folder"]
-        )
+        data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
     urbansim_enabled = settings.get("land_use_model") is not None
 
     if (year == settings["start_year"]) or warm_start or not urbansim_enabled:

@@ -1998,7 +1998,7 @@ def copy_data_to_mutable_location(
     settings, folder_path, provenance_tracker: FileProvenanceTracker
 ) -> Tuple[RecordStore, RecordStore]:
     logger.info(settings)
-    input_dir = os.path.join(folder_path, settings["asim_local_mutable_data_folder"])
+    input_dir = folder_path
     os.makedirs(input_dir, exist_ok=True)
     region = settings["region"]
     beam_input_dir = settings["beam_local_input_folder"]
@@ -2028,9 +2028,7 @@ def copy_data_to_mutable_location(
     configs_source_dir = os.path.join(
         settings["asim_local_configs_folder"], settings["region"]
     )
-    configs_dest_dir = os.path.join(
-        folder_path, settings["asim_local_mutable_configs_folder"]
-    )
+    configs_dest_dir = os.path.abspath(os.path.join(folder_path, "..","..",settings["asim_local_mutable_configs_folder"]))
     logger.info(
         "Moving asim configs from {0} to {1}".format(
             configs_source_dir, configs_dest_dir

@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 
 import pandas as pd
 from openlineage.client import set_producer, OpenLineageClient
@@ -84,6 +84,13 @@ class ProvenanceTracker:
         self.current_model_run_id = None
 
     def _save_run_info(self):
+        """Hook for persisting the in-memory run information.
+
+        The base implementation does not perform any I/O. Subclasses that
+        maintain a file-backed run_info should override this method to write
+        `self.run_info` to persistent storage. Calling the base method will log
+        a warning to make missing persistence explicit.
+        """
         # Base class does nothing (or could log, or raise NotImplementedError)
         logger.warning("No save_run_info implemented in base ProvenanceTracker class.")
         pass
@@ -101,6 +108,12 @@ class ProvenanceTracker:
             return None
 
     def _normalize_model_name(self, model: str) -> str:
+        """Normalize a model name to a canonical form.
+
+        Currently this normalizes to lowercase when a string is present. The
+        helper centralizes normalization so it can be extended (e.g. remove
+        whitespace or prefixes) in one place.
+        """
         return model.lower() if model else model
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
@@ -140,9 +153,21 @@ class ProvenanceTracker:
             current_model_run.input_record_hashes.append(repo_record.unique_id)
 
     def get_run_info(self) -> Dict[str, Any]:
+        """Return a copy of the current in-memory run information.
+
+        The returned object is a shallow copy of the underlying data model
+        (PilatesRunInfo). Subclasses may provide serialized representations
+        via their own `get_run_info` implementations.
+        """
         return self.run_info.copy()
 
     def get_model_summary(self) -> Dict[str, Any]:
+        """Produce a high-level summary of models, inputs, outputs, and status.
+
+        Returns a dictionary with aggregate counts and categorization useful
+        for quick inspection or reporting. The structure includes counts of
+        input/output files per model and counts of runs by model and status.
+        """
         summary = {
             "total_model_runs": len(self.run_info.model_runs),
             "models_used": self.run_info.model_runs,
@@ -181,6 +206,21 @@ class ProvenanceTracker:
         description: str = None,
         inputs: RecordStore = RecordStore(),
     ) -> str:
+        """Start tracking a new model run.
+
+        Creates a ModelRunInfo record, registers it in `self.run_info.model_runs`,
+        and returns the generated run identifier.
+
+        Args:
+            model: The model name.
+            year: Optional year associated with the run.
+            iteration: Optional iteration index for supply-demand loops.
+            description: Human-friendly description of this run.
+            inputs: A RecordStore containing input records to attach to the run.
+
+        Returns:
+            The unique run id string assigned to this model run.
+        """
         model_run_id = (
             f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
         )
@@ -205,6 +245,18 @@ class ProvenanceTracker:
         status: str = "completed",
         output_records: List[Union[FileRecord, RepoRecord]] = None,
     ):
+        """Mark a model run as complete and attach its outputs.
+
+        Updates timestamps and status for the model run identified by
+        `run_hash`. Any provided output records will be added to the
+        model run's outputs if not already present.
+
+        Args:
+            run_hash: The unique id of the model run to complete.
+            status: Final status (e.g., 'completed' or 'failed').
+            output_records: Optional list of FileRecord/RepoRecord objects
+                produced by the run.
+        """
         if output_records is None:
             output_records = []
         if run_hash in self.run_info.model_runs:
@@ -242,12 +294,24 @@ class FileProvenanceTracker(ProvenanceTracker):
         logger.info(f"FileProvenanceTracker initialized for run ID: {self.run_id}")
 
     def _get_run_info_path(self) -> str:
+        """Return the filesystem path where run_info.json should be stored.
+
+        If a `folder_name` was provided during initialization the run_info
+        file is placed under that subdirectory; otherwise it is placed
+        directly in `self.output_path`.
+        """
         if self.folder_name:
             return os.path.join(self.output_path, self.folder_name, "run_info.json")
         else:
             return os.path.join(self.output_path, "run_info.json")
 
     def _load_metadata(self, file_path: str) -> Dict[str, Any]:
+        """Load an adjacent .metadata.json file for a given data file if present.
+
+        Many datasets in this project ship with a sidecar `<filename>.metadata.json`
+        containing human-readable metadata; this helper attempts to load that
+        JSON file and returns an empty dict if it is missing or invalid.
+        """
         metadata_file = os.path.join(
             os.path.dirname(file_path), f"{os.path.basename(file_path)}.metadata.json"
         )
@@ -260,6 +324,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         return {}
 
     def is_git_repo(self, path: str) -> bool:
+        """Check whether a given path is the root of a Git repository.
+
+        This is a lightweight check that simply verifies the existence of a
+        `.git` directory at the given path. It does not attempt to run git
+        commands or validate repository health.
+        """
         abs_path = os.path.abspath(path)
         git_dir = os.path.join(abs_path, ".git")
         is_repo = os.path.exists(git_dir)
@@ -267,6 +337,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         return is_repo
 
     def get_git_hash(self, repo_path: str = None) -> Optional[str]:
+        """Attempt to retrieve the current Git commit hash (HEAD) for a repo.
+
+        Runs `git rev-parse HEAD` in `repo_path` (or the package directory when
+        not supplied). Returns the hash string or None if git is unavailable or
+        the command fails.
+        """
         try:
             abs_repo_path = (
                 os.path.abspath(repo_path) if repo_path else os.path.dirname(__file__)
@@ -292,6 +368,11 @@ class FileProvenanceTracker(ProvenanceTracker):
             return None
 
     def _validate_file_path(self, file_path: str) -> Optional[str]:
+        """Verify that a file path exists and return its absolute form.
+
+        Returns the absolute path when the file exists. If the provided path is
+        falsy or the file does not exist, logs a warning and returns None.
+        """
         if not file_path:
             logger.warning("Empty file path provided for validation")
             return None
@@ -304,7 +385,14 @@ class FileProvenanceTracker(ProvenanceTracker):
 
     def _get_validated_paths(
         self, file_path: str, skip_missing: bool
-    ) -> (Optional[str], Optional[str]):
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Validate `file_path` and return a tuple (absolute_or_original, relative).
+
+        If the file does not exist and `skip_missing` is True this returns
+        (None, None). Otherwise it returns the absolute path when available or
+        the original path, together with a relative path computed against the
+        tracker's output base.
+        """
         abs_path = self._validate_file_path(file_path)
         if not abs_path and skip_missing:
             logger.debug(f"Skipping missing file: {file_path}")
@@ -429,10 +517,20 @@ class FileProvenanceTracker(ProvenanceTracker):
             return None
 
     def _calculate_settings_hash(self, settings: Dict[str, Any]) -> str:
+        """Return a stable SHA-256 hash of the settings dict.
+
+        The settings are serialized with sorted keys so semantically equivalent
+        dicts map to the same hash regardless of insertion order.
+        """
         settings_str = json.dumps(settings, sort_keys=True, default=str)
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
     def _get_relative_path(self, file_path: str) -> str:
+        """Compute a path for storing in run_info relative to the tracker base.
+
+        If the relative path cannot be computed (e.g., different mounts), the
+        absolute path is returned and a warning is logged.
+        """
         abs_path = os.path.abspath(file_path)
         base_path = self.output_path or os.getcwd()
         try:
@@ -457,6 +555,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         description: str = None,
         git_hash: str = None,
     ) -> RepoRecord:
+        """Record a repository (or directory) as an input to the run.
+
+        The method calculates a unique id for the repository (using a path
+        hash when `git_hash` is not provided), stores a RepoRecord in
+        `self.run_info.repo_records`, and returns it.
+        """
         if git_hash is None:
             git_hash = self._calculate_path_hash(repo_path)
         model = self._normalize_model_name(model)
@@ -792,6 +896,13 @@ class FileProvenanceTracker(ProvenanceTracker):
         model: str,
         state: Optional[WorkflowState] = None,
     ) -> Optional[FileRecord]:
+        """Move a file on disk and update provenance records accordingly.
+
+        Copies the file from `source_path` to `destination_path`, marks the
+        original record as no longer existing, and records the destination as an
+        output of the current model run. Only file records are supported; for
+        repo moves callers must handle git operations manually.
+        """
         if isinstance(record, FileRecord):
             self.record_input_file(
                 model=self._normalize_model_name(model),
@@ -818,6 +929,12 @@ class FileProvenanceTracker(ProvenanceTracker):
             raise NotImplementedError("You have to move git repos manually")
 
     def record_input_record(self, record: Record, model_run_id: str = None):
+        """Attach an existing `Record` as an input to the given model run.
+
+        If `model_run_id` is omitted the currently active model run is used.
+        This simply appends the record's unique id to the model run's
+        `input_record_hashes` list.
+        """
         if model_run_id is None:
             model_run_id = self.current_model_run_id
         if model_run_id in self.run_info.model_runs:
@@ -1041,6 +1158,11 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
 
     def _save_run_info(self, data_to_save: PilatesRunInfo = None):
+        """Persist the tracker's `run_info` dataclass to JSON on disk.
+
+        If `data_to_save` is provided it will be saved instead of the current
+        `self.run_info`. Errors while writing the file are logged as errors.
+        """
         import dataclasses
 
         data = data_to_save if data_to_save is not None else self.run_info
@@ -1052,6 +1174,11 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.error(f"Could not save run_info.json to {self.run_info_path}: {e}")
 
     def get_run_info(self) -> dict:
+        """Return the persisted run_info as a dict when available.
+
+        This attempts to read the on-disk run_info.json and falls back to the
+        in-memory dataclass representation if the file is missing or invalid.
+        """
         import dataclasses
 
         if os.path.exists(self.run_info_path):
@@ -1170,7 +1297,12 @@ class FileProvenanceTracker(ProvenanceTracker):
         return issues
 
     def _initialize_run_info(self) -> PilatesRunInfo:
+        """Load an existing run_info.json or create an initial PilatesRunInfo.
 
+        If a `run_info.json` exists at `self.run_info_path` it is loaded and
+        converted into a `PilatesRunInfo` object. Otherwise a fresh
+        `PilatesRunInfo` is created, written to disk, and returned.
+        """
         if os.path.exists(self.run_info_path):
             try:
                 with open(self.run_info_path, "r") as f:
@@ -1367,6 +1499,11 @@ class OpenLineageTracker(FileProvenanceTracker):
     def _format_name(
         self, name: str, year: Optional[int], iteration: Optional[int]
     ) -> str:
+        """Format a job name optionally appending year/iteration suffixes.
+
+        This keeps OpenLineage job names stable while allowing disambiguation
+        by year and iteration when the tracker is configured to do so.
+        """
         if self.add_year_to_job_name and year:
             name += f"_{year}"
             if self.add_iteration_to_job_name and iteration:

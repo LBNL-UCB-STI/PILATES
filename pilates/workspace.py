@@ -184,6 +184,11 @@ class Workspace:
             self.full_path, self.settings["asim_local_mutable_data_folder"]
         )
 
+    def get_asim_mutable_configs_dir(self) -> str:
+        return os.path.join(
+            self.full_path, self.settings["asim_local_configs_folder"]
+        )
+
     def get_asim_output_dir(self) -> str:
         return os.path.join(self.full_path, self.settings["asim_local_output_folder"])
 

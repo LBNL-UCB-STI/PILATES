@@ -234,6 +234,29 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 short_name="usim_data",
             )
         ]
+
+        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", settings["beam_local_input_folder"], settings["region"], settings["skims_fname"]))
+        skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
+
+        inputs.append(self.provenance_tracker.record_input_file(
+            "urbansim",
+            skims_src,
+            short_name="omx_skims",
+            description="Raw BEAM OD skims",
+        ))
+        shutil.copyfile(skims_src, skims_target)
+
+        outputs.append(self.provenance_tracker.record_output_file(
+            "urbansim",
+            skims_target,
+            short_name="omx_skims",
+            description="Raw BEAM OD skims",
+        ))
+
+        logger.info(
+            f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
+        )
+
         other_data_fnames = {
             f"hsize_ct_{region_id}.csv": "hh_size",
             f"income_rates_{region_id}.csv": "income_rates",
