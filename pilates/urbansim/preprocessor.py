@@ -316,6 +316,29 @@ class UrbansimPreprocessor(GenericPreprocessor):
         processed_records = RecordStore()
 
         try:
+            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings["region"])
+            if not os.path.exists(geoid_to_zone_fname):
+                mapping = geoid_to_zone_map(settings)
+
+            geoid_to_zone_target = os.path.join(workspace.get_usim_mutable_data_dir(), "geoid_to_zone.csv")
+            shutil.copyfile(geoid_to_zone_fname, geoid_to_zone_target)
+            geo_zone_input_rec = self.provenance_tracker.record_input_file(
+                    "urbansim_preprocessor",
+                    geoid_to_zone_fname,
+                    description="Geoid to zone mapping for UrbanSim input",
+                    short_name="geoid_to_zone_mapping",
+                    model_run_id=model_run_hash,
+                )
+            geo_zone_output_rec = self.provenance_tracker.record_output_file_with_inputs(
+                    "urbansim_preprocessor",
+                    geoid_to_zone_fname,
+                    input_records=[geo_zone_input_rec],
+                    description="Copied skims for UrbanSim consumption",
+                    short_name="usim_skims_input",
+                    model_run_id=model_run_hash,
+                )
+            input_records.add_record(geo_zone_input_rec)
+            processed_records.add_record(geo_zone_output_rec)
             # Copy skims from ActivitySim output to UrbanSim input
             if "skims_fname" in settings:
                 source_skims_path = os.path.join(
