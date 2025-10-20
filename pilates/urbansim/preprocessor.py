@@ -250,7 +250,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             "urbansim",
             skims_target,
             short_name="omx_skims",
-            description="Raw BEAM OD skims",
+            description="Raw BEAM OD skims for USim",
         ))
 
         logger.info(

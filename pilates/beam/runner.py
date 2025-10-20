@@ -131,6 +131,9 @@ class BeamRunner(GenericRunner):
         abs_beam_input = workspace.get_beam_mutable_data_dir()
         abs_beam_output = workspace.get_beam_output_dir()
 
+        # Make sure there's a temp dir for the JVM to use
+        os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
+
         beam_memory = settings.get(
             "beam_memory",
             str(int(psutil.virtual_memory().total / (1024.0**3)) - 2) + "g",
@@ -172,7 +175,13 @@ class BeamRunner(GenericRunner):
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
-            environment={"JAVA_OPTS": (f"-Xmx{beam_memory}")},
+            environment={
+                "JAVA_OPTS": (
+                    f"-Xmx{beam_memory} "
+                    f"-Djava.io.tmpdir=/app/output/tmp "
+                    f"-Djna.tmpdir=/app/output/tmp"
+                )
+            }
         )
 
         if not success:
