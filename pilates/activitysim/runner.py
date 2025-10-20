@@ -190,6 +190,12 @@ class ActivitysimRunner(GenericRunner):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
+        asim_local_output_folder = os.path.abspath(
+            os.path.join(workspace.full_path, settings["asim_local_output_folder"])
+        )
+
+        os.makedirs(os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True)
+
         compiled_asim_this_year = False
 
         # Record ActivitySim run start (Compilation if needed)
@@ -222,6 +228,10 @@ class ActivitysimRunner(GenericRunner):
                 model_name="activitysim",
                 working_dir=asim_workdir,
                 args=additional_args,
+                environment={
+                    "NUMBA_CACHE_DIR": "/app/output/cache/numba",
+                    "XDG_CACHE_HOME": "/app/output/cache",
+                }
             )
 
             output_records = []
@@ -340,6 +350,10 @@ class ActivitysimRunner(GenericRunner):
             model_name="activitysim",
             working_dir=asim_workdir,
             args=additional_args,
+            environment={
+                "NUMBA_CACHE_DIR": "/app/output/cache/numba",
+                "XDG_CACHE_HOME": "/app/output/cache",
+            }
         )
 
         run_info = self.provenance_tracker.run_info.model_runs.get(new_asim_run_hash)
