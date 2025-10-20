@@ -361,7 +361,7 @@ def copy_plans_from_asim(
             source_run_id = None
 
         # The input_record is already passed in, so we use it directly.
-        provenance_tracker.record_input_record(input_record, model_run_id)
+        provenance_tracker.record_input_record(input_record)
 
         if os.path.exists(asim_file_path):
             if file_format == "csv":
