@@ -3232,12 +3232,13 @@ class BeamPostprocessor(GenericPostprocessor):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
         self.zarr_manager = None
 
-    def postprocess(
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,

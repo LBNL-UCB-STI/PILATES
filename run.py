@@ -254,9 +254,9 @@ def run_land_use(
 
     factory = ModelFactory()
 
-    preprocessor = factory.get_preprocessor("urbansim", state, provenance_tracker)
-    runner = factory.get_runner("urbansim", state, provenance_tracker)
-    postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker)
+    preprocessor = factory.get_preprocessor("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
+    runner = factory.get_runner("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
+    postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
 
     # 2. PREPARE URBANSIM DATA
     print_str = f"Preparing {year} input data for land use development simulation."
@@ -268,10 +268,12 @@ def run_land_use(
     print_str = f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
     formatted_print(print_str)
 
+
     raw_outputs, run_info = runner.run(input_data, workspace)
 
     # 4. POSTPROCESS URBANSIM OUTPUTS
-    postprocessor.postprocess(raw_outputs, workspace, model_run_hash=model_run_hash)
+
+    postprocessor.postprocess(raw_outputs, workspace, run_info, model_run_hash=model_run_hash)
 
     logger.info("Done!")
 
@@ -299,19 +301,15 @@ def run_activity_demand(
         return RecordStore()
     elif activity_demand_model == "activitysim":
         preprocessor = factory.get_preprocessor(
-            "activitysim", state, provenance_tracker
+            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand
         )
-        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        runner = factory.get_runner("activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand)
         postprocessor = factory.get_postprocessor(
-            "activitysim", state, provenance_tracker
+            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand
         )
 
-        # Preprocess
         input_data = preprocessor.preprocess(workspace)
-
-        # Run
         raw_outputs, run_info = runner.run(input_data, workspace)
-
         processed_outputs = postprocessor.postprocess(raw_outputs, workspace, run_info)
 
         return processed_outputs
@@ -343,16 +341,12 @@ def run_traffic_assignment(
             "POLARIS module is not activated due to missing polarisruntime library"
         )
     elif travel_model == "beam":
-        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker)
-        runner = factory.get_runner("beam", state, provenance_tracker)
-        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
+        runner = factory.get_runner("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
+        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
 
-        # Preprocess
         input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
-
-        # Run
         raw_outputs, run_info = runner.run(input_data, workspace)
-
         processed_outputs = postprocessor.postprocess(raw_outputs, workspace, run_info)
 
     else:
@@ -381,6 +375,7 @@ def main():
         provenance_tracker=provenance_tracker,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
+    state.set_run_info_path(provenance_tracker.run_info_path)
 
     initialization = Initialization("initialization", state, provenance_tracker)
     initialization.run(settings, workspace)
@@ -419,10 +414,10 @@ def main():
 
             # Use ModelFactory for all model/image lookups
             factory = ModelFactory()
-            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker)
-            runner = factory.get_runner("atlas", state, provenance_tracker)
+            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+            runner = factory.get_runner("atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
             postprocessor = factory.get_postprocessor(
-                "atlas", state, provenance_tracker
+                "atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model
             )
 
             # Determine if this is a warm start for ATLAS

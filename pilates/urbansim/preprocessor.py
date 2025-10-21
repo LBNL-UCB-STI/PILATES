@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 import os
 import shutil
 import logging
@@ -103,6 +103,8 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                     shutil.rmtree(input_skims_location)
                 shutil.copytree(mutable_skims_location, input_skims_location)
 
+                import xarray as xr
+
                 ds = xr.open_zarr(mutable_skims_location)
 
                 # Get zone IDs
@@ -173,8 +175,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["usim_data_reference"]
 
     def copy_data_to_mutable_location(
@@ -293,7 +296,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         )
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
-    def preprocess(
+    def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),

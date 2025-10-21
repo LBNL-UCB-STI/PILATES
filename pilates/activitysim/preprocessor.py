@@ -1332,8 +1332,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
 
     def _should_use_database_input(self, settings: dict) -> bool:
@@ -1505,7 +1506,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             settings, output_dir, self.provenance_tracker
         )
 
-    def preprocess(
+    def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),

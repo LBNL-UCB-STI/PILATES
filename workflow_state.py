@@ -42,6 +42,8 @@ class WorkflowState:
         file_loc: str,
         asim_compiled: bool,
         full_settings: Optional[dict] = None,
+        sub_stage_progress: Optional[str] = None,
+        run_info_path: Optional[str] = None,  # new
     ):
 
         # Store basic simulation parameters
@@ -54,6 +56,8 @@ class WorkflowState:
         self.current_major_stage = major_stage
         self.current_inner_iter = inner_iter
         self.current_sub_stage = sub_stage
+        self.sub_stage_progress = sub_stage_progress
+        self.run_info_path = run_info_path  # new
 
         self.forecast_year = None
         self.file_loc = file_loc
@@ -162,6 +166,14 @@ class WorkflowState:
     def iteration(self, value):
         self.current_inner_iter = value
 
+    def set_run_info_path(self, run_info_path: Optional[str]):
+        self.run_info_path = run_info_path
+        self.write_state()
+
+    def set_sub_stage_progress(self, sub_stage_progress: Optional[str]):
+        self.sub_stage_progress = sub_stage_progress
+        self.write_state()
+
     def enabled(self, stage):
         return stage in self.enabled_stages
 
@@ -173,12 +185,16 @@ class WorkflowState:
         file_loc,
         iteration,
         asim_compiled,
+        sub_stage_progress: Optional[str] = None,
+        run_info_path: Optional[str] = None,  # new
     ):
         to_save = {
             "year": year,
             "stage": current_stage.name if current_stage else None,
             "iteration": iteration,
             "asim_compiled": asim_compiled,
+            "sub_stage_progress": sub_stage_progress,
+            "run_info_path": run_info_path,  # new
         }
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
@@ -187,7 +203,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False]
+            return [None, None, 0, False, None, None]  # new
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -200,7 +216,9 @@ class WorkflowState:
         )
         iteration = data.get("iteration", 0) or 0
         asim_compiled = data.get("asim_compiled", False)
-        return [year, stage, iteration, asim_compiled]
+        sub_stage_progress = data.get("sub_stage_progress", None)
+        run_info_path = data.get("run_info_path", None) #new
+        return [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path]  # new
 
     @classmethod
     def from_settings(cls, settings):
@@ -214,7 +232,7 @@ class WorkflowState:
         replanning_enabled = settings["replanning_enabled"]
         file_loc = settings["state_file_loc"]
 
-        [year, stage, iteration, asim_compiled] = cls.read_current_stage(file_loc)
+        [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path] = cls.read_current_stage(file_loc)  # new
 
         year = year or start_year
 
@@ -234,6 +252,8 @@ class WorkflowState:
             file_loc,
             asim_compiled,
             settings,
+            sub_stage_progress=sub_stage_progress,
+            run_info_path=run_info_path,  # new
         )
 
         out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)
@@ -285,6 +305,8 @@ class WorkflowState:
             self.file_loc,
             self.current_inner_iter,
             self.__asim_compiled,
+            self.sub_stage_progress,
+            self.run_info_path,  # new
         )
 
     def is_enabled(self, stage: Stage) -> bool:
@@ -492,6 +514,7 @@ class WorkflowState:
                 self.current_major_stage = next_major
                 self.current_inner_iter = 0
                 self.current_sub_stage = None
+                self.sub_stage_progress = None  # new
 
                 # If entering supply-demand loop, set up first substage
                 if next_major == self.Stage.supply_demand_loop and self.loop_substages:
@@ -538,6 +561,7 @@ class WorkflowState:
             self.current_major_stage = None
             self.current_inner_iter = 0
             self.current_sub_stage = None
+            self.sub_stage_progress = None  # new
             # The __next__ method will handle state file removal when it detects completion
 
     def get_sub_stages_from(self, start_sub_stage: Optional[Stage]):

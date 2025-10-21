@@ -1,10 +1,12 @@
+import logging
 from abc import ABC, abstractmethod
-from typing import Any, Tuple
+from typing import Any, Tuple, Optional
 
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
 
+logger = logging.getLogger(__name__)
 
 class GenericPreprocessor(ABC, Model):
     """
@@ -17,8 +19,9 @@ class GenericPreprocessor(ABC, Model):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)  # new
         self.required_input_data: list[str] = []
 
     @abstractmethod
@@ -33,8 +36,29 @@ class GenericPreprocessor(ABC, Model):
         """
         raise NotImplementedError
 
-    @abstractmethod
     def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
+    ) -> RecordStore:
+        """
+        Preprocess input data for the model.
+        """
+        if self.state.current_major_stage == self.major_stage and self.state.sub_stage_progress in ["runner", "postprocessor"]:
+            logger.info("Skipping preprocessor, loading outputs from provenance.")
+            preprocessor_run = self.provenance_tracker.get_latest_completed_model_run(f"{self.model_name}_preprocessor", self.state.current_year, self.state.current_inner_iter)
+            if preprocessor_run:
+                return RecordStore.from_file_records(preprocessor_run.output_record_hashes, self.provenance_tracker.run_info.file_records)
+            else:
+                logger.warning("Could not find completed preprocessor run in provenance, re-running preprocessor.")
+                self.state.set_sub_stage_progress("preprocessor")
+                return self._preprocess(workspace, previous_records)
+        else:
+            self.state.set_sub_stage_progress("preprocessor")
+            return self._preprocess(workspace, previous_records)
+
+    @abstractmethod
+    def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),

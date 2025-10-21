@@ -1,7 +1,7 @@
 import logging
 import multiprocessing
 import os
-from typing import Tuple
+from typing import Tuple, Optional
 
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.generic.runner import GenericRunner
@@ -23,8 +23,9 @@ class ActivitysimRunner(GenericRunner):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_files = [
             "persons_asim_in",
             "households_asim_in",
@@ -134,7 +135,7 @@ class ActivitysimRunner(GenericRunner):
         }
         return asim_docker_vols
 
-    def run(
+    def _run(
         self,
         store: RecordStore,
         workspace: Workspace,

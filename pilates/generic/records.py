@@ -97,6 +97,11 @@ class RecordStore:
     def all_unique_ids(self) -> List[str]:
         return list(self.records.keys())
 
+    @classmethod
+    def from_file_records(cls, record_hashes: List[str], file_records: Dict[str, Any]):
+        records = [file_records[h] for h in record_hashes if h in file_records]
+        return cls(recordList=records)
+
 
 @dataclass(kw_only=True)
 class FileRecord(Record):

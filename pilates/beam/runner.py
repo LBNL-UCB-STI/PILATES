@@ -2,7 +2,7 @@ import logging
 import os
 import psutil
 import sys
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo, Record
@@ -61,8 +61,9 @@ class BeamRunner(GenericRunner):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
 
     def gather_outputs(
         self,
@@ -106,7 +107,7 @@ class BeamRunner(GenericRunner):
 
         return output_records
 
-    def run(
+    def _run(
         self,
         store: RecordStore,
         workspace: Workspace,

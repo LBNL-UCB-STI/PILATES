@@ -161,10 +161,11 @@ class AtlasPostprocessor(GenericPostprocessor):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
 
-    def postprocess(
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,

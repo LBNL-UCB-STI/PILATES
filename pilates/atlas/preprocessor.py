@@ -3,7 +3,7 @@ import os
 import shutil
 from pathlib import Path
 import glob
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -40,8 +40,9 @@ class AtlasPreprocessor(GenericPreprocessor):
         model_name: str,
         state: "WorkflowState",
         provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["usim_data"]
 
     def copy_data_to_mutable_location(
@@ -93,7 +94,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         logger.info(f"[AtlasPreprocessor] Finished copying {len(output_records)} files.")
         return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
 
-    def preprocess(
+    def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),

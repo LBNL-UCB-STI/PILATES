@@ -293,6 +293,30 @@ class FileProvenanceTracker(ProvenanceTracker):
         self.run_info = self._initialize_run_info()
         logger.info(f"FileProvenanceTracker initialized for run ID: {self.run_id}")
 
+    def get_latest_completed_model_run(self, model_name: str, year: int, iteration: int) -> Optional[ModelRunInfo]:
+        """
+        Find the latest completed model run for a given model name and year.
+
+        Args:
+            model_name (str): The name of the model.
+            year (int): The year of the model run.
+            iteration (int): The iteration of the model run.
+
+        Returns:
+            Optional[ModelRunInfo]: The latest completed model run, or None if not found.
+        """
+        latest_run = None
+        latest_time = None
+
+        for run in self.run_info.model_runs.values():
+            if run.model == model_name and run.year == year and run.iteration == iteration and run.status == "completed":
+                completed_at = datetime.fromisoformat(run.completed_at)
+                if latest_time is None or completed_at > latest_time:
+                    latest_time = completed_at
+                    latest_run = run
+        
+        return latest_run
+
     def _get_run_info_path(self) -> str:
         """Return the filesystem path where run_info.json should be stored.
 

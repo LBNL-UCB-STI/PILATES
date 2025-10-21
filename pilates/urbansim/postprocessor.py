@@ -6,6 +6,7 @@ import pandas as pd
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
 
@@ -158,7 +159,16 @@ class UrbansimPostprocessor(GenericPostprocessor):
     provenance, or preparing data for downstream models.
     """
 
-    def postprocess(
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, provenance_tracker, major_stage)
+
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,

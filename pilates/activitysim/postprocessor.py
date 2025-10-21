@@ -588,7 +588,16 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     ActivitySim-specific postprocessor that consolidates all postprocessing steps.
     """
 
-    def postprocess(
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, provenance_tracker, major_stage)
+
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
