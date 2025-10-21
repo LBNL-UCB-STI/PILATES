@@ -312,8 +312,7 @@ def run_activity_demand(
         # Run
         raw_outputs, run_info = runner.run(input_data, workspace)
 
-        # Postprocess
-        processed_outputs = postprocessor.postprocess(raw_outputs, run_info, workspace)
+        processed_outputs = postprocessor.postprocess(raw_outputs, workspace, run_info)
 
         return processed_outputs
 
