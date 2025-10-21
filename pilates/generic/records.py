@@ -1,9 +1,25 @@
+"""
+pilates/generic/records.py
+
+Data structures for tracking files, model runs, and provenance within PILATES.
+
+This module defines lightweight record types used by the provenance subsystem:
+- Record: base dataclass with common fields and OpenLineage id generation.
+- RecordStore: in-memory container for Record objects with convenience helpers.
+- FileRecord / H5FileRecord / H5TableRecord: file- and HDF5-specific records.
+- RepoRecord: repository reference record.
+- ModelRunInfo: metadata for a model execution.
+- OpenLineageEventMetadata: compact event metadata for OpenLineage events.
+- PilatesRunInfo: top-level run metadata aggregating records and model runs.
+
+These classes are intentionally simple and serializable; they are used to
+assemble OpenLineage Dataset objects and to persist run metadata elsewhere.
+"""
 import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union, Any
 import logging
-import hashlib
 
 from openlineage.client.facet import SchemaField, SchemaDatasetFacet
 from openlineage.client.run import Dataset, InputDataset, OutputDataset
@@ -13,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(kw_only=True)
 class Record:
+    """
+    Base record with common provenance fields.
+
+    Attributes:
+        unique_id: Optional stable unique identifier for the record (application-level).
+        created_at: ISO timestamp string of when the record was created.
+        short_name: Human-friendly short name used for OpenLineage dataset naming.
+        description: Optional descriptive text.
+        exists: Whether the referenced file/resource currently exists.
+        openlineage_id: UUID used specifically for OpenLineage; generated if absent.
+    """
     unique_id: Optional[str] = None
     created_at: Optional[str] = None
     short_name: Optional[str] = None
@@ -21,20 +48,23 @@ class Record:
     openlineage_id: Optional[str] = None
 
     def __post_init__(self):
+        # Ensure every record has an OpenLineage UUID for event payloads.
         if self.openlineage_id is None:
             self.openlineage_id = str(uuid.uuid4())
 
     def __hash__(self):
+        # Hash stable by unique_id to allow set/dict usage keyed by id.
         return hash(self.unique_id)
 
 
 class RecordStore:
     """
-    Base class for a record store that can be used to store and retrieve records.
-    This is a token implementation. In a real implementation, this would
-    interact with a database or other persistent storage.
-    """
+    Lightweight container for Record objects.
 
+    Intended for in-memory aggregation of FileRecord/H5FileRecord/RepoRecord objects.
+    It provides simple merging and convenience accessors used during initialization
+    and postprocessing.
+    """
     def __init__(
         self,
         recordDict: Optional[Dict[str, Record]] = None,
@@ -57,7 +87,9 @@ class RecordStore:
 
     def __add__(self, other: "RecordStore") -> "RecordStore":
         """
-        Combines the records of two RecordStore instances into a new RecordStore.
+        Return a new RecordStore containing records from both operands.
+
+        Does not mutate the operands.
         """
         if not isinstance(other, RecordStore):
             raise TypeError("Operand must be an instance of RecordStore.")
@@ -89,22 +121,44 @@ class RecordStore:
                 del self.records[record.unique_id]
 
     def get_record(self, unique_id: str) -> Optional[Record]:
+        """Return the Record with the given unique_id or None if not present."""
         return self.records.get(unique_id)
 
     def all_records(self) -> List[Union["FileRecord", "RepoRecord", "H5FileRecord", "H5TableRecord"]]:
+        """Return a list of all Record objects currently in the store."""
         return list(self.records.values())
 
     def all_unique_ids(self) -> List[str]:
+        """Return a list of all unique ids present in the store."""
         return list(self.records.keys())
 
     @classmethod
     def from_file_records(cls, record_hashes: List[str], file_records: Dict[str, Any]):
+        """
+        Construct a RecordStore from a list of record hashes and a mapping.
+
+        Only hashes present in the supplied mapping are included.
+        """
         records = [file_records[h] for h in record_hashes if h in file_records]
         return cls(recordList=records)
 
 
 @dataclass(kw_only=True)
 class FileRecord(Record):
+    """
+    Record describing a single file resource (CSV, JSON, H5 container, etc.).
+
+    Attributes:
+        file_path: Path to the file on disk (used for OpenLineage facets).
+        models: List of model names that produced/consume this file.
+        description: Optional description (overrides base.description).
+        year: Optional year tag associated with the dataset.
+        source_file_paths: List of original source paths used to create this file.
+        metadata: Arbitrary key/value metadata dict.
+        producing_run_id: ModelRunInfo.unique_id that produced this file, if known.
+        consuming_run_ids: List of model run ids that consume this file.
+        schema: Optional schema description used to generate OpenLineage schema facets.
+    """
     file_path: str
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
@@ -118,7 +172,12 @@ class FileRecord(Record):
     def __hash__(self):
         return hash(self.unique_id)
 
-    def _create_schema(self):
+    def _create_schema(self) -> Dict[str, SchemaDatasetFacet]:
+        """
+        Create OpenLineage schema facet if `schema` is provided.
+
+        Returns a mapping of facets to merge into the dataset facets.
+        """
         facets = {}
         if self.schema:
             fields = [
@@ -135,7 +194,10 @@ class FileRecord(Record):
 
     def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
         """
-        Converts the FileRecord to an OpenLineage Dataset.
+        Convert this FileRecord to an OpenLineage Dataset object.
+
+        The dataset facets include filePath, description, year, metadata and an
+        optional schema facet.
         """
         return Dataset(
             namespace=namespace,
@@ -185,25 +247,32 @@ class FileRecord(Record):
 @dataclass(kw_only=True)
 class H5TableRecord(FileRecord):
     """
-    Represents a table within an H5 file.
-    Inherits from FileRecord but adds specific H5 context.
+    Represents an individual table inside an H5 container.
+
+    The `h5_file_unique_id` links back to the parent H5FileRecord, and
+    `table_name` is the internal HDF5 path (e.g., '/households').
     """
     h5_file_unique_id: str  # Unique ID of the parent H5FileRecord
     table_name: str
 
     def __post_init__(self):
+        # Preserve behavior from FileRecord and ensure an openlineage id exists.
         super().__post_init__()
-        # Ensure unique_id is based on table content hash, not file_path
-        # This will be set during creation in the postprocessor
+        # When created without unique_id, a placeholder is assigned here.
         if self.unique_id is None:
-            # A placeholder unique_id if not explicitly provided, will be overwritten by hash
+            # A placeholder unique id; postprocessors typically overwrite based on content hash.
             self.unique_id = str(uuid.uuid4())
 
 
 @dataclass(kw_only=True)
 class H5FileRecord(Record):
     """
-    Represents an H5 file container, holding references to its internal tables.
+    Represents an H5 file container and references to contained tables.
+
+    Attributes:
+        file_path: Path to the H5 file.
+        table_record_ids: List of unique_ids for contained H5TableRecord entries.
+        Other fields are similar to FileRecord and used for provenance linkage.
     """
     file_path: str
     models: List[str] = field(default_factory=list)
@@ -272,6 +341,13 @@ class H5FileRecord(Record):
 
 @dataclass(kw_only=True)
 class RepoRecord(Record):
+    """
+    Simple record for referencing external code repositories or directories.
+
+    Fields:
+        repo_path: Filesystem path or URL of the repository.
+        accessed_at: ISO timestamp of when the repo was captured/accessed.
+    """
     repo_path: Optional[str] = None
     description: Optional[str] = None
     accessed_at: Optional[str] = None
@@ -321,6 +397,19 @@ class RepoRecord(Record):
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ModelRunInfo(Record):
+    """
+    Represents a single model run execution and its input/output record hashes.
+
+    Fields:
+        model: Model name (e.g., 'activitysim', 'beam').
+        year: Year associated with the run.
+        iteration: Optional supply/demand iteration index.
+        description: Optional descriptive text.
+        completed_at: ISO timestamp when the run completed.
+        input_record_hashes: List of unique_ids for input records.
+        output_record_hashes: List of unique_ids for outputs produced by this run.
+        status: Run status string (e.g., 'uninitialized', 'running', 'completed', 'failed').
+    """
     model: str
     year: int
     iteration: Optional[int] = None
@@ -344,6 +433,12 @@ class OpenLineageEventMetadata:
 
 @dataclass(kw_only=True)
 class PilatesRunInfo:
+    """
+    Aggregated metadata for an entire PILATES run.
+
+    Contains file and repo records, model run metadata, configuration snapshot,
+    and a lightweight list of produced OpenLineage event metadata.
+    """
     run_id: str
     created_at: str
     start_year: Optional[int] = None
@@ -362,7 +457,9 @@ class PilatesRunInfo:
 
     def get_latest_model_run(self, model_name: str) -> Optional[str]:
         """
-        Returns the latest ModelRunInfo for the given model name, or None if not found.
+        Return the unique_id of the most recent ModelRunInfo for the given model.
+
+        If no runs exist for the model, return None.
         """
         runs = [
             run.unique_id
@@ -391,7 +488,10 @@ class PilatesRunInfo:
 
     def get_most_recent_record(self, short_name: str) -> Optional[FileRecord]:
         """
-        Returns the most recent FileRecord with the given short name.
+        Return the most recently created FileRecord with the given short_name.
+
+        If multiple records share the short_name, the record with the latest
+        `created_at` timestamp is returned.
         """
         records = [
             record
@@ -414,7 +514,7 @@ class PilatesRunInfo:
 
     def get_run_outputs(self, model_run_hash: str) -> List[str]:
         """
-        Returns a list of file hashes that are outputs of the specified model run.
+        Return a list of file unique_ids that are outputs of the specified model run.
         """
         run_info = self.model_runs.get(model_run_hash)
         if not run_info:
@@ -424,7 +524,9 @@ class PilatesRunInfo:
 
     def get_latest_model_run_output_records(self, model_name: str) -> List[FileRecord]:
         """
-        Returns a list of FileRecords that are outputs of the latest model run for the given model name.
+        Return a list of FileRecord objects that are outputs of the latest model run.
+
+        If no runs exist for the model an empty list is returned.
         """
         latest_run_hash = self.get_latest_model_run(model_name)
         if not latest_run_hash:
