@@ -68,9 +68,11 @@ def create_next_iter_usim_data(
 
     # Record the UrbanSim output H5 from the current run
     output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=mutable_data_dir)
+    output_store_path = output_store._path
+    output_store.close()
     output_container = provenance_tracker.record_h5_input_container(
         "urbansim_postprocessor",
-        output_store._path,
+        output_store_path,
         description=f"UrbanSim output H5 for year {forecast_year}",
         short_name=f"usim_output_{forecast_year}",
         model_run_id=model_run_hash,
@@ -93,6 +95,7 @@ def create_next_iter_usim_data(
     # --- Merge and Provenance Step 3: Create new input file table by table ---
     logger.info("Merging results back into new UrbanSim input store!")
     final_table_records = []
+    output_store = pd.HDFStore(str(output_store_path), "r")
     with pd.HDFStore(str(archived_input_store_path), "r") as archived_store, \
          pd.HDFStore(str(input_store_path), "w") as new_store:
 

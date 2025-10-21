@@ -872,6 +872,35 @@ class FileProvenanceTracker(ProvenanceTracker):
         logger.info(f"Recorded new H5 table output '{table_name}' with hash {table_hash}")
         return output_table_record
 
+    def record_h5_output_container(self, model: str, file_path: str, table_records: List[H5TableRecord] = None, **kwargs) -> Optional[H5FileRecord]:
+        """Records an HDF5 file as an output container.
+
+        This is a convenience wrapper around `record_output_file` that ensures the created
+        record is an H5FileRecord, which includes records for all its internal tables.
+
+        Args:
+            model (str): The name of the model producing this output.
+            file_path (str): The path to the HDF5 file.
+            table_records (List[H5TableRecord], optional): A list of pre-created table records.
+                If not provided, they will be generated from the file.
+            **kwargs: Additional arguments passed to `record_output_file`.
+
+        Returns:
+            Optional[H5FileRecord]: The created or retrieved H5FileRecord, or None.
+        """
+        input_records = kwargs.pop('input_records', [])
+        record = self.record_output_file_with_inputs(model, file_path, input_records, **kwargs)
+
+        if record and not isinstance(record, H5FileRecord):
+            logger.error(f"Recorded H5 container for {file_path}, but it was not an H5FileRecord.")
+            return None
+        if record and table_records:
+            record.table_record_ids = [tr.unique_id for tr in table_records]
+            for tr in table_records:
+                if tr.unique_id not in self.run_info.file_records:
+                    self.run_info.file_records[tr.unique_id] = tr
+        return record
+
     def rename_directory(self, old_directory_name, new_directory_name):
         """
         Renames a directory in the run_info.file_records.

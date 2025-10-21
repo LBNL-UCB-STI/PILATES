@@ -353,7 +353,7 @@ def run_traffic_assignment(
         # Run
         raw_outputs, run_info = runner.run(input_data, workspace)
 
-        processed_outputs = postprocessor.postprocess(raw_outputs, run_info, workspace)
+        processed_outputs = postprocessor.postprocess(raw_outputs, workspace, run_info)
 
     else:
         logger.warning(f"Unknown or disabled travel model: {travel_model}")
@@ -483,8 +483,8 @@ def main():
                 postprocessor.update_state(atlas_state)
                 processed_outputs = postprocessor.postprocess(
                     raw_outputs,
-                    run_info,
                     workspace,
+                    run_info,
                     post_run_hash,
                 )
                 provenance_tracker.complete_model_run(
