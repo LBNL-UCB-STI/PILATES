@@ -192,7 +192,7 @@ class BeamRunner(GenericRunner):
                     "-XX:+AlwaysPreTouch "
                     
                     # More aggressive tuning
-                    "-XX:+UnlockExperimentalVMOptions"
+                    "-XX:+UnlockExperimentalVMOptions "
                     "-XX:G1MixedGCCountTarget=4 "  # Fewer mixed GC cycles (default 8)
                     "-XX:G1MixedGCLiveThresholdPercent=50 "
                     "-XX:G1OldCSetRegionThresholdPercent=15 "
