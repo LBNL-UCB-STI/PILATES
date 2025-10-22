@@ -181,20 +181,27 @@ class BeamRunner(GenericRunner):
                     # Memory settings (match Xms and Xmx)
                     f"-Xms{beam_memory} "
                     f"-Xmx{beam_memory} "
-
-                    # G1GC configuration (for large heaps)
+                    
+                    # G1GC with more aggressive settings
                     "-XX:+UseG1GC "
-                    "-XX:MaxGCPauseMillis=500 "
+                    "-XX:MaxGCPauseMillis=1500 "  # Accept longer pauses
                     "-XX:G1HeapRegionSize=32M "
-                    "-XX:ParallelGCThreads=14 "
-                    "-XX:ConcGCThreads=4 "
+                    "-XX:ParallelGCThreads=28 "   # DOUBLE from 14!
+                    "-XX:ConcGCThreads=7 "
                     "-XX:+UseNUMA "
                     "-XX:+AlwaysPreTouch "
-
+                    
+                    # More aggressive tuning
+                    "-XX:G1MixedGCCountTarget=4 "  # Fewer mixed GC cycles (default 8)
+                    "-XX:G1MixedGCLiveThresholdPercent=50 "
+                    "-XX:G1OldCSetRegionThresholdPercent=15 "
+                    "-XX:InitiatingHeapOccupancyPercent=30 "  # Start GC earlier
+                    "-XX:G1ReservePercent=5 "
+                    
                     # GC logging
-                    "-Xlog:gc*:file=/app/output/gc.log "
-
-                    # Existing settings
+                    "-Xlog:gc*:file=/app/output/gc.log:time,uptime,level,tags "
+                    
+                    # Existing
                     "-Djava.io.tmpdir=/app/output/tmp "
                     "-Djna.tmpdir=/app/output/tmp"
                 )
@@ -216,6 +223,17 @@ class BeamRunner(GenericRunner):
         except Exception as e:
             new_path = workspace.get_beam_output_dir()
             logger.error("Whoops!")
+
+        run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
+        # Update the run_info with the new beam_run_folder path
+        from pilates.generic.records import Record
+        beam_run_folder_record = Record(
+            name="beam_run_folder",
+            description="BEAM run output folder (renamed)",
+            data_type="directory",
+            file_path=new_path,
+        )
+        run_info.output_data["beam_run_folder"] = beam_run_folder_record
 
         # 3. ASSEMBLE OUTPUTS
         skims_fname = settings["skims_fname"]
