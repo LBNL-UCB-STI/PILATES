@@ -184,25 +184,27 @@ class BeamRunner(GenericRunner):
                     
                     # G1GC with more aggressive settings
                     "-XX:+UseG1GC "
-                    "-XX:MaxGCPauseMillis=1500 "  # Accept longer pauses
+                    "-XX:MaxGCPauseMillis=3000 "  # INCREASE from 1500 to allow larger young gen
                     "-XX:G1HeapRegionSize=32M "
-                    "-XX:ParallelGCThreads=28 "   # DOUBLE from 14!
+                    "-XX:ParallelGCThreads=28 "
                     "-XX:ConcGCThreads=7 "
                     "-XX:+UseNUMA "
                     "-XX:+AlwaysPreTouch "
                     
+                    # *** ADD THESE - FORCE LARGER YOUNG GEN ***
+                    "-XX:G1NewSizePercent=15 "      # Min 27GB young gen (15% of 180GB)
+                    "-XX:G1MaxNewSizePercent=40 "   # Max 72GB young gen (40% of 180GB)
+                    
                     # More aggressive tuning
                     "-XX:+UnlockExperimentalVMOptions "
-                    "-XX:G1MixedGCCountTarget=4 "  # Fewer mixed GC cycles (default 8)
+                    "-XX:G1MixedGCCountTarget=4 "
                     "-XX:G1MixedGCLiveThresholdPercent=50 "
                     "-XX:G1OldCSetRegionThresholdPercent=15 "
-                    "-XX:InitiatingHeapOccupancyPercent=30 "  # Start GC earlier
-                    "-XX:G1ReservePercent=5 "
+                    "-XX:InitiatingHeapOccupancyPercent=30 "
+                    "-XX:G1ReservePercent=10 "  # INCREASE from 5 to 10
                     
                     # GC logging
                     "-Xlog:gc*:file=/app/output/gc.log:time,uptime,level,tags "
-                    
-                    # Existing
                     "-Djava.io.tmpdir=/app/output/tmp "
                     "-Djna.tmpdir=/app/output/tmp"
                 )
