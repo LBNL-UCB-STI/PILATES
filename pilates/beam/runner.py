@@ -184,24 +184,33 @@ class BeamRunner(GenericRunner):
                     
                     # G1GC with more aggressive settings
                     "-XX:+UseG1GC "
-                    "-XX:MaxGCPauseMillis=3000 "  # INCREASE from 1500 to allow larger young gen
+                    "-XX:MaxGCPauseMillis=4000 "    # RELAX to 4s - gives G1 flexibility
                     "-XX:G1HeapRegionSize=32M "
-                    "-XX:ParallelGCThreads=28 "
-                    "-XX:ConcGCThreads=7 "
+                    
+                    # More GC threads for burst capacity
+                    "-XX:ParallelGCThreads=32 "     # Increase from 28 → 32 for headroom
+                    "-XX:ConcGCThreads=10 "         # Increase from 7 → 10 proportionally
+                    
                     "-XX:+UseNUMA "
                     "-XX:+AlwaysPreTouch "
                     
-                    # *** ADD THESE - FORCE LARGER YOUNG GEN ***
-                    "-XX:G1NewSizePercent=15 "      # Min 27GB young gen (15% of 180GB)
-                    "-XX:G1MaxNewSizePercent=40 "   # Max 72GB young gen (40% of 180GB)
-                    
-                    # More aggressive tuning
+                    # Flexible young gen - WIDE range for adaptability
                     "-XX:+UnlockExperimentalVMOptions "
-                    "-XX:G1MixedGCCountTarget=4 "
-                    "-XX:G1MixedGCLiveThresholdPercent=50 "
-                    "-XX:G1OldCSetRegionThresholdPercent=15 "
-                    "-XX:InitiatingHeapOccupancyPercent=30 "
-                    "-XX:G1ReservePercent=10 "  # INCREASE from 5 to 10
+                    "-XX:G1NewSizePercent=10 "      # Min 18GB (conservative floor)
+                    "-XX:G1MaxNewSizePercent=50 "   # Max 90GB (allow large young gen if needed)
+                    
+                    # Conservative mixed GC - spread work over more cycles
+                    "-XX:G1MixedGCCountTarget=8 "   # Back to default (was 4)
+                    "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
+                    
+                    # Earlier concurrent marking to avoid surprises
+                    "-XX:InitiatingHeapOccupancyPercent=30 " 
+                    
+                    # More evacuation buffer for large populations
+                    "-XX:G1ReservePercent=15 "      # Increase from 5 → 15 (27GB reserve)
+                    
+                    # Less aggressive old gen collection
+                    "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
                     
                     # GC logging
                     "-Xlog:gc*:file=/app/output/gc.log:time,uptime,level,tags "
