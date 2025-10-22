@@ -178,9 +178,25 @@ class BeamRunner(GenericRunner):
             working_dir="/app",
             environment={
                 "JAVA_OPTS": (
+                    # Memory settings (match Xms and Xmx)
+                    f"-Xms{beam_memory} "
                     f"-Xmx{beam_memory} "
-                    f"-Djava.io.tmpdir=/app/output/tmp "
-                    f"-Djna.tmpdir=/app/output/tmp"
+
+                    # G1GC configuration (for large heaps)
+                    "-XX:+UseG1GC "
+                    "-XX:MaxGCPauseMillis=500 "
+                    "-XX:G1HeapRegionSize=32M "
+                    "-XX:ParallelGCThreads=14 "
+                    "-XX:ConcGCThreads=4 "
+                    "-XX:+UseNUMA "
+                    "-XX:+AlwaysPreTouch "
+
+                    # GC logging
+                    "-Xlog:gc*:file=/app/output/gc.log "
+
+                    # Existing settings
+                    "-Djava.io.tmpdir=/app/output/tmp "
+                    "-Djna.tmpdir=/app/output/tmp"
                 )
             }
         )
