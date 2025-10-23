@@ -196,90 +196,92 @@ def _upload_activitysim_csv_data(
         logger.error(f"Failed to upload ActivitySim CSV data: {e}")
         return False
 
-def _upload_h5_data(
-    file_path: str, run_info: PilatesRunInfo, db_manager: DatabaseManager, file_record: FileRecord
-) -> bool:
-    """
-    Upload data from an H5 file to the database.
-    """
-    try:
-        import h5py
+def _get_record_val(rec, key, default=None):
+    """Helper to get value from either a dict or a dataclass object."""
+    if isinstance(rec, dict):
+        return rec.get(key, default)
+    return getattr(rec, key, default)
 
-        with h5py.File(file_path, "r") as f:
-            for table_name in f.keys():
-                logger.info(f"Reading table '{table_name}' from H5 file: {file_path}")
-                try:
-                    df = pd.read_hdf(file_path, key=table_name)
-
-                    # Calculate hash of the table data
-                    table_hash = hashlib.sha256(df.to_csv().encode()).hexdigest()
-
-                    # Create a FileRecord for the table
-                    table_file_record = FileRecord(
-                        unique_id=table_hash,
-                        openlineage_id=str(uuid.uuid4()),
-                        file_path=f"{file_path}/{table_name}",
-                        created_at=datetime.now().isoformat(),
-                        short_name=f"{file_record.short_name}_{table_name}",
-                        description=f"Table '{table_name}' from H5 file '{file_record.short_name}'",
-                        models=file_record.models,
-                        schema=[
-                            {"name": col, "type": str(dtype)}
-                            for col, dtype in df.dtypes.items()
-                        ],
-                        metadata={
-                            "table_name": table_name,
-                            "source_h5_file": file_record.file_path,
-                        },
-                        source_file_paths=[file_record.unique_id],
-                    )
-
-                    # Check if the table data already exists
-                    if db_manager.check_dataset_exists_by_hash(table_file_record.unique_id):
-                        logger.info(f"Skipping table upload, dataset already exists: {table_name}")
-                        continue
-
-                    # Upload the table's FileRecord
-                    db_manager.upload_file_record(table_file_record, run_info.run_id)
-
-                    db_manager.store_urbansim_raw_data(
-                            table_name,
-                            df,
-                            table_file_record.unique_id,
-                            run_info.run_id,
-                            file_record.openlineage_id,
-                            table_file_record.openlineage_id,
-                        )
-                except Exception as e:
-                    logger.warning(f"Could not read table '{table_name}' from H5 file: {e}")
-        return True
-    except ImportError:
-        logger.error("h5py is required to upload H5 files. Please install it.")
-        return False
-    except Exception as e:
-        logger.error(f"Failed to upload H5 file {file_path}: {e}")
-        return False
 
 def _upload_data_from_file_records(
-    run_info: PilatesRunInfo, db_manager: DatabaseManager
+    run_info_path: str, run_info: PilatesRunInfo, db_manager: DatabaseManager
 ) -> bool:
     """
-    Upload data from file records to the database.
+    Uploads data to the database, driven by the file_records in run_info.
+    This function now correctly handles H5 tables by using the H5TableRecord
+    provenance generated during the run.
     """
-    try:
-        for file_record in run_info.file_records.values():
-            if file_record.file_path.endswith(".h5"):
-                logger.info(f"Found H5 file: {file_record.file_path}")
-                _upload_h5_data(file_record.file_path, run_info, db_manager, file_record)
-            elif file_record.file_path.endswith(".csv"):
-                # This is a CSV file.
-                logger.info(f"Found CSV file: {file_record.file_path}")
-                # TODO: Implement generic CSV upload
+    run_directory = os.path.dirname(run_info_path)
+    success = True
 
-        return True
-    except Exception as e:
-        logger.error(f"Failed to upload data from file records: {e}")
-        return False
+    for record_id, record in run_info.file_records.items():
+        record_type = _get_record_val(record, "record_type", "file")
+
+        # We only care about uploading the data from individual tables, not containers
+        if record_type != "h5_table":
+            continue
+
+        table_name = _get_record_val(record, "table_name")
+        if not table_name:
+            logger.warning(f"Skipping H5 table record {record_id} without a table_name.")
+            continue
+
+        # Find the parent H5 container to construct the full file path
+        parent_h5_id = _get_record_val(record, "h5_file_unique_id")
+        if not parent_h5_id or parent_h5_id not in run_info.file_records:
+            logger.error(f"Could not find parent H5 container for table record {record_id}.")
+            success = False
+            continue
+
+        parent_h5_record = run_info.file_records[parent_h5_id]
+        h5_file_path = os.path.join(run_directory, _get_record_val(parent_h5_record, "file_path"))
+
+        if not os.path.exists(h5_file_path):
+            logger.warning(f"H5 file not found, skipping data upload for table '{table_name}' from {h5_file_path}")
+            continue
+
+        # Get the year and iteration for the new columns
+        year = _get_record_val(record, "year")
+        producing_run_id = _get_record_val(record, "producing_run_id")
+        iteration = None
+        if producing_run_id and producing_run_id in run_info.model_runs:
+            model_run = run_info.model_runs[producing_run_id]
+            iteration = _get_record_val(model_run, "iteration")
+            # If year is not on the file record, try to get it from the model run
+            if year is None:
+                year = _get_record_val(model_run, "year")
+
+
+        try:
+            logger.info(f"Reading table '{table_name}' from H5 file: {h5_file_path}")
+            df = pd.read_hdf(h5_file_path, key=table_name)
+
+            # Determine which data storage function to call
+            # This logic can be expanded for different models
+            if "urbansim" in _get_record_val(record, "models", []):
+                if isinstance(db_manager, DuckDBManager):
+                    db_manager.store_urbansim_raw_data(
+                        table_name=table_name.strip("/").split("/")[-1], # Get the base table name
+                        df=df,
+                        file_record_id=_get_record_val(record, "unique_id"),
+                        run_id=run_info.run_id,
+                        year=year,
+                        iteration=iteration,
+                        openlineage_id=_get_record_val(parent_h5_record, "openlineage_id"),
+                        table_openlineage_id=_get_record_val(record, "openlineage_id"),
+                    )
+                else:
+                    logger.warning(
+                        f"Database manager is not a DuckDBManager, cannot store raw urbansim data for table '{table_name}'."
+                    )
+            else:
+                logger.info(f"No specific data store method for table '{table_name}'. Skipping data upload.")
+
+        except Exception as e:
+            logger.error(f"Failed to read or upload table '{table_name}' from {h5_file_path}: {e}")
+            success = False
+
+    return success
 
 
 def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) -> bool:
@@ -401,7 +403,7 @@ def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) ->
             )
 
             # Upload data from file records
-            record_data_success = _upload_data_from_file_records(run_info, db_manager)
+            record_data_success = _upload_data_from_file_records(run_info_path, run_info, db_manager)
 
 
             if metadata_success and data_success and record_data_success:

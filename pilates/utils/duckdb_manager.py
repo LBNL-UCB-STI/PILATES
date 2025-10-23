@@ -281,6 +281,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_households_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -313,6 +315,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_persons_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -343,6 +347,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_jobs_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -368,6 +374,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_blocks_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -396,6 +404,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_buildings_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -423,6 +433,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('urbansim_parcels_raw_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -450,8 +462,10 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('activitysim_households_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
-                                        openlineage_id VARCHAR,
-                                        table_openlineage_id VARCHAR,                    household_id INTEGER,
+                    year INTEGER,
+                    iteration INTEGER,
+                    openlineage_id VARCHAR,
+                    table_openlineage_id VARCHAR,                    household_id INTEGER,
                     TAZ VARCHAR,
                     persons INTEGER,
                     income FLOAT,
@@ -475,6 +489,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('activitysim_persons_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -510,6 +526,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('activitysim_land_use_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     
@@ -565,6 +583,8 @@ class DuckDBManager(DatabaseManager):
                     id INTEGER PRIMARY KEY DEFAULT nextval('activitysim_data_generic_id_seq'),
                     file_record_id VARCHAR,
                     run_id VARCHAR,
+                    year INTEGER,
+                    iteration INTEGER,
                     openlineage_id VARCHAR,
                     table_openlineage_id VARCHAR,
                     table_name VARCHAR,
@@ -1930,6 +1950,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: Optional[str] = None,
     ) -> bool:
