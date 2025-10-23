@@ -96,6 +96,19 @@ def create_next_iter_usim_data(
     # --- Merge and Provenance Step 3: Create new input file table by table ---
     logger.info("Merging results back into new UrbanSim input store!")
     final_table_records = []
+
+    # --- Provenance Step 4: Record the final merged HDF5 container ---
+    final_output_container = provenance_tracker.record_h5_output_container(
+        "urbansim_postprocessor",
+        input_store_path,
+        input_records=[archived_container, output_container],
+        table_records=final_table_records,
+        year=forecast_year,
+        description=f"Merged UrbanSim input H5 for next iteration (from year {forecast_year} outputs)",
+        short_name=f"usim_input_merged_{forecast_year}",
+        model_run_id=model_run_hash,
+    )
+
     output_store = pd.HDFStore(str(output_store_path), "r")
     with pd.HDFStore(str(archived_input_store_path), "r") as archived_store, \
          pd.HDFStore(str(input_store_path), "w") as new_store:
@@ -113,7 +126,7 @@ def create_next_iter_usim_data(
                 # Copy data and record output table
                 new_store[table_name] = output_store[h5_key]
                 output_table = provenance_tracker.record_h5_table_output(
-                    "urbansim_postprocessor", None, table_name, [source_table], model_run_id=model_run_hash
+                    "urbansim_postprocessor", final_output_container, table_name, [source_table], model_run_id=model_run_hash
                 )
                 final_table_records.append(output_table)
                 processed_tables.add(table_name)
@@ -130,7 +143,7 @@ def create_next_iter_usim_data(
                 # Copy data and record output table
                 new_store[table_name] = archived_store[h5_key]
                 output_table = provenance_tracker.record_h5_table_output(
-                    "urbansim_postprocessor", None, table_name, [source_table], model_run_id=model_run_hash
+                    "urbansim_postprocessor", final_output_container, table_name, [source_table], model_run_id=model_run_hash
                 )
                 final_table_records.append(output_table)
 
@@ -138,17 +151,8 @@ def create_next_iter_usim_data(
 
     output_store.close()
 
-    # --- Provenance Step 4: Record the final merged HDF5 container ---
-    provenance_tracker.record_h5_output_container(
-        "urbansim_postprocessor",
-        input_store_path,
-        input_records=[archived_container, output_container],
-        table_records=final_table_records,
-        year=forecast_year,
-        description=f"Merged UrbanSim input H5 for next iteration (from year {forecast_year} outputs)",
-        short_name=f"usim_input_merged_{forecast_year}",
-        model_run_id=model_run_hash,
-    )
+    final_output_container.table_record_ids = [tr.unique_id for tr in final_table_records]
+    provenance_tracker.run_info.file_records[final_output_container.unique_id] = final_output_container
     logger.info(f"Recorded merged input H5 for provenance: {input_store_path}")
 
 

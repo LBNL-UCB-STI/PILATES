@@ -225,8 +225,7 @@ class BeamRunner(GenericRunner):
             self.provenance_tracker.complete_model_run(beam_run_hash, status="failed")
             sys.exit(1)
 
-        old_path = workspace.get_beam_output_dir()
-
+        output_path_for_gather: str
         try:
             old_path, new_path = rename_beam_output_directory(
                 workspace.get_beam_output_dir(),
@@ -234,12 +233,11 @@ class BeamRunner(GenericRunner):
                 self.state.current_year,
                 self.state.current_inner_iter,
             )
+            self.provenance_tracker.rename_directory(old_path, new_path)
+            output_path_for_gather = new_path
         except Exception as e:
-            new_path = workspace.get_beam_output_dir()
-            old_path = workspace.get_beam_output_dir()
-            logger.error("Whoops!")
-
-        self.provenance_tracker.rename_directory(old_path, new_path)
+            logger.error(f"Failed to rename BEAM output directory: {e}. Proceeding without rename.")
+            output_path_for_gather = workspace.get_beam_output_dir()
 
         # 3. ASSEMBLE OUTPUTS
         skims_fname = settings["skims_fname"]
@@ -255,7 +253,7 @@ class BeamRunner(GenericRunner):
             )
 
         run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
-        output_records = self.gather_outputs(new_path, run_info, skimFormat)
+        output_records = self.gather_outputs(output_path_for_gather, run_info, skimFormat)
 
         # Record BEAM run completion now that outputs are recorded
         self.provenance_tracker.complete_model_run(
