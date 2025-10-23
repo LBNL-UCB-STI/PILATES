@@ -28,7 +28,7 @@ def find_not_taken_dir_name(dir_name):
 
 def rename_beam_output_directory(
     beam_output_dir, settings, year, replanning_iteration_number=0
-) -> str:
+) -> (str, str):
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(
@@ -48,7 +48,7 @@ def rename_beam_output_directory(
             "Files {0} not found. Adding a slash".format(beam_run_output_dir)
         )
         os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
-    return new_iteration_output_directory
+    return beam_run_output_dir, new_iteration_output_directory
 
 
 class BeamRunner(GenericRunner):
@@ -225,8 +225,10 @@ class BeamRunner(GenericRunner):
             self.provenance_tracker.complete_model_run(beam_run_hash, status="failed")
             sys.exit(1)
 
+        old_path = workspace.get_beam_output_dir()
+
         try:
-            new_path = rename_beam_output_directory(
+            old_path, new_path = rename_beam_output_directory(
                 workspace.get_beam_output_dir(),
                 settings,
                 self.state.current_year,
@@ -234,18 +236,10 @@ class BeamRunner(GenericRunner):
             )
         except Exception as e:
             new_path = workspace.get_beam_output_dir()
+            old_path = workspace.get_beam_output_dir()
             logger.error("Whoops!")
 
-        run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
-        # Update the run_info with the new beam_run_folder path
-        from pilates.generic.records import Record
-        beam_run_folder_record = Record(
-            name="beam_run_folder",
-            description="BEAM run output folder (renamed)",
-            data_type="directory",
-            file_path=new_path,
-        )
-        run_info.output_data["beam_run_folder"] = beam_run_folder_record
+        self.provenance_tracker.rename_directory(old_path, new_path)
 
         # 3. ASSEMBLE OUTPUTS
         skims_fname = settings["skims_fname"]
