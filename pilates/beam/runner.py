@@ -184,7 +184,6 @@ class BeamRunner(GenericRunner):
                     
                     # G1GC with more aggressive settings
                     "-XX:+UseG1GC "
-                    "-XX:MaxGCPauseMillis=4000 "    # RELAX to 4s - gives G1 flexibility
                     "-XX:G1HeapRegionSize=32M "
                     
                     # More GC threads for burst capacity
@@ -196,11 +195,12 @@ class BeamRunner(GenericRunner):
                     
                     # Flexible young gen - WIDE range for adaptability
                     "-XX:+UnlockExperimentalVMOptions "
-                    "-XX:G1NewSizePercent=10 "      # Min 18GB (conservative floor)
-                    "-XX:G1MaxNewSizePercent=50 "   # Max 90GB (allow large young gen if needed)
+                    "-XX:G1NewSizePercent=40 "          # Min 72 GB young gen
+                    "-XX:G1MaxNewSizePercent=60 "       # Max 108 GB young gen
+                    "-XX:MaxGCPauseMillis=10000 "       # Accept 10s pauses for throughput
+                    "-XX:G1MixedGCCountTarget=16 "      # Spread old gen work
                     
                     # Conservative mixed GC - spread work over more cycles
-                    "-XX:G1MixedGCCountTarget=8 "   # Back to default (was 4)
                     "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
                     
                     # Earlier concurrent marking to avoid surprises
@@ -212,8 +212,14 @@ class BeamRunner(GenericRunner):
                     # Less aggressive old gen collection
                     "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
                     
+                    "-XX:+UnlockDiagnosticVMOptions "
+                    "-XX:+LogCompilation "
+                    "-XX:+PrintInlining "
+                    
                     # GC logging
                     "-Xlog:gc*:file=/app/output/gc.log:time,uptime,level,tags "
+                    "-Xlog:gc+heap=debug:file=/app/output/heap-detail.log "
+                    "-XX:+PrintTLAB "
                     "-Djava.io.tmpdir=/app/output/tmp "
                     "-Djna.tmpdir=/app/output/tmp"
                 )
