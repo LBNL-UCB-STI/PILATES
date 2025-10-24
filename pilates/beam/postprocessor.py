@@ -3236,8 +3236,9 @@ class BeamPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
-        self.skim_format = self.settings.get(
-            "skim_format", "skimsActivitySimOD_current"        )
+        self.skim_format = self.state.full_settings.get(
+            "skim_format", "skimsActivitySimOD_current"
+        )
         self.zarr_manager = None
 
     def _postprocess(
