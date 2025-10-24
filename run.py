@@ -461,9 +461,8 @@ def main():
 
     # Set up provenance tracking and workspace
     output_path = os.path.expandvars(settings.get("output_directory"))
-    run_name = settings.get(
-        "run_name", f"pilates-run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    )
+    partial_run_name = settings.get("output_run_name", "pilates-run")
+    run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     run_id = str(uuid.uuid4())
 
     provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
