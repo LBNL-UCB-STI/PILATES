@@ -342,44 +342,47 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 )
             input_records.add_record(geo_zone_input_rec)
             processed_records.add_record(geo_zone_output_rec)
-            # Copy skims from ActivitySim output to UrbanSim input
-            if "skims_fname" in settings:
-                source_skims_path = os.path.join(
-                    workspace.get_asim_mutable_data_dir(),
-                    settings["skims_fname"],
-                )
-                
-                region_id = settings["region_to_region_id"][settings["region"]]
-                dest_skims_fname = f"skims_mpo_{region_id}.omx"
-                dest_skims_path = os.path.join(
-                    workspace.get_usim_mutable_data_dir(), dest_skims_fname
-                )
 
-                if os.path.exists(source_skims_path):
-                    logger.info(f"Copying skims from {source_skims_path} to {dest_skims_path}")
-                    shutil.copy(source_skims_path, dest_skims_path)
+
+            # If not the first iteration, check if BEAM is enabled and copy updated skims
+            if self.state.current_year > settings['start_year'] or self.state.iteration > 0:
+                if settings.get("travel_model") == "beam":
+                    logger.info("Updating skims from BEAM mutable output for subsequent iteration.")
+                    source_skims_path = os.path.join(
+                        workspace.get_beam_mutable_data_dir(),
+                        settings["region"],
+                        settings["skims_fname"],
+                    )
                     
-                    # Record the source skims as an input to this step
-                    skims_input_rec = self.provenance_tracker.record_input_file(
-                        "urbansim_preprocessor",
-                        source_skims_path,
-                        description="ActivitySim skims for UrbanSim input",
-                        short_name="asim_skims_input",
-                        model_run_id=model_run_hash,
+                    region_id = settings["region_to_region_id"][settings["region"]]
+                    dest_skims_fname = f"skims_mpo_{region_id}.omx"
+                    dest_skims_path = os.path.join(
+                        workspace.get_usim_mutable_data_dir(), dest_skims_fname
                     )
-                    # Record the copied skims as an output of this step
-                    skims_output_rec = self.provenance_tracker.record_output_file_with_inputs(
-                        "urbansim_preprocessor",
-                        dest_skims_path,
-                        input_records=[skims_input_rec],
-                        description="Copied skims for UrbanSim consumption",
-                        short_name="usim_skims_input",
-                        model_run_id=model_run_hash,
-                    )
-                    if skims_output_rec:
-                        processed_records.add_record(skims_output_rec)
-                else:
-                    logger.warning(f"Skims file not found at source: {source_skims_path}")
+
+                    if os.path.exists(source_skims_path):
+                        logger.info(f"Copying skims from {source_skims_path} to {dest_skims_path}")
+                        shutil.copy(source_skims_path, dest_skims_path)
+                        
+                        skims_input_rec = self.provenance_tracker.record_input_file(
+                            "urbansim_preprocessor",
+                            source_skims_path,
+                            description="Updated BEAM skims for UrbanSim input",
+                            short_name="updated_beam_skims_input",
+                            model_run_id=model_run_hash,
+                        )
+                        skims_output_rec = self.provenance_tracker.record_output_file_with_inputs(
+                            "urbansim_preprocessor",
+                            dest_skims_path,
+                            input_records=[skims_input_rec],
+                            description="Copied updated skims for UrbanSim consumption",
+                            short_name="usim_skims_input_updated",
+                            model_run_id=model_run_hash,
+                        )
+                        if skims_output_rec:
+                            processed_records.add_record(skims_output_rec)
+                    else:
+                        logger.warning(f"Skims file not found at source: {source_skims_path}")
 
             # Pass through any existing input records
             for record in input_records.all_records():

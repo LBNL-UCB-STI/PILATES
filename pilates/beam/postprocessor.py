@@ -1856,7 +1856,7 @@ def write_zarr_skim_as_omx_new(
     all_skims_path : str
         Path to the main skims Zarr store.
     settings : dict
-        Settings dictionary, needed for 'region' and 'beam_local_input_folder'.
+        Settings dictionary, needed for 'region' and 'beam_local_mutable_data_folder'.
     new_skim_name : str
         Name of the new OMX skim file to be created (e.g., 'skims.omx').
     exclude_tables : list, optional
@@ -1871,7 +1871,7 @@ def write_zarr_skim_as_omx_new(
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
     region = settings.get("region")
-    beam_input_dir = settings.get("beam_local_input_folder")
+    beam_input_dir = settings.get("beam_local_mutable_data_folder")
 
     if not region or not beam_input_dir:
         logger.error(

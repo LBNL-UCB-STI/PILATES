@@ -1,5 +1,7 @@
 import logging
 import os
+from datetime import datetime
+
 import psutil
 import sys
 from typing import Tuple, List, Optional
@@ -165,6 +167,8 @@ class BeamRunner(GenericRunner):
         #     if isinstance(record, FileRecord):
         #         provenance_tracker.record_input_record(record)
 
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
         success = self.run_container(
             client=client,
             settings=settings,
@@ -217,8 +221,8 @@ class BeamRunner(GenericRunner):
                     "-XX:+PrintInlining "
                     
                     # GC logging
-                    "-Xlog:gc*:file=/app/output/gc.log:time,uptime,level,tags "
-                    "-Xlog:gc+heap=debug:file=/app/output/heap-detail.log "
+                    f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
+                    f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
                     "-XX:+PrintTLAB "
                     "-Djava.io.tmpdir=/app/output/tmp "
                     "-Djna.tmpdir=/app/output/tmp"
