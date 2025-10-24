@@ -97,6 +97,10 @@ def create_next_iter_usim_data(
     logger.info("Merging results back into new UrbanSim input store!")
     final_table_records = []
 
+    # Create an empty HDF5 file so that provenance can be recorded.
+    with pd.HDFStore(str(input_store_path), "w") as store:
+        pass
+
     # --- Provenance Step 4: Record the final merged HDF5 container ---
     final_output_container = provenance_tracker.record_h5_output_container(
         "urbansim_postprocessor",

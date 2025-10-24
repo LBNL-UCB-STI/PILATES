@@ -3236,6 +3236,8 @@ class BeamPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
+        self.skim_format = self.settings.get(
+            "skim_format", "skimsActivitySimOD_current"        )
         self.zarr_manager = None
 
     def _postprocess(
@@ -3274,19 +3276,42 @@ class BeamPostprocessor(GenericPostprocessor):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
-        zarr_skim_name = (
-            f"raw_od_skims_zarr_{self.state.forecast_year}_{self.state.iteration}"
-        )
+        zarr_skim_name = f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
         omx_skim_name = (
             f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}"
         )
 
-        if (zarr_skim_name not in raw_output_files) and (
-            omx_skim_name not in raw_output_files
-        ):
+        # List of possible skim names to check
+        possible_skim_names = [
+            zarr_skim_name,
+            f"raw_od_skims_zarr_{self.state.forecast_year}_{self.state.iteration}",
+            omx_skim_name,
+        ]
+
+        skim_name_found = None
+        for name in possible_skim_names:
+            if name in raw_output_files:
+                if name != zarr_skim_name:
+                    logger.warning(
+                        f"Could not find skim file with name {zarr_skim_name}, but found {name}. Proceeding with this file."
+                    )
+                skim_name_found = name
+                break
+
+        if not skim_name_found:
+            for name in raw_output_files:
+                if "skims" in name and name.endswith(".zarr"):
+                    logger.warning(
+                        f"Could not find skim file with expected names, but found {name}. Proceeding with this file."
+                    )
+                    skim_name_found = name
+                    break
+
+        if not skim_name_found:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
+
         elif not os.path.exists(all_skims_path):
             logger.warning(
                 f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
@@ -3296,10 +3321,8 @@ class BeamPostprocessor(GenericPostprocessor):
                 logger.warning(
                     "No existing Zarr skims record found, even though the file exists. Will generate a record as an output after merging"
                 )
-            if zarr_skim_name in raw_output_files:
-                skim_name = zarr_skim_name
-            else:
-                skim_name = omx_skim_name
+            
+            skim_name = skim_name_found
 
             raw_od_skims_path = os.path.join(
                 workspace.output_path,

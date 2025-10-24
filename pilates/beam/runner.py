@@ -73,7 +73,7 @@ class BeamRunner(GenericRunner):
     ) -> List[Record]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
-            "raw_od_skims_zarr": ("activitySimODSkims_current", ".zarr"),
+            "raw_od_skims_zarr": ("skimsActivitySimOD_current", ".zarr"),
             "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
             "beam_plans_out": ("plans", ".csv.gz"),
