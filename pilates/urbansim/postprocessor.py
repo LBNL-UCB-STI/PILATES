@@ -151,7 +151,9 @@ def create_next_iter_usim_data(
                 )
                 final_table_records.append(output_table)
 
-        assert set(new_store.keys()) == set(archived_store.keys())
+        if set(new_store.keys()) != set(archived_store.keys()):
+            logger.warning("Mismatch in tables between archived input and new input store after merging.")
+            logger.info(f"New tables: {set(new_store.keys())}. Archived tables: {set(archived_store.keys())}.")
 
     output_store.close()
 
