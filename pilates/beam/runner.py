@@ -223,7 +223,6 @@ class BeamRunner(GenericRunner):
                     # GC logging
                     f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
                     f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
-                    "-XX:+PrintTLAB "
                     "-Djava.io.tmpdir=/app/output/tmp "
                     "-Djna.tmpdir=/app/output/tmp"
                 )
