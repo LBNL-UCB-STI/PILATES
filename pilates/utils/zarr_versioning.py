@@ -59,6 +59,10 @@ class VersionedZarrStore:
         # Load or create manifest
         self.manifest = self._load_or_create_manifest()
 
+    @property
+    def path(self) -> Path:
+        return self.full_skims_path
+
     def _load_or_create_manifest(self) -> Dict:
         """Load existing manifest or create new one."""
         if self.manifest_path.exists():

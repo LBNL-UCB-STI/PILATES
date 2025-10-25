@@ -3364,10 +3364,10 @@ class BeamPostprocessor(GenericPostprocessor):
                 processed_records.append(output_rec)
 
             # At the end of all processing, record the final state of the Zarr store
-            if updated_zarr_store and updated_zarr_store.path:
+            if updated_zarr_store and updated_zarr_store.full_skims_path:
                 self.provenance_tracker.record_output_file(
                     model="beam_postprocessor",
-                    file_path=updated_zarr_store.path,
+                    file_path=updated_zarr_store.full_skims_path,
                     short_name="zarr_skims_final",
                     description="Final Zarr skims store after all BEAM post-processing.",
                     model_run_id=model_run_hash,
