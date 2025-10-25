@@ -191,8 +191,8 @@ class BeamRunner(GenericRunner):
                     "-XX:G1HeapRegionSize=32M "
                     
                     # More GC threads for burst capacity
-                    "-XX:ParallelGCThreads=32 "     # Increase from 28 → 32 for headroom
-                    "-XX:ConcGCThreads=10 "         # Increase from 7 → 10 proportionally
+                    "-XX:ParallelGCThreads=28 "     # Increase from 28 → 32 for headroom
+                    "-XX:ConcGCThreads=7 "         # Increase from 7 → 10 proportionally
                     
                     "-XX:+UseNUMA "
                     "-XX:+AlwaysPreTouch "
