@@ -478,7 +478,7 @@ def main():
     state.set_run_info_path(provenance_tracker.run_info_path)
 
     # Perform initialization (data copies and provenance recording)
-    if False: #not (settings.get("state_file_loc") and os.path.exists(settings.get("state_file_loc"))):
+    if True: #not (settings.get("state_file_loc") and os.path.exists(settings.get("state_file_loc"))):
         initialization = Initialization("initialization", state, provenance_tracker)
         initialization.run(settings, workspace)
     else:
