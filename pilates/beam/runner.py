@@ -216,9 +216,9 @@ class BeamRunner(GenericRunner):
                     # Less aggressive old gen collection
                     "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
                     
-                    "-XX:+UnlockDiagnosticVMOptions "
-                    "-XX:+LogCompilation "
-                    "-XX:+PrintInlining "
+                    # "-XX:+UnlockDiagnosticVMOptions "
+                    # "-XX:+LogCompilation "
+                    # "-XX:+PrintInlining "
                     
                     # GC logging
                     f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
