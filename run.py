@@ -525,7 +525,8 @@ def main():
             # Multi-year loop logic (as in run_atlas)
             if forecast:
                 # For forecast, run for all years between state.year and state.forecast_year, step 2
-                yrs = [y + 2 for y in range(state.year, state.forecast_year, 2)]
+                # Also ensure the start year is processed to generate its inputs.
+                yrs = [state.year] + [y + 2 for y in range(state.year, state.forecast_year, 2)]
                 if not yrs:
                     yrs = [state.forecast_year]
             else:
