@@ -112,7 +112,15 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
-        urbansim_output_path = workspace.get_usim_mutable_data_dir()
+
+        # Check if this is a restarted run by looking for the previous run's run_info.json
+        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+            logger.info(f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
+            previous_run_dir = os.path.dirname(self.state.run_info_path)
+            urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')
+        else:
+            urbansim_output_path = workspace.get_usim_mutable_data_dir()
+
         if self.state.is_start_year():
             urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
         else:

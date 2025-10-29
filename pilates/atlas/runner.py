@@ -396,7 +396,7 @@ class AtlasRunner(GenericRunner):
                 self.provenance_tracker.complete_model_run(
                     model_run_hash, status="failed"
                 )
-                return RecordStore(), ModelRunInfo()
+                return RecordStore(), ModelRunInfo(model=self.model_name, year=self.state.current_year)
 
         except Exception as e:
             logger.error(f"ATLAS container execution error: {e}")
