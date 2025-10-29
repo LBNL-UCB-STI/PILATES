@@ -348,8 +348,15 @@ class UrbansimPreprocessor(GenericPreprocessor):
             if self.state.current_year > settings['start_year'] or self.state.iteration > 0:
                 if settings.get("travel_model") == "beam":
                     logger.info("Updating skims from BEAM mutable output for subsequent iteration.")
+                    if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+                        logger.info(f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
+                        previous_run_dir = os.path.dirname(self.state.run_info_path)
+                        beam_mutable_data_dir = os.path.join(previous_run_dir, 'beam', 'input')
+                    else:
+                        beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
+
                     source_skims_path = os.path.join(
-                        workspace.get_beam_mutable_data_dir(),
+                        beam_mutable_data_dir,
                         settings["region"],
                         settings["skims_fname"],
                     )
