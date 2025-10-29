@@ -221,7 +221,12 @@ def copy_vehicles_from_atlas(
         settings["beam_scenario_folder"],
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
-    atlas_output_data_dir = workspace.get_atlas_output_dir()
+    if state.run_info_path and os.path.exists(state.run_info_path):
+        logger.info(f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
+        previous_run_dir = os.path.dirname(state.run_info_path)
+        atlas_output_data_dir = os.path.join(previous_run_dir, 'atlas', 'atlas_output')
+    else:
+        atlas_output_data_dir = workspace.get_atlas_output_dir()
     atlas_vehicle_file_loc = os.path.join(
         atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year)
     )
@@ -704,6 +709,12 @@ def copy_plans_from_asim(
             logger.error("No ActivitySim output files found in provenance tracker")
             return RecordStore()
 
+        if state.run_info_path and os.path.exists(state.run_info_path):
+            logger.info(f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
+            base_path = os.path.dirname(state.run_info_path)
+        else:
+            base_path = workspace.output_path
+
         asim_file_paths = {}
         for record in input_records.all_records():
             if (record.short_name.rsplit("_", 2)[0] in required_files) or (
@@ -718,7 +729,7 @@ def copy_plans_from_asim(
                 else:
                     shortened_name = record.short_name
                 asim_file_paths[shortened_name] = (
-                    os.path.join(workspace.output_path, record.file_path),
+                    os.path.join(base_path, record.file_path),
                     record,
                 )
                 logger.info(

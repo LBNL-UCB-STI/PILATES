@@ -2888,7 +2888,10 @@ def create_asim_data_from_h5(
         (state.forecast_year == settings["start_year"]) or warm_start or not urbansim_enabled
     )
 
-    if is_base_year:
+    if not is_base_year and state.run_info_path and os.path.exists(state.run_info_path):
+        logger.info(f"[ActivitysimPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
+        mdir = os.path.dirname(state.run_info_path)
+    elif is_base_year:
         mdir = None
     else:
         mdir = workspace.full_path
