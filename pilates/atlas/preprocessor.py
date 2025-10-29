@@ -279,7 +279,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                     # Record the output CSV, linking it to the H5 table record
                     csv_record = self.provenance_tracker.record_output_file_with_inputs(
-                        model_name="atlas_preprocessor",
+                        model="atlas_preprocessor",
                         file_path=output_csv_path,
                         input_records=[table_record],
                         year=self.state.year,
