@@ -191,8 +191,8 @@ class BeamRunner(GenericRunner):
                     "-XX:G1HeapRegionSize=32M "
                     
                     # More GC threads for burst capacity
-                    "-XX:ParallelGCThreads=28 "     # Increase from 28 → 32 for headroom
-                    "-XX:ConcGCThreads=7 "         # Increase from 7 → 10 proportionally
+                    "-XX:ParallelGCThreads=36 "   
+                    "-XX:ConcGCThreads=9 "    
                     
                     "-XX:+UseNUMA "
                     "-XX:+AlwaysPreTouch "
@@ -201,8 +201,10 @@ class BeamRunner(GenericRunner):
                     "-XX:+UnlockExperimentalVMOptions "
                     "-XX:G1NewSizePercent=40 "          # Min 72 GB young gen
                     "-XX:G1MaxNewSizePercent=60 "       # Max 108 GB young gen
-                    "-XX:MaxGCPauseMillis=10000 "       # Accept 10s pauses for throughput
-                    "-XX:G1MixedGCCountTarget=16 "      # Spread old gen work
+                    "-XX:MaxTenuringThreshold=6 "    # Objects die faster in young gen
+                    "-XX:SurvivorRatio=6 "           # 12.5% survivors (helps transit burst)
+                    "-XX:MaxGCPauseMillis=5000 "       # Accept 10s pauses for throughput
+                    "-XX:G1MixedGCCountTarget=12 "      # Spread old gen work
                     
                     # Conservative mixed GC - spread work over more cycles
                     "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
@@ -211,7 +213,7 @@ class BeamRunner(GenericRunner):
                     "-XX:InitiatingHeapOccupancyPercent=30 " 
                     
                     # More evacuation buffer for large populations
-                    "-XX:G1ReservePercent=15 "      # Increase from 5 → 15 (27GB reserve)
+                    "-XX:G1ReservePercent=15 "      # I (27GB reserve)
                     
                     # Less aggressive old gen collection
                     "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
