@@ -1556,9 +1556,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 description="Raw BEAM OD skims",
             )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
+            os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
             shutil.copyfile(path_to_beam_skims, skims_loc)
             input_records.add_record(input_skims_record)
         else:
+            os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             skims_loc = create_skims_from_beam(
                 settings, self.state, output_dir=workspace.get_asim_mutable_data_dir()
             )

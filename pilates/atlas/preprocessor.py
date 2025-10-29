@@ -118,13 +118,21 @@ class AtlasPreprocessor(GenericPreprocessor):
             # This is a restarted run
             previous_run_dir = os.path.dirname(self.state.run_info_path)
             logger.info(f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}")
+            old_atlas_input_root = os.path.join(previous_run_dir, 'atlas', 'atlas_input')
+            new_atlas_input_root = workspace.get_atlas_mutable_input_dir()
 
             # 1. Copy base year atlas inputs from previous run
-            old_base_year_input_path = os.path.join(previous_run_dir, 'atlas', 'atlas_input', f"year{self.state.start_year}")
-            new_base_year_input_path = os.path.join(workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}")
+            old_base_year_input_path = os.path.join(old_atlas_input_root, f"year{self.state.start_year}")
+            new_base_year_input_path = os.path.join(new_atlas_input_root, f"year{self.state.start_year}")
             if os.path.exists(old_base_year_input_path) and not os.path.exists(new_base_year_input_path):
                 logger.info(f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}")
                 shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True)
+
+            # 2. Copy root files like cpi.csv
+            if os.path.exists(old_atlas_input_root):
+                for f in glob.glob(os.path.join(old_atlas_input_root, '*.csv')):
+                    shutil.copy(f, new_atlas_input_root)
+                logger.info(f"[AtlasPreprocessor] Copied root CSV files from previous run: {old_atlas_input_root}")
             
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')
