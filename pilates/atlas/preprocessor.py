@@ -132,7 +132,13 @@ class AtlasPreprocessor(GenericPreprocessor):
             if os.path.exists(old_atlas_input_root):
                 for f in glob.glob(os.path.join(old_atlas_input_root, '*.csv')):
                     shutil.copy(f, new_atlas_input_root)
-                logger.info(f"[AtlasPreprocessor] Copied root CSV files from previous run: {old_atlas_input_root}")
+                    self.provenance_tracker.record_input_file(
+                        "atlas_preprocessor",
+                        f,
+                        description=f"ATLAS static input file: {os.path.basename(f)}",
+                        short_name=os.path.splitext(os.path.basename(f))[0],
+                    )
+                logger.info(f"[AtlasPreprocessor] Copied and recorded root CSV files from previous run: {old_atlas_input_root}")
             
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')

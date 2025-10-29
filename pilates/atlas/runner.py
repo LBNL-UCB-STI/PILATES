@@ -440,9 +440,8 @@ class AtlasRunner(GenericRunner):
             output_records=output_records,
         )
 
-        # Create run info
-        run_info = ModelRunInfo()
-        # TODO: Populate run_info with ATLAS-specific information
+        # Get the model run info object to return
+        run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
 
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (outputs=%d)",

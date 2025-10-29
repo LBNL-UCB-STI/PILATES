@@ -175,7 +175,7 @@ class UrbansimRunner(GenericRunner):
                 f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}"
             )
             self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-            return RecordStore(), ModelRunInfo()
+            return RecordStore(), ModelRunInfo(model=self.model_name, year=self.state.current_year)
 
         # Get the model run info object to return
         run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
