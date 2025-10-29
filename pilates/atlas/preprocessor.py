@@ -110,6 +110,25 @@ class AtlasPreprocessor(GenericPreprocessor):
         4. If enabled, compute accessibility using BEAM skims.
         5. Complete the model run in provenance and return a RecordStore of all input/output files.
         """
+        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+            # This is a restarted run
+            previous_run_dir = os.path.dirname(self.state.run_info_path)
+            # Copy base year atlas inputs from previous run
+            old_base_year_input_path = os.path.join(previous_run_dir, 'atlas', 'atlas_input', f"year{self.state.start_year}")
+            new_base_year_input_path = os.path.join(workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}")
+            if os.path.exists(old_base_year_input_path) and not os.path.exists(new_base_year_input_path):
+                logger.info(f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}")
+                shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True)
+
+        logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
+
+        Steps:
+        1. Record all input files (UrbanSim HDF5, BEAM skims if needed) for provenance.
+        2. Start the model run in provenance.
+        3. Extract UrbanSim HDF5 tables and write them as CSVs for ATLAS.
+        4. If enabled, compute accessibility using BEAM skims.
+        5. Complete the model run in provenance and return a RecordStore of all input/output files.
+        """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
 
@@ -125,7 +144,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
         else:
             urbansim_output_fname = _get_usim_datastore_fname(
-                settings, io="output", year=self.state.forecast_year
+                settings, io="output", year=self.state.main_forecast_year
             )
         urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
 

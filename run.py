@@ -542,6 +542,7 @@ def main():
                         self.year = year
                         self.current_year = year
                         self.forecast_year = year
+                        self.main_forecast_year = parent_state.forecast_year
                         self.start_year = parent_state.start_year
                         self.full_settings = parent_state.full_settings
                         # Provide an is_start_year method consistent with the parent
