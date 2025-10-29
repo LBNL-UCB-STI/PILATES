@@ -158,15 +158,17 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "year{}".format(self.state.start_year),
             )
             for f in glob.glob(os.path.join(old_input_path, "*.RData")):
-                if os.path.exists(os.path.join(atlas_input_path, Path(f).name)):
+                # The destination for RData files is the root of the atlas_input, not the year-specific directory
+                destination_path = os.path.join(workspace.get_atlas_mutable_input_dir(), Path(f).name)
+                if os.path.exists(destination_path):
                     logger.info(
-                        f"[AtlasPreprocessor] Not copying file {f} to atlas input {os.path.join(atlas_input_path, Path(f).name)} because it exists"
+                        f"[AtlasPreprocessor] Not copying file {f} to atlas input {destination_path} because it exists"
                     )
                 else:
                     logger.info(
                         f"[AtlasPreprocessor] Moving file {f} to atlas input for year {self.state.year}"
                     )
-                    shutil.copyfile(f, os.path.join(atlas_input_path, Path(f).name))
+                    shutil.copyfile(f, destination_path)
 
         # --- Record all input files before starting model run ---
         input_records = []
