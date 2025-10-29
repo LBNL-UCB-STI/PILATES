@@ -478,9 +478,10 @@ def main():
     state.set_run_info_path(provenance_tracker.run_info_path)
 
     # Perform initialization (data copies and provenance recording)
-    if True: #not (settings.get("state_file_loc") and os.path.exists(settings.get("state_file_loc"))):
+    if not state.data_initialized:
         initialization = Initialization("initialization", state, provenance_tracker)
         initialization.run(settings, workspace)
+        state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping data initialization.")
 
@@ -544,6 +545,9 @@ def main():
                         self.full_settings = parent_state.full_settings
                         # Provide an is_start_year method consistent with the parent
                         self.is_start_year = lambda: (year == parent_state.start_year)
+
+                    def set_sub_stage_progress(self, sub_stage_progress):
+                        state.set_sub_stage_progress(sub_stage_progress)
 
                 atlas_state = AtlasSubState(state, atlas_year)
 

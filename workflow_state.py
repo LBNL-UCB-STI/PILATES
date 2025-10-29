@@ -44,6 +44,7 @@ class WorkflowState:
         full_settings: Optional[dict] = None,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,  # new
+        data_initialized: bool = False,
     ):
 
         # Store basic simulation parameters
@@ -58,6 +59,7 @@ class WorkflowState:
         self.current_sub_stage = sub_stage
         self.sub_stage_progress = sub_stage_progress
         self.run_info_path = run_info_path  # new
+        self.data_initialized = data_initialized
 
         self.forecast_year = None
         self.file_loc = file_loc
@@ -186,7 +188,8 @@ class WorkflowState:
         iteration,
         asim_compiled,
         sub_stage_progress: Optional[str] = None,
-        run_info_path: Optional[str] = None,  # new
+        run_info_path: Optional[str] = None,
+        data_initialized: bool = False,
     ):
         to_save = {
             "year": year,
@@ -194,7 +197,8 @@ class WorkflowState:
             "iteration": iteration,
             "asim_compiled": asim_compiled,
             "sub_stage_progress": sub_stage_progress,
-            "run_info_path": run_info_path,  # new
+            "run_info_path": run_info_path,
+            "data_initialized": data_initialized,
         }
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
@@ -203,7 +207,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False, None, None]  # new
+            return [None, None, 0, False, None, None, False]
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -217,8 +221,9 @@ class WorkflowState:
         iteration = data.get("iteration", 0) or 0
         asim_compiled = data.get("asim_compiled", False)
         sub_stage_progress = data.get("sub_stage_progress", None)
-        run_info_path = data.get("run_info_path", None) #new
-        return [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path]  # new
+        run_info_path = data.get("run_info_path", None)
+        data_initialized = data.get("data_initialized", False)
+        return [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized]
 
     @classmethod
     def from_settings(cls, settings):
@@ -232,7 +237,7 @@ class WorkflowState:
         replanning_enabled = settings["replanning_enabled"]
         file_loc = settings["state_file_loc"]
 
-        [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path] = cls.read_current_stage(file_loc)  # new
+        [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized] = cls.read_current_stage(file_loc)
 
         year = year or start_year
 
@@ -253,7 +258,8 @@ class WorkflowState:
             asim_compiled,
             settings,
             sub_stage_progress=sub_stage_progress,
-            run_info_path=run_info_path,  # new
+            run_info_path=run_info_path,
+            data_initialized=data_initialized,
         )
 
         out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)
@@ -306,7 +312,8 @@ class WorkflowState:
             self.current_inner_iter,
             self.__asim_compiled,
             self.sub_stage_progress,
-            self.run_info_path,  # new
+            self.run_info_path,
+            self.data_initialized,
         )
 
     def is_enabled(self, stage: Stage) -> bool:
@@ -563,6 +570,10 @@ class WorkflowState:
             self.current_sub_stage = None
             self.sub_stage_progress = None  # new
             # The __next__ method will handle state file removal when it detects completion
+
+    def set_data_initialized(self, value: bool):
+        self.data_initialized = value
+        self.write_state()
 
     def get_sub_stages_from(self, start_sub_stage: Optional[Stage]):
         """Returns the sequence of sub-stages starting from the given stage (inclusive)."""
