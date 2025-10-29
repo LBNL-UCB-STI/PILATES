@@ -38,6 +38,6 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    job.sh "$settings_file" "$stage_file"
+    "$(dirname $0)/job.sh" "$settings_file" "$stage_file"
 
 echo $JOB_LOG_FILE_PATH
