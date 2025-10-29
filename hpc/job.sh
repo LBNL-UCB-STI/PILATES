@@ -30,5 +30,5 @@ squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep $(hostname)
 echo "=========================="
 
 
-python run.py -c "$1" -s "$2"
+python run.py -c "$1" -S "$2"
 
