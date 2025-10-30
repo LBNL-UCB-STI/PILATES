@@ -532,68 +532,77 @@ def main():
             else:
                 yrs = [state.year]
 
+            max_retries = settings.get("atlas_max_retries", 3)
             for atlas_year in yrs:
-                # Create a lightweight sub-state object for this ATLAS sub-run. It copies
-                # the parent state's attributes and overrides the year/fiscal context used
-                # by preprocessors/runners/postprocessors.
-                class AtlasSubState:
-                    def __init__(self, parent_state, year):
-                        # Shallow copy parent state dict to inherit attributes
-                        self.__dict__ = parent_state.__dict__.copy()
-                        self.year = year
-                        self.current_year = year
-                        self.forecast_year = year
-                        self.main_forecast_year = parent_state.forecast_year
-                        self.start_year = parent_state.start_year
-                        self.full_settings = parent_state.full_settings
-                        # Provide an is_start_year method consistent with the parent
-                        self.is_start_year = lambda: (year == parent_state.start_year)
+                for i in range(max_retries):
+                    # Create a lightweight sub-state object for this ATLAS sub-run. It copies
+                    # the parent state's attributes and overrides the year/fiscal context used
+                    # by preprocessors/runners/postprocessors.
+                    class AtlasSubState:
+                        def __init__(self, parent_state, year):
+                            # Shallow copy parent state dict to inherit attributes
+                            self.__dict__ = parent_state.__dict__.copy()
+                            self.year = year
+                            self.current_year = year
+                            self.forecast_year = year
+                            self.main_forecast_year = parent_state.forecast_year
+                            self.start_year = parent_state.start_year
+                            self.full_settings = parent_state.full_settings
+                            # Provide an is_start_year method consistent with the parent
+                            self.is_start_year = lambda: (year == parent_state.start_year)
 
-                    def set_sub_stage_progress(self, sub_stage_progress):
-                        state.set_sub_stage_progress(sub_stage_progress)
+                        def set_sub_stage_progress(self, sub_stage_progress):
+                            state.set_sub_stage_progress(sub_stage_progress)
 
-                atlas_state = AtlasSubState(state, atlas_year)
+                    atlas_state = AtlasSubState(state, atlas_year)
 
-                logger.info(
-                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
-                )
-                # Preprocess
-                preprocessor.update_state(atlas_state)
-                input_data = preprocessor.preprocess(workspace)
-                logger.info(
-                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
-                )
+                    logger.info(
+                        f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
+                    )
+                    # Preprocess
+                    preprocessor.update_state(atlas_state)
+                    input_data = preprocessor.preprocess(workspace)
+                    logger.info(
+                        f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
+                    )
 
-                logger.info(
-                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
-                )
-                # Run
-                runner.update_state(atlas_state)
-                raw_outputs, run_info = runner.run(input_data, workspace)
-                logger.info(
-                    f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
-                )
+                    logger.info(
+                        f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
+                    )
+                    # Run
+                    runner.update_state(atlas_state)
+                    raw_outputs, run_info = runner.run(input_data, workspace)
 
-                logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
-                # Postprocess
-                post_run_hash = provenance_tracker.start_model_run(
-                    "atlas_postprocessor",
-                    atlas_state.current_year,
-                    description="ATLAS postprocessing",
-                )
-                postprocessor.update_state(atlas_state)
-                processed_outputs = postprocessor.postprocess(
-                    raw_outputs,
-                    workspace,
-                    run_info,
-                    post_run_hash,
-                )
-                provenance_tracker.complete_model_run(
-                    post_run_hash, output_records=processed_outputs.all_records()
-                )
-                logger.info(
-                    f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
-                )
+                    if run_info and run_info.status == "completed":
+                        logger.info(f"[run.py] [ATLAS] AtlasRunner successful for year {atlas_year} on attempt {i + 1}")
+                        # Postprocess
+                        logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
+                        post_run_hash = provenance_tracker.start_model_run(
+                            "atlas_postprocessor",
+                            atlas_state.current_year,
+                            description="ATLAS postprocessing",
+                        )
+                        postprocessor.update_state(atlas_state)
+                        processed_outputs = postprocessor.postprocess(
+                            raw_outputs,
+                            workspace,
+                            run_info,
+                            post_run_hash,
+                        )
+                        provenance_tracker.complete_model_run(
+                            post_run_hash, output_records=processed_outputs.all_records()
+                        )
+                        logger.info(
+                            f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
+                        )
+                        break  # Exit retry loop on success
+                    else:
+                        logger.warning(
+                            f"ATLAS run failed for year {atlas_year} on attempt {i + 1}. Retrying... ({max_retries - i - 1} retries left)"
+                        )
+                else:  # This else belongs to the for loop, runs if the loop completes without break
+                    logger.error(f"ATLAS run for year {atlas_year} failed after {max_retries} attempts. Aborting.")
+                    sys.exit(1)  # Exit the whole simulation
 
             logger.info(
                 "[run.py] [ATLAS] All ATLAS years complete for this major step."
