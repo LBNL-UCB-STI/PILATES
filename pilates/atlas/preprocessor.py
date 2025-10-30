@@ -127,7 +127,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         # Copy global CSV files
         for f in glob.glob(os.path.join(global_source_dir, '*.csv')):
-            dest_path = os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            dest_path = os.path.realpath(os.path.join(current_atlas_mutable_input_root, os.path.basename(f)))
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
                 self.provenance_tracker.record_input_file(
@@ -142,7 +142,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         # Copy global RData files
         for f in glob.glob(os.path.join(global_source_dir, '*.RData')):
-            dest_path = os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            dest_path = os.path.realpath(os.path.join(current_atlas_mutable_input_root, os.path.basename(f)))
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
                 self.provenance_tracker.record_input_file(
@@ -168,13 +168,26 @@ class AtlasPreprocessor(GenericPreprocessor):
             new_base_year_input_path = os.path.join(workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}")
             if os.path.exists(old_base_year_input_path) and not os.path.exists(new_base_year_input_path):
                 logger.info(f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}")
-                shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True)
+                shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True, symlinks=True)
             
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')
         else:
             # This is a fresh run
             urbansim_output_path = workspace.get_usim_mutable_data_dir()
+
+        if self.state.is_start_year():
+            urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
+        else:
+            urbansim_output_fname = _get_usim_datastore_fname(
+                settings, io="output", year=self.state.main_forecast_year
+            )
+        urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
+
+        atlas_input_path = os.path.join(
+            workspace.get_atlas_mutable_input_dir(),
+            "year{}".format(self.state.year),
+        )
 
         # --- Record all input files before starting model run ---
         input_records = []
