@@ -236,10 +236,8 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.info(
                 "[AtlasPreprocessor] atlas_beamac=0, looking for .RData accessibility files"
             )
-            # Look for .RData files in the year-specific input directory
-            year_input_dir = os.path.join(
-                workspace.get_atlas_mutable_input_dir(), f"year{self.state.year}"
-            )
+            # Look for .RData files in the root input directory
+            year_input_dir = workspace.get_atlas_mutable_input_dir()
             if os.path.exists(year_input_dir):
                 rdata_files = glob.glob(os.path.join(year_input_dir, "*.RData"))
                 for rdata_file in rdata_files:
