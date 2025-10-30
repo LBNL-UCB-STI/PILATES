@@ -119,77 +119,62 @@ class AtlasPreprocessor(GenericPreprocessor):
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
 
-        # --- Restart Logic ---
+        # --- Ensure global ATLAS input files are present for every year --- 
+        # Source for global files (e.g., cpi.csv, RData files)
+        global_source_dir = "pilates/atlas/atlas_input"
+        # Destination for global files in the current run's mutable directory
+        current_atlas_mutable_input_root = workspace.get_atlas_mutable_input_dir()
+
+        # Copy global CSV files
+        for f in glob.glob(os.path.join(global_source_dir, '*.csv')):
+            dest_path = os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            if not os.path.exists(dest_path):
+                shutil.copy(f, dest_path)
+                self.provenance_tracker.record_input_file(
+                    "atlas_preprocessor",
+                    f,
+                    description=f"ATLAS static input file: {os.path.basename(f)}",
+                    short_name=os.path.splitext(os.path.basename(f))[0],
+                )
+                logger.info(f"[AtlasPreprocessor] Copied global CSV file: {f} to {dest_path}")
+            else:
+                logger.debug(f"[AtlasPreprocessor] Global CSV file already exists: {dest_path}")
+
+        # Copy global RData files
+        for f in glob.glob(os.path.join(global_source_dir, '*.RData')):
+            dest_path = os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            if not os.path.exists(dest_path):
+                shutil.copy(f, dest_path)
+                self.provenance_tracker.record_input_file(
+                    "atlas_preprocessor",
+                    f,
+                    description=f"ATLAS static RData file: {os.path.basename(f)}",
+                    short_name=os.path.splitext(os.path.basename(f))[0],
+                )
+                logger.info(f"[AtlasPreprocessor] Copied global RData file: {f} to {dest_path}")
+            else:
+                logger.debug(f"[AtlasPreprocessor] Global RData file already exists: {dest_path}")
+
+        # --- End Global File Handling ---
+
+        # --- Restart Logic for year-specific data ---
         if self.state.run_info_path and os.path.exists(self.state.run_info_path):
             # This is a restarted run
             previous_run_dir = os.path.dirname(self.state.run_info_path)
             logger.info(f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}")
-            old_atlas_input_root = os.path.join(previous_run_dir, 'atlas', 'atlas_input')
-            new_atlas_input_root = workspace.get_atlas_mutable_input_dir()
 
             # 1. Copy base year atlas inputs from previous run
-            old_base_year_input_path = os.path.join(old_atlas_input_root, f"year{self.state.start_year}")
-            new_base_year_input_path = os.path.join(new_atlas_input_root, f"year{self.state.start_year}")
+            old_base_year_input_path = os.path.join(previous_run_dir, 'atlas', 'atlas_input', f"year{self.state.start_year}")
+            new_base_year_input_path = os.path.join(workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}")
             if os.path.exists(old_base_year_input_path) and not os.path.exists(new_base_year_input_path):
                 logger.info(f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}")
                 shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True)
-
-            # 2. Copy root files like cpi.csv
-            if os.path.exists(old_atlas_input_root):
-                for f in glob.glob(os.path.join(old_atlas_input_root, '*.csv')):
-                    shutil.copy(f, new_atlas_input_root)
-                    self.provenance_tracker.record_input_file(
-                        "atlas_preprocessor",
-                        f,
-                        description=f"ATLAS static input file: {os.path.basename(f)}",
-                        short_name=os.path.splitext(os.path.basename(f))[0],
-                    )
-                logger.info(f"[AtlasPreprocessor] Copied and recorded root CSV files from previous run: {old_atlas_input_root}")
             
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')
         else:
             # This is a fresh run
             urbansim_output_path = workspace.get_usim_mutable_data_dir()
-        # --- End Restart Logic ---
-
-        if self.state.is_start_year():
-            urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
-        else:
-            urbansim_output_fname = _get_usim_datastore_fname(
-                settings, io="output", year=self.state.main_forecast_year
-            )
-        urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
-
-        atlas_input_path = os.path.join(
-            workspace.get_atlas_mutable_input_dir(),
-            "year{}".format(self.state.year),
-        )
-
-        if not os.path.exists(atlas_input_path):
-            os.makedirs(atlas_input_path)
-            logger.info(
-                f"[AtlasPreprocessor] ATLAS Input Path Created for Year {self.state.year}: {atlas_input_path}"
-            )
-
-        # Always copy RData files from the base year input if they don't exist at the root.
-        old_input_path = os.path.join(
-            workspace.get_atlas_mutable_input_dir(),
-            "year{}".format(self.state.start_year),
-        )
-        if os.path.exists(old_input_path):
-            for f in glob.glob(os.path.join(old_input_path, "*.RData")):
-                # The destination for RData files is the root of the atlas_input, not the year-specific directory
-                destination_path = os.path.join(workspace.get_atlas_mutable_input_dir(), Path(f).name)
-                if os.path.exists(destination_path):
-                    logger.info(
-                        f"[AtlasPreprocessor] Not copying file {f} to atlas input {destination_path} because it exists"
-                    )
-                else:
-                    logger.info(
-                        f"[AtlasPreprocessor] Copying file {f} to atlas input for year {self.state.year}"
-                    )
-                    shutil.copyfile(f, destination_path)
 
         # --- Record all input files before starting model run ---
         input_records = []
