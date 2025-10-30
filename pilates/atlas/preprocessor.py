@@ -69,7 +69,13 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                 source_path = os.path.join(root, filename)
                 relative_path = os.path.relpath(source_path, source_dir)
-                dest_path = os.path.join(year_specific_output_dir, relative_path)
+
+                # If the file is at the root of the source, copy it to the root of the destination.
+                # Otherwise, place it in the year-specific directory.
+                if os.path.dirname(relative_path) == '.':
+                    dest_path = os.path.join(output_dir, filename)
+                else:
+                    dest_path = os.path.join(year_specific_output_dir, relative_path)
 
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy(source_path, dest_path)
