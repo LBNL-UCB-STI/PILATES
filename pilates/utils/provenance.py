@@ -1363,7 +1363,22 @@ class FileProvenanceTracker(ProvenanceTracker):
             try:
                 with open(self.run_info_path, "r") as f:
                     data = json.load(f)
-                    # Convert dicts/lists to dataclasses for all fields
+                    
+                    # Deserialize file_records from dicts to actual FileRecord/H5FileRecord/H5TableRecord objects
+                    deserialized_file_records = {}
+                    for uid, record_dict in data.get("file_records", {}).items():
+                        if "h5_file_unique_id" in record_dict:
+                            deserialized_file_records[uid] = H5TableRecord(**record_dict)
+                        elif "table_record_ids" in record_dict:
+                            deserialized_file_records[uid] = H5FileRecord(**record_dict)
+                        else:
+                            deserialized_file_records[uid] = FileRecord(**record_dict)
+
+                    # Deserialize model_runs from dicts to ModelRunInfo objects
+                    deserialized_model_runs = {}
+                    for uid, run_dict in data.get("model_runs", {}).items():
+                        deserialized_model_runs[uid] = ModelRunInfo(**run_dict)
+
                     run_info = PilatesRunInfo(
                         run_id=data.get("run_id"),
                         created_at=data.get("created_at"),
@@ -1373,18 +1388,18 @@ class FileProvenanceTracker(ProvenanceTracker):
                         settings_hash=data.get("settings_hash"),
                         code_version=data.get("code_version"),
                         hostname=data.get("hostname"),
-                        file_records=data.get("file_records", {}),
+                        file_records=deserialized_file_records,
                         repo_records=data.get("repo_records", {}),
-                        model_runs=data.get("model_runs", {}),
+                        model_runs=deserialized_model_runs,
                         config_snapshot=data.get("config_snapshot"),
                         openlineage_event_metadata=data.get(
                             "openlineage_event_metadata", []
                         ),
                     )
                     return run_info
-            except (json.JSONDecodeError, IOError) as e:
+            except Exception as e: # Catch broader exception during deserialization
                 logger.warning(
-                    f"Could not load existing run_info.json: {e}. Creating new one."
+                    f"Could not load existing run_info.json due to deserialization error: {e}. Creating new one."
                 )
         run_info = PilatesRunInfo(
             run_id=self.run_id,
