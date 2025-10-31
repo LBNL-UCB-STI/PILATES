@@ -1576,10 +1576,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             inputs=input_records_filtered,
         )
 
-        if os.path.exists(path_to_beam_skims):
+        if os.path.exists(path_to_beam_skims_in_current_run_workspace): # <--- This condition should now be true
             input_skims_record = self.provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
-                path_to_beam_skims,
+                path_to_beam_skims_in_current_run_workspace,
                 short_name="omx_skims",
                 model_run_id=pre_run_hash,
                 description="Raw BEAM OD skims",
