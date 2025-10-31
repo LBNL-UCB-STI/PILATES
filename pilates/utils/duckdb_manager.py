@@ -312,7 +312,7 @@ class DuckDBManager(DatabaseManager):
                     settings_hash, code_version, hostname, config_snapshot_id,
                     config_content_hash
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (run_id) DO NOTHING
+                ON CONFLICT (run_id) UPDATE
             """,
                 [
                     run_info.run_id,
