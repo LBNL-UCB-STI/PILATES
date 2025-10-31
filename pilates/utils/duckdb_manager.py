@@ -261,32 +261,6 @@ class DuckDBManager(DatabaseManager):
         Returns:
             bool: True if upload successful
         """
-        if isinstance(run_info, dict):
-            file_records = {
-                uid: FileRecord(**rec)
-                for uid, rec in run_info.get("file_records", {}).items()
-            }
-            model_runs = {
-                uid: ModelRunInfo(**run)
-                for uid, run in run_info.get("model_runs", {}).items()
-            }
-            
-            run_info = PilatesRunInfo(
-                run_id=run_info.get("run_id"),
-                created_at=run_info.get("created_at"),
-                start_year=run_info.get("start_year"),
-                end_year=run_info.get("end_year"),
-                models_used=run_info.get("models_used", []),
-                settings_hash=run_info.get("settings_hash"),
-                code_version=run_info.get("code_version"),
-                hostname=run_info.get("hostname"),
-                file_records=file_records,
-                repo_records=run_info.get("repo_records", {}),
-                model_runs=model_runs,
-                config_snapshot=run_info.get("config_snapshot"),
-                openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
-            )
-
         try:
             conn = self._get_connection()
 
