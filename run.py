@@ -461,8 +461,17 @@ def main():
 
     # Set up provenance tracking and workspace
     output_path = os.path.realpath(os.path.expandvars(settings.get("output_directory")))
-    partial_run_name = settings.get("output_run_name", "pilates-run")
-    run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    # Determine run_name: if restarting, use the folder name from the previous run_info_path
+    if state.run_info_path:
+        # Extract folder_name from the run_info_path
+        # e.g., /global/scratch/users/zaneedell/pilates-output/atlas-baseline-database-20251030-191514/run_info.json
+        # -> atlas-baseline-database-20251030-191514
+        run_name = os.path.basename(os.path.dirname(state.run_info_path))
+        logger.info(f"Restarting run. Reusing output folder: {run_name}")
+    else:
+        # For a fresh run, generate a new timestamped folder name
+        run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     run_id = str(uuid.uuid4())
 
     provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)

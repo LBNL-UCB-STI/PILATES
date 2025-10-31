@@ -24,7 +24,7 @@ from pilates.utils.geog import (
     get_taz_geoms,
     geoid_to_zone_map,
 )
-from pilates.utils.io import read_datastore, datastore_path
+from pilates.utils.io import read_datastore, datastore_path, get_merged_usim_input_datastore_path
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.database_upload import create_database_manager
 
@@ -1523,11 +1523,40 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
         skims_fname = settings.get("skims_fname", False)
-        path_to_beam_skims = os.path.join(
+        path_to_beam_skims_in_current_run_workspace = os.path.join(
             workspace.get_beam_mutable_data_dir(),
-            workspace.settings["region"],
+            settings["region"],
             skims_fname,
         )
+
+        # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
+        if not os.path.exists(path_to_beam_skims_in_current_run_workspace):
+            logger.info(f"[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production.")
+            beam_production_path = os.path.abspath(
+                os.path.join(
+                    find_project_root(), # Assuming find_project_root is available
+                    "pilates",
+                    "beam",
+                    "production",
+                    settings["region"],
+                )
+            )
+            dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.copyfile(os.path.join(beam_production_path, skims_fname), path_to_beam_skims_in_current_run_workspace)
+            # Also record provenance for this copy
+            self.provenance_tracker.record_input_file(
+                "activitysim_preprocessor",
+                os.path.join(beam_production_path, skims_fname),
+                description="BEAM skims from production (copied on demand)",
+                short_name="omx_skims_production",
+            )
+            self.provenance_tracker.record_output_file(
+                "activitysim_preprocessor",
+                path_to_beam_skims_in_current_run_workspace,
+                description="BEAM skims copied to current workspace",
+                short_name="omx_skims_current_workspace",
+            )
 
         input_records = workspace.output_data.get("activitysim", RecordStore())
         input_records_filtered = RecordStore(
