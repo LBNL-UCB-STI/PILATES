@@ -14,7 +14,7 @@ import pandas as pd
 
 import duckdb
 
-from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord, H5FileRecord, H5TableRecord
+from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord, H5FileRecord, H5TableRecord, ModelRunInfo
 from pilates.utils.database import (
     DatabaseManager,
     DatabaseUploadError,
@@ -248,18 +248,32 @@ class DuckDBManager(DatabaseManager):
             return True
         except Exception as e:
             logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
-            return False
+        if isinstance(run_info, dict):
+            file_records = {
+                uid: FileRecord(**rec)
+                for uid, rec in run_info.get("file_records", {}).items()
+            }
+            model_runs = {
+                uid: ModelRunInfo(**run)
+                for uid, run in run_info.get("model_runs", {}).items()
+            }
+            
+            run_info = PilatesRunInfo(
+                run_id=run_info.get("run_id"),
+                created_at=run_info.get("created_at"),
+                start_year=run_info.get("start_year"),
+                end_year=run_info.get("end_year"),
+                models_used=run_info.get("models_used", []),
+                settings_hash=run_info.get("settings_hash"),
+                code_version=run_info.get("code_version"),
+                hostname=run_info.get("hostname"),
+                file_records=file_records,
+                repo_records=run_info.get("repo_records", {}),
+                model_runs=model_runs,
+                config_snapshot=run_info.get("config_snapshot"),
+                openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
+            )
 
-    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
-        """
-        Upload complete run data to DuckDB.
-
-        Args:
-            run_info: Complete PILATES run information
-
-        Returns:
-            bool: True if upload successful
-        """
         try:
             conn = self._get_connection()
 

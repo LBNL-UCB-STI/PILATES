@@ -106,21 +106,14 @@ def main():
     # Connect to the database
     db_manager = DuckDBManager(args.database_path)
 
-    # Ensure the run exists in the runs table to satisfy foreign key constraints
-    run_id = run_info.get('run_id')
-    if run_id:
-        conn = db_manager._get_connection()
-        existing_run = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", [run_id]).fetchone()
-        if not existing_run:
-            logging.info(f"Run ID {run_id} not found in 'runs' table. Inserting a minimal record.")
-            conn.execute("INSERT INTO runs (run_id) VALUES (?)", [run_id])
-    unique_id = run_info.get('unique_id')
-    if unique_id:
-        conn = db_manager._get_connection()
-        existing_run = conn.execute("SELECT unique_id FROM runs WHERE unique_id = ?", [unique_id]).fetchone()
-        if not existing_run:
-            logging.info(f"Run ID {unique_id} not found in 'runs' table. Inserting a minimal record.")
-            conn.execute("INSERT INTO runs (unique_id) VALUES (?)", [unique_id])
+    # Upload the entire run_info structure to ensure all records exist
+    try:
+        db_manager.upload_run_data(run_info)
+        logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
+    except Exception as e:
+        logging.error(f"Critical error: Failed to upload initial run data: {e}")
+        # We can choose to exit if the initial upload fails, as subsequent uploads will likely fail.
+        return
 
     # Find records to upload
     records_to_upload = []
@@ -203,16 +196,22 @@ def main():
                 if 'year' in df.columns:
                     df.rename(columns={'year': 'data_year'}, inplace=True)
 
-            # Add metadata to the dataframe before upload
-            df['run_id'] = run_info['run_id']
-            df['file_record_id'] = record['unique_id']
-            df['year'] = record.get('year')
-            # Note: Iteration is on the model_run, not the file_record. This is a simplification.
-            df['iteration'] = None 
-
-            # Upload the data
-            success = db_manager.store_generic_table(normalized_table_name, df)
-            if success:
+                                    # Special handling for atlas_jobs_csv sector_id
+                                    if normalized_table_name == 'atlas_jobs_csv':
+                                        if 'sector_id' in df.columns:
+                                            df['sector_id'] = df['sector_id'].astype(str)
+                        
+                                    # Sanitize column names
+                                    df.columns = [sanitize_name(col) for col in df.columns]            
+                        # Add metadata to the dataframe before upload
+                        df['run_id'] = run_info['run_id']
+                        df['file_record_id'] = record['unique_id']
+                        df['year'] = record.get('year')
+                        # Note: Iteration is on the model_run, not the file_record. This is a simplification.
+                        df['iteration'] = None 
+            
+                        # Upload the data
+                        success = db_manager.store_generic_table(normalized_table_name, df)            if success:
                 logging.info(f"Successfully uploaded {len(df)} rows to table '{normalized_table_name}'.")
             else:
                 logging.error(f"Failed to upload data for table '{normalized_table_name}'.")
