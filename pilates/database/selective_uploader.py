@@ -107,13 +107,8 @@ def main():
     db_manager = DuckDBManager(args.database_path)
 
     # Upload the entire run_info structure to ensure all records exist
-    try:
-        db_manager.upload_run_data(run_info)
-        logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
-    except Exception as e:
-        logging.error(f"Critical error: Failed to upload initial run data: {e}")
-        # We can choose to exit if the initial upload fails, as subsequent uploads will likely fail.
-        return
+    db_manager.upload_run_data(run_info)
+    logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
 
     # Find records to upload
     records_to_upload = []

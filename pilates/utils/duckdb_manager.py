@@ -248,6 +248,19 @@ class DuckDBManager(DatabaseManager):
             return True
         except Exception as e:
             logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
+            return False
+
+
+    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
+        """
+        Upload complete run data to DuckDB.
+
+        Args:
+            run_info: Complete PILATES run information
+
+        Returns:
+            bool: True if upload successful
+        """
         if isinstance(run_info, dict):
             file_records = {
                 uid: FileRecord(**rec)
@@ -274,212 +287,6 @@ class DuckDBManager(DatabaseManager):
                 openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
             )
 
-        try:
-            conn = self._get_connection()
-
-            # Start transaction
-            conn.begin()
-
-            # 1. Upload config snapshot if present
-            config_snapshot_id = None
-            if run_info.config_snapshot:
-                config_snapshot_id = run_info.config_snapshot.get("snapshot_id")
-
-                # Check if config snapshot already exists
-                existing = conn.execute(
-                    "SELECT snapshot_id FROM config_snapshots WHERE snapshot_id = ?",
-                    [config_snapshot_id],
-                ).fetchone()
-
-                if not existing:
-                    conn.execute(
-                        """
-                        INSERT INTO config_snapshots (
-                            snapshot_id, created_timestamp, config_content_hash,
-                            git_hashes, config_files, pilates_settings,
-                            beam_config, asim_subdir, region
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                        [
-                            config_snapshot_id,
-                            run_info.config_snapshot.get("created_timestamp"),
-                            run_info.config_snapshot.get("config_content_hash"),
-                            json.dumps(run_info.config_snapshot.get("git_hashes", {})),
-                            json.dumps(
-                                run_info.config_snapshot.get("config_files", {})
-                            ),
-                            json.dumps(
-                                run_info.config_snapshot.get("pilates_settings", {})
-                            ),
-                            run_info.config_snapshot.get("beam_config"),
-                            run_info.config_snapshot.get("asim_subdir"),
-                            run_info.config_snapshot.get("region"),
-                        ],
-                    )
-                    logger.info(f"Uploaded config snapshot {config_snapshot_id}")
-
-            # 2. Upload main run record
-            conn.execute(
-                """
-                INSERT INTO runs (
-                    run_id, created_at, start_year, end_year, models_used,
-                    settings_hash, code_version, hostname, config_snapshot_id,
-                    config_content_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (run_id) UPDATE
-            """,
-                [
-                    run_info.run_id,
-                    run_info.created_at,
-                    run_info.start_year,
-                    run_info.end_year,
-                    run_info.models_used,
-                    run_info.settings_hash,
-                    run_info.code_version,
-                    run_info.hostname,
-                    config_snapshot_id,
-                    (
-                        run_info.config_snapshot.get("config_content_hash")
-                        if run_info.config_snapshot
-                        else None
-                    ),
-                ],
-            )
-
-            # 3. Upload file records
-            for file_record in run_info.file_records.values():
-                # The item can be a dict (from JSON) or a dataclass object.
-                # This logic handles both cases.
-                def get_val(rec, key, default=None):
-                    if isinstance(rec, dict):
-                        return rec.get(key, default)
-                    return getattr(rec, key, default)
-
-                is_h5_table = get_val(file_record, "h5_file_unique_id") is not None
-                is_h5_container = get_val(file_record, "table_record_ids") is not None
-
-                record_type = "file"
-                if is_h5_table:
-                    record_type = "h5_table"
-                elif is_h5_container:
-                    record_type = "h5_container"
-
-                # Insert common fields into file_records table
-                conn.execute(
-                    """
-                    INSERT INTO file_records (
-                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
-                        short_name, description, year, models, producing_run_id,
-                        consuming_run_ids, source_file_paths, metadata, schema, exists
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) UPDATE
-                    """,
-                    [
-                        get_val(file_record, "unique_id"),
-                        record_type,
-                        run_info.run_id,
-                        get_val(file_record, "openlineage_id"),
-                        get_val(file_record, "file_path"),
-                        get_val(file_record, "created_at"),
-                        get_val(file_record, "short_name"),
-                        get_val(file_record, "description"),
-                        get_val(file_record, "year"),
-                        get_val(file_record, "models", []),
-                        get_val(file_record, "producing_run_id"),
-                        get_val(file_record, "consuming_run_ids", []),
-                        get_val(file_record, "source_file_paths", []),
-                        json.dumps(get_val(file_record, "metadata", {})),
-                        json.dumps(get_val(file_record, "schema", [])),
-                        get_val(file_record, "exists", True),
-                    ],
-                )
-
-                # If it's an H5 table, insert into the new h5_table_records table
-                if is_h5_table:
-                    conn.execute(
-                        """
-                        INSERT INTO h5_table_records (
-                            unique_id, h5_file_unique_id, table_name
-                        ) VALUES (?, ?, ?)
-                        ON CONFLICT (unique_id) UPDATE
-                        """,
-                        [
-                            get_val(file_record, "unique_id"),
-                            get_val(file_record, "h5_file_unique_id"),
-                            get_val(file_record, "table_name"),
-                        ],
-                    )
-
-            # 4. Upload model runs
-            for model_run in run_info.model_runs.values():
-                conn.execute(
-                    """
-                    INSERT INTO model_runs (
-                        unique_id, run_id, openlineage_id, model, year, iteration,
-                        description, created_at, completed_at, status,
-                        input_record_hashes, output_record_hashes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) UPDATE
-                """,
-                    [
-                        model_run.unique_id,
-                        run_info.run_id,
-                        model_run.openlineage_id,
-                        model_run.model,
-                        model_run.year,
-                        model_run.iteration,
-                        model_run.description,
-                        model_run.created_at,
-                        model_run.completed_at,
-                        model_run.status,
-                        model_run.input_record_hashes,
-                        model_run.output_record_hashes,
-                    ],
-                )
-
-            # 5. Upload OpenLineage event metadata
-            for event_metadata in run_info.openlineage_event_metadata:
-                conn.execute(
-                    """
-                    INSERT INTO openlineage_events (
-                        id, run_id, model_run_id, event_time, event_type,
-                        run_uuid, job_name
-                    ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
-                """,
-                    [
-                        run_info.run_id,
-                        event_metadata["model_run_id"],
-                        event_metadata["event_time"],
-                        event_metadata["event_type"],
-                        event_metadata["run_uuid"],
-                        event_metadata["job_name"],
-                    ],
-                )
-
-            # Commit transaction
-            conn.commit()
-
-            logger.info(f"Successfully uploaded run data for {run_info.run_id}")
-            return True
-
-        except Exception as e:
-            try:
-                conn.rollback()
-            except:
-                pass
-            logger.error(f"Failed to upload run data for {run_info.run_id}: {e}")
-            raise DatabaseUploadError(f"Upload failed: {e}")
-
-    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
-        """
-        Upload complete run data to DuckDB.
-
-        Args:
-            run_info: Complete PILATES run information
-
-        Returns:
-            bool: True if upload successful
-        """
         try:
             conn = self._get_connection()
 
