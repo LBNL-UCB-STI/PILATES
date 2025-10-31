@@ -180,9 +180,11 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
         "    FOREIGN KEY (run_id) REFERENCES runs(run_id),",
         "    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)",
         ");",
-        "",
-        f"COMMENT ON TABLE {table_name} IS '{record.get('description', 'Table auto-generated from run data.').replace("'", "''")}';",
-
+        ""
+    ])
+    description = record.get('description', 'Table auto-generated from run data.').replace("'", "''")
+    sql_lines.append(f"COMMENT ON TABLE {table_name} IS '{description}';")
+    sql_lines.extend([
         f"CREATE INDEX IF NOT EXISTS idx_{table_name}_run_id ON {table_name}(run_id);",
         f"CREATE INDEX IF NOT EXISTS idx_{table_name}_year_iter ON {table_name}(year, iteration);",
         ""
