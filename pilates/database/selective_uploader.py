@@ -13,6 +13,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.duckdb_manager import DuckDBManager
+from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo
 from pilates.database.schema_generator import _normalize_table_name # Import the normalization function
 
 # Configure logging
@@ -106,8 +107,34 @@ def main():
     # Connect to the database
     db_manager = DuckDBManager(args.database_path)
 
+    # Convert run_info dict to PilatesRunInfo object
+    file_records = {
+        uid: FileRecord(**rec)
+        for uid, rec in run_info.get("file_records", {}).items()
+    }
+    model_runs = {
+        uid: ModelRunInfo(**run)
+        for uid, run in run_info.get("model_runs", {}).items()
+    }
+    
+    run_info_obj = PilatesRunInfo(
+        run_id=run_info.get("run_id"),
+        created_at=run_info.get("created_at"),
+        start_year=run_info.get("start_year"),
+        end_year=run_info.get("end_year"),
+        models_used=run_info.get("models_used", []),
+        settings_hash=run_info.get("settings_hash"),
+        code_version=run_info.get("code_version"),
+        hostname=run_info.get("hostname"),
+        file_records=file_records,
+        repo_records=run_info.get("repo_records", {}),
+        model_runs=model_runs,
+        config_snapshot=run_info.get("config_snapshot"),
+        openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
+    )
+
     # Upload the entire run_info structure to ensure all records exist
-    db_manager.upload_run_data(run_info)
+    db_manager.upload_run_data(run_info_obj)
     logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
 
     # Find records to upload
