@@ -145,24 +145,20 @@ def main():
                 parent_h5_id = record['h5_file_unique_id']
                 path_from_record = run_info['file_records'][parent_h5_id]['file_path']
 
-            # Heuristic to detect old format and issue a warning
-            if path_from_record.startswith(('../', '..\\')):
-                logging.warning(f"Old-style relative path detected for {path_from_record}. Stripping prefix.")
-                path_from_record = re.sub(r'^\.\.[\\/]', '', path_from_record)
-
-            # 1. Try path as-is (works for new format, and for corrected old format)
-            if os.path.exists(path_from_record):
-                data_file_path = path_from_record
+            if os.path.isabs(path_from_record):
+                if os.path.exists(path_from_record):
+                    data_file_path = path_from_record
             else:
-                # 2. Try path relative to the run_info.json directory (works for old format)
+                # 1. Try path relative to the run_info.json directory
                 candidate_path = os.path.join(run_dir, path_from_record)
                 if os.path.exists(candidate_path):
                     data_file_path = candidate_path
                 else:
-                    # 3. Try path relative to the project root
-                    candidate_path_from_root = os.path.join(project_root, path_from_record)
-                    if os.path.exists(candidate_path_from_root):
-                        data_file_path = candidate_path_from_root
+                    # 2. Try path relative to the parent of the run_info.json directory
+                    parent_run_dir = os.path.dirname(run_dir)
+                    candidate_path_from_parent = os.path.join(parent_run_dir, path_from_record)
+                    if os.path.exists(candidate_path_from_parent):
+                        data_file_path = candidate_path_from_parent
             
             if not data_file_path:
                 raise FileNotFoundError(f"Could not find data file. Record path: {path_from_record}")
