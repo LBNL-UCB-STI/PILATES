@@ -196,22 +196,23 @@ def main():
                 if 'year' in df.columns:
                     df.rename(columns={'year': 'data_year'}, inplace=True)
 
-                                    # Special handling for atlas_jobs_csv sector_id
-                                    if normalized_table_name == 'atlas_jobs_csv':
-                                        if 'sector_id' in df.columns:
-                                            df['sector_id'] = df['sector_id'].astype(str)
-                        
-                                    # Sanitize column names
-                                    df.columns = [sanitize_name(col) for col in df.columns]            
-                        # Add metadata to the dataframe before upload
-                        df['run_id'] = run_info['run_id']
-                        df['file_record_id'] = record['unique_id']
-                        df['year'] = record.get('year')
-                        # Note: Iteration is on the model_run, not the file_record. This is a simplification.
-                        df['iteration'] = None 
-            
-                        # Upload the data
-                        success = db_manager.store_generic_table(normalized_table_name, df)            if success:
+            # Special handling for atlas_jobs_csv sector_id
+            if normalized_table_name == 'atlas_jobs_csv':
+                if 'sector_id' in df.columns:
+                    df['sector_id'] = df['sector_id'].astype(str)
+                    
+            # Sanitize column names
+            df.columns = [sanitize_name(col) for col in df.columns]
+            # Add metadata to the dataframe before upload
+            df['run_id'] = run_info['run_id']
+            df['file_record_id'] = record['unique_id']
+            df['year'] = record.get('year')
+            # Note: Iteration is on the model_run, not the file_record. This is a simplification.
+            df['iteration'] = None
+
+            # Upload the data
+            success = db_manager.store_generic_table(normalized_table_name, df)
+            if success:
                 logging.info(f"Successfully uploaded {len(df)} rows to table '{normalized_table_name}'.")
             else:
                 logging.error(f"Failed to upload data for table '{normalized_table_name}'.")
