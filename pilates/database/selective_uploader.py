@@ -13,7 +13,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.duckdb_manager import DuckDBManager
-from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo
+from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo, H5TableRecord
 from pilates.database.schema_generator import _normalize_table_name # Import the normalization function
 
 # Configure logging
@@ -108,10 +108,12 @@ def main():
     db_manager = DuckDBManager(args.database_path)
 
     # Convert run_info dict to PilatesRunInfo object
-    file_records = {
-        uid: FileRecord(**rec)
-        for uid, rec in run_info.get("file_records", {}).items()
-    }
+    file_records = {}
+    for uid, rec in run_info.get("file_records", {}).items():
+        if "h5_file_unique_id" in rec:
+            file_records[uid] = H5TableRecord(**rec)
+        else:
+            file_records[uid] = FileRecord(**rec)
     model_runs = {
         uid: ModelRunInfo(**run)
         for uid, run in run_info.get("model_runs", {}).items()
