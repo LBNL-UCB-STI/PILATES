@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS atlas_jobs_csv (
     job_id BIGINT,
     lcm_county_id BIGINT,
     agg_sector BIGINT,
-    sector_id BIGINT,
+    sector_id VARCHAR,
     block_id BIGINT,
     UNIQUE (run_id, job_id),
     -- FOREIGN KEY (run_id, block_id) REFERENCES atlas_blocks_csv(run_id, block_id),
