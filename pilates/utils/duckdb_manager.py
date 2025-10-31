@@ -333,24 +333,16 @@ class DuckDBManager(DatabaseManager):
                 ],
             )
 
-            # 3. Upload file records
-            for file_record in run_info.file_records.values():
-                # The item can be a dict (from JSON) or a dataclass object.
-                # This logic handles both cases.
-                def get_val(rec, key, default=None):
-                    if isinstance(rec, dict):
-                        return rec.get(key, default)
-                    return getattr(rec, key, default)
+            # 3. Upload file records in two passes to handle foreign key constraints
+            file_and_h5_container_records = []
+            h5_table_records = []
+            for rec in run_info.file_records.values():
+                if isinstance(rec, H5TableRecord):
+                    h5_table_records.append(rec)
+                else:
+                    file_and_h5_container_records.append(rec)
 
-                is_h5_table = get_val(file_record, "h5_file_unique_id") is not None
-                is_h5_container = get_val(file_record, "table_record_ids") is not None
-
-                record_type = "file"
-                if is_h5_table:
-                    record_type = "h5_table"
-                elif is_h5_container:
-                    record_type = "h5_container"
-
+            for file_record in file_and_h5_container_records:
                 # Insert common fields into file_records table
                 conn.execute(
                     """
@@ -362,40 +354,69 @@ class DuckDBManager(DatabaseManager):
                     ON CONFLICT (unique_id) DO NOTHING
                     """,
                     [
-                        get_val(file_record, "unique_id"),
-                        record_type,
+                        file_record.unique_id,
+                        'file' if not isinstance(file_record, H5FileRecord) else 'h5_container',
                         run_info.run_id,
-                        get_val(file_record, "openlineage_id"),
-                        get_val(file_record, "file_path"),
-                        get_val(file_record, "created_at"),
-                        get_val(file_record, "short_name"),
-                        get_val(file_record, "description"),
-                        get_val(file_record, "year"),
-                        get_val(file_record, "models", []),
-                        get_val(file_record, "producing_run_id"),
-                        get_val(file_record, "consuming_run_ids", []),
-                        get_val(file_record, "source_file_paths", []),
-                        json.dumps(get_val(file_record, "metadata", {})),
-                        json.dumps(get_val(file_record, "schema", [])),
-                        get_val(file_record, "exists", True),
+                        file_record.openlineage_id,
+                        file_record.file_path,
+                        file_record.created_at,
+                        file_record.short_name,
+                        file_record.description,
+                        file_record.year,
+                        file_record.models,
+                        file_record.producing_run_id,
+                        file_record.consuming_run_ids,
+                        file_record.source_file_paths,
+                        json.dumps(file_record.metadata),
+                        json.dumps(file_record.schema),
+                        file_record.exists,
                     ],
                 )
 
-                # If it's an H5 table, insert into the new h5_table_records table
-                if is_h5_table:
-                    conn.execute(
-                        """
-                        INSERT INTO h5_table_records (
-                            unique_id, h5_file_unique_id, table_name
-                        ) VALUES (?, ?, ?)
-                        ON CONFLICT (unique_id) DO NOTHING
-                        """,
-                        [
-                            get_val(file_record, "unique_id"),
-                            get_val(file_record, "h5_file_unique_id"),
-                            get_val(file_record, "table_name"),
-                        ],
-                    )
+            for h5_table_record in h5_table_records:
+                # Insert into file_records first
+                conn.execute(
+                    """
+                    INSERT INTO file_records (
+                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                        short_name, description, year, models, producing_run_id,
+                        consuming_run_ids, source_file_paths, metadata, schema, exists
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (unique_id) DO NOTHING
+                    """,
+                    [
+                        h5_table_record.unique_id,
+                        'h5_table',
+                        run_info.run_id,
+                        h5_table_record.openlineage_id,
+                        h5_table_record.file_path,
+                        h5_table_record.created_at,
+                        h5_table_record.short_name,
+                        h5_table_record.description,
+                        h5_table_record.year,
+                        h5_table_record.models,
+                        h5_table_record.producing_run_id,
+                        h5_table_record.consuming_run_ids,
+                        h5_table_record.source_file_paths,
+                        json.dumps(h5_table_record.metadata),
+                        json.dumps(h5_table_record.schema),
+                        h5_table_record.exists,
+                    ],
+                )
+                # Then insert into h5_table_records
+                conn.execute(
+                    """
+                    INSERT INTO h5_table_records (
+                        unique_id, h5_file_unique_id, table_name
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT (unique_id) DO NOTHING
+                    """,
+                    [
+                        h5_table_record.unique_id,
+                        h5_table_record.h5_file_unique_id,
+                        h5_table_record.table_name,
+                    ],
+                )
 
             # 4. Upload model runs
             for model_run in run_info.model_runs.values():
