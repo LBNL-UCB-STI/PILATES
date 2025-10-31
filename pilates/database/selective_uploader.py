@@ -158,6 +158,11 @@ def main():
                 candidate_path = os.path.join(run_dir, path_from_record)
                 if os.path.exists(candidate_path):
                     data_file_path = candidate_path
+                else:
+                    # 3. Try path relative to the project root
+                    candidate_path_from_root = os.path.join(project_root, path_from_record)
+                    if os.path.exists(candidate_path_from_root):
+                        data_file_path = candidate_path_from_root
             
             if not data_file_path:
                 raise FileNotFoundError(f"Could not find data file. Record path: {path_from_record}")
@@ -176,7 +181,7 @@ def main():
             elif data_file_path.endswith('.parquet'):
                 df = pd.read_parquet(data_file_path)
             else:
-                logging.warning(f"Unsupported file type for table {table_name}: {data_file_path}")
+                logging.warning(f"Unsupported file type for table {normalized_table_name}: {data_file_path}")
                 continue
 
             # Add metadata to the dataframe before upload
@@ -189,12 +194,12 @@ def main():
             # Upload the data
             success = db_manager.store_generic_table(normalized_table_name, df)
             if success:
-                logging.info(f"Successfully uploaded {len(df)} rows to table '{table_name}'.")
+                logging.info(f"Successfully uploaded {len(df)} rows to table '{normalized_table_name}'.")
             else:
-                logging.error(f"Failed to upload data for table '{table_name}'.")
+                logging.error(f"Failed to upload data for table '{normalized_table_name}'.")
 
         except Exception as e:
-            logging.error(f"An error occurred while processing table {table_name}: {e}")
+            logging.error(f"An error occurred while processing table {normalized_table_name}: {e}")
 
     logging.info("Selective upload process complete.")
 
