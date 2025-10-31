@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS atlas_persons_csv (
     file_record_id VARCHAR,
     year INTEGER,
     iteration INTEGER,
-    person_id BIGINT,
+    person_id INTEGER,
     sex DOUBLE,
     member_id BIGINT,
     school_zone_id BIGINT,
@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS atlas_persons_csv (
     race_id DOUBLE,
     UNIQUE (run_id, person_id),
     FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
+    FOREIGN KEY (run_id, person_id) REFERENCES urbansim_persons_raw(run_id, person_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
@@ -299,11 +300,12 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles2_output (
     vehicle_tag VARCHAR,
     data_year BIGINT,
     newhhflag DOUBLE,
-    maindriver_id DOUBLE,
+    maindriver_id INTEGER,
     vintage_category VARCHAR,
     vehicletypeid VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
 );
 
 COMMENT ON TABLE atlas_vehicles2_output IS 'ATLAS vehicles2 CSV with vehicleTypeId';
