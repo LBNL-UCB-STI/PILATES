@@ -23,6 +23,17 @@ from pilates.utils.database import (
 
 logger = logging.getLogger(__name__)
 
+def _execute_sql_from_file(conn, sql_file_path: str):
+    """Helper function to execute SQL commands from a file."""
+    try:
+        with open(sql_file_path, 'r') as f:
+            sql_commands = f.read()
+            conn.execute(sql_commands)
+        logger.info(f"Successfully executed SQL from {os.path.basename(sql_file_path)}")
+    except Exception as e:
+        logger.error(f"Failed to execute SQL from {os.path.basename(sql_file_path)}: {e}")
+        raise
+
 
 class DuckDBManager(DatabaseManager):
     """
