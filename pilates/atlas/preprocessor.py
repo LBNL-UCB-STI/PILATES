@@ -57,10 +57,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         input_records = []
         output_records = []
         source_dir = "pilates/atlas/atlas_input"
-        start_year = settings["start_year"]
-        year_specific_output_dir = os.path.join(output_dir, f"year{start_year}")
-
-        logger.info(f"[AtlasPreprocessor] Copying files from {source_dir} to {year_specific_output_dir}")
+        logger.info(f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}")
 
         for root, dirs, files in os.walk(source_dir):
             for filename in files:
@@ -70,12 +67,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 source_path = os.path.join(root, filename)
                 relative_path = os.path.relpath(source_path, source_dir)
 
-                # If the file is at the root of the source, copy it to the root of the destination.
-                # Otherwise, place it in the year-specific directory.
-                if os.path.dirname(relative_path) == '.':
-                    dest_path = os.path.join(output_dir, filename)
-                else:
-                    dest_path = os.path.join(year_specific_output_dir, relative_path)
+                dest_path = os.path.join(output_dir, relative_path)
 
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy(source_path, dest_path)
@@ -283,6 +275,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 try:
                     table_data = data[table_name_in_h5]
                     output_csv_path = f"{atlas_input_path}/{output_csv_name}.csv"
+                    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
                     table_data.to_csv(output_csv_path)
 
                     # Record the H5 table as a specific input
