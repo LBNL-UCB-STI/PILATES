@@ -8,6 +8,7 @@ PILATES run data, optimized for analytical queries and local/cloud deployment.
 import json
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import pandas as pd
