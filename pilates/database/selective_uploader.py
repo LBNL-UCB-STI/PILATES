@@ -114,6 +114,13 @@ def main():
         if not existing_run:
             logging.info(f"Run ID {run_id} not found in 'runs' table. Inserting a minimal record.")
             conn.execute("INSERT INTO runs (run_id) VALUES (?)", [run_id])
+    unique_id = run_info.get('unique_id')
+    if unique_id:
+        conn = db_manager._get_connection()
+        existing_run = conn.execute("SELECT unique_id FROM runs WHERE unique_id = ?", [unique_id]).fetchone()
+        if not existing_run:
+            logging.info(f"Run ID {unique_id} not found in 'runs' table. Inserting a minimal record.")
+            conn.execute("INSERT INTO runs (unique_id) VALUES (?)", [unique_id])
 
     # Find records to upload
     records_to_upload = []

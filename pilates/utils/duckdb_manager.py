@@ -225,7 +225,7 @@ class DuckDBManager(DatabaseManager):
                     short_name, description, year, models, producing_run_id,
                     consuming_run_ids, source_file_paths, metadata, schema, exists
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (unique_id) DO NOTHING
+                ON CONFLICT (unique_id) UPDATE
             """,
                 [
                     file_record.unique_id,
@@ -358,7 +358,7 @@ class DuckDBManager(DatabaseManager):
                         short_name, description, year, models, producing_run_id,
                         consuming_run_ids, source_file_paths, metadata, schema, exists
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                    ON CONFLICT (unique_id) UPDATE
                     """,
                     [
                         get_val(file_record, "unique_id"),
@@ -387,7 +387,7 @@ class DuckDBManager(DatabaseManager):
                         INSERT INTO h5_table_records (
                             unique_id, h5_file_unique_id, table_name
                         ) VALUES (?, ?, ?)
-                        ON CONFLICT (unique_id) DO NOTHING
+                        ON CONFLICT (unique_id) UPDATE
                         """,
                         [
                             get_val(file_record, "unique_id"),
@@ -405,7 +405,7 @@ class DuckDBManager(DatabaseManager):
                         description, created_at, completed_at, status,
                         input_record_hashes, output_record_hashes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                    ON CONFLICT (unique_id) UPDATE
                 """,
                     [
                         model_run.unique_id,
@@ -564,7 +564,7 @@ class DuckDBManager(DatabaseManager):
                         short_name, description, year, models, producing_run_id,
                         consuming_run_ids, source_file_paths, metadata, schema, exists
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                    ON CONFLICT (unique_id) UPDATE
                     """,
                     [
                         get_val(file_record, "unique_id"),
@@ -593,7 +593,7 @@ class DuckDBManager(DatabaseManager):
                         INSERT INTO h5_table_records (
                             unique_id, h5_file_unique_id, table_name
                         ) VALUES (?, ?, ?)
-                        ON CONFLICT (unique_id) DO NOTHING
+                        ON CONFLICT (unique_id) UPDATE
                         """,
                         [
                             get_val(file_record, "unique_id"),
@@ -611,7 +611,7 @@ class DuckDBManager(DatabaseManager):
                         description, created_at, completed_at, status,
                         input_record_hashes, output_record_hashes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                    ON CONFLICT (unique_id) UPDATE
                 """,
                     [
                         model_run.unique_id,
