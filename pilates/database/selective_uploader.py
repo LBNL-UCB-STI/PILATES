@@ -106,6 +106,15 @@ def main():
     # Connect to the database
     db_manager = DuckDBManager(args.database_path)
 
+    # Ensure the run exists in the runs table to satisfy foreign key constraints
+    run_id = run_info.get('run_id')
+    if run_id:
+        conn = db_manager._get_connection()
+        existing_run = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", [run_id]).fetchone()
+        if not existing_run:
+            logging.info(f"Run ID {run_id} not found in 'runs' table. Inserting a minimal record.")
+            conn.execute("INSERT INTO runs (run_id) VALUES (?)", [run_id])
+
     # Find records to upload
     records_to_upload = []
     for record in run_info.get('file_records', {}).values():
@@ -172,8 +181,10 @@ def main():
                     if record['table_name'] not in h5_keys:
                         raise KeyError(f"Key '{record['table_name']}' not found in H5 file. Please check the file content.")
                 df = pd.read_hdf(data_file_path, key=record['table_name'])
-            elif data_file_path.endswith(('.parquet')):
+            elif data_file_path.endswith('.parquet'):
                 df = pd.read_parquet(data_file_path)
+            elif data_file_path.endswith('.csv') or data_file_path.endswith('.csv.gz'):
+                df = pd.read_csv(data_file_path)
             else:
                 logging.warning(f"Unsupported file type for table {normalized_table_name}: {data_file_path}")
                 continue
