@@ -172,13 +172,18 @@ def main():
                     if record['table_name'] not in h5_keys:
                         raise KeyError(f"Key '{record['table_name']}' not found in H5 file. Please check the file content.")
                 df = pd.read_hdf(data_file_path, key=record['table_name'])
-            elif data_file_path.endswith(('.csv', '.csv.gz')):
-                df = pd.read_csv(data_file_path)
-            elif data_file_path.endswith('.parquet'):
+            elif data_file_path.endswith(('.parquet')):
                 df = pd.read_parquet(data_file_path)
             else:
                 logging.warning(f"Unsupported file type for table {normalized_table_name}: {data_file_path}")
                 continue
+
+            # Rename 'year' column to 'data_year' for specific tables to match schema
+            if normalized_table_name in ['householdv', 'atlas_vehicles_input', 'new_vehicle_annual_medians', 
+                                        'new_vehicle_representative_vehicle', 'new_vehicles', 'vehicles', 
+                                        'atlas_vehicles2_output']:
+                if 'year' in df.columns:
+                    df.rename(columns={'year': 'data_year'}, inplace=True)
 
             # Add metadata to the dataframe before upload
             df['run_id'] = run_info['run_id']

@@ -2377,9 +2377,23 @@ class DuckDBManager(DatabaseManager):
         try:
             conn = self._get_connection()
             
-            # The table must already exist. We are not creating it on the fly.
-            # DuckDB's `append` method is used to insert a DataFrame into an existing table.
-            conn.append(table_name, df)
+            # Get column names from the DataFrame
+            insert_cols = df.columns.tolist()
+            
+            # Register the DataFrame as a temporary table
+            temp_table_name = f"{table_name}_temp_data"
+            conn.register(temp_table_name, df)
+            
+            # Use INSERT INTO ... SELECT ... to insert data
+            conn.execute(
+                f"""
+                INSERT INTO {table_name} ({', '.join(insert_cols)})
+                SELECT {', '.join(insert_cols)} FROM {temp_table_name}
+                """
+            )
+            
+            # Unregister the temporary table
+            conn.unregister(temp_table_name)
             
             return True
         except Exception as e:
