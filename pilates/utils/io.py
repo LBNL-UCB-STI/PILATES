@@ -212,6 +212,14 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     return store, table_prefix_yr
 
 
+def get_merged_usim_input_datastore_path(settings, mutable_data_dir=None):
+    region = settings["region"]
+    region_id = settings["region_to_region_id"][region]
+    usim_base_fname = settings["usim_formattable_input_file_name"]
+    datastore_name = usim_base_fname.format(region_id=region_id)
+    data_loc = mutable_data_dir if mutable_data_dir else settings["usim_local_data_input_folder"]
+    return os.path.join(data_loc, datastore_name)
+
 def locate_asim_file(asim_output_data_dir, file_name, fmt):
     if fmt == "csv":
         return os.path.join(asim_output_data_dir, "final_" + file_name + ".csv")

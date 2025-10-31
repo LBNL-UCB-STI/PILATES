@@ -2885,34 +2885,23 @@ def create_asim_data_from_h5(
         default_zone_id_col=input_zone_id_col,
     )
 
-    urbansim_enabled = settings.get("land_use_model") is not None
-    is_base_year = (
-        (state.forecast_year == settings["start_year"]) or warm_start or not urbansim_enabled
-    )
-
-    if not is_base_year and state.run_info_path and os.path.exists(state.run_info_path):
-        logger.info(f"[ActivitysimPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
-        mdir = os.path.dirname(state.run_info_path)
-    elif is_base_year:
-        mdir = None
-    else:
-        mdir = workspace.full_path
+    # Determine the correct HDF5 file path (UrbanSim's merged input H5)
+    usim_h5_file_path = get_merged_usim_input_datastore_path(settings, mutable_data_dir=workspace.get_usim_mutable_data_dir())
 
     # Record the H5 datastore as an input to this preprocessor run
     h5_input_record = provenance_tracker.record_input_file(
         "activitysim_preprocessor",
-        datastore_path(settings, state.forecast_year, mutable_data_dir=mdir),
+        usim_h5_file_path,
         short_name="urbansim_h5",
         model_run_id=model_run_hash,
         description="UrbanSim H5 data store",
     )
 
-    store, table_prefix_yr = read_datastore(
-        settings,
-        state.forecast_year,
-        warm_start,
-        mutable_data_dir=mdir,
-    )
+    # Open the HDF5 store
+    store = pd.HDFStore(usim_h5_file_path, mode="r")
+
+    # For the merged input H5, tables are at the root, so no year prefix
+    table_prefix_yr = ""
 
     logger.info(
         "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(
