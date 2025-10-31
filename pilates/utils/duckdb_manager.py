@@ -419,6 +419,91 @@ class DuckDBManager(DatabaseManager):
                 )
 
             # 4. Upload model runs
+            # Ensure all referenced file_records exist before inserting model_runs
+            referenced_file_record_ids = set()
+            for model_run in run_info.model_runs.values():
+                for hash_id in model_run.input_record_hashes:
+                    referenced_file_record_ids.add(hash_id)
+                for hash_id in model_run.output_record_hashes:
+                    referenced_file_record_ids.add(hash_id)
+
+            for unique_id in referenced_file_record_ids:
+                # Check if the file_record already exists in the database
+                existing_file_record = conn.execute(
+                    "SELECT unique_id FROM file_records WHERE unique_id = ?", [unique_id]
+                ).fetchone()
+
+                if not existing_file_record:
+                    # If not in DB, try to find it in the current run_info
+                    if unique_id in run_info.file_records:
+                        file_record = run_info.file_records[unique_id]
+                        record_type = 'file'
+                        if isinstance(file_record, H5TableRecord):
+                            record_type = 'h5_table'
+                        elif isinstance(file_record, H5FileRecord):
+                            record_type = 'h5_container'
+
+                        conn.execute(
+                            """
+                            INSERT INTO file_records (
+                                unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                                short_name, description, year, models, producing_run_id,
+                                consuming_run_ids, source_file_paths, metadata, schema, exists
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT (unique_id) DO NOTHING
+                            """,
+                            [
+                                file_record.unique_id,
+                                record_type,
+                                run_info.run_id,
+                                file_record.openlineage_id,
+                                file_record.file_path,
+                                file_record.created_at,
+                                file_record.short_name,
+                                file_record.description,
+                                file_record.year,
+                                file_record.models,
+                                file_record.producing_run_id,
+                                file_record.consuming_run_ids,
+                                file_record.source_file_paths,
+                                json.dumps(file_record.metadata),
+                                json.dumps(file_record.schema),
+                                file_record.exists,
+                            ],
+                        )
+                        logger.info(f"Inserted missing referenced file_record: {unique_id}")
+                    else:
+                        # If not in DB and not in current run_info, create a minimal placeholder
+                        logger.warning(f"Referenced file_record {unique_id} not found in DB or current run_info. Creating placeholder.")
+                        conn.execute(
+                            """
+                            INSERT INTO file_records (
+                                unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                                short_name, description, year, models, producing_run_id,
+                                consuming_run_ids, source_file_paths, metadata, schema, exists
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT (unique_id) DO NOTHING
+                            """,
+                            [
+                                unique_id,
+                                'placeholder',
+                                run_info.run_id, # Link to current run_id
+                                str(uuid.uuid4()), # Generate a new OpenLineage ID
+                                'unknown',
+                                datetime.now().isoformat(),
+                                'missing_reference',
+                                f'Placeholder for missing file_record {unique_id}',
+                                None,
+                                [],
+                                None,
+                                [],
+                                [],
+                                '{}',
+                                '{}',
+                                False,
+                            ],
+                        )
+
             for model_run in run_info.model_runs.values():
                 conn.execute(
                     """
