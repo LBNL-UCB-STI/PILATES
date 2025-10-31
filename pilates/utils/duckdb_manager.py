@@ -359,7 +359,7 @@ class DuckDBManager(DatabaseManager):
                         short_name, description, year, models, producing_run_id,
                         consuming_run_ids, source_file_paths, metadata, schema, exists
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) UPDATE
+                    ON CONFLICT (unique_id) DO NOTHING
                     """,
                     [
                         get_val(file_record, "unique_id"),
@@ -388,7 +388,7 @@ class DuckDBManager(DatabaseManager):
                         INSERT INTO h5_table_records (
                             unique_id, h5_file_unique_id, table_name
                         ) VALUES (?, ?, ?)
-                        ON CONFLICT (unique_id) UPDATE
+                        ON CONFLICT (unique_id) DO NOTHING
                         """,
                         [
                             get_val(file_record, "unique_id"),
@@ -406,7 +406,18 @@ class DuckDBManager(DatabaseManager):
                         description, created_at, completed_at, status,
                         input_record_hashes, output_record_hashes
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) UPDATE
+                    ON CONFLICT (unique_id) DO UPDATE SET
+                        run_id = excluded.run_id,
+                        openlineage_id = excluded.openlineage_id,
+                        model = excluded.model,
+                        year = excluded.year,
+                        iteration = excluded.iteration,
+                        description = excluded.description,
+                        created_at = excluded.created_at,
+                        completed_at = excluded.completed_at,
+                        status = excluded.status,
+                        input_record_hashes = excluded.input_record_hashes,
+                        output_record_hashes = excluded.output_record_hashes
                 """,
                     [
                         model_run.unique_id,
