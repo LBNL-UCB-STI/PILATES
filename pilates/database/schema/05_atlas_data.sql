@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS atlas_householdv_input (
     data_year BIGINT,
     newhhflag DOUBLE,
     UNIQUE (run_id, household_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
+    -- FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS atlas_jobs_csv (
     sector_id BIGINT,
     block_id BIGINT,
     UNIQUE (run_id, job_id),
-    FOREIGN KEY (run_id, block_id) REFERENCES atlas_blocks_csv(run_id, block_id),
+    -- FOREIGN KEY (run_id, block_id) REFERENCES atlas_blocks_csv(run_id, block_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
@@ -198,8 +198,8 @@ CREATE TABLE IF NOT EXISTS atlas_persons_csv (
     earning DOUBLE,
     race_id DOUBLE,
     UNIQUE (run_id, person_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
-    FOREIGN KEY (run_id, person_id) REFERENCES urbansim_persons_raw(run_id, person_id),
+--    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
+--    FOREIGN KEY (run_id, person_id) REFERENCES urbansim_persons_raw(run_id, person_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
@@ -305,7 +305,7 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles2_output (
     vehicletypeid VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+--    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
 );
 
 COMMENT ON TABLE atlas_vehicles2_output IS 'ATLAS vehicles2 CSV with vehicleTypeId';
@@ -353,7 +353,7 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles_input (
     vintage_category VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+--    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
 );
 
 COMMENT ON TABLE atlas_vehicles_input IS 'ATLAS vehicles CSV before vehicleTypeId addition';
@@ -390,7 +390,7 @@ CREATE TABLE IF NOT EXISTS householdv (
     newhhflag DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+--    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
 );
 
 COMMENT ON TABLE householdv IS 'ATLAS householdv_2023.csv output for year 2023';
@@ -689,7 +689,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     vintage_category VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
-    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+--    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
 );
 
 COMMENT ON TABLE vehicles IS 'ATLAS vehicles_2023.csv output for year 2023';
