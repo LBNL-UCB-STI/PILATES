@@ -475,8 +475,7 @@ def main():
         provenance_tracker=provenance_tracker,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
-    if not state.run_info_path:
-        state.set_run_info_path(provenance_tracker.run_info_path)
+    state.set_run_info_path(provenance_tracker.run_info_path)
 
     # Perform initialization (data copies and provenance recording)
     if not state.data_initialized:

@@ -306,6 +306,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
         """
         logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
         settings = self.state.full_settings
+        
+        # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
+        usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
+        os.makedirs(usim_mutable_data_dir, exist_ok=True)
+
         input_records = workspace.input_data.get("urbansim", RecordStore())
 
         model_run_hash = self.provenance_tracker.start_model_run(

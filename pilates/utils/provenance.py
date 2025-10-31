@@ -550,19 +550,22 @@ class FileProvenanceTracker(ProvenanceTracker):
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
     def _get_relative_path(self, file_path: str) -> str:
-        """Compute a path for storing in run_info relative to the tracker base.
-
-        If the relative path cannot be computed (e.g., different mounts), the
-        absolute path is returned and a warning is logged.
-        """
+        """Compute a path for storing in run_info relative to the project root."""
         abs_path = os.path.abspath(file_path)
-        base_path = self.output_path or os.getcwd()
-        try:
-            return os.path.relpath(abs_path, base_path)
-        except ValueError:
-            logger.warning(
-                f"Could not create relative path for {abs_path} relative to {base_path}"
-            )
+        project_root = find_project_root()
+        if project_root:
+            try:
+                # Return path relative to project root
+                return os.path.relpath(abs_path, project_root)
+            except ValueError:
+                # Fallback to absolute path if on a different drive (e.g., Windows)
+                logger.warning(
+                    f"Could not create relative path for {abs_path} relative to {project_root}. Storing absolute path."
+                )
+                return abs_path
+        else:
+            # Fallback to absolute path if project root can't be found
+            logger.warning("Could not find project root. Storing absolute path.")
             return abs_path
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
