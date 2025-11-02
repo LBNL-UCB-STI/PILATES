@@ -26,6 +26,8 @@ SELECT
     f.short_name as dataset_name,
     f.description,
     f.year,
+    f.iteration,
+    f.sub_iteration,
     f.file_path,
     array_to_string(f.models, ' → ') as processing_chain,
     array_length(f.source_file_paths, 1) as num_input_files,

@@ -116,7 +116,7 @@ def _normalize_table_name(short_name: str, year: Optional[int]) -> str:
     # Pattern: NAME_YYYY -> NAME (general case for year at the end)
     normalized_name = re.sub(r'([_-]?\d{4})(?![0-9])', '', normalized_name).strip('_-')
     
-        # Further sanitize the normalized name    normalized_name = re.sub(r'[^a-zA-Z0-9_]', '_', normalized_name)
+    # Further sanitize the normalized name    normalized_name = re.sub(r'[^a-zA-Z0-9_]', '_', normalized_name)
     # Remove any double underscores that might result from year removal
     normalized_name = re.sub(r'_{2,}', '_', normalized_name)
     normalized_name = normalized_name.strip('_')
@@ -168,6 +168,7 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
         "    file_record_id VARCHAR,",
         "    year INTEGER,",
         "    iteration INTEGER,",
+        "    sub_iteration INTEGER,"
     ])
 
     # Add columns from schema
@@ -182,11 +183,11 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
         ");",
         ""
     ])
-    description = record.get('description', 'Table auto-generated from run data.').replace("'", "''")
+    description = (record.get('description', 'Table auto-generated from run data.') or "").replace("'", "''")
     sql_lines.append(f"COMMENT ON TABLE {table_name} IS '{description}';")
     sql_lines.extend([
         f"CREATE INDEX IF NOT EXISTS idx_{table_name}_run_id ON {table_name}(run_id);",
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_year_iter ON {table_name}(year, iteration);",
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_year_iter_sub_iter ON {table_name}(year, iteration, sub_iteration);",
         ""
     ])
 
@@ -245,6 +246,24 @@ def main():
             match = re.search(r'(\d{4})', record['short_name'])
             if match:
                 record['year'] = int(match.group(1))
+
+        # Initialize iteration and sub_iteration to None
+        record['iteration'] = None
+        record['sub_iteration'] = None
+
+        # Extract sub_iteration from short_name first
+        sub_iter_match = re.search(r'_sub(\d+)$', record['short_name'])
+        if sub_iter_match:
+            record['sub_iteration'] = int(sub_iter_match.group(1))
+            # Remove the matched sub_iteration part from short_name for further processing
+            record['short_name'] = re.sub(r'_sub\d+$', '', record['short_name'])
+
+        # Extract iteration from the (potentially modified) short_name
+        iter_match = re.search(r'_(\d+)$', record['short_name'])
+        if iter_match:
+            record['iteration'] = int(iter_match.group(1))
+            # Remove the matched iteration part from short_name for further processing
+            record['short_name'] = re.sub(r'_\d+$', '', record['short_name'])
 
         # Normalize table name to handle year-specific tables
         normalized_short_name = _normalize_table_name(record['short_name'], record.get('year'))

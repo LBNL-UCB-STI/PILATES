@@ -25,24 +25,26 @@ CREATE TABLE IF NOT EXISTS modeaccessibility (
     id BIGINT PRIMARY KEY DEFAULT nextval('modeaccessibility_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
     unnamed__0 BIGINT,
-    geoid BIGINT,
+    geoid BIGINT NOT NULL,
     bike BIGINT,
     rail BIGINT,
     bus BIGINT,
-    UNIQUE (run_id, geoid),
+    UNIQUE (run_id, year, geoid),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE modeaccessibility IS 'Mutable ATLAS input file: modeaccessibility.csv';
-CREATE INDEX IF NOT EXISTS idx_modeaccessibility_run_id ON modeaccessibility(run_id);
-CREATE INDEX IF NOT EXISTS idx_modeaccessibility_year_iter ON modeaccessibility(year, iteration);
-
+COMMENT ON COLUMN modeaccessibility.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN modeaccessibility.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN modeaccessibility.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN modeaccessibility.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN modeaccessibility.unnamed__0 IS 'Original index or unnamed column from source file.';
 COMMENT ON COLUMN modeaccessibility.geoid IS 'Geographic identifier (e.g., TAZ, block group).';
 COMMENT ON COLUMN modeaccessibility.bike IS 'Bike accessibility score/measure.';
@@ -54,11 +56,12 @@ CREATE TABLE IF NOT EXISTS atlas_blocks_csv (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_blocks_csv_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    block_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    block_id BIGINT NOT NULL,
     tract_id BIGINT,
     y DOUBLE,
     cousub BIGINT,
@@ -74,15 +77,16 @@ CREATE TABLE IF NOT EXISTS atlas_blocks_csv (
     block_group_id BIGINT,
     zone_id BIGINT,
     node_id BIGINT,
-    UNIQUE (run_id, block_id),
+    UNIQUE (run_id, year, block_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE atlas_blocks_csv IS 'ATLAS blocks input CSV';
-CREATE INDEX IF NOT EXISTS idx_atlas_blocks_csv_run_id ON atlas_blocks_csv(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_blocks_csv_year_iter ON atlas_blocks_csv(year, iteration);
-
+COMMENT ON COLUMN atlas_blocks_csv.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_blocks_csv.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_blocks_csv.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_blocks_csv.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_blocks_csv.block_id IS 'Unique identifier for the block.';
 COMMENT ON COLUMN atlas_blocks_csv.tract_id IS 'Census tract identifier.';
 COMMENT ON COLUMN atlas_blocks_csv.y IS 'Y-coordinate of the block centroid.';
@@ -105,24 +109,25 @@ CREATE TABLE IF NOT EXISTS atlas_householdv_input (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_householdv_input_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    household_id INTEGER,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    household_id INTEGER NOT NULL,
     nvehicles BIGINT,
     data_year BIGINT,
     newhhflag DOUBLE,
-    UNIQUE (run_id, household_id),
-    -- FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
+    UNIQUE (run_id, year, household_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE atlas_householdv_input IS 'ATLAS household vehicle counts for year 2023';
-CREATE INDEX IF NOT EXISTS idx_atlas_householdv_input_run_id ON atlas_householdv_input(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_householdv_input_year_iter ON atlas_householdv_input(year, iteration);
-
+COMMENT ON COLUMN atlas_householdv_input.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_householdv_input.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_householdv_input.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_householdv_input.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_householdv_input.household_id IS 'Unique household identifier.';
 COMMENT ON COLUMN atlas_householdv_input.nvehicles IS 'Number of vehicles owned by the household.';
 COMMENT ON COLUMN atlas_householdv_input.data_year IS 'Year of the data.';
@@ -134,25 +139,26 @@ CREATE TABLE IF NOT EXISTS atlas_jobs_csv (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_jobs_csv_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    job_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    job_id BIGINT NOT NULL,
     lcm_county_id BIGINT,
     agg_sector BIGINT,
     sector_id VARCHAR,
     block_id BIGINT,
-    UNIQUE (run_id, job_id),
-    -- FOREIGN KEY (run_id, block_id) REFERENCES atlas_blocks_csv(run_id, block_id),
+    UNIQUE (run_id, year, job_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE atlas_jobs_csv IS 'ATLAS jobs input CSV';
-CREATE INDEX IF NOT EXISTS idx_atlas_jobs_csv_run_id ON atlas_jobs_csv(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_jobs_csv_year_iter ON atlas_jobs_csv(year, iteration);
-
+COMMENT ON COLUMN atlas_jobs_csv.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_jobs_csv.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_jobs_csv.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_jobs_csv.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_jobs_csv.job_id IS 'Unique job identifier.';
 COMMENT ON COLUMN atlas_jobs_csv.lcm_county_id IS 'County identifier for job location.';
 COMMENT ON COLUMN atlas_jobs_csv.agg_sector IS 'Aggregated employment sector.';
@@ -164,11 +170,12 @@ CREATE TABLE IF NOT EXISTS atlas_persons_csv (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_persons_csv_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    person_id INTEGER,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    person_id INTEGER NOT NULL,
     sex DOUBLE,
     member_id BIGINT,
     school_zone_id BIGINT,
@@ -197,17 +204,16 @@ CREATE TABLE IF NOT EXISTS atlas_persons_csv (
     race VARCHAR,
     earning DOUBLE,
     race_id DOUBLE,
-    UNIQUE (run_id, person_id),
---    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id),
---    FOREIGN KEY (run_id, person_id) REFERENCES urbansim_persons_raw(run_id, person_id),
+    UNIQUE (run_id, year, person_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE atlas_persons_csv IS 'ATLAS persons input CSV';
-CREATE INDEX IF NOT EXISTS idx_atlas_persons_csv_run_id ON atlas_persons_csv(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_persons_csv_year_iter ON atlas_persons_csv(year, iteration);
-
+COMMENT ON COLUMN atlas_persons_csv.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_persons_csv.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_persons_csv.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_persons_csv.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_persons_csv.person_id IS 'Unique person identifier.';
 COMMENT ON COLUMN atlas_persons_csv.sex IS 'Sex of the person.';
 COMMENT ON COLUMN atlas_persons_csv.member_id IS 'Member ID within a household.';
@@ -244,11 +250,12 @@ CREATE TABLE IF NOT EXISTS atlas_residential_csv (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_residential_csv_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    unit_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    unit_id BIGINT NOT NULL,
     acs_18_value DOUBLE,
     block_id BIGINT,
     acs_13_value DOUBLE,
@@ -258,16 +265,17 @@ CREATE TABLE IF NOT EXISTS atlas_residential_csv (
     lcm_county_id BIGINT,
     year_built BIGINT,
     block_group_id BIGINT,
-    UNIQUE (run_id, unit_id),
-    FOREIGN KEY (run_id, block_id) REFERENCES atlas_blocks_csv(run_id, block_id),
+    UNIQUE (run_id, year, unit_id),
+    FOREIGN KEY (run_id, year, block_id) REFERENCES atlas_blocks_csv(run_id, year, block_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE atlas_residential_csv IS 'ATLAS residential units input CSV';
-CREATE INDEX IF NOT EXISTS idx_atlas_residential_csv_run_id ON atlas_residential_csv(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_residential_csv_year_iter ON atlas_residential_csv(year, iteration);
-
+COMMENT ON COLUMN atlas_residential_csv.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_residential_csv.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_residential_csv.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_residential_csv.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_residential_csv.unit_id IS 'Unique residential unit identifier.';
 COMMENT ON COLUMN atlas_residential_csv.acs_18_value IS 'ACS 2018 property value.';
 COMMENT ON COLUMN atlas_residential_csv.block_id IS 'Block where the residential unit is located.';
@@ -284,12 +292,13 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles2_output (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_vehicles2_output_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    household_id INTEGER,
-    vehicle_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    household_id INTEGER NOT NULL,
+    vehicle_id BIGINT NOT NULL,
     bodytype VARCHAR,
     pred_power VARCHAR,
     ownlease VARCHAR,
@@ -305,13 +314,14 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles2_output (
     vehicletypeid VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
---    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+    UNIQUE (run_id, year, household_id, vehicle_id)
 );
 
 COMMENT ON TABLE atlas_vehicles2_output IS 'ATLAS vehicles2 CSV with vehicleTypeId';
-CREATE INDEX IF NOT EXISTS idx_atlas_vehicles2_output_run_id ON atlas_vehicles2_output(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_vehicles2_output_year_iter ON atlas_vehicles2_output(year, iteration);
-
+COMMENT ON COLUMN atlas_vehicles2_output.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_vehicles2_output.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_vehicles2_output.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_vehicles2_output.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_vehicles2_output.household_id IS 'Identifier for the household owning the vehicle.';
 COMMENT ON COLUMN atlas_vehicles2_output.vehicle_id IS 'Unique identifier for the vehicle.';
 COMMENT ON COLUMN atlas_vehicles2_output.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -333,12 +343,13 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles_input (
     id BIGINT PRIMARY KEY DEFAULT nextval('atlas_vehicles_input_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    household_id INTEGER,
-    vehicle_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    household_id INTEGER NOT NULL,
+    vehicle_id BIGINT NOT NULL,
     bodytype VARCHAR,
     pred_power VARCHAR,
     ownlease VARCHAR,
@@ -353,13 +364,14 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles_input (
     vintage_category VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
---    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+    UNIQUE (run_id, year, household_id, vehicle_id)
 );
 
 COMMENT ON TABLE atlas_vehicles_input IS 'ATLAS vehicles CSV before vehicleTypeId addition';
-CREATE INDEX IF NOT EXISTS idx_atlas_vehicles_input_run_id ON atlas_vehicles_input(run_id);
-CREATE INDEX IF NOT EXISTS idx_atlas_vehicles_input_year_iter ON atlas_vehicles_input(year, iteration);
-
+COMMENT ON COLUMN atlas_vehicles_input.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN atlas_vehicles_input.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN atlas_vehicles_input.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN atlas_vehicles_input.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN atlas_vehicles_input.household_id IS 'Identifier for the household owning the vehicle.';
 COMMENT ON COLUMN atlas_vehicles_input.vehicle_id IS 'Unique identifier for the vehicle.';
 COMMENT ON COLUMN atlas_vehicles_input.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -380,23 +392,25 @@ CREATE TABLE IF NOT EXISTS householdv (
     id BIGINT PRIMARY KEY DEFAULT nextval('householdv_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    household_id INTEGER,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    household_id INTEGER NOT NULL,
     nvehicles BIGINT,
     data_year BIGINT,
     newhhflag DOUBLE,
+    UNIQUE (run_id, year, household_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
---    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
 );
 
 COMMENT ON TABLE householdv IS 'ATLAS householdv_2023.csv output for year 2023';
-CREATE INDEX IF NOT EXISTS idx_householdv_run_id ON householdv(run_id);
-CREATE INDEX IF NOT EXISTS idx_householdv_year_iter ON householdv(year, iteration);
-
+COMMENT ON COLUMN householdv.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN householdv.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN householdv.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN householdv.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN householdv.household_id IS 'Unique household identifier.';
 COMMENT ON COLUMN householdv.nvehicles IS 'Number of vehicles in the household.';
 COMMENT ON COLUMN householdv.data_year IS 'The year of the data record.';
@@ -408,13 +422,14 @@ CREATE TABLE IF NOT EXISTS new_vehicle_annual_medians (
     id BIGINT PRIMARY KEY DEFAULT nextval('new_vehicle_annual_medians_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    data_year BIGINT,
-    fueltype VARCHAR,
-    bodytype VARCHAR,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    data_year BIGINT NOT NULL,
+    fueltype VARCHAR NOT NULL,
+    bodytype VARCHAR NOT NULL,
     price DOUBLE,
     accel DOUBLE,
     range DOUBLE,
@@ -428,13 +443,15 @@ CREATE TABLE IF NOT EXISTS new_vehicle_annual_medians (
     int_volume DOUBLE,
     total_sales DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, data_year, fueltype, bodytype)
 );
 
 COMMENT ON TABLE new_vehicle_annual_medians IS 'Mutable ATLAS input file: new_vehicle_annual_medians.csv';
-CREATE INDEX IF NOT EXISTS idx_new_vehicle_annual_medians_run_id ON new_vehicle_annual_medians(run_id);
-CREATE INDEX IF NOT EXISTS idx_new_vehicle_annual_medians_year_iter ON new_vehicle_annual_medians(year, iteration);
-
+COMMENT ON COLUMN new_vehicle_annual_medians.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN new_vehicle_annual_medians.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN new_vehicle_annual_medians.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN new_vehicle_annual_medians.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN new_vehicle_annual_medians.data_year IS 'The year of the data record.';
 COMMENT ON COLUMN new_vehicle_annual_medians.fueltype IS 'Type of fuel (e.g., Gasoline, BEV).';
 COMMENT ON COLUMN new_vehicle_annual_medians.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -456,13 +473,14 @@ CREATE TABLE IF NOT EXISTS new_vehicle_representative_vehicle (
     id BIGINT PRIMARY KEY DEFAULT nextval('new_vehicle_representative_vehicle_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    data_year BIGINT,
-    fueltype VARCHAR,
-    bodytype VARCHAR,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    data_year BIGINT NOT NULL,
+    fueltype VARCHAR NOT NULL,
+    bodytype VARCHAR NOT NULL,
     price DOUBLE,
     accel DOUBLE,
     range BIGINT,
@@ -476,13 +494,15 @@ CREATE TABLE IF NOT EXISTS new_vehicle_representative_vehicle (
     int_volume BIGINT,
     total_sales DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, data_year, fueltype, bodytype)
 );
 
 COMMENT ON TABLE new_vehicle_representative_vehicle IS 'Mutable ATLAS input file: new_vehicle_representative_vehicle.csv';
-CREATE INDEX IF NOT EXISTS idx_new_vehicle_representative_vehicle_run_id ON new_vehicle_representative_vehicle(run_id);
-CREATE INDEX IF NOT EXISTS idx_new_vehicle_representative_vehicle_year_iter ON new_vehicle_representative_vehicle(year, iteration);
-
+COMMENT ON COLUMN new_vehicle_representative_vehicle.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN new_vehicle_representative_vehicle.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN new_vehicle_representative_vehicle.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN new_vehicle_representative_vehicle.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN new_vehicle_representative_vehicle.data_year IS 'The year of the data record.';
 COMMENT ON COLUMN new_vehicle_representative_vehicle.fueltype IS 'Type of fuel (e.g., Gasoline, BEV).';
 COMMENT ON COLUMN new_vehicle_representative_vehicle.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -505,13 +525,14 @@ CREATE TABLE IF NOT EXISTS new_vehicles (
     id BIGINT PRIMARY KEY DEFAULT nextval('new_vehicles_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    data_year BIGINT,
-    fueltype VARCHAR,
-    bodytype VARCHAR,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    data_year BIGINT NOT NULL,
+    fueltype VARCHAR NOT NULL,
+    bodytype VARCHAR NOT NULL,
     price DOUBLE,
     accel DOUBLE,
     range BIGINT,
@@ -524,13 +545,15 @@ CREATE TABLE IF NOT EXISTS new_vehicles (
     rebate BIGINT,
     sales DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, data_year, fueltype, bodytype)
 );
 
 COMMENT ON TABLE new_vehicles IS 'Mutable ATLAS input file: new_vehicles.csv';
-CREATE INDEX IF NOT EXISTS idx_new_vehicles_run_id ON new_vehicles(run_id);
-CREATE INDEX IF NOT EXISTS idx_new_vehicles_year_iter ON new_vehicles(year, iteration);
-
+COMMENT ON COLUMN new_vehicles.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN new_vehicles.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN new_vehicles.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN new_vehicles.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN new_vehicles.data_year IS 'The year of the data record.';
 COMMENT ON COLUMN new_vehicles.fueltype IS 'Type of fuel (e.g., Gasoline, BEV).';
 COMMENT ON COLUMN new_vehicles.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -552,12 +575,13 @@ CREATE TABLE IF NOT EXISTS new_vehicles_biannual_values (
     id BIGINT PRIMARY KEY DEFAULT nextval('new_vehicles_biannual_values_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    fueltype VARCHAR,
-    bodytype VARCHAR,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    fueltype VARCHAR NOT NULL,
+    bodytype VARCHAR NOT NULL,
     price DOUBLE,
     accel DOUBLE,
     range DOUBLE,
@@ -570,13 +594,15 @@ CREATE TABLE IF NOT EXISTS new_vehicles_biannual_values (
     rebate BIGINT,
     total_sales DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, fueltype, bodytype)
 );
 
 COMMENT ON TABLE new_vehicles_biannual_values IS 'Mutable ATLAS input file: new_vehicles_biannual_values_2049.csv';
-CREATE INDEX IF NOT EXISTS idx_new_vehicles_biannual_values_run_id ON new_vehicles_biannual_values(run_id);
-CREATE INDEX IF NOT EXISTS idx_new_vehicles_biannual_values_year_iter ON new_vehicles_biannual_values(year, iteration);
-
+COMMENT ON COLUMN new_vehicles_biannual_values.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN new_vehicles_biannual_values.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN new_vehicles_biannual_values.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN new_vehicles_biannual_values.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN new_vehicles_biannual_values.fueltype IS 'Type of fuel (e.g., Gasoline, BEV).';
 COMMENT ON COLUMN new_vehicles_biannual_values.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
 COMMENT ON COLUMN new_vehicles_biannual_values.price IS 'Price of the new vehicle.';
@@ -596,13 +622,14 @@ CREATE TABLE IF NOT EXISTS used_vehicles (
     id BIGINT PRIMARY KEY DEFAULT nextval('used_vehicles_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    model_year BIGINT,
-    bodytype VARCHAR,
-    fueltype VARCHAR,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    model_year BIGINT NOT NULL,
+    bodytype VARCHAR NOT NULL,
+    fueltype VARCHAR NOT NULL,
     new_price DOUBLE,
     accel DOUBLE,
     range BIGINT,
@@ -613,13 +640,15 @@ CREATE TABLE IF NOT EXISTS used_vehicles (
     annmain DOUBLE,
     price DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, model_year, bodytype, fueltype)
 );
 
 COMMENT ON TABLE used_vehicles IS 'Mutable ATLAS input file: used_vehicles_2047.csv';
-CREATE INDEX IF NOT EXISTS idx_used_vehicles_run_id ON used_vehicles(run_id);
-CREATE INDEX IF NOT EXISTS idx_used_vehicles_year_iter ON used_vehicles(year, iteration);
-
+COMMENT ON COLUMN used_vehicles.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN used_vehicles.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN used_vehicles.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN used_vehicles.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN used_vehicles.model_year IS 'Model year of the used vehicle.';
 COMMENT ON COLUMN used_vehicles.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
 COMMENT ON COLUMN used_vehicles.fueltype IS 'Type of fuel (e.g., Gasoline, BEV).';
@@ -638,24 +667,27 @@ CREATE TABLE IF NOT EXISTS vehicle_type_mapping_baseline (
     id BIGINT PRIMARY KEY DEFAULT nextval('vehicle_type_mapping_baseline_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
     unnamed__0 BIGINT,
-    vehicletypeid VARCHAR,
-    bodytype VARCHAR,
-    modelyear BIGINT,
-    adopt_fuel VARCHAR,
+    vehicletypeid VARCHAR NOT NULL,
+    bodytype VARCHAR NOT NULL,
+    modelyear BIGINT NOT NULL,
+    adopt_fuel VARCHAR NOT NULL,
     sampleprobabilitywithincategory DOUBLE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)
+    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    UNIQUE (run_id, year, vehicletypeid, bodytype, modelyear, adopt_fuel)
 );
 
 COMMENT ON TABLE vehicle_type_mapping_baseline IS 'Mutable ATLAS input file: vehicle_type_mapping_baseline.csv';
-CREATE INDEX IF NOT EXISTS idx_vehicle_type_mapping_baseline_run_id ON vehicle_type_mapping_baseline(run_id);
-CREATE INDEX IF NOT EXISTS idx_vehicle_type_mapping_baseline_year_iter ON vehicle_type_mapping_baseline(year, iteration);
-
+COMMENT ON COLUMN vehicle_type_mapping_baseline.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN vehicle_type_mapping_baseline.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN vehicle_type_mapping_baseline.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN vehicle_type_mapping_baseline.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN vehicle_type_mapping_baseline.unnamed__0 IS 'Original index or unnamed column from source file.';
 COMMENT ON COLUMN vehicle_type_mapping_baseline.vehicletypeid IS 'Identifier for the vehicle type.';
 COMMENT ON COLUMN vehicle_type_mapping_baseline.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
@@ -669,12 +701,13 @@ CREATE TABLE IF NOT EXISTS vehicles (
     id BIGINT PRIMARY KEY DEFAULT nextval('vehicles_id_seq'),
 
     -- Foreign keys and metadata to link to the main run, file, and context
-    run_id VARCHAR,
+    run_id VARCHAR NOT NULL,
     file_record_id VARCHAR,
-    year INTEGER,
-    iteration INTEGER,
-    household_id INTEGER,
-    vehicle_id BIGINT,
+    year INTEGER NOT NULL,
+    iteration INTEGER, -- ATLAS does not typically have iterations for this data
+    sub_iteration INTEGER, -- ATLAS does not typically have sub-iterations for this data
+    household_id INTEGER NOT NULL,
+    vehicle_id BIGINT NOT NULL,
     bodytype VARCHAR,
     pred_power VARCHAR,
     ownlease VARCHAR,
@@ -689,13 +722,14 @@ CREATE TABLE IF NOT EXISTS vehicles (
     vintage_category VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
---    FOREIGN KEY (run_id, household_id) REFERENCES urbansim_households_raw(run_id, household_id)
+    UNIQUE (run_id, year, household_id, vehicle_id)
 );
 
 COMMENT ON TABLE vehicles IS 'ATLAS vehicles_2023.csv output for year 2023';
-CREATE INDEX IF NOT EXISTS idx_vehicles_run_id ON vehicles(run_id);
-CREATE INDEX IF NOT EXISTS idx_vehicles_year_iter ON vehicles(year, iteration);
-
+COMMENT ON COLUMN vehicles.run_id IS 'Foreign key to parent PILATES run';
+COMMENT ON COLUMN vehicles.year IS 'Simulation year this data corresponds to';
+COMMENT ON COLUMN vehicles.iteration IS 'Simulation iteration (not typically used for ATLAS data)';
+COMMENT ON COLUMN vehicles.sub_iteration IS 'Simulation sub-iteration (not typically used for ATLAS data)';
 COMMENT ON COLUMN vehicles.household_id IS 'Identifier for the household owning the vehicle.';
 COMMENT ON COLUMN vehicles.vehicle_id IS 'Unique identifier for the vehicle.';
 COMMENT ON COLUMN vehicles.bodytype IS 'Body type of the vehicle (e.g., Sedan, SUV).';
