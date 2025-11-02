@@ -470,6 +470,7 @@ def main():
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
         # For a fresh run, generate a new timestamped folder name
+        partial_run_name = settings.get("output_run_name", "pilates-run")
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     run_id = str(uuid.uuid4())
