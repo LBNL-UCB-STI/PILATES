@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS model_runs (
     status VARCHAR,
     input_record_hashes VARCHAR[],
     output_record_hashes VARCHAR[],
+    metadata JSON,
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
 COMMENT ON TABLE model_runs IS 'Individual model execution records tracking each model component run with inputs/outputs';
@@ -79,6 +80,7 @@ COMMENT ON COLUMN model_runs.completed_at IS 'Timestamp when model execution fin
 COMMENT ON COLUMN model_runs.status IS 'Execution status: completed, failed, or running';
 COMMENT ON COLUMN model_runs.input_record_hashes IS 'Array of file_records.unique_id values for input files';
 COMMENT ON COLUMN model_runs.output_record_hashes IS 'Array of file_records.unique_id values for output files';
+COMMENT ON COLUMN model_runs.metadata IS 'JSON object with runtime execution metadata including container command, runtime parameters, and other execution details';
 
 -- Dataset information
 CREATE TABLE IF NOT EXISTS file_records (

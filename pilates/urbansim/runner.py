@@ -177,6 +177,29 @@ class UrbansimRunner(GenericRunner):
             self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
             return RecordStore(), ModelRunInfo(model=self.model_name, year=self.state.current_year)
 
+        # Prepare runtime metadata
+        runtime_metadata = {
+            "container_command": usim_cmd,
+            "runtime_parameters": {
+                "region_id": settings["region_to_region_id"][settings["region"]],
+                "year": self.state.current_year,
+                "forecast_year": forecast_year,
+                "land_use_freq": settings["land_use_freq"],
+                "skims_source": settings["travel_model"],
+            },
+            "container_image": land_use_image,
+            "container_manager": settings.get("container_manager", "docker"),
+            "working_directory": settings.get("usim_client_base_folder", "/app"),
+        }
+
+        # Complete provenance tracking
+        self.provenance_tracker.complete_model_run(
+            model_run_hash,
+            status="completed",
+            output_records=output_records,
+            metadata=runtime_metadata,
+        )
+
         # Get the model run info object to return
         run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
 

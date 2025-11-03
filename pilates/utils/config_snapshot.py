@@ -4,6 +4,9 @@ Configuration snapshot management for PILATES.
 This module provides utilities for capturing complete configuration state
 including git hashes, config file contents, and PILATES settings for
 reproducibility and database upload purposes.
+
+Supports hierarchical configuration hashing for intelligent caching and
+output reuse across runs.
 """
 
 import hashlib
@@ -16,6 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import glob
+
+from pilates.generic.config_hashing import ConfigHasher
+from pilates.config.schema import get_field_annotations, get_dependency_graph
 
 logger = logging.getLogger(__name__)
 
@@ -369,3 +375,74 @@ class ConfigSnapshotManager:
         # Create hash of relevant config
         config_json = json.dumps(relevant_config, sort_keys=True)
         return hashlib.sha256(config_json.encode()).hexdigest()
+
+    def create_hierarchical_config_hashes(
+        self,
+        config_snapshot: Dict[str, Any],
+        enabled_models: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Create hierarchical config hashes for intelligent caching (Phase 1).
+
+        This method computes separate hashes for:
+        - base: Run-level config affecting all models
+        - Each enabled model: Model-specific config + upstream dependencies
+
+        Args:
+            config_snapshot: Complete config snapshot from create_config_snapshot()
+            enabled_models: List of enabled model names (e.g., ['urbansim', 'activitysim', 'beam'])
+
+        Returns:
+            Dict mapping model name → {'hash': str, 'config_data': dict}
+
+        Example:
+            >>> enabled_models = ['activitysim', 'beam']
+            >>> hashes = manager.create_hierarchical_config_hashes(snapshot, enabled_models)
+            >>> print(hashes['activitysim']['hash'])
+            'a1b2c3d4...'
+        """
+        # Build config dict suitable for ConfigHasher
+        # (using pilates_settings from snapshot)
+        config_for_hashing = config_snapshot.get('pilates_settings', {})
+
+        # Get field annotations and dependency graph
+        field_annotations = get_field_annotations()
+        dependency_graph = get_dependency_graph()
+
+        # Create hasher
+        hasher = ConfigHasher(
+            config=config_for_hashing,
+            field_annotations=field_annotations,
+            dependency_graph=dependency_graph
+        )
+
+        # Get hierarchical hashes
+        hash_results = hasher.get_hierarchical_hashes(enabled_models)
+
+        # Package results with config data for database storage
+        result = {}
+
+        for model_name, hash_value in hash_results.items():
+            # Extract the config data that was hashed
+            if model_name == 'base':
+                # Base config: global fields only
+                config_data = hasher._extract_fields_by_scope(
+                    hasher.field_annotations.get('run', {}).get('hash_scope', 'global')
+                )
+            else:
+                # Model config: extract model-specific section
+                config_data = config_for_hashing.get(model_name, {})
+
+            result[model_name] = {
+                'hash': hash_value,
+                'config_data': config_data,
+                'config_type': model_name,
+                'model_name': model_name
+            }
+
+        logger.info(
+            f"Created hierarchical config hashes for {len(result)} layers: "
+            f"{', '.join(result.keys())}"
+        )
+
+        return result

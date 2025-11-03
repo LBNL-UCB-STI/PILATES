@@ -245,6 +245,7 @@ class ProvenanceTracker:
         run_hash: str,
         status: str = "completed",
         output_records: List[Union[FileRecord, RepoRecord]] = None,
+        metadata: dict = None,
     ):
         """Mark a model run as complete and attach its outputs.
 
@@ -257,12 +258,15 @@ class ProvenanceTracker:
             status: Final status (e.g., 'completed' or 'failed').
             output_records: Optional list of FileRecord/RepoRecord objects
                 produced by the run.
+            metadata: Optional dict with runtime execution metadata (container command, parameters, etc.).
         """
         if output_records is None:
             output_records = []
         if run_hash in self.run_info.model_runs:
             self.run_info.model_runs[run_hash].completed_at = datetime.now().isoformat()
             self.run_info.model_runs[run_hash].status = status
+            if metadata:
+                self.run_info.model_runs[run_hash].metadata.update(metadata)
             for dataset in output_records:
                 if isinstance(dataset, Record):
                     if (
@@ -1724,6 +1728,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         run_hash: str,
         status: str = "completed",
         output_records: List[Union[FileRecord, RepoRecord]] = None,
+        metadata: dict = None,
     ):
         """Complete a model run and emit OpenLineage event."""
         if output_records is None:
@@ -1770,4 +1775,4 @@ class OpenLineageTracker(FileProvenanceTracker):
                 producer="https://github.com/LBNL-UCB-STI/PILATES",
             )
             self._emit_event(event, run_hash)
-        super().complete_model_run(run_hash, status, output_records)
+        super().complete_model_run(run_hash, status, output_records, metadata)

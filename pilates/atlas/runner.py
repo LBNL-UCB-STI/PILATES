@@ -433,11 +433,32 @@ class AtlasRunner(GenericRunner):
             else:
                 logger.warning(f"Expected ATLAS output file not found: {output_path}")
 
+        # Prepare runtime metadata
+        runtime_metadata = {
+            "container_command": atlas_cmd,
+            "runtime_parameters": {
+                "freq": freq,
+                "output_year": self.state.forecast_year,
+                "npe": npe,
+                "nsample": nsample,
+                "beamac": beamac,
+                "mod": mod,
+                "adscen": adscen,
+                "rebfactor": rebfactor,
+                "taxfactor": taxfactor,
+                "discIncent": discIncent,
+            },
+            "container_image": atlas_image,
+            "container_manager": settings.get("container_manager", "docker"),
+            "working_directory": "/",
+        }
+
         # Complete provenance tracking
         self.provenance_tracker.complete_model_run(
             model_run_hash,
             status="completed" if output_records else "failed",
             output_records=output_records,
+            metadata=runtime_metadata,
         )
 
         # Get the model run info object to return

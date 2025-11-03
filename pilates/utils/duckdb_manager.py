@@ -536,8 +536,8 @@ class DuckDBManager(DatabaseManager):
                     INSERT INTO model_runs (
                         unique_id, run_id, openlineage_id, model, year, iteration,
                         description, created_at, completed_at, status,
-                        input_record_hashes, output_record_hashes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        input_record_hashes, output_record_hashes, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (unique_id) DO UPDATE SET
                         run_id = excluded.run_id,
                         openlineage_id = excluded.openlineage_id,
@@ -549,7 +549,8 @@ class DuckDBManager(DatabaseManager):
                         completed_at = excluded.completed_at,
                         status = excluded.status,
                         input_record_hashes = excluded.input_record_hashes,
-                        output_record_hashes = excluded.output_record_hashes
+                        output_record_hashes = excluded.output_record_hashes,
+                        metadata = excluded.metadata
                 """,
                     [
                         model_run.unique_id,
@@ -564,6 +565,7 @@ class DuckDBManager(DatabaseManager):
                         model_run.status,
                         model_run.input_record_hashes,
                         model_run.output_record_hashes,
+                        json.dumps(_convert_numpy_types(model_run.metadata)),
                     ],
                 )
 
@@ -578,11 +580,11 @@ class DuckDBManager(DatabaseManager):
                 """,
                     [
                         run_info.run_id,
-                        event_metadata["model_run_id"],
-                        event_metadata["event_time"],
-                        event_metadata["event_type"],
-                        event_metadata["run_uuid"],
-                        event_metadata["job_name"],
+                        event_metadata.model_run_id,
+                        event_metadata.event_time,
+                        event_metadata.event_type,
+                        event_metadata.run_uuid,
+                        event_metadata.job_name,
                     ],
                 )
 
@@ -662,6 +664,163 @@ class DuckDBManager(DatabaseManager):
                 pass
             logger.error(f"Failed to upload Zarr manifest data for run {run_id}: {e}")
             return False
+
+    def upload_hierarchical_config_hashes(
+        self,
+        config_snapshot_id: str,
+        hierarchical_hashes: Dict[str, Dict[str, Any]]
+    ) -> bool:
+        """
+        Upload hierarchical configuration hashes (Phase 1).
+
+        Args:
+            config_snapshot_id: ID of the config snapshot these hashes belong to
+            hierarchical_hashes: Dict from create_hierarchical_config_hashes()
+                Format: {model_name: {'hash': str, 'config_data': dict, ...}}
+
+        Returns:
+            True if upload successful
+
+        Example:
+            >>> hashes = snapshot_manager.create_hierarchical_config_hashes(snapshot, enabled_models)
+            >>> db.upload_hierarchical_config_hashes(snapshot_id, hashes)
+        """
+        try:
+            conn = self._get_connection()
+
+            for model_name, hash_info in hierarchical_hashes.items():
+                config_hash = hash_info['hash']
+                config_data = hash_info['config_data']
+                config_type = hash_info.get('config_type', model_name)
+
+                # Insert into model_configs (deduplicates by hash)
+                conn.execute(
+                    """
+                    INSERT INTO model_configs (
+                        config_hash, model_name, config_snapshot_id,
+                        config_type, config_data
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (config_hash) DO NOTHING
+                    """,
+                    [
+                        config_hash,
+                        model_name,
+                        config_snapshot_id,
+                        config_type,
+                        json.dumps(config_data)
+                    ]
+                )
+
+            logger.info(
+                f"Uploaded {len(hierarchical_hashes)} hierarchical config hashes "
+                f"for snapshot {config_snapshot_id}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to upload hierarchical config hashes: {e}")
+            raise DatabaseUploadError(f"Upload failed: {e}")
+
+    def link_model_run_to_config_hashes(
+        self,
+        model_run_id: str,
+        hierarchical_hashes: Dict[str, Dict[str, Any]]
+    ) -> bool:
+        """
+        Link a model run to its hierarchical config hashes.
+
+        This creates entries in model_run_configs linking the model run
+        to all relevant config layers (base + upstream models + own config).
+
+        Args:
+            model_run_id: ID of the model run
+            hierarchical_hashes: Dict from create_hierarchical_config_hashes()
+
+        Returns:
+            True if successful
+        """
+        try:
+            conn = self._get_connection()
+
+            for model_name, hash_info in hierarchical_hashes.items():
+                config_hash = hash_info['hash']
+                config_type = hash_info.get('config_type', model_name)
+
+                conn.execute(
+                    """
+                    INSERT INTO model_run_configs (
+                        model_run_id, config_hash, config_type
+                    )
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (model_run_id, config_type) DO UPDATE
+                    SET config_hash = excluded.config_hash
+                    """,
+                    [model_run_id, config_hash, config_type]
+                )
+
+            logger.info(
+                f"Linked model run {model_run_id} to {len(hierarchical_hashes)} config hashes"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to link model run to config hashes: {e}")
+            raise DatabaseUploadError(f"Link failed: {e}")
+
+    def find_reusable_outputs(
+        self,
+        model_name: str,
+        config_hash: str,
+        year: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Find model outputs that can be reused based on config hash.
+
+        This is the key query for intelligent caching: find completed model runs
+        with matching configuration to reuse their outputs.
+
+        Args:
+            model_name: Name of model (urbansim, activitysim, beam, atlas)
+            config_hash: Configuration hash for this model
+            year: Optional year filter
+
+        Returns:
+            List of file records that can be reused
+
+        Example:
+            >>> # Find reusable ActivitySim outputs
+            >>> outputs = db.find_reusable_outputs('activitysim', 'abc123def456', year=2018)
+            >>> if outputs:
+            ...     print(f"Found {len(outputs)} reusable files!")
+        """
+        try:
+            conn = self._get_connection()
+
+            query = """
+                SELECT fr.*
+                FROM file_records fr
+                JOIN model_runs mr ON fr.model_run_id = mr.unique_id
+                JOIN model_run_configs mrc ON mr.unique_id = mrc.model_run_id
+                WHERE mrc.config_hash = ?
+                  AND mr.model = ?
+                  AND mr.status = 'completed'
+            """
+
+            params = [config_hash, model_name]
+
+            if year is not None:
+                query += " AND mr.year = ?"
+                params.append(year)
+
+            results = conn.execute(query, params).fetchall()
+
+            columns = [desc[0] for desc in conn.description]
+            return [dict(zip(columns, row)) for row in results]
+
+        except Exception as e:
+            logger.error(f"Failed to find reusable outputs: {e}")
+            raise DatabaseQueryError(f"Query failed: {e}")
 
     def get_run_by_id(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve run information by run ID."""

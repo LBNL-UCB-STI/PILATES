@@ -30,6 +30,11 @@ from pilates.workspace import Workspace
 from pilates.utils.provenance import OpenLineageTracker
 from pilates.generic.initialization import Initialization
 
+# NEW: Hierarchical config system imports
+from pilates.config.models import load_config, config_to_dict, PilatesConfig
+from pilates.utils.duckdb_manager import DuckDBManager
+from pydantic import ValidationError
+
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
@@ -456,7 +461,39 @@ def main():
       - Persist/log completion status via provenance tracker and workspace
     """
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
-    settings = parse_args_and_settings()
+
+    # Load settings with Pydantic validation (new hierarchical config system)
+    # Try new config format first, fall back to legacy if needed
+    raw_settings = parse_args_and_settings()
+
+    # Attempt to load as new Pydantic config for validation
+    pydantic_config = None
+    try:
+        # Check if config file path is available (from parse_args_and_settings)
+        config_file = raw_settings.get('settings_file')
+        if config_file:
+            logger.info(f"Loading config with Pydantic validation: {config_file}")
+            pydantic_config = load_config(config_file)
+            logger.info(f"✓ Config validated successfully!")
+            logger.info(f"  Region: {pydantic_config.run.region}")
+            logger.info(f"  Years: {pydantic_config.run.start_year}-{pydantic_config.run.end_year}")
+            logger.info(f"  Enabled models: {pydantic_config.get_enabled_models()}")
+
+            # Convert back to dict for backward compatibility with existing code
+            settings = config_to_dict(pydantic_config)
+            # Preserve command-line overrides from raw_settings
+            for key in ['static_skims', 'warm_start_skims', 'asim_validation', 'state_file_loc', 'settings_file',
+                       'docker_stdout', 'pull_latest', 'household_sample_size']:
+                if key in raw_settings:
+                    settings[key] = raw_settings[key]
+        else:
+            logger.warning("Config file path not available, using raw settings without validation")
+            settings = raw_settings
+    except (ValidationError, FileNotFoundError, KeyError) as e:
+        logger.warning(f"Could not load config with Pydantic (likely legacy format): {e}")
+        logger.info("Using settings as-is (legacy format)")
+        settings = raw_settings
+
     state = WorkflowState.from_settings(settings)
 
     # Set up provenance tracking and workspace
@@ -477,6 +514,53 @@ def main():
 
     provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
     provenance_tracker.initialize_from_settings(settings)
+
+    # NEW: Create hierarchical config hashes for intelligent caching
+    hierarchical_hashes = None
+    if pydantic_config:
+        try:
+            logger.info("Creating hierarchical config hashes for intelligent caching...")
+            # Get the config snapshot that was just created
+            config_snapshot = provenance_tracker.run_info.config_snapshot
+            if config_snapshot:
+                # Create hierarchical hashes using the snapshot manager
+                from pilates.utils.config_snapshot import ConfigSnapshotManager
+                snapshot_manager = ConfigSnapshotManager(
+                    os.path.join(output_path, run_name) if run_name else output_path
+                )
+                enabled_models = pydantic_config.get_enabled_models()
+                hierarchical_hashes = snapshot_manager.create_hierarchical_config_hashes(
+                    config_snapshot,
+                    enabled_models
+                )
+                logger.info(f"✓ Created {len(hierarchical_hashes)} hierarchical config hashes:")
+                for model_name, hash_info in hierarchical_hashes.items():
+                    logger.info(f"  {model_name}: {hash_info['hash'][:16]}...")
+
+                # Upload to database if enabled
+                database_config = settings.get("database", {})
+                if database_config.get("enabled") and database_config.get("path"):
+                    try:
+                        logger.info(f"Uploading config hashes to database: {database_config['path']}")
+                        db = DuckDBManager(database_config['path'])
+                        db.initialize_database()
+                        db.upload_hierarchical_config_hashes(
+                            config_snapshot['snapshot_id'],
+                            hierarchical_hashes
+                        )
+                        logger.info("✓ Config hashes uploaded to database successfully")
+
+                        # Store hierarchical_hashes in provenance tracker for model run linking
+                        provenance_tracker.hierarchical_hashes = hierarchical_hashes
+                        logger.info("✓ Hierarchical hashes stored in provenance tracker")
+                    except Exception as e:
+                        logger.warning(f"Could not upload config hashes to database: {e}")
+                        logger.info("Continuing without database config hash upload...")
+            else:
+                logger.warning("Config snapshot not available, skipping hierarchical hash creation")
+        except Exception as e:
+            logger.warning(f"Could not create hierarchical config hashes: {e}")
+            logger.info("Continuing without hierarchical config hashing...")
 
     workspace = Workspace(
         settings,

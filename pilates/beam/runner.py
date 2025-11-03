@@ -169,6 +169,54 @@ class BeamRunner(GenericRunner):
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
+        java_opts = (
+            # Memory settings (match Xms and Xmx)
+            f"-Xms{beam_memory} "
+            f"-Xmx{beam_memory} "
+
+            # G1GC with more aggressive settings
+            "-XX:+UseG1GC "
+            "-XX:G1HeapRegionSize=32M "
+
+            # More GC threads for burst capacity
+            "-XX:ParallelGCThreads=36 "
+            "-XX:ConcGCThreads=9 "
+
+            "-XX:+UseNUMA "
+            "-XX:+AlwaysPreTouch "
+
+            # Flexible young gen - WIDE range for adaptability
+            "-XX:+UnlockExperimentalVMOptions "
+            "-XX:G1NewSizePercent=40 "          # Min 72 GB young gen
+            "-XX:G1MaxNewSizePercent=60 "       # Max 108 GB young gen
+            "-XX:MaxTenuringThreshold=6 "    # Objects die faster in young gen
+            "-XX:SurvivorRatio=6 "           # 12.5% survivors (helps transit burst)
+            "-XX:MaxGCPauseMillis=5000 "       # Accept 10s pauses for throughput
+            "-XX:G1MixedGCCountTarget=12 "      # Spread old gen work
+
+            # Conservative mixed GC - spread work over more cycles
+            "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
+
+            # Earlier concurrent marking to avoid surprises
+            "-XX:InitiatingHeapOccupancyPercent=30 "
+
+            # More evacuation buffer for large populations
+            "-XX:G1ReservePercent=15 "      # I (27GB reserve)
+
+            # Less aggressive old gen collection
+            "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
+
+            # "-XX:+UnlockDiagnosticVMOptions "
+            # "-XX:+LogCompilation "
+            # "-XX:+PrintInlining "
+
+            # GC logging
+            f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
+            f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
+            "-Djava.io.tmpdir=/app/output/tmp "
+            "-Djna.tmpdir=/app/output/tmp"
+        )
+
         success = self.run_container(
             client=client,
             settings=settings,
@@ -180,60 +228,29 @@ class BeamRunner(GenericRunner):
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
-            environment={
-                "JAVA_OPTS": (
-                    # Memory settings (match Xms and Xmx)
-                    f"-Xms{beam_memory} "
-                    f"-Xmx{beam_memory} "
-                    
-                    # G1GC with more aggressive settings
-                    "-XX:+UseG1GC "
-                    "-XX:G1HeapRegionSize=32M "
-                    
-                    # More GC threads for burst capacity
-                    "-XX:ParallelGCThreads=36 "   
-                    "-XX:ConcGCThreads=9 "    
-                    
-                    "-XX:+UseNUMA "
-                    "-XX:+AlwaysPreTouch "
-                    
-                    # Flexible young gen - WIDE range for adaptability
-                    "-XX:+UnlockExperimentalVMOptions "
-                    "-XX:G1NewSizePercent=40 "          # Min 72 GB young gen
-                    "-XX:G1MaxNewSizePercent=60 "       # Max 108 GB young gen
-                    "-XX:MaxTenuringThreshold=6 "    # Objects die faster in young gen
-                    "-XX:SurvivorRatio=6 "           # 12.5% survivors (helps transit burst)
-                    "-XX:MaxGCPauseMillis=5000 "       # Accept 10s pauses for throughput
-                    "-XX:G1MixedGCCountTarget=12 "      # Spread old gen work
-                    
-                    # Conservative mixed GC - spread work over more cycles
-                    "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
-                    
-                    # Earlier concurrent marking to avoid surprises
-                    "-XX:InitiatingHeapOccupancyPercent=30 " 
-                    
-                    # More evacuation buffer for large populations
-                    "-XX:G1ReservePercent=15 "      # I (27GB reserve)
-                    
-                    # Less aggressive old gen collection
-                    "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
-                    
-                    # "-XX:+UnlockDiagnosticVMOptions "
-                    # "-XX:+LogCompilation "
-                    # "-XX:+PrintInlining "
-                    
-                    # GC logging
-                    f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
-                    f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
-                    "-Djava.io.tmpdir=/app/output/tmp "
-                    "-Djna.tmpdir=/app/output/tmp"
-                )
-            }
+            environment={"JAVA_OPTS": java_opts}
         )
+
+        # Prepare runtime metadata
+        runtime_metadata = {
+            "container_command": f"--config={path_to_beam_config}",
+            "runtime_parameters": {
+                "beam_config": beam_config,
+                "path_to_beam_config": path_to_beam_config,
+                "beam_memory": beam_memory,
+                "region": region,
+            },
+            "container_image": travel_model_image,
+            "container_manager": settings.get("container_manager", "docker"),
+            "working_directory": "/app",
+            "java_opts": java_opts,
+        }
 
         if not success:
             logger.error("[BEAM Runner] BEAM run failed.")
-            self.provenance_tracker.complete_model_run(beam_run_hash, status="failed")
+            self.provenance_tracker.complete_model_run(
+                beam_run_hash, status="failed", metadata=runtime_metadata
+            )
             sys.exit(1)
 
         output_path_for_gather: str
@@ -268,7 +285,10 @@ class BeamRunner(GenericRunner):
 
         # Record BEAM run completion now that outputs are recorded
         self.provenance_tracker.complete_model_run(
-            beam_run_hash, status="completed", output_records=output_records
+            beam_run_hash,
+            status="completed",
+            output_records=output_records,
+            metadata=runtime_metadata,
         )
 
         output_store = RecordStore(recordList=output_records)

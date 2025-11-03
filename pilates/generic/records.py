@@ -409,6 +409,7 @@ class ModelRunInfo(Record):
         input_record_hashes: List of unique_ids for input records.
         output_record_hashes: List of unique_ids for outputs produced by this run.
         status: Run status string (e.g., 'uninitialized', 'running', 'completed', 'failed').
+        metadata: Runtime execution metadata including container command and parameters.
     """
     model: str
     year: int
@@ -418,6 +419,7 @@ class ModelRunInfo(Record):
     input_record_hashes: List[str] = field(default_factory=list)
     output_record_hashes: List[str] = field(default_factory=list)
     status: str = "uninitialized"
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(kw_only=True)

@@ -295,10 +295,25 @@ class ActivitysimRunner(GenericRunner):
                 except Exception as e:
                     logger.warning(f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.")
 
+            # Prepare runtime metadata for compilation run
+            compile_metadata = {
+                "container_command": asim_cmd,
+                "runtime_parameters": {
+                    "household_sample_size": 2500,
+                    "num_processes": 1,
+                    "chunk_size": settings.get("chunk_size", 0),
+                    "additional_args": additional_args,
+                },
+                "container_image": activity_demand_image,
+                "container_manager": settings.get("container_manager", "docker"),
+                "working_directory": asim_workdir,
+            }
+
             self.provenance_tracker.complete_model_run(
                 asim_compile_run_hash,
                 status="completed" if success else "failed",
                 output_records=output_records,
+                metadata=compile_metadata,
             )
 
             logger.info("ASIM Compilation success: {0}".format(success))
@@ -406,9 +421,26 @@ class ActivitysimRunner(GenericRunner):
                     if output_rec:
                         output_records.append(output_rec)
 
+        # Prepare runtime metadata for main run
+        runtime_metadata = {
+            "container_command": asim_cmd,
+            "runtime_parameters": {
+                "household_sample_size": settings.get("household_sample_size", 0),
+                "num_processes": settings.get("num_processes", multiprocessing.cpu_count() - 1),
+                "chunk_size": settings.get("chunk_size", 0),
+                "additional_args": additional_args,
+            },
+            "container_image": activity_demand_image,
+            "container_manager": settings.get("container_manager", "docker"),
+            "working_directory": asim_workdir,
+        }
+
         # Record ActivitySim run completion (Main run)
         self.provenance_tracker.complete_model_run(
-            new_asim_run_hash, status="completed" if success else "failed"
+            new_asim_run_hash,
+            status="completed" if success else "failed",
+            output_records=output_records,
+            metadata=runtime_metadata,
         )
 
         output_store = RecordStore(recordList=output_records)
