@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import pandas as pd
+import numpy as np
 
 import duckdb
 
@@ -23,6 +24,30 @@ from pilates.utils.database import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_numpy_types(obj):
+    """
+    Convert numpy types to native Python types for JSON serialization.
+
+    Args:
+        obj: Object that may contain numpy types
+
+    Returns:
+        Object with numpy types converted to native Python types
+    """
+    if isinstance(obj, dict):
+        return {k: _convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
 
 def _execute_sql_from_file(conn, sql_file_path: str):
     """Helper function to execute SQL commands from a file."""
@@ -241,8 +266,8 @@ class DuckDBManager(DatabaseManager):
                     file_record.producing_run_id,
                     file_record.consuming_run_ids,
                     file_record.source_file_paths,
-                    json.dumps(file_record.metadata),
-                    json.dumps(file_record.schema),
+                    json.dumps(_convert_numpy_types(file_record.metadata)),
+                    json.dumps(_convert_numpy_types(file_record.schema)),
                     file_record.exists,
                 ],
             )
@@ -368,8 +393,8 @@ class DuckDBManager(DatabaseManager):
                         file_record.producing_run_id,
                         file_record.consuming_run_ids,
                         file_record.source_file_paths,
-                        json.dumps(file_record.metadata),
-                        json.dumps(file_record.schema),
+                        json.dumps(_convert_numpy_types(file_record.metadata)),
+                        json.dumps(_convert_numpy_types(file_record.schema)),
                         file_record.exists,
                     ],
                 )
@@ -399,8 +424,8 @@ class DuckDBManager(DatabaseManager):
                         h5_table_record.producing_run_id,
                         h5_table_record.consuming_run_ids,
                         h5_table_record.source_file_paths,
-                        json.dumps(h5_table_record.metadata),
-                        json.dumps(h5_table_record.schema),
+                        json.dumps(_convert_numpy_types(h5_table_record.metadata)),
+                        json.dumps(_convert_numpy_types(h5_table_record.schema)),
                         h5_table_record.exists,
                     ],
                 )
@@ -467,8 +492,8 @@ class DuckDBManager(DatabaseManager):
                                 file_record.producing_run_id,
                                 file_record.consuming_run_ids,
                                 file_record.source_file_paths,
-                                json.dumps(file_record.metadata),
-                                json.dumps(file_record.schema),
+                                json.dumps(_convert_numpy_types(file_record.metadata)),
+                                json.dumps(_convert_numpy_types(file_record.schema)),
                                 file_record.exists,
                             ],
                         )
@@ -760,27 +785,27 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "persons":
                 return self._store_persons_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "jobs":
                 return self._store_jobs_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "blocks":
                 return self._store_blocks_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "buildings":
                 return self._store_buildings_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "parcels":
                 return self._store_parcels_raw_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             else:
                 # Store in generic table for other raw data
@@ -791,6 +816,7 @@ class DuckDBManager(DatabaseManager):
                     file_record_id,
                     run_id,
                     openlineage_id,
+                    table_openlineage_id,
                 )
 
         except Exception as e:
@@ -805,6 +831,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: Optional[str] = None,
     ) -> bool:
@@ -816,6 +844,8 @@ class DuckDBManager(DatabaseManager):
             df: DataFrame containing the data
             file_record_id: File record unique ID
             run_id: PILATES run ID
+            year: Simulation year
+            iteration: Simulation iteration
             openlineage_id: OpenLineage dataset ID for the parent file
             table_openlineage_id: OpenLineage dataset ID for this specific table. Defaults to openlineage_id.
 
@@ -829,20 +859,20 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "persons":
                 return self._store_persons_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             elif table_name == "land_use":
                 return self._store_land_use_data(
-                    conn, df, file_record_id, run_id, openlineage_id, table_openlineage_id
+                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
             else:
-                # Store in generic table for other ActivitySim inputs
+                # Store in generic table for other ActivitySim inputs (e.g., skims)
                 return self._store_generic_data(
-                    conn, table_name, df, file_record_id, run_id, openlineage_id
+                    conn, table_name, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
                 )
 
         except Exception as e:
@@ -857,6 +887,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -866,6 +898,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -884,16 +918,18 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
+            # Households are constant across iterations - unique on (run_id, year, household_id)
+            # First iteration inserts, subsequent iterations skip (reuse same data)
             conn.register("households_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_households ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM households_temp_data
-                ON CONFLICT (household_id, run_id) DO NOTHING
+                ON CONFLICT (run_id, year, household_id) DO NOTHING
             """
             )
             conn.unregister("households_temp_data")
@@ -911,6 +947,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -920,6 +958,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -945,16 +985,18 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
+            # Persons are constant across iterations - unique on (run_id, year, person_id)
+            # First iteration inserts, subsequent iterations skip (reuse same data)
             conn.register("persons_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_persons ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM persons_temp_data
-                ON CONFLICT (person_id, run_id) DO NOTHING
+                ON CONFLICT (run_id, year, person_id) DO NOTHING
             """
             )
             conn.unregister("persons_temp_data")
@@ -972,6 +1014,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -981,6 +1025,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1024,16 +1070,18 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
+            # Land use is constant across iterations - unique on (run_id, year, TAZ)
+            # First iteration inserts, subsequent iterations skip (reuse same data)
             conn.register("land_use_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO activitysim_land_use ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM land_use_temp_data
-                ON CONFLICT (TAZ, run_id) DO NOTHING
+                ON CONFLICT (run_id, year, TAZ) DO NOTHING
             """
             )
             conn.unregister("land_use_temp_data")
@@ -1052,26 +1100,32 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
-        """Store generic ActivitySim data in JSON format."""
+        """Store generic ActivitySim data in JSON format.
+
+        This stores data that can vary per iteration (e.g., skims updated by BEAM).
+        Uses DELETE+INSERT instead of UPSERT because we want to replace the entire JSON blob.
+        """
         try:
             # Convert DataFrame to JSON for storage
             data_json = df.to_json(orient="records")
 
-            # Insert data
+            # Delete existing data for this specific table/year/iteration combination
             conn.execute(
-                "DELETE FROM activitysim_data_generic WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
+                "DELETE FROM activitysim_data_generic WHERE run_id = ? AND year = ? AND iteration = ? AND table_name = ?",
+                [run_id, year, iteration, table_name],
             )
             conn.execute(
                 """
                 INSERT INTO activitysim_data_generic (
-                    file_record_id, run_id, openlineage_id, table_name, data_json, table_openlineage_id
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    file_record_id, run_id, year, iteration, openlineage_id, table_name, data_json, table_openlineage_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-                [file_record_id, run_id, openlineage_id, table_name, data_json, table_openlineage_id],
+                [file_record_id, run_id, year, iteration, openlineage_id, table_name, data_json, table_openlineage_id],
             )
 
             logger.info(
@@ -1090,6 +1144,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1099,6 +1155,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1119,21 +1177,16 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_households_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("households_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_households_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM households_raw_temp_data
+                ON CONFLICT (run_id, year, household_id) DO NOTHING
             """
             )
             conn.unregister("households_raw_temp_data")
@@ -1151,6 +1204,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1160,6 +1215,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1180,21 +1237,16 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_persons_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("persons_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_persons_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM persons_raw_temp_data
+                ON CONFLICT (run_id, year, person_id) DO NOTHING
             """
             )
             conn.unregister("persons_raw_temp_data")
@@ -1212,6 +1264,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1221,6 +1275,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1231,21 +1287,16 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_jobs_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("jobs_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_jobs_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM jobs_raw_temp_data
+                ON CONFLICT (run_id, year, job_id) DO NOTHING
             """
             )
             conn.unregister("jobs_raw_temp_data")
@@ -1263,6 +1314,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1272,6 +1325,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1298,21 +1353,16 @@ class DuckDBManager(DatabaseManager):
                 df_copy["block_id"] = df_copy["block_id"].astype(str)
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_blocks_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("blocks_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_blocks_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM blocks_raw_temp_data
+                ON CONFLICT (run_id, year, block_id) DO NOTHING
             """
             )
             conn.unregister("blocks_raw_temp_data")
@@ -1330,6 +1380,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1339,6 +1391,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1356,21 +1410,16 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_buildings_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("buildings_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_buildings_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM buildings_raw_temp_data
+                ON CONFLICT (run_id, year, building_id) DO NOTHING
             """
             )
             conn.unregister("buildings_raw_temp_data")
@@ -1388,6 +1437,8 @@ class DuckDBManager(DatabaseManager):
         df: pd.DataFrame,
         file_record_id: str,
         run_id: str,
+        year: int,
+        iteration: int,
         openlineage_id: str,
         table_openlineage_id: str,
     ) -> bool:
@@ -1397,6 +1448,8 @@ class DuckDBManager(DatabaseManager):
             df_copy = df.copy()
             df_copy["file_record_id"] = file_record_id
             df_copy["run_id"] = run_id
+            df_copy["year"] = year
+            df_copy["iteration"] = iteration
             df_copy["openlineage_id"] = openlineage_id
             df_copy["table_openlineage_id"] = table_openlineage_id
 
@@ -1413,21 +1466,16 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
             df_insert = df_copy[insert_cols]
 
-            # Delete existing data for this table_openlineage_id
-            conn.execute(
-                "DELETE FROM urbansim_parcels_raw WHERE table_openlineage_id = ?",
-                [table_openlineage_id],
-            )
-
-            # Bulk insert using DuckDB's DataFrame integration
+            # Bulk insert using DuckDB's DataFrame integration with UPSERT
             conn.register("parcels_raw_temp_data", df_insert)
             conn.execute(
                 f"""
                 INSERT INTO urbansim_parcels_raw ({', '.join(insert_cols)})
                 SELECT {', '.join(insert_cols)} FROM parcels_raw_temp_data
+                ON CONFLICT (run_id, year, parcel_id) DO NOTHING
             """
             )
             conn.unregister("parcels_raw_temp_data")

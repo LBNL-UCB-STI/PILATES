@@ -45,6 +45,7 @@ from pilates.generic.records import (
 )
 
 from workflow_state import WorkflowState
+from pilates.generic.execution_context import ExecutionContext
 from pilates.utils.config_snapshot import ConfigSnapshotManager
 
 logger = logging.getLogger(__name__)
@@ -426,7 +427,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return path_to_use, relative_path
 
     def _calculate_directory_hash(
-        self, abs_dir_path: str, state: Optional[WorkflowState] = None
+        self, abs_dir_path: str, state: Optional[ExecutionContext] = None
     ) -> Optional[str]:
         """
         Calculates a SHA-256 hash of a directory based on its file and subdirectory names,
@@ -435,7 +436,7 @@ class FileProvenanceTracker(ProvenanceTracker):
 
         Args:
             abs_dir_path (str): The path to the directory to hash.
-            state (Optional[WorkflowState]): Optional state metadata to include in the hash.
+            state (Optional[ExecutionContext]): Optional state metadata to include in the hash.
 
         Returns:
             Optional[str]: The calculated hash, or None if the path is invalid.
@@ -476,7 +477,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         return sha256_hash.hexdigest()
 
     def _calculate_path_hash(
-        self, file_path: str, state: Optional[WorkflowState] = None
+        self, file_path: str, state: Optional[ExecutionContext] = None
     ) -> Optional[str]:
         """
         Calculates the SHA-256 hash of a file, depending on its contents and its location. It also optionally
@@ -484,7 +485,7 @@ class FileProvenanceTracker(ProvenanceTracker):
 
         Args:
             file_path (str): The path to the file whose hash is to be calculated.
-            state (Optional[WorkflowState]): An optional state object containing additional metadata
+            state (Optional[ExecutionContext]): An optional state object containing additional metadata
                 (e.g., current stage, year, and iteration) to include in the hash.
 
         Returns:
@@ -507,7 +508,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             return None
 
     def _calculate_file_hash(
-        self, abs_file_path: str, state: Optional[WorkflowState] = None
+        self, abs_file_path: str, state: Optional[ExecutionContext] = None
     ) -> Optional[str]:
         """
         Calculates the SHA-256 hash of a file, depending on its contents and its location. It also optionally
@@ -515,7 +516,7 @@ class FileProvenanceTracker(ProvenanceTracker):
 
         Args:
             abs_file_path (str): The path to the file whose hash is to be calculated.
-            state (Optional[WorkflowState]): An optional state object containing additional metadata
+            state (Optional[ExecutionContext]): An optional state object containing additional metadata
                 (e.g., current stage, year, and iteration) to include in the hash.
 
         Returns:
@@ -748,7 +749,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         skip_missing: bool = True,
         description: Optional[str] = None,
         short_name: Optional[str] = None,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
         source_file_paths: Optional[List[str]] = None,
     ) -> Optional[Union["FileRecord", "H5FileRecord"]]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
@@ -806,6 +807,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 short_name=short_name,
                 metadata=metadata,
                 description=description,
+                year=state.current_year if state else None,
                 schema=schema,
                 source_file_paths=source_file_paths or []
             )
@@ -950,7 +952,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_path: str,
         destination_path: str,
         model: str,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
         """Move a file on disk and update provenance records accordingly.
 
@@ -1006,7 +1008,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         description: str = None,
         model_run_id: str = None,
         short_name: str = None,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
         """
         Automatically finds the previous output record and links it, making cross-model
@@ -1094,11 +1096,49 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: List[str] = None,
         skip_missing: bool = True,
         model_run_id: str = None,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
+        """
+        Record an input file with optional execution context.
+
+        Parameters
+        ----------
+        model : str
+            Name of the model consuming this input
+        file_path : str
+            Path to the input file
+        source_run_id : str, optional
+            ID of the run that produced this file
+        description : str, optional
+            Human-readable description of the file
+        short_name : str, optional
+            Short identifier for the file
+        source_file_paths : List[str], optional
+            Paths to source files that produced this file
+        skip_missing : bool, default=True
+            If True, skip files that don't exist rather than raising an error
+        model_run_id : str, optional
+            ID of the model run consuming this input
+        state : ExecutionContext, optional
+            **DEPRECATED**: Use 'context' instead. Execution context providing
+            year, stage, and iteration metadata.
+        context : ExecutionContext, optional
+            Execution context providing year, stage, and iteration metadata.
+            Any object with current_year, current_major_stage, and current_inner_iter
+            attributes works (including WorkflowState).
+
+        Returns
+        -------
+        FileRecord or None
+            Record of the input file, or None if file doesn't exist and skip_missing=True
+        """
+        # Support both 'state' and 'context' parameters during transition
+        # context takes precedence if both provided
+        ctx = context if context is not None else state
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, short_name=short_name, state=state, source_file_paths=source_file_paths
+            file_path, skip_missing, description, short_name=short_name, state=ctx, source_file_paths=source_file_paths
         )
         if not file_record:
             return None
@@ -1137,11 +1177,48 @@ class FileProvenanceTracker(ProvenanceTracker):
         model_run_id: str = None,
         short_name: str = None,
         source_file_paths: list = None,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
+        context: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
+        """
+        Record an output file with optional execution context.
+
+        Parameters
+        ----------
+        model : str
+            Name of the model producing this output
+        file_path : str
+            Path to the output file
+        year : int, optional
+            Year associated with this output (overrides context.current_year if provided)
+        description : str, optional
+            Human-readable description of the file
+        skip_missing : bool, default=True
+            If True, skip files that don't exist rather than raising an error
+        model_run_id : str, optional
+            ID of the model run producing this output
+        short_name : str, optional
+            Short identifier for the file
+        source_file_paths : list, optional
+            Paths to source files that produced this output
+        state : ExecutionContext, optional
+            **DEPRECATED**: Use 'context' instead. Execution context providing
+            year, stage, and iteration metadata.
+        context : ExecutionContext, optional
+            Execution context providing year, stage, and iteration metadata.
+            Any object with current_year, current_major_stage, and current_inner_iter
+            attributes works (including WorkflowState).
+
+        Returns
+        -------
+        FileRecord or None
+            Record of the output file, or None if file doesn't exist and skip_missing=True
+        """
+        # Support both 'state' and 'context' parameters during transition
+        ctx = context if context is not None else state
         model = self._normalize_model_name(model)
         file_record = self._get_or_create_file_record(
-            file_path, skip_missing, description, short_name, state=state, source_file_paths=source_file_paths
+            file_path, skip_missing, description, short_name, state=ctx, source_file_paths=source_file_paths
         )
         if not file_record:
             return None
@@ -1587,7 +1664,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         source_path: str,
         destination_path: str,
         model: str,
-        state: Optional[WorkflowState] = None,
+        state: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
         output_record = super().move_file(
             record, source_path, destination_path, model, state

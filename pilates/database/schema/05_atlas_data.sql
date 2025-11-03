@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS atlas_vehicles2_output (
     vehicletypeid VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
+    FOREIGN KEY (run_id, year, household_id) REFERENCES urbansim_households_raw(run_id, year, household_id),
     UNIQUE (run_id, year, household_id, vehicle_id)
 );
 

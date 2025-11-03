@@ -30,14 +30,14 @@ CREATE TABLE IF NOT EXISTS activitysim_households (
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (run_id, year, household_id) REFERENCES urbansim_households_raw(run_id, year, household_id),
-    UNIQUE (run_id, year, iteration, household_id)
+    UNIQUE (run_id, year, household_id)
 );
-COMMENT ON TABLE activitysim_households IS 'Processed household data ready for ActivitySim consumption, transformed from UrbanSim outputs';
+COMMENT ON TABLE activitysim_households IS 'Processed household data ready for ActivitySim consumption, transformed from UrbanSim outputs. Households are constant across iterations within a year.';
 COMMENT ON COLUMN activitysim_households.id IS 'Auto-incrementing database row ID';
 COMMENT ON COLUMN activitysim_households.file_record_id IS 'Foreign key to file_records';
 COMMENT ON COLUMN activitysim_households.run_id IS 'Foreign key to parent PILATES run';
 COMMENT ON COLUMN activitysim_households.year IS 'Simulation year this data corresponds to';
-COMMENT ON COLUMN activitysim_households.iteration IS 'Simulation iteration this data corresponds to';
+COMMENT ON COLUMN activitysim_households.iteration IS 'Simulation iteration when this record was first created (households remain constant across iterations within a year)';
 COMMENT ON COLUMN activitysim_households.sub_iteration IS 'Simulation sub-iteration (if applicable)';
 COMMENT ON COLUMN activitysim_households.openlineage_id IS 'OpenLineage dataset ID for the parent file';
 COMMENT ON COLUMN activitysim_households.table_openlineage_id IS 'OpenLineage dataset ID for this specific table';
@@ -84,14 +84,14 @@ CREATE TABLE IF NOT EXISTS activitysim_persons (
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (household_id) REFERENCES activitysim_households(id),
     FOREIGN KEY (run_id, year, person_id) REFERENCES urbansim_persons_raw(run_id, year, person_id),
-    UNIQUE (run_id, year, iteration, person_id)
+    UNIQUE (run_id, year, person_id)
 );
-COMMENT ON TABLE activitysim_persons IS 'Processed person-level data for ActivitySim, including synthetic person attributes';
+COMMENT ON TABLE activitysim_persons IS 'Processed person-level data for ActivitySim, including synthetic person attributes. Persons are constant across iterations within a year.';
 COMMENT ON COLUMN activitysim_persons.id IS 'Auto-incrementing database row ID';
 COMMENT ON COLUMN activitysim_persons.file_record_id IS 'Foreign key to file_records';
 COMMENT ON COLUMN activitysim_persons.run_id IS 'Foreign key to parent PILATES run';
 COMMENT ON COLUMN activitysim_persons.year IS 'Simulation year this data corresponds to';
-COMMENT ON COLUMN activitysim_persons.iteration IS 'Simulation iteration this data corresponds to';
+COMMENT ON COLUMN activitysim_persons.iteration IS 'Simulation iteration when this record was first created (persons remain constant across iterations within a year)';
 COMMENT ON COLUMN activitysim_persons.sub_iteration IS 'Simulation sub-iteration (if applicable)';
 COMMENT ON COLUMN activitysim_persons.openlineage_id IS 'OpenLineage dataset ID for the parent file';
 COMMENT ON COLUMN activitysim_persons.table_openlineage_id IS 'OpenLineage dataset ID for this specific table';
@@ -162,14 +162,14 @@ CREATE TABLE IF NOT EXISTS activitysim_land_use (
     
     FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
-    UNIQUE (run_id, year, iteration, TAZ)
+    UNIQUE (run_id, year, TAZ)
 );
-COMMENT ON TABLE activitysim_land_use IS 'Processed land use/zonal data for ActivitySim including demographics, employment, and accessibility';
+COMMENT ON TABLE activitysim_land_use IS 'Processed land use/zonal data for ActivitySim including demographics, employment, and accessibility. Land use data is constant across iterations within a year.';
 COMMENT ON COLUMN activitysim_land_use.id IS 'Auto-incrementing database row ID';
 COMMENT ON COLUMN activitysim_land_use.file_record_id IS 'Foreign key to file_records';
 COMMENT ON COLUMN activitysim_land_use.run_id IS 'Foreign key to parent PILATES run';
 COMMENT ON COLUMN activitysim_land_use.year IS 'Simulation year this data corresponds to';
-COMMENT ON COLUMN activitysim_land_use.iteration IS 'Simulation iteration this data corresponds to';
+COMMENT ON COLUMN activitysim_land_use.iteration IS 'Simulation iteration when this record was first created (land use remains constant across iterations within a year)';
 COMMENT ON COLUMN activitysim_land_use.sub_iteration IS 'Simulation sub-iteration (if applicable)';
 COMMENT ON COLUMN activitysim_land_use.openlineage_id IS 'OpenLineage dataset ID for the parent file';
 COMMENT ON COLUMN activitysim_land_use.table_openlineage_id IS 'OpenLineage dataset ID for this specific table';
@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS activitysim_data_generic (
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     UNIQUE (run_id, year, iteration, table_name)
 );
-COMMENT ON TABLE activitysim_data_generic IS 'Generic storage for additional ActivitySim input tables (accessibility, skims, etc.) in JSON format';
+COMMENT ON TABLE activitysim_data_generic IS 'Generic storage for additional ActivitySim input tables (accessibility, skims, etc.) in JSON format. Data can vary per iteration (e.g., skims updated by BEAM).';
 COMMENT ON COLUMN activitysim_data_generic.id IS 'Auto-incrementing database row ID';
 COMMENT ON COLUMN activitysim_data_generic.file_record_id IS 'Foreign key to file_records';
 COMMENT ON COLUMN activitysim_data_generic.run_id IS 'Foreign key to parent PILATES run';

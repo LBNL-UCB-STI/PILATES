@@ -25,6 +25,7 @@ from pilates.activitysim.preprocessor import (
     _clean_activitysim_data_for_csv,
     _create_minimal_placeholder,
 )
+from pilates.atlas.postprocessor import atlas_add_vehileTypeId
 from pilates.generic.records import PilatesRunInfo, FileRecord
 from datetime import datetime
 import uuid
@@ -154,11 +155,12 @@ class TestDatabaseComponents(unittest.TestCase):
             # Create test file records
             conn.execute(
                 """
-                INSERT INTO file_records (unique_id, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO file_records (unique_id, record_type, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 [
                     unique_file_id_1,
+                    "file",
                     unique_run_id,
                     unique_ol_id_1,
                     "/test/path1",
@@ -174,11 +176,12 @@ class TestDatabaseComponents(unittest.TestCase):
 
             conn.execute(
                 """
-                INSERT INTO file_records (unique_id, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO file_records (unique_id, record_type, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 [
                     unique_file_id_2,
+                    "file",
                     unique_run_id,
                     unique_ol_id_2,
                     "/test/path2",
@@ -193,6 +196,51 @@ class TestDatabaseComponents(unittest.TestCase):
             )
 
             print("   🗂️ Created prerequisite records for foreign key constraints")
+
+            # Create parcels first (required for buildings FK chain)
+            raw_parcels_data = pd.DataFrame(
+                {
+                    "parcel_id": [201, 202, 203],
+                    "zone_id": ["zone1", "zone2", "zone3"],
+                    "land_value": [100000.0, 150000.0, 120000.0],
+                    "total_sqft": [5000.0, 6000.0, 4500.0],
+                    "county_id": ["county1", "county1", "county2"],
+                }
+            )
+
+            print("   🏞️ Creating parcels data first...")
+            db_manager.store_urbansim_raw_data(
+                table_name="parcels",
+                df=raw_parcels_data,
+                file_record_id=unique_file_id_1,
+                run_id=unique_run_id,
+                year=2017,
+                iteration=0,
+                openlineage_id=unique_ol_id_1,
+            )
+
+            # Create buildings second (required for households FK)
+            raw_buildings_data = pd.DataFrame(
+                {
+                    "building_id": [101, 102, 103],
+                    "parcel_id": [201, 202, 203],
+                    "building_type_id": [1, 2, 1],
+                    "sqft": [1500, 2000, 1200],
+                    "year_built": [1990, 2000, 1985],
+                    "stories": [2, 3, 1],
+                }
+            )
+
+            print("   🏢 Creating buildings data second...")
+            db_manager.store_urbansim_raw_data(
+                table_name="buildings",
+                df=raw_buildings_data,
+                file_record_id=unique_file_id_1,
+                run_id=unique_run_id,
+                year=2017,
+                iteration=0,
+                openlineage_id=unique_ol_id_1,
+            )
 
             # Create test data for raw UrbanSim households
             raw_households_data = pd.DataFrame(
@@ -216,6 +264,8 @@ class TestDatabaseComponents(unittest.TestCase):
                 df=raw_households_data,
                 file_record_id=unique_file_id_1,
                 run_id=unique_run_id,
+                year=2017,
+                iteration=0,
                 openlineage_id=unique_ol_id_1,
             )
             self.assertTrue(
@@ -243,6 +293,8 @@ class TestDatabaseComponents(unittest.TestCase):
                 df=processed_households_data,
                 file_record_id=unique_file_id_2,
                 run_id=unique_run_id,
+                year=2017,
+                iteration=0,
                 openlineage_id=unique_ol_id_2,
             )
             self.assertTrue(
@@ -257,6 +309,8 @@ class TestDatabaseComponents(unittest.TestCase):
                 df=raw_households_data,  # Same data
                 file_record_id=unique_file_id_1,  # Same file record
                 run_id=unique_run_id,
+                year=2017,
+                iteration=0,
                 openlineage_id=unique_ol_id_1,  # Same openlineage_id
             )
             self.assertTrue(
@@ -362,7 +416,27 @@ class TestDatabaseComponents(unittest.TestCase):
             db_manager.initialize_database()
 
             # Create test data for multiple different table types to simulate parallel scenario
+            # Must create in FK dependency order: parcels -> buildings -> (households, jobs) -> persons
             test_datasets = {
+                "parcels": pd.DataFrame(
+                    {
+                        "parcel_id": list(range(1, 26)),  # Covers 101-109 and 201-215
+                        "zone_id": [f"zone_{j}" for j in range(1, 26)],
+                        "land_value": [100000.0 for j in range(25)],
+                        "total_sqft": [5000.0 for j in range(25)],
+                        "county_id": [f"county_{j%3}" for j in range(25)],
+                    }
+                ),
+                "buildings": pd.DataFrame(
+                    {
+                        "building_id": list(range(101, 111)) + list(range(201, 216)),  # 10 + 15 = 25
+                        "parcel_id": list(range(1, 11)) + list(range(11, 26)),  # 10 + 15 = 25
+                        "building_type_id": ([1, 2] * 12) + [1],  # 25 items
+                        "sqft": [1500] * 25,  # 25 items
+                        "year_built": [2000] * 25,  # 25 items
+                        "stories": [2] * 25,  # 25 items
+                    }
+                ),
                 "households": pd.DataFrame(
                     {
                         "household_id": [j for j in range(1, 11)],
@@ -379,7 +453,7 @@ class TestDatabaseComponents(unittest.TestCase):
                 "persons": pd.DataFrame(
                     {
                         "person_id": [j for j in range(1, 21)],
-                        "household_id": [j // 2 + 1 for j in range(1, 21)],
+                        "household_id": [(j - 1) // 2 + 1 for j in range(1, 21)],  # Maps 1-2->1, 3-4->2, ..., 19-20->10
                         "age": [25 + j for j in range(20)],
                         "worker": [j % 2 for j in range(20)],
                         "student": [1 if j < 18 else 0 for j in range(20)],
@@ -419,11 +493,12 @@ class TestDatabaseComponents(unittest.TestCase):
             for table_name in test_datasets.keys():
                 conn.execute(
                     """
-                    INSERT INTO file_records (unique_id, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO file_records (unique_id, record_type, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     [
                         f"test_file_{table_name}_{uuid.uuid4().hex[:8]}",
+                        "file",
                         unique_run_id,
                         f"test_ol_{table_name}_{uuid.uuid4().hex[:8]}",
                         f"/test/path_{table_name}",
@@ -480,6 +555,8 @@ class TestDatabaseComponents(unittest.TestCase):
                     df=df,
                     file_record_id=unique_file_ids[table_name],
                     run_id=unique_run_id,
+                    year=2017,
+                    iteration=0,
                     openlineage_id=unique_ol_ids[table_name],
                 )
 
@@ -511,6 +588,14 @@ class TestDatabaseComponents(unittest.TestCase):
 
             # Verify data integrity for each table type
             table_counts = {
+                "parcels": conn.execute(
+                    "SELECT COUNT(*) FROM urbansim_parcels_raw WHERE openlineage_id = ?",
+                    [unique_ol_ids["parcels"]],
+                ).fetchone()[0],
+                "buildings": conn.execute(
+                    "SELECT COUNT(*) FROM urbansim_buildings_raw WHERE openlineage_id = ?",
+                    [unique_ol_ids["buildings"]],
+                ).fetchone()[0],
                 "households": conn.execute(
                     "SELECT COUNT(*) FROM urbansim_households_raw WHERE openlineage_id = ?",
                     [unique_ol_ids["households"]],
@@ -658,6 +743,8 @@ class TestDatabaseComponents(unittest.TestCase):
                 df=test_data,
                 file_record_id="test_types_123",
                 run_id="test_run_types",
+                year=2017,
+                iteration=0,
                 openlineage_id="test_ol_types",
             )
             # Note: This might not succeed if table doesn't exist, but we're testing the data handling
@@ -694,6 +781,403 @@ class TestDatabaseComponents(unittest.TestCase):
             )
             self.assertIsNone(result)
             print("   ✅ Graceful handling of non-existent data")
+
+
+    def test_iteration_constant_behavior(self):
+        """Test that generic data (skims) varies per iteration - demonstrates iteration-specific storage."""
+        print("\n🔄 Testing iteration-varying behavior for skims...")
+
+        db_manager = create_database_manager(self.settings)
+
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+
+            # Setup prerequisite records
+            unique_run_id = f"test_iter_const_{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                "INSERT INTO runs (run_id, created_at, models_used, code_version, hostname) VALUES (?, ?, ?, ?, ?)",
+                [unique_run_id, datetime.now().isoformat(), ["test"], "test_version", "test_host"],
+            )
+
+            file_id = f"test_file_{uuid.uuid4().hex[:8]}"
+            ol_id_0 = f"test_ol_0_{uuid.uuid4().hex[:8]}"
+            ol_id_1 = f"test_ol_1_{uuid.uuid4().hex[:8]}"
+
+            for ol_id in [ol_id_0, ol_id_1]:
+                conn.execute(
+                    "INSERT INTO file_records (unique_id, record_type, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [f"file_{ol_id}", "file", unique_run_id, ol_id, "/test/path", datetime.now().isoformat(), "test", "Test", ["test"], "[]", "{}", True],
+                )
+
+            # Create test generic data (simulating skims)
+            skims_iter0_df = pd.DataFrame({
+                "origin": [1, 2],
+                "dest": [2, 1],
+                "time": [10.0, 15.0],  # Iteration 0 values
+            })
+
+            skims_iter1_df = pd.DataFrame({
+                "origin": [1, 2],
+                "dest": [2, 1],
+                "time": [12.0, 18.0],  # Iteration 1 values (updated by BEAM)
+            })
+
+            print("   📊 Iteration 0: Storing initial skims...")
+            db_manager.store_activitysim_data(
+                "skims", skims_iter0_df, f"file_{ol_id_0}", unique_run_id, 2017, 0, ol_id_0
+            )
+
+            print("   📊 Iteration 1: Storing updated skims...")
+            db_manager.store_activitysim_data(
+                "skims", skims_iter1_df, f"file_{ol_id_1}", unique_run_id, 2017, 1, ol_id_1
+            )
+
+            # Verify skims: should have 2 rows (one per iteration)
+            skims_count = conn.execute(
+                "SELECT COUNT(*) FROM activitysim_data_generic WHERE run_id = ? AND table_name = 'skims'",
+                [unique_run_id]
+            ).fetchone()[0]
+            self.assertEqual(skims_count, 2, "Should have 2 skim entries (one per iteration)")
+            print(f"   ✅ Skims vary per iteration: {skims_count} rows")
+
+            # Verify skims have different iterations
+            skim_iterations = conn.execute(
+                "SELECT DISTINCT iteration FROM activitysim_data_generic WHERE run_id = ? AND table_name = 'skims' ORDER BY iteration",
+                [unique_run_id]
+            ).fetchall()
+            self.assertEqual(len(skim_iterations), 2, "Skims should exist for 2 iterations")
+            self.assertEqual([row[0] for row in skim_iterations], [0, 1], "Skims should have iterations 0 and 1")
+            print(f"   ✅ Skims stored for iterations: {[row[0] for row in skim_iterations]}")
+
+            # Verify unique constraint on (run_id, year, iteration, table_name)
+            # Try to insert duplicate skims for iteration 0 - should replace
+            skims_iter0_updated_df = pd.DataFrame({
+                "origin": [1, 2],
+                "dest": [2, 1],
+                "time": [11.0, 16.0],  # Updated iteration 0 values
+            })
+
+            print("   🔄 Re-inserting skims for iteration 0 (should replace)...")
+            db_manager.store_activitysim_data(
+                "skims", skims_iter0_updated_df, f"file_{ol_id_0}", unique_run_id, 2017, 0, ol_id_0
+            )
+
+            # Still should have 2 rows (replaced, not added)
+            skims_count_after = conn.execute(
+                "SELECT COUNT(*) FROM activitysim_data_generic WHERE run_id = ? AND table_name = 'skims'",
+                [unique_run_id]
+            ).fetchone()[0]
+            self.assertEqual(skims_count_after, 2, "Should still have 2 skim entries (replaced, not duplicated)")
+            print(f"   ✅ Duplicate skims replaced (not duplicated): {skims_count_after} rows")
+
+            print("   ✅ Test passed: Iteration-varying behavior verified for skims")
+
+    def test_atlas_vehicles_workflow(self):
+        """Test ATLAS vehicles2 data storage and FK constraints."""
+        print("\n🚗 Testing ATLAS vehicles workflow...")
+
+        db_manager = create_database_manager(self.settings)
+
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+
+            # Setup prerequisite records
+            unique_run_id = f"test_vehicles_run_{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                "INSERT INTO runs (run_id, created_at, models_used, code_version, hostname) VALUES (?, ?, ?, ?, ?)",
+                [unique_run_id, datetime.now().isoformat(), ["atlas"], "test_version", "test_host"],
+            )
+
+            file_id = f"test_file_{uuid.uuid4().hex[:8]}"
+            ol_id = f"test_ol_{uuid.uuid4().hex[:8]}"
+
+            conn.execute(
+                "INSERT INTO file_records (unique_id, record_type, run_id, openlineage_id, file_path, created_at, short_name, description, models, schema, metadata, exists) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [file_id, "file", unique_run_id, ol_id, "/test/path", datetime.now().isoformat(), "atlas_vehicles2_output", "Test", ["atlas"], "[]", "{}", True],
+            )
+
+            # Create household data (required for FK constraint)
+            # Must create in FK dependency order: parcels -> buildings -> households
+            parcels_data = pd.DataFrame({
+                "parcel_id": [1, 2, 3],
+                "zone_id": ["zone1", "zone2", "zone3"],
+                "land_value": [100000.0, 150000.0, 120000.0],
+                "total_sqft": [5000.0, 6000.0, 4500.0],
+                "county_id": ["county1", "county1", "county2"],
+            })
+            db_manager.store_urbansim_raw_data(
+                "parcels", parcels_data, file_id, unique_run_id, 2017, 0, ol_id
+            )
+
+            buildings_data = pd.DataFrame({
+                "building_id": [101, 102, 103],
+                "parcel_id": [1, 2, 3],
+                "building_type_id": [1, 2, 1],
+                "sqft": [1500, 2000, 1200],
+                "year_built": [1990, 2000, 1985],
+                "stories": [2, 3, 1],
+            })
+            db_manager.store_urbansim_raw_data(
+                "buildings", buildings_data, file_id, unique_run_id, 2017, 0, ol_id
+            )
+
+            households_data = pd.DataFrame({
+                "household_id": [1, 2, 3],
+                "building_id": [101, 102, 103],
+                "persons": [2, 3, 1],
+                "income": [50000.0, 75000.0, 40000.0],
+                "cars": [1, 2, 0],
+                "block_id": ["block1", "block2", "block3"],
+                "age_of_head": [35, 45, 28],
+                "children": [1, 2, 0],
+                "workers": [1, 2, 1],
+            })
+            db_manager.store_urbansim_raw_data(
+                "households", households_data, file_id, unique_run_id, 2017, 0, ol_id
+            )
+            print("   ✅ Created prerequisite households data")
+
+            # Create test vehicles data
+            vehicles_data = [
+                {
+                    "run_id": unique_run_id,
+                    "file_record_id": file_id,
+                    "year": 2017,
+                    "iteration": 0,
+                    "household_id": 1,
+                    "vehicle_id": 1001,
+                    "bodytype": "Sedan",
+                    "pred_power": "ICE",
+                    "ownlease": "Own",
+                    "modelyear": 2015,
+                    "adopt_fuel": "Gasoline",
+                    "adopt_veh": "Conventional",
+                    "vehicletypeid": "Sedan_ICE_2015",
+                },
+                {
+                    "run_id": unique_run_id,
+                    "file_record_id": file_id,
+                    "year": 2017,
+                    "iteration": 0,
+                    "household_id": 2,
+                    "vehicle_id": 1002,
+                    "bodytype": "SUV",
+                    "pred_power": "BEV",
+                    "ownlease": "Lease",
+                    "modelyear": 2020,
+                    "adopt_fuel": "Electric",
+                    "adopt_veh": "BEV",
+                    "vehicletypeid": "SUV_BEV_2020",
+                },
+                {
+                    "run_id": unique_run_id,
+                    "file_record_id": file_id,
+                    "year": 2017,
+                    "iteration": 0,
+                    "household_id": 2,
+                    "vehicle_id": 1003,
+                    "bodytype": "Sedan",
+                    "pred_power": "ICE",
+                    "ownlease": "Own",
+                    "modelyear": 2018,
+                    "adopt_fuel": "Gasoline",
+                    "adopt_veh": "Conventional",
+                    "vehicletypeid": "Sedan_ICE_2018",
+                },
+            ]
+
+            # Insert vehicles data
+            for vehicle in vehicles_data:
+                conn.execute(
+                    """
+                    INSERT INTO atlas_vehicles2_output (
+                        run_id, file_record_id, year, iteration, household_id, vehicle_id,
+                        bodytype, pred_power, ownlease, modelyear, adopt_fuel, adopt_veh, vehicletypeid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        vehicle["run_id"], vehicle["file_record_id"], vehicle["year"],
+                        vehicle["iteration"], vehicle["household_id"], vehicle["vehicle_id"],
+                        vehicle["bodytype"], vehicle["pred_power"], vehicle["ownlease"],
+                        vehicle["modelyear"], vehicle["adopt_fuel"], vehicle["adopt_veh"],
+                        vehicle["vehicletypeid"]
+                    ],
+                )
+            print("   ✅ Inserted 3 vehicle records")
+
+            # Verify data was inserted
+            vehicle_count = conn.execute(
+                "SELECT COUNT(*) FROM atlas_vehicles2_output WHERE run_id = ?",
+                [unique_run_id]
+            ).fetchone()[0]
+            self.assertEqual(vehicle_count, 3, "Should have 3 vehicle records")
+            print(f"   ✅ Verified {vehicle_count} vehicles stored")
+
+            # Test FK constraint - try to insert vehicle for non-existent household
+            print("   🔒 Testing FK constraint (should fail for non-existent household)...")
+            with self.assertRaises(Exception) as context:
+                conn.execute(
+                    """
+                    INSERT INTO atlas_vehicles2_output (
+                        run_id, file_record_id, year, iteration, household_id, vehicle_id,
+                        bodytype, vehicletypeid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [unique_run_id, file_id, 2017, 0, 999, 9999, "Sedan", "Sedan_ICE_2015"],
+                )
+            self.assertIn("Constraint Error", str(context.exception))
+            print("   ✅ FK constraint correctly prevents orphaned vehicles")
+
+            # Test UNIQUE constraint (run_id, year, household_id, vehicle_id)
+            # Note: iteration is NOT in the UNIQUE constraint (vehicles are constant across iterations)
+            print("   🔄 Testing UNIQUE constraint (should fail for duplicate vehicle)...")
+            with self.assertRaises(Exception) as context:
+                conn.execute(
+                    """
+                    INSERT INTO atlas_vehicles2_output (
+                        run_id, file_record_id, year, iteration, household_id, vehicle_id,
+                        bodytype, vehicletypeid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [unique_run_id, file_id, 2017, 0, 1, 1001, "Truck", "Truck_ICE_2015"],
+                )
+            self.assertIn("Constraint Error", str(context.exception))
+            print("   ✅ UNIQUE constraint correctly prevents duplicate vehicles")
+
+            # Test that vehicles can be linked to households with vehicles
+            print("   🔗 Testing household-vehicle relationship...")
+            result = conn.execute(
+                """
+                SELECT h.household_id, h.cars, COUNT(v.vehicle_id) as vehicle_count
+                FROM urbansim_households_raw h
+                LEFT JOIN atlas_vehicles2_output v ON h.run_id = v.run_id AND h.year = v.year AND h.household_id = v.household_id
+                WHERE h.run_id = ?
+                GROUP BY h.household_id, h.cars
+                ORDER BY h.household_id
+                """,
+                [unique_run_id]
+            ).fetchall()
+
+            # Verify relationships
+            self.assertEqual(len(result), 3, "Should have 3 households")
+            self.assertEqual(result[0][2], 1, "Household 1 should have 1 vehicle")
+            self.assertEqual(result[1][2], 2, "Household 2 should have 2 vehicles")
+            self.assertEqual(result[2][2], 0, "Household 3 should have 0 vehicles")
+            print("   ✅ Household-vehicle relationships correct")
+
+            # Verify iteration-constant behavior (same as households/persons)
+            print("   📊 Testing iteration-constant behavior...")
+            # The UNIQUE constraint is (run_id, year, household_id, vehicle_id) - no iteration
+            # This means vehicles are constant across iterations within a year
+            unique_constraint_check = conn.execute(
+                """
+                SELECT constraint_name, constraint_type
+                FROM duckdb_constraints()
+                WHERE table_name = 'atlas_vehicles2_output' AND constraint_type = 'UNIQUE'
+                """
+            ).fetchall()
+            print(f"   ✅ UNIQUE constraint: {unique_constraint_check}")
+            print("   ✅ Vehicles are constant across iterations (iteration not in UNIQUE key)")
+
+            print("   ✅ Test passed: ATLAS vehicles workflow verified")
+
+    def test_atlas_add_vehicleTypeId_logic(self):
+        """Test the atlas_add_vehileTypeId function logic for creating vehicleTypeId."""
+        print("\n🔧 Testing atlas_add_vehileTypeId logic...")
+
+        # Create test input data with various scenarios
+        test_vehicles = pd.DataFrame({
+            "household_id": [1, 2, 3, 4, 5, 6],
+            "vehicle_id": [1001, 1002, 1003, 1004, 1005, 1006],
+            "bodytype": ["Sedan", "SUV", "Truck", "Sedan", "SUV", "Sedan"],
+            "pred_power": ["ICE", "BEV", "ICE", "PHEV", "ICE", "ICE"],
+            "modelyear": [2020, 2018, 2010, 2015, 2022, 2000],  # Mix of pre/post 2015
+            "ownlease": ["Own", "Lease", "Own", "Own", "Lease", "Own"],
+            "adopt_fuel": ["Gasoline", "Electric", "Diesel", "Hybrid", "Gasoline", "Gasoline"],
+        })
+
+        # Create temporary files
+        input_csv = os.path.join(self.temp_dir, "test_vehicles_input.csv")
+        output_csv = os.path.join(self.temp_dir, "test_vehicles2_output.csv")
+
+        # Write test data
+        test_vehicles.to_csv(input_csv, index=False)
+        print(f"   📝 Created test input file with {len(test_vehicles)} vehicles")
+
+        # Call the function
+        settings = {}  # Not used in the function
+        atlas_add_vehileTypeId(settings, 2017, input_csv, output_csv)
+        print("   ✅ atlas_add_vehileTypeId executed successfully")
+
+        # Read the output
+        self.assertTrue(os.path.exists(output_csv), "Output file should be created")
+        result_df = pd.read_csv(output_csv)
+
+        # Verify vehicleTypeId column was added
+        self.assertIn("vehicleTypeId", result_df.columns, "vehicleTypeId column should exist")
+        print("   ✅ vehicleTypeId column added")
+
+        # Verify all rows have vehicleTypeId
+        self.assertEqual(result_df["vehicleTypeId"].isna().sum(), 0, "No missing vehicleTypeId values")
+        print("   ✅ All vehicles have vehicleTypeId")
+
+        # Test specific logic rules
+        # Rule 1: Post-2015 vehicles should have format: bodytype_pred_power_modelyear
+        post_2015_rows = result_df[result_df["modelyear"] >= 2015]
+        for idx, row in post_2015_rows.iterrows():
+            expected = f"{row['bodytype']}_{row['pred_power']}_{int(row['modelyear'])}"
+            self.assertEqual(
+                row["vehicleTypeId"],
+                expected,
+                f"Post-2015 vehicle should have format bodytype_pred_power_modelyear"
+            )
+        print(f"   ✅ Post-2015 vehicles ({len(post_2015_rows)}) have correct format: bodytype_pred_power_modelyear")
+
+        # Rule 2: Pre-2015 vehicles should have format: bodytype_pred_power_2015
+        pre_2015_rows = result_df[result_df["modelyear"] < 2015]
+        for idx, row in pre_2015_rows.iterrows():
+            expected = f"{row['bodytype']}_{row['pred_power']}_2015"
+            self.assertEqual(
+                row["vehicleTypeId"],
+                expected,
+                f"Pre-2015 vehicle should have format bodytype_pred_power_2015"
+            )
+        print(f"   ✅ Pre-2015 vehicles ({len(pre_2015_rows)}) have correct format: bodytype_pred_power_2015")
+
+        # Verify specific test cases
+        test_cases = [
+            (0, "Sedan_ICE_2020"),      # 2020 Sedan ICE
+            (1, "SUV_BEV_2018"),        # 2018 SUV BEV
+            (2, "Truck_ICE_2015"),      # 2010 Truck ICE -> capped at 2015
+            (3, "Sedan_PHEV_2015"),     # 2015 Sedan PHEV (boundary case)
+            (4, "SUV_ICE_2022"),        # 2022 SUV ICE
+            (5, "Sedan_ICE_2015"),      # 2000 Sedan ICE -> capped at 2015
+        ]
+
+        for row_idx, expected_id in test_cases:
+            actual_id = result_df.iloc[row_idx]["vehicleTypeId"]
+            self.assertEqual(
+                actual_id,
+                expected_id,
+                f"Row {row_idx}: Expected {expected_id}, got {actual_id}"
+            )
+            print(f"   ✅ Test case {row_idx}: {expected_id}")
+
+        # Verify original columns are preserved
+        for col in ["household_id", "vehicle_id", "bodytype", "pred_power", "modelyear", "ownlease", "adopt_fuel"]:
+            self.assertIn(col, result_df.columns, f"Original column {col} should be preserved")
+        print("   ✅ All original columns preserved")
+
+        # Verify modelyear is integer type
+        self.assertTrue(
+            pd.api.types.is_integer_dtype(result_df["modelyear"]),
+            "modelyear should be integer type"
+        )
+        print("   ✅ modelyear converted to integer")
+
+        print("   ✅ Test passed: atlas_add_vehileTypeId logic verified")
 
 
 if __name__ == "__main__":

@@ -227,26 +227,39 @@ def copy_vehicles_from_atlas(
         atlas_output_data_dir = os.path.join(previous_run_dir, 'atlas', 'atlas_output')
     else:
         atlas_output_data_dir = workspace.get_atlas_output_dir()
+
+    # FIX: Look for vehicles2 (with vehicleTypeId), not vehicles
     atlas_vehicle_file_loc = os.path.join(
-        atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year)
+        atlas_output_data_dir, "vehicles2_{0}.csv".format(state.forecast_year)
     )
     if not os.path.exists(atlas_vehicle_file_loc):
         atlas_vehicle_file_loc = os.path.join(
-            atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year - 1)
+            atlas_output_data_dir, "vehicles2_{0}.csv".format(state.forecast_year - 1)
         )
+
     logger.info(
-        "Copying atlas vehicles file from {0} to {1}".format(
+        "Copying atlas vehicles2 file from {0} to {1}".format(
             atlas_vehicle_file_loc, beam_vehicles_path
         )
     )
+
     input_record = provenance_tracker.record_input_file(
-        "beam_preprocessor", atlas_vehicle_file_loc, model_run_id=model_run_hash
+        "beam_preprocessor",
+        atlas_vehicle_file_loc,
+        short_name="atlas_vehicles2_output",  # Match the short_name from postprocessor
+        model_run_id=model_run_hash
     )
-    shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
+
+    # FIX: Read uncompressed CSV and write as gzipped
+    df = pd.read_csv(atlas_vehicle_file_loc)
+    df.to_csv(beam_vehicles_path, compression="gzip", index=False)
+
     provenance_tracker.record_output_file_with_inputs(
         "beam_preprocessor",
         beam_vehicles_path,
         input_records=[input_record],
+        description="BEAM vehicles input copied from ATLAS vehicles2 output",
+        short_name="beam_vehicles_in",
         model_run_id=model_run_hash,
     )
 
@@ -872,7 +885,8 @@ class BeamPreprocessor(GenericPreprocessor):
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
 
         # Copy vehicle data from Atlas if enabled
-        if settings.get("vehicle_ownership_model_enabled"):
+        # Only copy on first iteration since vehicles are constant across iterations within a year
+        if settings.get("vehicle_ownership_model_enabled") and self.state.current_inner_iter == 0:
             copy_vehicles_from_atlas(
                 settings, workspace, self.state, self.provenance_tracker, model_run_hash
             )
