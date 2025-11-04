@@ -25,7 +25,7 @@ from pilates.utils.geog import (
     geoid_to_zone_map,
 )
 from pilates.utils.io import read_datastore, datastore_path, get_merged_usim_input_datastore_path
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
 

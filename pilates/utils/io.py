@@ -5,6 +5,7 @@ import pandas as pd
 import yaml
 
 from pilates.utils.settings_helper import get as get_setting
+from pilates.config.models import load_config, config_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +120,8 @@ def parse_args_and_settings(settings_file="settings.yaml"):
         settings_file = args.config
 
     # read settings from config file
-    with open(settings_file) as file:
-        settings = yaml.load(file, Loader=yaml.FullLoader)
+    pydantic_config = load_config(settings_file)
+    settings = config_to_dict(pydantic_config)
 
     disabled_models = "" if args.disable_model is None else args.disable_model
 

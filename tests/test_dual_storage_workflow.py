@@ -167,33 +167,45 @@ class TestDualStorageWorkflow(unittest.TestCase):
                 "year": 2017,
             },
             # Basic PILATES settings for H5 processing
-            "region": "sfbay",
-            "start_year": 2017,
-            "forecast_year": 2017,
-            "geoms_index_col": "taz1454",
-            "FIPS": {
-                "sfbay": {
-                    "state": "06",
-                    "counties": [
-                        "001",
-                        "013",
-                        "041",
-                        "055",
-                        "075",
-                        "081",
-                        "085",
-                        "095",
-                        "097",
-                    ],
+            "run": {
+                "region": "sfbay",
+                "start_year": 2017,
+                "end_year": 2017,
+            },
+            "shared": {
+                "geography": {
+                    "FIPS": {
+                        "sfbay": {
+                            "state": "06",
+                            "counties": [
+                                "001",
+                                "013",
+                                "041",
+                                "055",
+                                "075",
+                                "081",
+                                "085",
+                                "095",
+                                "097",
+                            ],
+                        }
+                    },
+                    "local_crs": {"sfbay": "EPSG:26910"},
+                },
+                "skims": {
+                    "zone_type": "taz",
+                    "geoms_index_col": "taz1454",
                 }
             },
-            "local_crs": {"sfbay": "EPSG:26910"},
-            "skims_zone_type": "taz",
-            "region_to_region_id": {"sfbay": "06197001"},
-            "usim_local_data_input_folder": "pilates/urbansim/data",
-            "usim_formattable_input_file_name": "custom_mpo_{region_id}_model_data.h5",
-            "usim_local_mutable_data_folder": "urbansim/data/",
-            "usim_formattable_output_file_name": "model_data_{year}.h5",
+            "urbansim": {
+                "region_mappings": {
+                    "region_to_region_id": {"sfbay": "06197001"}
+                },
+                "local_data_input_folder": "pilates/urbansim/data",
+                "formattable_input_file_name": "custom_mpo_{region_id}_model_data.h5",
+                "local_mutable_data_folder": "urbansim/data/",
+                "formattable_output_file_name": "model_data_{year}.h5",
+            }
         }
 
     def tearDown(self):

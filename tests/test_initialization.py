@@ -81,12 +81,26 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     init = Initialization("init", None, None)
     workspace = DummyWorkspace()
     settings = {
-        "travel_model": "beam",
-        "beam_model": "beam",  # model name key used by get_preprocessor
-        "activitysim": "activitysim",
-        "activity_demand_model": "dummy_activity",
-        "vehicle_ownership_model": "dummy_vehicle",
-        "land_use_model": "urbansim",  # trigger urbansim path
+        "run": {
+            "models": {
+                "travel": "beam",
+                "activity_demand": "dummy_activity",
+                "vehicle_ownership": "dummy_vehicle",
+                "land_use": "urbansim",
+            }
+        },
+        "beam": {
+            "model": "beam",  # This is a placeholder, actual beam config would be here
+        },
+        "urbansim": {
+            "model": "urbansim",  # This is a placeholder, actual urbansim config would be here
+        },
+        "activitysim": {
+            "model": "activitysim",  # This is a placeholder, actual activitysim config would be here
+        },
+        "atlas": {
+            "model": "atlas",  # This is a placeholder, actual atlas config would be here
+        },
     }
 
     # Run initialization – should not raise any exception

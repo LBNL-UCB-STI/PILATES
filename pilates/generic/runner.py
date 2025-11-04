@@ -16,7 +16,7 @@ from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.container_utils import to_singularity_volumes, to_singularity_env
-from pilates.utils.settings_helper import get as get_setting, get_nested_or_legacy
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class GenericRunner(ABC, Model):
         }
 
         nested_path = model_type_mapping.get(model_type, model_type)
-        model_name = get_nested_or_legacy(settings, nested_path, legacy_key=model_type)
+        model_name = get_setting(settings, nested_path, default=get_setting(settings, model_type))
         if not model_name:
             # If model type is optional (e.g., vehicle_ownership_model), return None
             optional_models = [

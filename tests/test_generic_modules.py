@@ -32,8 +32,10 @@ def test_model_factory_unknown_model_raises():
 # ----------------------------------------------------------------------
 def test_get_model_and_image_success():
     settings = {
-        "container_manager": "docker",
-        "docker_images": {"my_model": "my_image"},
+        "infrastructure": {
+            "container_manager": "docker",
+            "docker_images": {"my_model": "my_image"},
+        },
         "my_model": "my_model",
     }
     model, image = GenericRunner.get_model_and_image(settings, "my_model")
@@ -49,8 +51,10 @@ def test_get_model_and_image_missing_manager():
 
 def test_get_model_and_image_missing_model():
     settings = {
-        "container_manager": "docker",
-        "docker_images": {"my_model": "my_image"},
+        "infrastructure": {
+            "container_manager": "docker",
+            "docker_images": {"my_model": "my_image"},
+        },
     }
     with pytest.raises(ValueError, match="No model my_model specified"):
         GenericRunner.get_model_and_image(settings, "my_model")
@@ -58,8 +62,10 @@ def test_get_model_and_image_missing_model():
 
 def test_get_model_and_image_missing_image():
     settings = {
-        "container_manager": "docker",
-        "docker_images": {},
+        "infrastructure": {
+            "container_manager": "docker",
+            "docker_images": {},
+        },
         "my_model": "my_model",
     }
     with pytest.raises(ValueError, match="No docker image specified"):

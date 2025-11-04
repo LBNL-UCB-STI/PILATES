@@ -355,26 +355,6 @@ def config_to_dict(config: PilatesConfig) -> Dict[str, Any]:
     # Start with nested structure
     result = config.model_dump(exclude_none=True)
 
-    # Import the mapping from settings_helper
-    from pilates.utils.settings_helper import COMMON_SETTINGS
-
-    # Add flattened legacy keys for backward compatibility
-    # Reverse the COMMON_SETTINGS mapping: nested_path -> legacy_key
-    for nested_path, legacy_key in COMMON_SETTINGS.items():
-        # Navigate the nested structure
-        keys = nested_path.split('.')
-        value = result
-        for key in keys:
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                value = None
-                break
-
-        # If we found a value, add it as a flat key
-        if value is not None:
-            result[legacy_key] = value
-
     # Add special legacy aliases
     if 'shared' in result and 'skims' in result['shared']:
         skims = result['shared']['skims']

@@ -75,7 +75,7 @@ class ActivitysimRunner(GenericRunner):
     @staticmethod
     def get_asim_docker_vols(settings, working_dir=None):
         region = get_setting(settings, "run.region")
-        asim_subdir = settings["region_to_asim_subdir"][region]
+        asim_subdir = get_setting(settings, "activitysim.region_mappings.region_to_subdir")[region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         if working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
@@ -155,7 +155,7 @@ class ActivitysimRunner(GenericRunner):
         """
         settings = self.state.full_settings
         region = get_setting(settings, "run.region")
-        asim_subdir = settings["region_to_asim_subdir"][region]
+        asim_subdir = get_setting(settings, "activitysim.region_mappings.region_to_subdir")[region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # Get from your config
