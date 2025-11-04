@@ -57,8 +57,7 @@ class ConfigMigrator:
         }
 
         # Add model-specific configs (only if models are enabled)
-        if self.legacy.get('land_use_model'):
-            new_config['urbansim'] = self._migrate_urbansim_config()
+        new_config['urbansim'] = self._migrate_urbansim_config()
 
         if self.legacy.get('vehicle_ownership_model'):
             new_config['atlas'] = self._migrate_atlas_config()
