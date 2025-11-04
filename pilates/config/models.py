@@ -375,4 +375,15 @@ def config_to_dict(config: PilatesConfig) -> Dict[str, Any]:
         if value is not None:
             result[legacy_key] = value
 
+    # Add special legacy aliases
+    if 'shared' in result and 'skims' in result['shared']:
+        skims = result['shared']['skims']
+        if 'geoms_fname' in skims:
+            result['beam_geoms_fname'] = skims['geoms_fname']
+        if 'geoms_index_col' in skims:
+            result['geoms_index_col'] = skims['geoms_index_col']
+
+    if 'beam' in result and 'router_directory' in result['beam']:
+        result['beam_router_directory'] = result['beam']['router_directory']
+
     return result
