@@ -154,7 +154,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
     # Check both legacy (top-level) and new nested (activitysim.household_sample_size) locations
     household_sample_size = get_setting(settings, "activitysim.household_sample_size", default=get_setting(settings, "household_sample_size", 0))
 
-    if (household_sample_size > 0) and land_use_enabled:
+    if (household_sample_size > 0) and enabled_flags["land_use_enabled"]:
         raise ValueError(
             'Land use models must be disabled (explicitly or via "warm '
             'start" mode to use a non-zero household sample size. The '
