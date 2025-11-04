@@ -34,6 +34,7 @@ from pilates.generic.initialization import Initialization
 from pilates.config.models import load_config, config_to_dict, PilatesConfig
 from pilates.utils.duckdb_manager import DuckDBManager
 from pydantic import ValidationError
+from pilates.utils.settings_helper import get as get_setting
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -375,7 +376,7 @@ def run_activity_demand(
         RecordStore: Processed outputs (file records) from the activity demand postprocessor.
     """
     factory = ModelFactory()
-    activity_demand_model = settings.get("activity_demand_model")
+    activity_demand_model = get_setting(settings, "run.models.activity_demand")
 
     if activity_demand_model == "polaris":
         # POLARIS integration placeholder
