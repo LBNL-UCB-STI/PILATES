@@ -36,7 +36,7 @@ class Initialization(Model):
         model_factory = ModelFactory()
 
         # BEAM model initialization
-        if settings.get("travel_model") == "beam":
+        if get_setting(settings, "run.models.travel") == "beam":
             beam_preprocessor = model_factory.get_preprocessor(
                 "beam", self.state, self.provenance_tracker
             )
@@ -54,12 +54,14 @@ class Initialization(Model):
                 workspace.output_data["beam"] = rec_out
 
         # Other models
-        for model_key in [
-            "activity_demand_model",
-            "vehicle_ownership_model",
-            "land_use_model",
-        ]:
-            model_name = settings.get(model_key)
+        model_keys_mapping = {
+            "activity_demand_model": "run.models.activity_demand",
+            "vehicle_ownership_model": "run.models.vehicle_ownership",
+            "land_use_model": "run.models.land_use",
+        }
+
+        for legacy_key, nested_key in model_keys_mapping.items():
+            model_name = get_setting(settings, nested_key)
             if not model_name:
                 continue
 
