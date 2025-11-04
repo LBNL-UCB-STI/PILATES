@@ -65,11 +65,16 @@ COMMON_SETTINGS = {
     "run.models.vehicle_ownership": "vehicle_ownership_model",
 
     # Shared settings
+    "shared.geography.FIPS": "FIPS",
+    "shared.geography.local_crs": "local_crs",
     "shared.skims.zone_type": "skims_zone_type",
     "shared.skims.fname": "skims_fname",
     "shared.skims.origin_fname": "origin_skims_fname",
     "shared.skims.geoms_fname": "skims_geoms_fname",
     "shared.skims.geoms_index_col": "skims_geoms_index_col",
+    "shared.skims.hwy_paths": "hwy_paths",
+    "shared.skims.periods": "periods",
+    "shared.skims.transit_paths": "transit_paths",
 
     # Infrastructure
     "infrastructure.container_manager": "container_manager",
@@ -95,6 +100,14 @@ COMMON_SETTINGS = {
     "urbansim.command_template": "usim_formattable_command",
 
     # ATLAS
+    "atlas.host_input_folder": "atlas_host_input_folder",
+    "atlas.warmstart_input_folder": "atlas_warmstart_input_folder",
+    "atlas.host_mutable_input_folder": "atlas_host_mutable_input_folder",
+    "atlas.host_output_folder": "atlas_host_output_folder",
+    "atlas.container_input_folder": "atlas_container_input_folder",
+    "atlas.container_output_folder": "atlas_container_output_folder",
+    "atlas.basedir": "atlas_basedir",
+    "atlas.codedir": "atlas_codedir",
     "atlas.sample_size": "atlas_sample_size",
     "atlas.num_processes": "atlas_npe",
     "atlas.beamac": "atlas_beamac",
@@ -104,6 +117,7 @@ COMMON_SETTINGS = {
     "atlas.rebfactor": "atlas_rebfactor",
     "atlas.taxfactor": "atlas_taxfactor",
     "atlas.discIncent": "atlas_discIncent",
+    "atlas.command_template": "atlas_formattable_command",
 
     # ActivitySim
     "activitysim.household_sample_size": "household_sample_size",
@@ -126,12 +140,24 @@ COMMON_SETTINGS = {
 
     # BEAM
     "beam.sample": "beam_sample",
+    "beam.replanning_portion": "beam_replanning_portion",
     "beam.memory": "beam_memory",
     "beam.config": "beam_config",
     "beam.local_input_folder": "beam_local_input_folder",
     "beam.local_mutable_data_folder": "beam_local_mutable_data_folder",
     "beam.local_output_folder": "beam_local_output_folder",
+    "beam.scenario_folder": "beam_scenario_folder",
     "beam.router_directory": "beam_router_directory",
+    "beam.skims_shapefile": "beam_skims_shapefile",
+    "beam.skim_zone_source_id_col": "skim_zone_source_id_col",
+    "beam.skim_zone_geoid_col": "skim_zone_geoid_col",
+    "beam.discard_plans_every_year": "discard_plans_every_year",
+    "beam.max_plans_memory": "max_plans_memory",
+    "beam.simulated_hwy_paths": "beam_simulated_hwy_paths",
+    "beam.asim_hwy_measure_map": "beam_asim_hwy_measure_map",
+    "beam.asim_transit_measure_map": "beam_asim_transit_measure_map",
+    "beam.asim_ridehail_measure_map": "beam_asim_ridehail_measure_map",
+    "beam.ridehail_path_map": "ridehail_path_map",
 
     # Note: Some settings like region_to_region_id, travel_model, etc.
     # are kept at top-level as they're mappings or legacy references.
