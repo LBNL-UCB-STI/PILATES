@@ -198,12 +198,12 @@ class UrbansimPreprocessor(GenericPreprocessor):
         year_specific_model_data_fname = settings.get(
             "usim_formattable_input_file_name_year", ""
         ).format(region_id=region_id, start_year=get_setting(settings, "run.start_year"))
-        model_data_fname = settings["usim_formattable_input_file_name"].format(
+        model_data_fname = get_setting(settings, "urbansim.input_file_template").format(
             region_id=region_id
         )
-        data_dir = settings["usim_local_data_input_folder"]
+        data_dir = get_setting(settings, "urbansim.local_data_input_folder")
         if os.path.exists(os.path.join(data_dir, year_specific_model_data_fname)) and (
-            settings.get("usim_formattable_input_file_name_year") is not None
+            get_setting(settings, "urbansim.input_file_template_year") is not None
         ):
             src = os.path.join(data_dir, year_specific_model_data_fname)
         else:

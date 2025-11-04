@@ -38,7 +38,7 @@ class UrbansimRunner(GenericRunner):
             dict: A dictionary of volume mappings for the Docker container.
         """
         settings = self.state.full_settings
-        usim_remote_data_folder = settings["usim_client_data_folder"]
+        usim_remote_data_folder = get_setting(settings, "urbansim.client_data_folder")
         usim_local_mutable_data_folder = os.path.abspath(output_dir)
         usim_docker_vols = {
             usim_local_mutable_data_folder: {
@@ -61,7 +61,7 @@ class UrbansimRunner(GenericRunner):
         region_id = settings["region_to_region_id"][region]
         land_use_freq = get_setting(settings, "run.land_use_freq")
         skims_source = settings["travel_model"]
-        formattable_usim_cmd = settings["usim_formattable_command"]
+        formattable_usim_cmd = get_setting(settings, "urbansim.command_template")
         usim_cmd = formattable_usim_cmd.format(
             region_id, year, forecast_year, land_use_freq, skims_source
         )
@@ -105,7 +105,7 @@ class UrbansimRunner(GenericRunner):
             )
 
         # Prepare output file path
-        usim_output_store_name = settings["usim_formattable_output_file_name"].format(
+        usim_output_store_name = get_setting(settings, "urbansim.output_file_template").format(
             year=forecast_year
         )
         usim_datastore_fpath = os.path.join(
@@ -140,7 +140,7 @@ class UrbansimRunner(GenericRunner):
                 volumes=usim_docker_vols,
                 command=usim_cmd,
                 model_name=self.model_name,
-                working_dir=settings.get("usim_client_base_folder", "/app"),
+                working_dir=get_setting(settings, "urbansim.client_base_folder", "/app"),
             )
 
             if not success:
@@ -190,7 +190,7 @@ class UrbansimRunner(GenericRunner):
             },
             "container_image": land_use_image,
             "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
-            "working_directory": settings.get("usim_client_base_folder", "/app"),
+            "working_directory": get_setting(settings, "urbansim.client_base_folder", "/app"),
         }
 
         # Complete provenance tracking

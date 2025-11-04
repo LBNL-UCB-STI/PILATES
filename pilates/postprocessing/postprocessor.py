@@ -47,7 +47,7 @@ dtypes = {
 
 
 def copy_outputs_to_mep(settings, year, iter):
-    asim_output_data_dir = settings["asim_local_output_folder"]
+    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
     mep_output_data_dir = os.path.join(settings["mep_local_output_folder"], str(year))
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
@@ -73,7 +73,7 @@ def copy_outputs_to_mep(settings, year, iter):
                 f_out.writelines(f_in)
 
     def copy_urbansim_outputs_to_mep():
-        data_dir = settings["usim_local_mutable_data_folder"]
+        data_dir = get_setting(settings, "urbansim.local_mutable_data_folder")
         usim_output_store_name = get_usim_datastore_fname(
             settings, io="input", year=year
         )
@@ -878,7 +878,7 @@ def _process_person_trip_events(person_trip_events):
 
 
 def _read_asim_utilities(settings, year, iteration):
-    asim_output_data_dir = settings["asim_local_output_folder"]
+    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     trip_utility_location = os.path.join(
         asim_output_data_dir, iteration_output_dir, "trip_mode_choice.zip"
@@ -972,7 +972,7 @@ def _merge_trips_with_utilities(asim_trips, asim_utilities, beam_trips):
 
 
 def _read_asim_plans(settings, year, iteration):
-    asim_output_data_dir = settings["asim_local_output_folder"]
+    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     path = os.path.join(asim_output_data_dir, iteration_output_dir)
     households = (

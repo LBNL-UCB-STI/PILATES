@@ -12,6 +12,8 @@ import polarisruntime as PR
 from pathlib import Path
 from threading import Thread
 
+from pilates.utils.settings_helper import get as get_setting
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,7 +101,7 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
     block_loc_file = "{0}/{1}".format(str(data_dir), block_loc_file_name)
     vot_level = polaris_settings.get("vot_level")
 
-    usim_output_dir = os.path.abspath(usim_settings["usim_local_mutable_data_folder"])
+    usim_output_dir = os.path.abspath(usim_get_setting(settings, "urbansim.local_mutable_data_folder"))
 
     # store the original inputs
     supply_db_name = db_name + "-Supply.sqlite"

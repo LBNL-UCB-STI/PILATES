@@ -26,11 +26,11 @@ def get_usim_datastore_fname(settings, io, year=None):
         str: The formatted UrbanSim datastore filename.
     """
     if io == "output":
-        datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
+        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
     elif io == "input":
         region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
-        usim_base_fname = settings["usim_formattable_input_file_name"]
+        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
         raise ValueError(

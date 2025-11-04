@@ -39,7 +39,7 @@ class ActivitysimRunner(GenericRunner):
 
     @staticmethod
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
-        formattable_asim_cmd = settings["asim_formattable_command"]
+        formattable_asim_cmd = get_setting(settings, "activitysim.command_template")
         if not household_sample_size:
             household_sample_size = settings.get("household_sample_size", 0)
         num_processes = num_processes or settings.get(
@@ -54,7 +54,7 @@ class ActivitysimRunner(GenericRunner):
     @staticmethod
     def get_asim_additional_args(settings, asim_docker_vols, compile):
         additional_args = []
-        if settings.get("file_format", "parquet") == "parquet":
+        if get_setting(settings, "activitysim.file_format", "parquet") == "parquet":
             additional_args.append("--persist-sharrow-cache")
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
@@ -79,38 +79,38 @@ class ActivitysimRunner(GenericRunner):
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         if working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
-                os.path.join(working_dir, settings["asim_local_mutable_data_folder"])
+                os.path.join(working_dir, get_setting(settings, "activitysim.local_mutable_data_folder"))
             )
             asim_local_output_folder = os.path.abspath(
-                os.path.join(working_dir, settings["asim_local_output_folder"])
+                os.path.join(working_dir, get_setting(settings, "activitysim.local_output_folder"))
             )
             asim_local_configs_folder = os.path.abspath(
                 os.path.join(
                     working_dir,
-                    settings["asim_local_mutable_configs_folder"],
-                    settings.get("asim_main_configs_dir", "configs"),
+                    get_setting(settings, "activitysim.local_mutable_configs_folder"),
+                    get_setting(settings, "activitysim.main_configs_dir", "configs"),
                 )
             )
             asim_local_configs_compile_folder = os.path.abspath(
                 os.path.join(
                     working_dir,
-                    settings["asim_local_mutable_configs_folder"],
+                    get_setting(settings, "activitysim.local_mutable_configs_folder"),
                     "configs_sh_compile",
                 )
             )
         else:
             asim_local_mutable_data_folder = os.path.abspath(
-                settings["asim_local_mutable_data_folder"]
+                get_setting(settings, "activitysim.local_mutable_data_folder")
             )
             asim_local_output_folder = os.path.abspath(
-                settings["asim_local_output_folder"]
+                get_setting(settings, "activitysim.local_output_folder")
             )
             asim_local_configs_folder = os.path.abspath(
-                os.path.join(settings["asim_local_configs_folder"], region, "configs")
+                os.path.join(get_setting(settings, "activitysim.local_configs_folder"), region, "configs")
             )
             asim_local_configs_compile_folder = os.path.abspath(
                 os.path.join(
-                    settings["asim_local_configs_folder"], region, "configs_sh_compile"
+                    get_setting(settings, "activitysim.local_configs_folder"), region, "configs_sh_compile"
                 )
             )
         asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
@@ -213,7 +213,7 @@ class ActivitysimRunner(GenericRunner):
         )
 
         asim_local_output_folder = os.path.abspath(
-            os.path.join(workspace.full_path, settings["asim_local_output_folder"])
+            os.path.join(workspace.full_path, get_setting(settings, "activitysim.local_output_folder"))
         )
 
         os.makedirs(os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True)

@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 def _get_usim_datastore_fname(settings, io, year=None):
     # reference: asim postprocessor
     if io == "output":
-        datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
+        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
     elif io == "input":
         region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
-        usim_base_fname = settings["usim_formattable_input_file_name"]
+        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
         datastore_name = usim_base_fname.format(region_id=region_id)
 
     return datastore_name
@@ -456,7 +456,7 @@ def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
     # open skims file
     import openmatrix as omx
 
-    skims_dir = settings["asim_local_mutable_data_folder"]
+    skims_dir = get_setting(settings, "activitysim.local_mutable_data_folder")
     skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
 
     # find the path with minimum time for each o-d

@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 def _load_asim_outputs(settings, workspace: Workspace):
-    output_tables_settings = settings["asim_output_tables"]
+    output_tables_settings = get_setting(settings, "activitysim.output_tables")
     prefix = output_tables_settings["prefix"]
     output_tables = output_tables_settings["tables"]
     asim_output_dict = {}
     asim_output_dir = workspace.get_asim_output_dir()
     for table_name in output_tables:
-        file_format = settings.get("file_format", "csv")
+        file_format = get_setting(settings, "activitysim.file_format", "csv")
         if file_format == "parquet":
             file_name = "%s%s.parquet" % (prefix, table_name)
             file_path = os.path.join(
@@ -63,11 +63,11 @@ def _load_asim_outputs(settings, workspace: Workspace):
 
 def get_usim_datastore_fname(settings, io, year=None):
     if io == "output":
-        datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
+        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
     elif io == "input":
         region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
-        usim_base_fname = settings["usim_formattable_input_file_name"]
+        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
         datastore_name = usim_base_fname.format(region_id=region_id)
 
     return datastore_name

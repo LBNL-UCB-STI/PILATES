@@ -207,16 +207,16 @@ def datastore_path(settings, year=None, mutable_data_dir=None):
     region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
-        data_loc = settings["usim_local_data_input_folder"]
+        data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
         data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
         os.makedirs(data_loc, exist_ok=True)
     if year is None:
-        usim_datastore = settings["usim_formattable_input_file_name"].format(
+        usim_datastore = get_setting(settings, "urbansim.input_file_template").format(
             region_id=region_id
         )
     else:
-        usim_datastore = settings["usim_formattable_output_file_name"].format(year=year)
+        usim_datastore = get_setting(settings, "urbansim.output_file_template").format(year=year)
     return os.path.join(data_loc, usim_datastore)
 
 
@@ -227,7 +227,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
-        data_loc = settings["usim_local_data_input_folder"]
+        data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
         data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
     urbansim_enabled = settings.get("land_use_model") is not None
@@ -239,7 +239,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
             )
         )
         table_prefix_yr = ""  # input data store tables have no year prefix
-        usim_datastore = settings["usim_formattable_input_file_name"].format(
+        usim_datastore = get_setting(settings, "urbansim.input_file_template").format(
             region_id=region_id
         )
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
@@ -257,7 +257,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
 
     # Otherwise we read from the land use outputs
     else:
-        usim_datastore = settings["usim_formattable_output_file_name"].format(year=year)
+        usim_datastore = get_setting(settings, "urbansim.output_file_template").format(year=year)
         table_prefix_yr = str(year)
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
         store = pd.HDFStore(usim_datastore_fpath)
@@ -273,9 +273,9 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
 def get_merged_usim_input_datastore_path(settings, mutable_data_dir=None):
     region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
-    usim_base_fname = settings["usim_formattable_input_file_name"]
+    usim_base_fname = get_setting(settings, "urbansim.input_file_template")
     datastore_name = usim_base_fname.format(region_id=region_id)
-    data_loc = mutable_data_dir if mutable_data_dir else settings["usim_local_data_input_folder"]
+    data_loc = mutable_data_dir if mutable_data_dir else get_setting(settings, "urbansim.local_data_input_folder")
     return os.path.join(data_loc, datastore_name)
 
 def locate_asim_file(asim_output_data_dir, file_name, fmt):

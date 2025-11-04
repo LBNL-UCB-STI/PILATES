@@ -137,7 +137,7 @@ class Workspace:
                 else:
                     self.output_data[model_name] = output_store
                 # asim_config_dir = os.path.join(
-                #     settings.get("asim_local_configs_folder"), get_setting(settings, "run.region")
+                #     get_setting(settings, "activitysim.local_configs_folder"), get_setting(settings, "run.region")
                 # )
                 # self._record_initial_repo_files(
                 #     "activitysim",
@@ -177,21 +177,21 @@ class Workspace:
     # Path getter methods
     def get_usim_mutable_data_dir(self) -> str:
         return os.path.join(
-            self.full_path, self.settings["usim_local_mutable_data_folder"]
+            self.full_path, get_setting(self.settings, "urbansim.local_mutable_data_folder")
         )
 
     def get_asim_mutable_data_dir(self) -> str:
         return os.path.join(
-            self.full_path, self.settings["asim_local_mutable_data_folder"]
+            self.full_path, get_setting(self.settings, "activitysim.local_mutable_data_folder")
         )
 
     def get_asim_mutable_configs_dir(self) -> str:
         return os.path.join(
-            self.full_path, self.settings["asim_local_configs_folder"]
+            self.full_path, get_setting(self.settings, "activitysim.local_configs_folder")
         )
 
     def get_asim_output_dir(self) -> str:
-        return os.path.join(self.full_path, self.settings["asim_local_output_folder"])
+        return os.path.join(self.full_path, get_setting(self.settings, "activitysim.local_output_folder"))
 
     def get_beam_mutable_data_dir(self) -> str:
         return os.path.join(

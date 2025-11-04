@@ -345,7 +345,7 @@ def update_usim_after_polaris(forecast_year, usim_output_dir, db_demand, usim_se
         # no forecast year so read the input urbansim model from settings
         region = usim_get_setting(settings, "run.region")
         region_id = usim_settings["region_to_region_id"][region]
-        usim_base_fname = usim_settings["usim_formattable_input_file_name"]
+        usim_base_fname = usim_get_setting(settings, "urbansim.input_file_template")
         usim_base = usim_base_fname.format(region_id=region_id)
         usim_output = "{0}/{1}".format(usim_output_dir, usim_base)
 

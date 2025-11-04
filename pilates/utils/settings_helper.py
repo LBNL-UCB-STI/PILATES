@@ -84,6 +84,14 @@ COMMON_SETTINGS = {
 
     # UrbanSim
     "urbansim.region_id": "region_id",
+    "urbansim.local_data_input_folder": "usim_local_data_input_folder",
+    "urbansim.local_mutable_data_folder": "usim_local_mutable_data_folder",
+    "urbansim.client_base_folder": "usim_client_base_folder",
+    "urbansim.client_data_folder": "usim_client_data_folder",
+    "urbansim.input_file_template": "usim_formattable_input_file_name",
+    "urbansim.input_file_template_year": "usim_formattable_input_file_name_year",
+    "urbansim.output_file_template": "usim_formattable_output_file_name",
+    "urbansim.command_template": "usim_formattable_command",
 
     # ATLAS
     "atlas.sample_size": "atlas_sample_size",
@@ -101,6 +109,19 @@ COMMON_SETTINGS = {
     "activitysim.chunk_size": "chunk_size",
     "activitysim.num_processes": "num_processes",
     "activitysim.replan_iters": "replan_iters",
+    "activitysim.file_format": "file_format",
+    "activitysim.local_input_folder": "asim_local_input_folder",
+    "activitysim.local_mutable_data_folder": "asim_local_mutable_data_folder",
+    "activitysim.local_output_folder": "asim_local_output_folder",
+    "activitysim.local_configs_folder": "asim_local_configs_folder",
+    "activitysim.local_mutable_configs_folder": "asim_local_mutable_configs_folder",
+    "activitysim.validation_folder": "asim_validation_folder",
+    "activitysim.subdir": "asim_subdir",
+    "activitysim.main_configs_dir": "asim_main_configs_dir",
+    "activitysim.from_urbansim_col_maps": "asim_from_usim_col_maps",
+    "activitysim.to_urbansim_col_maps": "asim_to_usim_col_maps",
+    "activitysim.output_tables": "asim_output_tables",
+    "activitysim.command_template": "asim_formattable_command",
 
     # BEAM
     "beam.sample": "beam_sample",
@@ -110,8 +131,8 @@ COMMON_SETTINGS = {
     "beam.local_output_folder": "beam_local_output_folder",
     "beam.router_directory": "beam_router_directory",
 
-    # Note: Some settings like region_to_region_id, usim_formattable_input_file_name, etc.
-    # are kept at top-level as they're mappings/templates that don't fit the nested structure.
+    # Note: Some settings like region_to_region_id, travel_model, etc.
+    # are kept at top-level as they're mappings or legacy references.
     # They can be accessed directly with settings["key"] for now.
 }
 

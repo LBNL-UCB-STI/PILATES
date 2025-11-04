@@ -117,7 +117,7 @@ def read_skims(settings, mode="a", data_dir=None, file_name="skims.omx"):
         Ignored in read-only mode.
     """
     if data_dir is None:
-        data_dir = settings["asim_local_mutable_data_folder"]
+        data_dir = get_setting(settings, "activitysim.local_mutable_data_folder")
     path = os.path.join(data_dir, file_name)
     skims = omx.open_file(path, mode=mode)
     return skims
@@ -219,8 +219,8 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
 
     path_list = [
         full_path,
-        settings["asim_local_mutable_configs_folder"],
-        settings.get("asim_main_configs_dir", "configs"),
+        get_setting(settings, "activitysim.local_mutable_configs_folder"),
+        get_setting(settings, "activitysim.main_configs_dir", "configs"),
         "settings.yaml",
     ]
 
@@ -322,7 +322,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
 
     """
     if output_dir is None:
-        output_dir = settings["asim_local_mutable_data_folder"]
+        output_dir = get_setting(settings, "activitysim.local_mutable_data_folder")
     skims_path = os.path.join(output_dir, "skims.omx")
     final_skims_exist = os.path.exists(skims_path)
 
@@ -1171,7 +1171,7 @@ def _create_offset(settings, order, data_dir=None):
 def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) -> str:
     if not output_dir:
         output_dir = os.path.join(
-            state.full_path, settings["asim_local_mutable_data_folder"]
+            state.full_path, get_setting(settings, "activitysim.local_mutable_data_folder")
         )
 
     # If running in static skims mode and ActivitySim skims already exist
@@ -1286,7 +1286,7 @@ def plot_skims(
             )
 
     # Saving plots to files.
-    asim_validation = settings["asim_validation_folder"]
+    asim_validation = get_setting(settings, "activitysim.validation_folder")
     if not os.path.isdir(asim_validation):
         os.mkdir(asim_validation)
 
@@ -2059,9 +2059,9 @@ def copy_data_to_mutable_location(
     )
 
     configs_source_dir = os.path.join(
-        settings["asim_local_configs_folder"], get_setting(settings, "run.region")
+        get_setting(settings, "activitysim.local_configs_folder"), get_setting(settings, "run.region")
     )
-    configs_dest_dir = os.path.abspath(os.path.join(folder_path, "..","..",settings["asim_local_mutable_configs_folder"]))
+    configs_dest_dir = os.path.abspath(os.path.join(folder_path, "..","..",get_setting(settings, "activitysim.local_mutable_configs_folder")))
     logger.info(
         "Moving asim configs from {0} to {1}".format(
             configs_source_dir, configs_dest_dir

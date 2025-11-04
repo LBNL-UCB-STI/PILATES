@@ -441,7 +441,7 @@ def copy_plans_from_asim(
             return None
 
     def merge_only_updated_households(asim_file_paths: dict) -> List[Record]:
-        file_format = settings.get("file_format", "parquet")
+        file_format = get_setting(settings, "activitysim.file_format", "parquet")
 
         asim_plans_path, asim_plans_record = asim_file_paths.get("beam_plans")
         asim_households_path, asim_households_record = asim_file_paths.get("households")
@@ -704,7 +704,7 @@ def copy_plans_from_asim(
         logger.info(
             "You have chosen to use final ASIM plans. Will attempt to read files from provenance tracker."
         )
-        file_format = settings.get("file_format", "parquet")
+        file_format = get_setting(settings, "activitysim.file_format", "parquet")
 
         # Find ActivitySim output files using provenance tracker
         required_files = [
@@ -785,7 +785,7 @@ def copy_plans_from_asim(
     else:
         logger.info("Using the plans that were already in the beam scenario folder")
         # Locate and create records for existing plans, households, persons
-        file_format = settings.get("file_format", "parquet")
+        file_format = get_setting(settings, "activitysim.file_format", "parquet")
         record_list = []
         for _, beam_name in [
             ("beam_plans", "plans"),
