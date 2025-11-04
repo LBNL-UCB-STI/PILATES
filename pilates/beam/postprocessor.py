@@ -3375,7 +3375,7 @@ class BeamPostprocessor(GenericPostprocessor):
                     state=self.state,
                 )
 
-        if settings.get("write_skims_to_omx", False) or settings.get("land_use_model") == "urbansim":
+        if settings.get("write_skims_to_omx", False) or get_setting(settings, "run.models.land_use") == "urbansim":
             logger.info("Writing skims to OMX file for UrbanSim or other downstream models...")
             if not self.zarr_manager or not self.zarr_manager.path or not os.path.exists(self.zarr_manager.path):
                 logger.error("Zarr manager or path is not available. Cannot write skims to OMX.")

@@ -230,7 +230,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
         data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
-    urbansim_enabled = settings.get("land_use_model") is not None
+    urbansim_enabled = get_setting(settings, "run.models.land_use") is not None
 
     if (year == get_setting(settings, "run.start_year")) or warm_start or not urbansim_enabled:
         logger.info(

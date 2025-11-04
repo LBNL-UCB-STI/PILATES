@@ -216,7 +216,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         processed_records = []
 
         try:
-            if settings.get("land_use_model") == "urbansim":
+            if get_setting(settings, "run.models.land_use") == "urbansim":
                 create_next_iter_usim_data(
                     settings,
                     self.state.forecast_year,

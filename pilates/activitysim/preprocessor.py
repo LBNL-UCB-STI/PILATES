@@ -1354,7 +1354,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             bool: True if database input should be used
         """
         # Check if UrbanSim is turned off
-        land_use_model = settings.get("land_use_model", "")
+        land_use_model = get_setting(settings, "run.models.land_use", "")
         urbansim_disabled = land_use_model != "urbansim"
 
         # Check if database is configured

@@ -306,19 +306,17 @@ class GenericRunner(ABC, Model):
 
     @staticmethod
     def initialize_docker_client(settings):
-        land_use_model = settings.get("land_use_model", False)
-        vehicle_ownership_model = settings.get(
-            "vehicle_ownership_model", False
-        )  ## ATLAS
-        activity_demand_model = settings.get("activity_demand_model", False)
-        travel_model = settings.get("travel_model", False)
+        land_use_model = get_setting(settings, "run.models.land_use", False)
+        vehicle_ownership_model = get_setting(settings, "run.models.vehicle_ownership", False)  ## ATLAS
+        activity_demand_model = get_setting(settings, "run.models.activity_demand", False)
+        travel_model = get_setting(settings, "run.models.travel", False)
         models = [
             land_use_model,
             vehicle_ownership_model,
             activity_demand_model,
             travel_model,
         ]
-        image_names = settings["docker_images"]
+        image_names = get_setting(settings, "infrastructure.docker_images")
         pull_latest = settings.get("pull_latest", False)
 
         client = docker.from_env()

@@ -351,7 +351,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
 
             # If not the first iteration, check if BEAM is enabled and copy updated skims
-            if self.state.current_year > settings['start_year'] or self.state.iteration > 0:
+            if self.state.current_year > get_setting(settings, 'run.start_year') or self.state.iteration > 0:
                 if settings.get("travel_model") == "beam":
                     logger.info("Updating skims from BEAM mutable output for subsequent iteration.")
                     if self.state.run_info_path and os.path.exists(self.state.run_info_path):

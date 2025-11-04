@@ -60,7 +60,7 @@ class UrbansimRunner(GenericRunner):
         region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
         land_use_freq = get_setting(settings, "run.land_use_freq")
-        skims_source = settings["travel_model"]
+        skims_source = get_setting(settings, "run.models.travel")
         formattable_usim_cmd = get_setting(settings, "urbansim.command_template")
         usim_cmd = formattable_usim_cmd.format(
             region_id, year, forecast_year, land_use_freq, skims_source
@@ -186,7 +186,7 @@ class UrbansimRunner(GenericRunner):
                 "year": self.state.current_year,
                 "forecast_year": forecast_year,
                 "land_use_freq": get_setting(settings, "run.land_use_freq"),
-                "skims_source": settings["travel_model"],
+                "skims_source": get_setting(settings, "run.models.travel"),
             },
             "container_image": land_use_image,
             "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
