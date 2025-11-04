@@ -7,6 +7,71 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def compute_model_enabled_flags(settings, disabled_models=""):
+    """
+    Compute which models are enabled based on config and command-line args.
+
+    Works with both legacy (flat) and new (nested Pydantic) config formats.
+
+    Args:
+        settings: Settings dict (either flat or nested format)
+        disabled_models: String of disabled model letters from -d flag (e.g., "lt")
+
+    Returns:
+        dict: Flags for land_use_enabled, vehicle_ownership_model_enabled, etc.
+    """
+    # Helper to get nested or flat values
+    def get(nested_path, legacy_key, default=None):
+        value = settings
+        for key in nested_path.split('.'):
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                value = settings.get(legacy_key, default)
+                break
+        return value
+
+    # Get model names from nested or legacy locations
+    land_use_model = get("run.models.land_use", "land_use_model", False)
+    vehicle_ownership_model = get("run.models.vehicle_ownership", "vehicle_ownership_model", False)
+    activity_demand_model = get("run.models.activity_demand", "activity_demand_model", False)
+    travel_model = get("run.models.travel", "travel_model", False)
+
+    warm_start_skims = settings.get("warm_start_skims", False)
+    static_skims = settings.get("static_skims", False)
+    replan_iters = get("activitysim.replan_iters", "replan_iters", 0)
+
+    # Compute enabled flags
+    land_use_enabled = (
+        bool(land_use_model)
+        and (not warm_start_skims)
+        and ("l" not in disabled_models)
+    )
+
+    vehicle_ownership_model_enabled = bool(vehicle_ownership_model)
+
+    activity_demand_enabled = bool(activity_demand_model) and ("a" not in disabled_models)
+
+    traffic_assignment_enabled = (
+        bool(travel_model)
+        and (not static_skims)
+        and ("t" not in disabled_models)
+    )
+
+    replanning_enabled = replan_iters > 0
+
+    if activity_demand_enabled and activity_demand_model == "polaris":
+        replanning_enabled = False
+
+    return {
+        "land_use_enabled": land_use_enabled,
+        "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
+        "activity_demand_enabled": activity_demand_enabled,
+        "traffic_assignment_enabled": traffic_assignment_enabled,
+        "replanning_enabled": replanning_enabled,
+    }
+
+
 def parse_args_and_settings(settings_file="settings.yaml"):
     # parse command-line args
     parser = argparse.ArgumentParser(add_help=False)
@@ -64,6 +129,8 @@ def parse_args_and_settings(settings_file="settings.yaml"):
     with open(settings_file) as file:
         settings = yaml.load(file, Loader=yaml.FullLoader)
 
+    disabled_models = "" if args.disable_model is None else args.disable_model
+
     # command-line only settings:
     settings.update(
         {
@@ -72,6 +139,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
             "asim_validation": args.figures,
             "state_file_loc": args.stage,
             "settings_file": settings_file,
+            "_disabled_models": disabled_models,  # Store for later use
         }
     )
 
@@ -83,41 +151,10 @@ def parse_args_and_settings(settings_file="settings.yaml"):
         settings.update({"pull_latest": args.pull_latest})
     if args.household_sample_size:
         settings.update({"household_sample_size": args.household_sample_size})
-    disabled_models = "" if args.disable_model is None else args.disable_model
 
-    # turn models on or off
-    land_use_enabled = (
-        (settings.get("land_use_model", False))
-        and (not settings.get("warm_start_skims"))
-        and ("l" not in disabled_models)
-    )
-
-    vehicle_ownership_model_enabled = settings.get(
-        "vehicle_ownership_model", False
-    )  ## Atlas
-    activity_demand_enabled = (settings.get("activity_demand_model", False)) and (
-        "a" not in disabled_models
-    )
-    traffic_assignment_enabled = (
-        (settings.get("travel_model", False))
-        and (not settings["static_skims"])
-        and ("t" not in disabled_models)
-    )
-    replanning_enabled = settings.get("replan_iters", 0) > 0
-
-    if activity_demand_enabled:
-        if settings["activity_demand_model"] == "polaris":
-            replanning_enabled = False
-
-    settings.update(
-        {
-            "land_use_enabled": land_use_enabled,
-            "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,  ## Atlas
-            "activity_demand_enabled": activity_demand_enabled,
-            "traffic_assignment_enabled": traffic_assignment_enabled,
-            "replanning_enabled": replanning_enabled,
-        }
-    )
+    # Compute model enabled flags using shared function (disabled_models already stored above)
+    enabled_flags = compute_model_enabled_flags(settings, disabled_models)
+    settings.update(enabled_flags)
 
     # raise errors/warnings for conflicting settings
     # Check both legacy (top-level) and new nested (activitysim.household_sample_size) locations

@@ -52,6 +52,7 @@ from pilates.activitysim import postprocessor as asim_post
 from pilates.urbansim import postprocessor as usim_post
 from pilates.utils.io import parse_args_and_settings
 from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
+from pilates.utils.io import compute_model_enabled_flags
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -481,11 +482,17 @@ def main():
 
             # Convert back to dict for backward compatibility with existing code
             settings = config_to_dict(pydantic_config)
+
             # Preserve command-line overrides from raw_settings
             for key in ['static_skims', 'warm_start_skims', 'asim_validation', 'state_file_loc', 'settings_file',
-                       'docker_stdout', 'pull_latest', 'household_sample_size']:
+                       'docker_stdout', 'pull_latest', 'household_sample_size', '_disabled_models']:
                 if key in raw_settings:
                     settings[key] = raw_settings[key]
+
+            # Compute model enabled flags (works with nested config format)
+            disabled_models = settings.get('_disabled_models', '')
+            enabled_flags = compute_model_enabled_flags(settings, disabled_models)
+            settings.update(enabled_flags)
         else:
             logger.warning("Config file path not available, using raw settings without validation")
             settings = raw_settings
