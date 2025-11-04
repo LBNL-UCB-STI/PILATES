@@ -53,7 +53,16 @@ class GenericRunner(ABC, Model):
                 "Container Manager not specified (container_manager param in settings.yaml)"
             )
 
-        model_name = settings.get(model_type)
+        # Map legacy model_type keys to nested paths
+        model_type_mapping = {
+            "land_use_model": "run.models.land_use",
+            "travel_model": "run.models.travel",
+            "activity_demand_model": "run.models.activity_demand",
+            "vehicle_ownership_model": "run.models.vehicle_ownership",
+        }
+
+        nested_path = model_type_mapping.get(model_type, model_type)
+        model_name = get_setting(settings, nested_path, model_type)
         if not model_name:
             # If model type is optional (e.g., vehicle_ownership_model), return None
             optional_models = [
