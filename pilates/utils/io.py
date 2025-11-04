@@ -120,16 +120,35 @@ def parse_args_and_settings(settings_file="settings.yaml"):
     )
 
     # raise errors/warnings for conflicting settings
-    if (settings["household_sample_size"] > 0) and land_use_enabled:
+    # Check both legacy (top-level) and new nested (activitysim.household_sample_size) locations
+    household_sample_size = settings.get("household_sample_size")
+    if household_sample_size is None:
+        # Try nested location for Pydantic-style configs
+        household_sample_size = settings.get("activitysim", {}).get("household_sample_size", 0)
+
+    if (household_sample_size > 0) and land_use_enabled:
         raise ValueError(
             'Land use models must be disabled (explicitly or via "warm '
             'start" mode to use a non-zero household sample size. The '
             "household sample size you specified is {0}".format(
-                settings["household_sample_size"]
+                household_sample_size
             )
         )
-    if (settings["atlas_beamac"] > 0) and (
-        (settings["region"] != "sfbay") or (settings["skims_zone_type"] != "taz")
+    # Check both legacy and nested locations for atlas_beamac, region, skims_zone_type
+    atlas_beamac = settings.get("atlas_beamac")
+    if atlas_beamac is None:
+        atlas_beamac = settings.get("atlas", {}).get("beamac", 0)
+
+    region = settings.get("region")
+    if region is None:
+        region = settings.get("run", {}).get("region")
+
+    skims_zone_type = settings.get("skims_zone_type")
+    if skims_zone_type is None:
+        skims_zone_type = settings.get("shared", {}).get("skims", {}).get("zone_type")
+
+    if (atlas_beamac > 0) and (
+        (region != "sfbay") or (skims_zone_type != "taz")
     ):
         raise ValueError(
             "atlas_beamac must be 0 (read accessibility from RData) "
