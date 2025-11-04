@@ -229,7 +229,8 @@ def _load_events_file(settings, year, replanning_iteration_number, beam_iteratio
     events = pd.read_csv(path, dtype=dtypes)
 
     # Adding scenario info
-            scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")    events["scenario"] = scenario_defs["name"]
+    scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
+    events["scenario"] = scenario_defs["name"]
     events["scenario"] = events["scenario"].astype("category")
     events["lever"] = scenario_defs["lever"]
     events["lever"] = events["lever"].astype("category")
@@ -1108,7 +1109,8 @@ def process_event_file(settings, year, iteration):
         except Exception as e:
             print("Error during merging: \n {0}".format(e))
             logger.error("Error during merging: \n {0}".format(e))
-    scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
+
+        scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
         post_output_folder = get_setting(settings, "postprocessing.output_folder")
 
         filename = "{0}_{1}_{2}-{3}_{4}_iter{6}__{5}.csv.gz".format(

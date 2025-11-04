@@ -283,7 +283,7 @@ class H5ActivitySimExtractor:
             return None
 
     def _create_file_record(
-        self, table_name: str, df: pd.DataFrame, output_path: Optional[str] = None
+        self, table_name: str, df: pd.DataFrame, year: Optional[int] = None, iteration: Optional[int] = None, output_path: Optional[str] = None
     ) -> FileRecord:
         """
         Create a FileRecord for an extracted table.
@@ -319,6 +319,8 @@ class H5ActivitySimExtractor:
                 "source_h5_file": self.h5_path,
                 "extraction_method": "h5_to_database",
                 "data_types": dtypes_str,  # Use string-converted dtypes
+                "year": year,
+                "iteration": iteration,
             },
         )
 
@@ -457,8 +459,8 @@ class H5ActivitySimExtractor:
     ) -> Optional[pd.DataFrame]:
         """Generate land_use table using ActivitySim preprocessor logic."""
         try:
-            region = self.get_setting(settings, "run.region")
-            FIPS = self.get_setting(settings, "shared.geography.FIPS")[region]
+            region = get_setting(self.settings, "run.region")
+            FIPS = get_setting(self.settings, "shared.geography.FIPS")[region]
             asim_zone_id_col = "TAZ"
             # TODO: Generalize this or add it to settings.yaml
             input_zone_id_col = self.settings.get("geoms_index_col", "zone_id")
@@ -568,6 +570,9 @@ class H5ActivitySimExtractor:
         df = table_info["df"]
         file_record = table_info["file_record"]
 
+        year = file_record.metadata.get("year")
+        iteration = file_record.metadata.get("iteration")
+
         try:
             if table_type == "raw":
                 logger.info(
@@ -579,6 +584,8 @@ class H5ActivitySimExtractor:
                     file_record_id=file_record.unique_id,
                     run_id=self.run_id,
                     openlineage_id=file_record.openlineage_id,
+                    year=year,
+                    iteration=iteration,
                 )
             else:  # processed
                 logger.info(
@@ -590,6 +597,8 @@ class H5ActivitySimExtractor:
                     file_record_id=file_record.unique_id,
                     run_id=self.run_id,
                     openlineage_id=file_record.openlineage_id,
+                    year=year,
+                    iteration=iteration,
                 )
 
             return {
@@ -637,13 +646,17 @@ class H5ActivitySimExtractor:
 
             # File records for processed ActivitySim tables
             for table_name, df in self.extracted_tables.items():
-                file_record = self._create_file_record(f"{table_name}_processed", df)
+                year = df["_year"].iloc[0] if "_year" in df.columns else None
+                iteration = 0 # Assuming 0 for initial extraction
+                file_record = self._create_file_record(f"{table_name}_processed", df, year=year, iteration=iteration)
                 file_record.metadata["data_type"] = "processed_activitysim"
                 file_records[file_record.unique_id] = file_record
 
             # File records for raw UrbanSim tables
             for table_name, df in self.raw_tables.items():
-                file_record = self._create_file_record(f"{table_name}_raw", df)
+                year = df["_year"].iloc[0] if "_year" in df.columns else None
+                iteration = 0 # Assuming 0 for initial extraction
+                file_record = self._create_file_record(f"{table_name}_raw", df, year=year, iteration=iteration)
                 file_record.metadata["data_type"] = "raw_urbansim"
                 file_records[file_record.unique_id] = file_record
 
