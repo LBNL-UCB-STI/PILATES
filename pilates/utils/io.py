@@ -205,7 +205,7 @@ def datastore_path(settings, year=None, mutable_data_dir=None):
     If `year` is specified, returns the forecast year data store.
     """
     region = get_setting(settings, "run.region")
-    region_id = settings["region_to_region_id"][region]
+    region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
     if mutable_data_dir is None:
         data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
@@ -225,7 +225,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     Access to the land use .H5 data store
     """
     region = get_setting(settings, "run.region")
-    region_id = settings["region_to_region_id"][region]
+    region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
     if mutable_data_dir is None:
         data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
@@ -272,7 +272,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
 
 def get_merged_usim_input_datastore_path(settings, mutable_data_dir=None):
     region = get_setting(settings, "run.region")
-    region_id = settings["region_to_region_id"][region]
+    region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
     usim_base_fname = get_setting(settings, "urbansim.input_file_template")
     datastore_name = usim_base_fname.format(region_id=region_id)
     data_loc = mutable_data_dir if mutable_data_dir else get_setting(settings, "urbansim.local_data_input_folder")

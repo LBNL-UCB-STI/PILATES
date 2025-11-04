@@ -58,7 +58,7 @@ class UrbansimRunner(GenericRunner):
         year = self.state.current_year
         forecast_year = self.state.forecast_year
         region = get_setting(settings, "run.region")
-        region_id = settings["region_to_region_id"][region]
+        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
         land_use_freq = get_setting(settings, "run.land_use_freq")
         skims_source = get_setting(settings, "run.models.travel")
         formattable_usim_cmd = get_setting(settings, "urbansim.command_template")
@@ -182,7 +182,7 @@ class UrbansimRunner(GenericRunner):
         runtime_metadata = {
             "container_command": usim_cmd,
             "runtime_parameters": {
-                "region_id": settings["region_to_region_id"][get_setting(settings, "run.region")],
+                "region_id": get_setting(settings, "urbansim.region_mappings.region_to_region_id")[get_setting(settings, "run.region")],
                 "year": self.state.current_year,
                 "forecast_year": forecast_year,
                 "land_use_freq": get_setting(settings, "run.land_use_freq"),

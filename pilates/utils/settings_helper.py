@@ -84,6 +84,7 @@ COMMON_SETTINGS = {
 
     # UrbanSim
     "urbansim.region_id": "region_id",
+    "urbansim.region_mappings.region_to_region_id": "region_to_region_id",
     "urbansim.local_data_input_folder": "usim_local_data_input_folder",
     "urbansim.local_mutable_data_folder": "usim_local_mutable_data_folder",
     "urbansim.client_base_folder": "usim_client_base_folder",

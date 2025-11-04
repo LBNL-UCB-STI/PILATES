@@ -89,7 +89,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 beam_output_dir = settings["beam_local_output_folder"]
                 skims_fname = get_setting(settings, "shared.skims.fname")
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings["region_to_region_id"][get_setting(settings, "run.region")]
+                region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[get_setting(settings, "run.region")]
                 input_skims_location = os.path.join(
                     usim_data_dir, "skims_mpo_{0}.zarr".format(region_id)
                 )
@@ -194,7 +194,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
         """
         region = get_setting(settings, "run.region")
-        region_id = settings["region_to_region_id"][region]
+        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
         year_specific_model_data_fname = settings.get(
             "usim_formattable_input_file_name_year", ""
         ).format(region_id=region_id, start_year=get_setting(settings, "run.start_year"))
@@ -367,7 +367,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         get_setting(settings, "shared.skims.fname"),
                     )
                     
-                    region_id = settings["region_to_region_id"][get_setting(settings, "run.region")]
+                    region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[get_setting(settings, "run.region")]
                     dest_skims_fname = f"skims_mpo_{region_id}.omx"
                     dest_skims_path = os.path.join(
                         workspace.get_usim_mutable_data_dir(), dest_skims_fname
