@@ -195,13 +195,30 @@ class UrbansimPreprocessor(GenericPreprocessor):
         """
         region = get_setting(settings, "run.region")
         region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
-        year_specific_model_data_fname = settings.get(
-            "usim_formattable_input_file_name_year", ""
-        ).format(region_id=region_id, start_year=get_setting(settings, "run.start_year"))
-        model_data_fname = get_setting(settings, "urbansim.input_file_template").format(
-            region_id=region_id
-        )
+
+        # Get the input file templates
+        year_template = get_setting(settings, "urbansim.input_file_template_year", "")
+        if year_template:
+            year_specific_model_data_fname = year_template.format(
+                region_id=region_id, start_year=get_setting(settings, "run.start_year")
+            )
+        else:
+            year_specific_model_data_fname = ""
+
+        base_template = get_setting(settings, "urbansim.input_file_template", "")
+        if base_template:
+            model_data_fname = base_template.format(region_id=region_id)
+        else:
+            model_data_fname = ""
         data_dir = get_setting(settings, "urbansim.local_data_input_folder")
+
+        # Validate we have a filename
+        if not model_data_fname:
+            raise ValueError(
+                "UrbanSim input file template is not configured. "
+                "Please set 'urbansim.input_file_template' or 'usim_formattable_input_file_name' in settings."
+            )
+
         if os.path.exists(os.path.join(data_dir, year_specific_model_data_fname)) and (
             get_setting(settings, "urbansim.input_file_template_year") is not None
         ):

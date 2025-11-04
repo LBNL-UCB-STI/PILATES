@@ -165,8 +165,18 @@ class ConfigMigrator:
         region = self.legacy['region']
         region_to_id = self.legacy.get('region_to_region_id', {})
 
+        # Ensure all region IDs are strings (for proper YAML quoting)
+        region_id = region_to_id.get(region)
+        if region_id and not isinstance(region_id, str):
+            region_id = str(region_id)
+
+        # Ensure all region_to_region_id values are strings
+        region_mappings = {}
+        for k, v in self.legacy.get('region_to_region_id', {}).items():
+            region_mappings[k] = str(v) if v is not None else v
+
         return {
-            'region_id': region_to_id.get(region),
+            'region_id': region_id,
             'local_data_input_folder': self.legacy.get('usim_local_data_input_folder', 'pilates/urbansim/data/'),
             'local_mutable_data_folder': self.legacy.get('usim_local_mutable_data_folder', 'urbansim/data/'),
             'client_base_folder': self.legacy.get('usim_client_base_folder', '/base/demos_urbansim'),
@@ -176,7 +186,7 @@ class ConfigMigrator:
             'output_file_template': self.legacy.get('usim_formattable_output_file_name', 'model_data_{year}.h5'),
             'command_template': self.legacy.get('usim_formattable_command', '-r {0} -i {1} -y {2} -f {3} -t {4}'),
             'region_mappings': {
-                'region_to_region_id': self.legacy.get('region_to_region_id', {})
+                'region_to_region_id': region_mappings
             }
         }
 
@@ -328,8 +338,17 @@ def migrate_config_file(
                 logger.info("Writing config anyway (use --no-validate to skip validation)")
                 # Continue to write even if validation fails
 
-        # Write new config
+        # Write new config with proper string quoting
         logger.info(f"Writing new config to: {output_path}")
+
+        # Custom YAML representer to ensure strings with { } are quoted
+        def str_representer(dumper, data):
+            if '{' in data or '}' in data:
+                return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+            return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+        yaml.add_representer(str, str_representer)
+
         with open(output_path, 'w') as f:
             yaml.dump(
                 new_config,
