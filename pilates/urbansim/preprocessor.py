@@ -44,7 +44,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
             if skims_fname.endswith("csv"):
                 raise NotImplementedError("DEMOS requires skims in omx format, not csv")
                 # path_to_skims = os.path.join(
-                #     settings["beam_local_output_folder"], skims_fname
+                #     get_setting(settings, "beam.local_output_folder"), skims_fname
                 # )
                 # # load skims from disk or url
                 # skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
@@ -86,7 +86,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 skims.close()
                 return out.to_frame()
             elif skims_fname.endswith("zarr"):
-                beam_output_dir = settings["beam_local_output_folder"]
+                beam_output_dir = get_setting(settings, "beam.local_output_folder")
                 skims_fname = get_setting(settings, "shared.skims.fname")
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
                 region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[get_setting(settings, "run.region")]
@@ -239,7 +239,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
 
-        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", settings["beam_local_input_folder"], get_setting(settings, "run.region"), get_setting(settings, "shared.skims.fname")))
+        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", get_setting(settings, "beam.local_input_folder"), get_setting(settings, "run.region"), get_setting(settings, "shared.skims.fname")))
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 
         inputs.append(self.provenance_tracker.record_input_file(

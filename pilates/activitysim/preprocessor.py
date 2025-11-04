@@ -265,7 +265,7 @@ def _load_raw_beam_skims(settings, convertFromCsv=True, blank=False):
     """
     zone_type = get_setting(settings, "shared.skims.zone_type")
     skims_fname = get_setting(settings, "shared.skims.fname", False)
-    path_to_beam_skims = os.path.join(settings["beam_local_output_folder"], skims_fname)
+    path_to_beam_skims = os.path.join(get_setting(settings, "beam.local_output_folder"), skims_fname)
 
     if (not os.path.exists(path_to_beam_skims)) & (not convertFromCsv):
         return None
@@ -302,7 +302,7 @@ def _load_raw_beam_origin_skims(settings):
 
     origin_skims_fname = get_setting(settings, "shared.skims.origin_fname", False)
     path_to_beam_skims = os.path.join(
-        settings["beam_local_output_folder"], origin_skims_fname
+        get_setting(settings, "beam.local_output_folder"), origin_skims_fname
     )
     skims = pd.read_csv(path_to_beam_skims, dtype=beam_origin_skims_types)
     return skims
@@ -328,7 +328,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
 
     skims_fname = get_setting(settings, "shared.skims.fname", False)
     omx_skim_output = skims_fname.endswith(".omx")
-    beam_output_dir = settings["beam_local_output_folder"]
+    beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(output_dir, "skims.omx")
     mutable_skims_exist = os.path.exists(mutable_skims_location)
     should_use_csv_input_skims = mutable_skims_exist & (not omx_skim_output)
@@ -623,7 +623,7 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
     logger.info("Creating distance skims.")
 
     skims_fname = "skims.omx"
-    # beam_output_dir = settings['beam_local_output_folder']
+    # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
@@ -823,7 +823,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
-    # beam_output_dir = settings['beam_local_output_folder']
+    # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
@@ -895,7 +895,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
-    # beam_output_dir = settings['beam_local_output_folder']
+    # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
@@ -1002,7 +1002,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
-    # beam_output_dir = settings['beam_local_output_folder']
+    # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
     needToClose = True
     if input_skims is not None:
@@ -1208,7 +1208,7 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) ->
 
             del auto_df, transit_df
         else:
-            # beam_output_dir = settings['beam_local_output_folder']
+            # beam_output_dir = get_setting(settings, "beam.local_output_folder")
             _distance_skims(settings, state.year, tempSkims, order, data_dir=output_dir)
             _fill_auto_skims(settings, tempSkims, order, data_dir=output_dir)
             _fill_transit_skims(settings, tempSkims, order, data_dir=output_dir)
@@ -2034,7 +2034,7 @@ def copy_data_to_mutable_location(
     input_dir = folder_path
     os.makedirs(input_dir, exist_ok=True)
     region = get_setting(settings, "run.region")
-    beam_input_dir = settings["beam_local_input_folder"]
+    beam_input_dir = get_setting(settings, "beam.local_input_folder")
     beam_geoms_fname = settings["beam_geoms_fname"]
     beam_router_directory = settings["beam_router_directory"]
     asim_geoms_location = os.path.join(input_dir, beam_geoms_fname)

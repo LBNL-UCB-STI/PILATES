@@ -195,11 +195,11 @@ class Workspace:
 
     def get_beam_mutable_data_dir(self) -> str:
         return os.path.join(
-            self.full_path, self.settings["beam_local_mutable_data_folder"]
+            self.full_path, get_setting(self.settings, "beam.local_mutable_data_folder")
         )
 
     def get_beam_output_dir(self) -> str:
-        return os.path.join(self.full_path, self.settings["beam_local_output_folder"])
+        return os.path.join(self.full_path, get_setting(self.settings, "beam.local_output_folder"))
 
     def get_atlas_mutable_input_dir(self) -> str:
         return os.path.join(

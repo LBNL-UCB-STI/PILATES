@@ -163,7 +163,7 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
             config_value = valueOverride
         beam_config_path = os.path.join(
             working_dir,
-            settings["beam_local_mutable_data_folder"],
+            get_setting(settings, "beam.local_mutable_data_folder"),
             get_setting(settings, "run.region"),
             settings["beam_config"],
         )

@@ -52,7 +52,7 @@ def copy_outputs_to_mep(settings, year, iter):
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
-        settings["beam_local_output_folder"],
+        get_setting(settings, "beam.local_output_folder"),
         get_setting(settings, "run.region"),
         "year-{0}-iteration-{1}".format(year, iter),
     )
@@ -168,7 +168,7 @@ def copy_outputs_to_mep(settings, year, iter):
         except:
             logger.error("Missing expected beam output file {0}".format(odSkims))
         beam_router_dir = os.path.join(
-            settings["beam_local_input_folder"],
+            get_setting(settings, "beam.local_input_folder"),
             get_setting(settings, "run.region"),
             settings["beam_router_directory"],
         )
@@ -215,7 +215,7 @@ def copy_outputs_to_mep(settings, year, iter):
 
 
 def _load_events_file(settings, year, replanning_iteration_number, beam_iteration=0):
-    beam_output_dir = settings["beam_local_output_folder"]
+    beam_output_dir = get_setting(settings, "beam.local_output_folder")
     region = get_setting(settings, "run.region")
     iteration_output_dir = "year-{0}-iteration-{1}".format(
         year, replanning_iteration_number
@@ -1070,7 +1070,7 @@ def build_mep_summaries(trips, settings, year, iteration):
         * 1609.34
     )
 
-    beam_output_dir = settings["beam_local_output_folder"]
+    beam_output_dir = get_setting(settings, "beam.local_output_folder")
     region = get_setting(settings, "run.region")
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     totalsByMode.to_csv(
@@ -1142,7 +1142,7 @@ def process_event_file(settings, year, iteration):
 if __name__ == "__main__":
     os.chdir("../..")
     settings = parse_args_and_settings(os.path.join("settings.yaml"))
-    beam_output_dir = settings["beam_local_output_folder"]
+    beam_output_dir = get_setting(settings, "beam.local_output_folder")
     region = get_setting(settings, "run.region")
     output_path = os.path.join(beam_output_dir, region, "year*")
     outputDirs = glob.glob(output_path)

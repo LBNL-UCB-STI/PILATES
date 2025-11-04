@@ -129,6 +129,7 @@ COMMON_SETTINGS = {
     "beam.memory": "beam_memory",
     "beam.config": "beam_config",
     "beam.local_input_folder": "beam_local_input_folder",
+    "beam.local_mutable_data_folder": "beam_local_mutable_data_folder",
     "beam.local_output_folder": "beam_local_output_folder",
     "beam.router_directory": "beam_router_directory",
 
