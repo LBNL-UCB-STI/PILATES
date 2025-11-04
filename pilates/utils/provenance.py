@@ -122,16 +122,11 @@ class ProvenanceTracker:
         self.run_info.start_year = get_setting(settings, "run.start_year")
         self.run_info.end_year = get_setting(settings, "run.end_year")
         self.run_info.settings_hash = None  # FileProvenanceTracker will set this
-        models_used = []
-        model_keys = [
-            "land_use_model",
-            "vehicle_ownership_model",
-            "activity_demand_model",
-            "travel_model",
+        models_used = [
+            get_setting(settings, f"run.models.{model_type}")
+            for model_type in ["land_use", "vehicle_ownership", "activity_demand", "travel"]
+            if get_setting(settings, f"run.models.{model_type}")
         ]
-        for key in model_keys:
-            if settings.get(key):
-                models_used.append(settings[key])
         self.run_info.models_used = list(set(models_used))
 
     def record_repo_input(

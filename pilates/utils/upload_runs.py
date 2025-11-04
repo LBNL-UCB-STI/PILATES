@@ -23,6 +23,7 @@ from pilates.utils.database_upload import (
     upload_run_info_to_database,
     batch_upload_runs_to_database,
 )
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ Examples:
         return 1
 
     # Check database configuration
-    db_config = settings.get("database", {})
+    db_config = get_setting(settings, "shared.database", {})
     if not db_config.get("enabled", False):
         logger.warning("Database upload is not enabled in settings")
         if not args.dry_run:

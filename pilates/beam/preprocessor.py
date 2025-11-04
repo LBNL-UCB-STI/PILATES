@@ -219,7 +219,7 @@ def copy_vehicles_from_atlas(
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         get_setting(settings, "run.region"),
-        settings["beam_scenario_folder"],
+        get_setting(settings, "beam.scenario_folder"),
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
     if state.run_info_path and os.path.exists(state.run_info_path):
@@ -353,7 +353,7 @@ def copy_plans_from_asim(
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         get_setting(settings, "run.region"),
-        settings["beam_scenario_folder"],
+        get_setting(settings, "beam.scenario_folder"),
     )
 
     def copy_with_compression_asim_file_to_beam(
@@ -880,7 +880,7 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
         # Update BEAM config
-        if settings["discard_plans_every_year"]:
+        if get_setting(settings, "beam.discard_plans_every_year"):
             update_beam_config(settings, workspace.full_path, "max_plans_memory", 0)
         else:
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
@@ -934,7 +934,7 @@ class BeamPreprocessor(GenericPreprocessor):
             linkstats_path = os.path.join(
                 workspace.get_beam_mutable_data_dir(),
                 get_setting(settings, "run.region"),
-                settings["beam_router_directory"],
+                get_setting(settings, "beam.router_directory"),
                 "init.linkstats.csv.gz",
             )
             if os.path.exists(linkstats_path):

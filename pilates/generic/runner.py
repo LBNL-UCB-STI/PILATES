@@ -165,7 +165,7 @@ class GenericRunner(ABC, Model):
             bool: True if the container/stub ran successfully (exit code 0), False otherwise.
         """
         if client:  # Docker client is available
-            docker_stdout = settings.get("docker_stdout", False)
+            docker_stdout = get_setting(settings, "infrastructure.docker_config.stdout", False)
             logger.info("Running docker container: %s, command: %s", image, command)
             run_kwargs = {
                 "volumes": volumes,
@@ -317,7 +317,7 @@ class GenericRunner(ABC, Model):
             travel_model,
         ]
         image_names = get_setting(settings, "infrastructure.docker_images")
-        pull_latest = settings.get("pull_latest", False)
+        pull_latest = get_setting(settings, "infrastructure.docker_config.pull_latest", False)
 
         client = docker.from_env()
         if pull_latest:

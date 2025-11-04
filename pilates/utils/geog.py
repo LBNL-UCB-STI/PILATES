@@ -329,7 +329,7 @@ def geoid_to_zone_map(settings, year=None):
     """
     region = get_setting(settings, "run.region")
     zone_type = get_setting(settings, "shared.skims.zone_type")
-    travel_model = settings.get("travel_model", "beam")
+    travel_model = get_setting(settings, "run.models.travel", "beam")
     zone_id_col = "zone_id"
     geoid_to_zone_folder = os.path.join(
         "pilates", "utils", "data", region, travel_model or "beam"

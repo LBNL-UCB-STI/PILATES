@@ -22,26 +22,17 @@ def compute_model_enabled_flags(settings, disabled_models=""):
     Returns:
         dict: Flags for land_use_enabled, vehicle_ownership_model_enabled, etc.
     """
-    # Helper to get nested or flat values
-    def get(nested_path, legacy_key, default=None):
-        value = settings
-        for key in nested_path.split('.'):
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                value = settings.get(legacy_key, default)
-                break
-        return value
+
 
     # Get model names from nested or legacy locations
-    land_use_model = get("run.models.land_use", "land_use_model", False)
-    vehicle_ownership_model = get("run.models.vehicle_ownership", "vehicle_ownership_model", False)
-    activity_demand_model = get("run.models.activity_demand", "activity_demand_model", False)
-    travel_model = get("run.models.travel", "travel_model", False)
+    land_use_model = get_setting(settings, "run.models.land_use", default=get_setting(settings, "land_use_model", False))
+    vehicle_ownership_model = get_setting(settings, "run.models.vehicle_ownership", default=get_setting(settings, "vehicle_ownership_model", False))
+    activity_demand_model = get_setting(settings, "run.models.activity_demand", default=get_setting(settings, "activity_demand_model", False))
+    travel_model = get_setting(settings, "run.models.travel", default=get_setting(settings, "travel_model", False))
 
-    warm_start_skims = settings.get("warm_start_skims", False)
-    static_skims = settings.get("static_skims", False)
-    replan_iters = get("activitysim.replan_iters", "replan_iters", 0)
+    warm_start_skims = get_setting(settings, "warm_start_skims", False)
+    static_skims = get_setting(settings, "static_skims", False)
+    replan_iters = get_setting(settings, "activitysim.replan_iters", default=get_setting(settings, "replan_iters", 0))
 
     # Compute enabled flags
     land_use_enabled = (
@@ -160,10 +151,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
 
     # raise errors/warnings for conflicting settings
     # Check both legacy (top-level) and new nested (activitysim.household_sample_size) locations
-    household_sample_size = settings.get("household_sample_size")
-    if household_sample_size is None:
-        # Try nested location for Pydantic-style configs
-        household_sample_size = settings.get("activitysim", {}).get("household_sample_size", 0)
+    household_sample_size = get_setting(settings, "activitysim.household_sample_size", default=get_setting(settings, "household_sample_size", 0))
 
     if (household_sample_size > 0) and land_use_enabled:
         raise ValueError(
@@ -174,17 +162,11 @@ def parse_args_and_settings(settings_file="settings.yaml"):
             )
         )
     # Check both legacy and nested locations for atlas_beamac, region, skims_zone_type
-    atlas_beamac = settings.get("atlas_beamac")
-    if atlas_beamac is None:
-        atlas_beamac = settings.get("atlas", {}).get("beamac", 0)
+    atlas_beamac = get_setting(settings, "atlas.beamac", default=get_setting(settings, "atlas_beamac", 0))
 
     region = get_setting(settings, "run.region")
-    if region is None:
-        region = settings.get("run", {}).get("region")
 
     skims_zone_type = get_setting(settings, "shared.skims.zone_type")
-    if skims_zone_type is None:
-        skims_zone_type = settings.get("shared", {}).get("skims", {}).get("zone_type")
 
     if (atlas_beamac > 0) and (
         (region != "sfbay") or (skims_zone_type != "taz")

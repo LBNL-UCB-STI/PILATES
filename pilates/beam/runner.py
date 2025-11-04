@@ -127,8 +127,10 @@ class BeamRunner(GenericRunner):
                 logger.error(f"Failed to initialize Docker client: {e}")
 
         # 1. PARSE SETTINGS
-        travel_model_image = settings[f"{settings['container_manager']}_images"]["beam"]
-        beam_config = settings["beam_config"]
+        travel_model, travel_model_image = self.get_model_and_image(
+            settings, "travel_model"
+        )
+        beam_config = get_setting(settings, "beam.config")
         region = get_setting(settings, "run.region")
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
 
@@ -138,8 +140,8 @@ class BeamRunner(GenericRunner):
         # Make sure there's a temp dir for the JVM to use
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
-        beam_memory = settings.get(
-            "beam_memory",
+        beam_memory = get_setting(settings, 
+            "beam.memory",
             str(int(psutil.virtual_memory().total / (1024.0**3)) - 2) + "g",
         )
 

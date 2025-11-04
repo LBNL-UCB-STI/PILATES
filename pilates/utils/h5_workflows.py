@@ -22,6 +22,7 @@ sys.path.insert(0, str(project_root))
 from pilates.utils.h5_to_database import H5ActivitySimExtractor
 from pilates.utils.database_to_h5 import DatabaseToH5Reconstructor
 from pilates.utils.database_upload import create_database_manager
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def workflow_extract_activitysim_inputs(
     logger.info("=== WORKFLOW 1: Extract ActivitySim Inputs ===")
     logger.info(f"Source H5: {h5_path}")
     logger.info(
-        f"Target: Database ({settings.get('database', {}).get('path', 'not configured')})"
+        f"Target: Database ({get_setting(settings, 'shared.database.path', 'not configured')})"
     )
 
     try:
@@ -131,7 +132,7 @@ def workflow_reconstruct_urbansim_h5(
     """
     logger.info("=== WORKFLOW 2: Reconstruct UrbanSim H5 ===")
     logger.info(
-        f"Source: Database ({settings.get('database', {}).get('path', 'not configured')})"
+        f"Source: Database ({get_setting(settings, 'shared.database.path', 'not configured')})"
     )
     logger.info(f"Target H5: {output_h5_path}")
 

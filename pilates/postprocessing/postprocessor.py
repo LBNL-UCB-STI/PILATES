@@ -48,7 +48,7 @@ dtypes = {
 
 def copy_outputs_to_mep(settings, year, iter):
     asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
-    mep_output_data_dir = os.path.join(settings["mep_local_output_folder"], str(year))
+    mep_output_data_dir = os.path.join(get_setting(settings, "postprocessing.mep_output_folder"), str(year))
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
@@ -170,7 +170,7 @@ def copy_outputs_to_mep(settings, year, iter):
         beam_router_dir = os.path.join(
             get_setting(settings, "beam.local_input_folder"),
             get_setting(settings, "run.region"),
-            settings["beam_router_directory"],
+            get_setting(settings, "beam.router_directory"),
         )
         mep_gtfs_dir = os.path.join(mep_output_data_dir, "GTFS")
         if not os.path.exists(mep_gtfs_dir):
@@ -229,8 +229,7 @@ def _load_events_file(settings, year, replanning_iteration_number, beam_iteratio
     events = pd.read_csv(path, dtype=dtypes)
 
     # Adding scenario info
-    scenario_defs = settings["scenario_definitions"]
-    events["scenario"] = scenario_defs["name"]
+            scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")    events["scenario"] = scenario_defs["name"]
     events["scenario"] = events["scenario"].astype("category")
     events["lever"] = scenario_defs["lever"]
     events["lever"] = events["lever"].astype("category")
@@ -1109,8 +1108,8 @@ def process_event_file(settings, year, iteration):
         except Exception as e:
             print("Error during merging: \n {0}".format(e))
             logger.error("Error during merging: \n {0}".format(e))
-        scenario_defs = settings["scenario_definitions"]
-        post_output_folder = settings["postprocessing_output_folder"]
+    scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
+        post_output_folder = get_setting(settings, "postprocessing.output_folder")
 
         filename = "{0}_{1}_{2}-{3}_{4}_iter{6}__{5}.csv.gz".format(
             get_setting(settings, "run.region"),

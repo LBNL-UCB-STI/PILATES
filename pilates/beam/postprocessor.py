@@ -1872,7 +1872,7 @@ def write_zarr_skim_as_omx_new(
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
     region = get_setting(settings, "run.region")
-    beam_input_dir = settings.get("beam_local_mutable_data_folder")
+    beam_input_dir = get_setting(settings, "beam.local_mutable_data_folder")
 
     if not region or not beam_input_dir:
         logger.error(
@@ -2027,7 +2027,7 @@ def write_zarr_skim_as_omx(
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
     region = get_setting(settings, "run.region")
-    beam_input_dir = settings.get("beam_local_input_folder")
+    beam_input_dir = get_setting(settings, "beam.local_input_folder")
 
     if not region or not beam_input_dir:
         logger.error(
@@ -2530,8 +2530,8 @@ def _merge_beam_skims_to_zarr(
     # This should run after the base skims (like SOV) are finalized.
     # This should run regardless of whether new OMX skims were merged.
     logger.info("Copying skims for unobserved modes based on mapping.")
-    mapping = settings.get(
-        "unobserved_skim_copy_map",
+    mapping = get_setting(settings, 
+        "beam.ridehail_path_map",
         {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]},
     )  # Add setting
     copy_skims_for_unobserved_modes(mapping, skims_ds)
@@ -2571,7 +2571,7 @@ def _merge_beam_skims_to_zarr(
             logger.info("Creating zarr version snapshot after BEAM merge...")
 
             # Get database path from settings
-            database_path = settings.get("database", {}).get("path")
+            database_path = get_setting(settings, "shared.database.path")
             if database_path:
                 # Initialize zarr version manager
                 zarr_base_path = os.path.dirname(database_path)
@@ -3000,8 +3000,8 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
             settings, get_setting(settings, "run.start_year", 2015)
         )  # Use .get for start_year safety
         periods = get_setting(settings, "shared.skims.periods")
-        transit_paths_settings = settings.get(
-            "transit_paths", {}
+        transit_paths_settings = get_setting(settings, 
+            "shared.skims.transit_paths", {}
         )  # Use .get for safety
     except Exception as e:
         logger.error(f"Error reading settings for trimming: {e}. Skipping trim.")
@@ -3237,8 +3237,8 @@ class BeamPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
-        self.skim_format = self.state.full_settings.get(
-            "skim_format", "skimsActivitySimOD_current"
+        self.skim_format = get_setting(self.state.full_settings, 
+            "shared.skims.fname", "skimsActivitySimOD_current"
         )
         self.zarr_manager = None
 

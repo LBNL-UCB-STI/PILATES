@@ -65,7 +65,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 skims_fname = "skims.omx"
                 mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
                 input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(
-                    settings["region_id"]
+                    get_setting(settings, "urbansim.region_id")
                 )
                 logger.info(
                     "Copying skims from {0} to {1} for urbansim".format(
@@ -369,7 +369,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
             # If not the first iteration, check if BEAM is enabled and copy updated skims
             if self.state.current_year > get_setting(settings, 'run.start_year') or self.state.iteration > 0:
-                if settings.get("travel_model") == "beam":
+                if get_setting(settings, "run.models.travel") == "beam":
                     logger.info("Updating skims from BEAM mutable output for subsequent iteration.")
                     if self.state.run_info_path and os.path.exists(self.state.run_info_path):
                         logger.info(f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
