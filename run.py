@@ -503,8 +503,22 @@ def main():
 
     state = WorkflowState.from_settings(settings)
 
+    # Helper to get nested or legacy config values
+    def get_setting(nested_path, legacy_key, default=None):
+        """Get setting from nested path first, then legacy key."""
+        value = settings
+        for key in nested_path.split('.'):
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return settings.get(legacy_key, default)
+        return value
+
     # Set up provenance tracking and workspace
-    output_path = os.path.realpath(os.path.expandvars(settings.get("output_directory")))
+    output_directory = get_setting("run.output_directory", "output_directory")
+    if not output_directory:
+        raise ValueError("output_directory not found in config (checked run.output_directory and output_directory)")
+    output_path = os.path.realpath(os.path.expandvars(output_directory))
     # Determine run_name: if restarting, use the folder name from the previous run_info_path
     if state.run_info_path:
         # Extract folder_name from the run_info_path
@@ -514,7 +528,7 @@ def main():
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
         # For a fresh run, generate a new timestamped folder name
-        partial_run_name = settings.get("output_run_name", "pilates-run")
+        partial_run_name = get_setting("run.output_run_name", "output_run_name", "pilates-run")
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     run_id = str(uuid.uuid4())
