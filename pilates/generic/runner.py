@@ -45,9 +45,11 @@ class GenericRunner(ABC, Model):
     def get_model_and_image(settings: dict, model_type: str):
         manager = get_setting(settings, "infrastructure.container_manager")
         if manager == "docker":
-            image_names = settings.get("docker_images", {})
+            # Check nested path first, fall back to legacy
+            image_names = get_setting(settings, "infrastructure.docker_images", "docker_images", default={})
         elif manager == "singularity":
-            image_names = settings.get("singularity_images", {})
+            # Check nested path first, fall back to legacy
+            image_names = get_setting(settings, "infrastructure.singularity_images", "singularity_images", default={})
         else:
             raise ValueError(
                 "Container Manager not specified (container_manager param in settings.yaml)"

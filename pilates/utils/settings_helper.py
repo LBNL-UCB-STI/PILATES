@@ -73,6 +73,8 @@ COMMON_SETTINGS = {
 
     # Infrastructure
     "infrastructure.container_manager": "container_manager",
+    "infrastructure.docker_images": "docker_images",
+    "infrastructure.singularity_images": "singularity_images",
     "infrastructure.docker.stdout": "docker_stdout",
     "infrastructure.docker.pull_latest": "pull_latest",
 
