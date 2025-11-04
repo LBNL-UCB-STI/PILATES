@@ -20,6 +20,7 @@ from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
+from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
@@ -1870,7 +1871,7 @@ def write_zarr_skim_as_omx_new(
     """
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
-    region = settings.get("region")
+    region = get_setting(settings, "run.region")
     beam_input_dir = settings.get("beam_local_mutable_data_folder")
 
     if not region or not beam_input_dir:
@@ -2025,7 +2026,7 @@ def write_zarr_skim_as_omx(
     """
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
-    region = settings.get("region")
+    region = get_setting(settings, "run.region")
     beam_input_dir = settings.get("beam_local_input_folder")
 
     if not region or not beam_input_dir:
@@ -2064,7 +2065,7 @@ def write_zarr_skim_as_omx(
                     "Zarr uses zero-based zones but no original zone mapping found!"
                 )
                 # Try to reconstruct from settings
-                zone_ids = zone_order(settings, settings.get("start_year", 2015))
+                zone_ids = zone_order(settings, get_setting(settings, "run.start_year", 2015))
                 logger.warning(
                     f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
                 )
@@ -2272,14 +2273,14 @@ def _merge_beam_skims_to_zarr(
             else:
                 # Get from settings
                 original_zone_ids = zone_order(
-                    settings, settings.get("start_year", 2015)
+                    settings, get_setting(settings, "run.start_year", 2015)
                 )
                 skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
     except Exception as e:
         logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
         return None  # Indicate failure
 
-    timePeriods = settings["periods"]
+    timePeriods = get_setting(settings, "shared.skims.periods")
     consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
 
     # Step 1: Accumulate completed and failed trips based on format
@@ -2996,9 +2997,9 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
 
     try:
         order = zone_order(
-            settings, settings.get("start_year", 2015)
+            settings, get_setting(settings, "run.start_year", 2015)
         )  # Use .get for start_year safety
-        periods = settings["periods"]
+        periods = get_setting(settings, "shared.skims.periods")
         transit_paths_settings = settings.get(
             "transit_paths", {}
         )  # Use .get for safety
@@ -3399,7 +3400,7 @@ class BeamPostprocessor(GenericPostprocessor):
                     final_omx_path = write_zarr_skim_as_omx_new(
                         self.zarr_manager.path,
                         settings,
-                        settings["skims_fname"],
+                        get_setting(settings, "shared.skims.fname"),
                         exclude_tables=vars_to_exclude
                     )
 

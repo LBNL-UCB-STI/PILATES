@@ -16,6 +16,7 @@ from pilates.beam.postprocessor import (
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def rename_beam_output_directory(
     beam_run_output_dir = os.path.join(*iteration_output_directory.split(os.sep)[:-2])
     new_iteration_output_directory = os.path.join(
         beam_output_dir,
-        settings["region"],
+        get_setting(settings, "run.region"),
         "year-{0}-iteration-{1}".format(year, replanning_iteration_number),
     )
     if os.path.exists(new_iteration_output_directory):
@@ -119,7 +120,7 @@ class BeamRunner(GenericRunner):
         """
         settings = self.state.full_settings
         client = None  # Initialize client to None
-        if settings.get("container_manager") == "docker":
+        if get_setting(settings, "infrastructure.container_manager") == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -128,7 +129,7 @@ class BeamRunner(GenericRunner):
         # 1. PARSE SETTINGS
         travel_model_image = settings[f"{settings['container_manager']}_images"]["beam"]
         beam_config = settings["beam_config"]
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
 
         abs_beam_input = workspace.get_beam_mutable_data_dir()
@@ -241,7 +242,7 @@ class BeamRunner(GenericRunner):
                 "region": region,
             },
             "container_image": travel_model_image,
-            "container_manager": settings.get("container_manager", "docker"),
+            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
             "working_directory": "/app",
             "java_opts": java_opts,
         }
@@ -268,7 +269,7 @@ class BeamRunner(GenericRunner):
             output_path_for_gather = workspace.get_beam_output_dir()
 
         # 3. ASSEMBLE OUTPUTS
-        skims_fname = settings["skims_fname"]
+        skims_fname = get_setting(settings, "shared.skims.fname")
         if skims_fname.endswith(".csv.gz"):
             skimFormat = "csv.gz"
         elif skims_fname.endswith(".omx"):

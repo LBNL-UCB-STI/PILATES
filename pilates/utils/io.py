@@ -4,6 +4,8 @@ import os
 import pandas as pd
 import yaml
 
+from pilates.utils.settings_helper import get as get_setting
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,11 +178,11 @@ def parse_args_and_settings(settings_file="settings.yaml"):
     if atlas_beamac is None:
         atlas_beamac = settings.get("atlas", {}).get("beamac", 0)
 
-    region = settings.get("region")
+    region = get_setting(settings, "run.region")
     if region is None:
         region = settings.get("run", {}).get("region")
 
-    skims_zone_type = settings.get("skims_zone_type")
+    skims_zone_type = get_setting(settings, "shared.skims.zone_type")
     if skims_zone_type is None:
         skims_zone_type = settings.get("shared", {}).get("skims", {}).get("zone_type")
 
@@ -202,7 +204,7 @@ def datastore_path(settings, year=None, mutable_data_dir=None):
     If `year` is None, returns the base year data store.
     If `year` is specified, returns the forecast year data store.
     """
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
         data_loc = settings["usim_local_data_input_folder"]
@@ -222,7 +224,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
     """
     Access to the land use .H5 data store
     """
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
     if mutable_data_dir is None:
         data_loc = settings["usim_local_data_input_folder"]
@@ -230,10 +232,10 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         data_loc = mutable_data_dir # Corrected: Use mutable_data_dir directly
     urbansim_enabled = settings.get("land_use_model") is not None
 
-    if (year == settings["start_year"]) or warm_start or not urbansim_enabled:
+    if (year == get_setting(settings, "run.start_year")) or warm_start or not urbansim_enabled:
         logger.info(
             "Year {0}, start year {1}, warm_start {2}, urbansim_enabled {3}".format(
-                year, settings["start_year"], warm_start, urbansim_enabled
+                year, get_setting(settings, "run.start_year"), warm_start, urbansim_enabled
             )
         )
         table_prefix_yr = ""  # input data store tables have no year prefix
@@ -269,7 +271,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
 
 
 def get_merged_usim_input_datastore_path(settings, mutable_data_dir=None):
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     region_id = settings["region_to_region_id"][region]
     usim_base_fname = settings["usim_formattable_input_file_name"]
     datastore_name = usim_base_fname.format(region_id=region_id)

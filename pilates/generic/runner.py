@@ -16,6 +16,7 @@ from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.container_utils import to_singularity_volumes, to_singularity_env
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class GenericRunner(ABC, Model):
 
     @staticmethod
     def get_model_and_image(settings: dict, model_type: str):
-        manager = settings.get("container_manager")
+        manager = get_setting(settings, "infrastructure.container_manager")
         if manager == "docker":
             image_names = settings.get("docker_images", {})
         elif manager == "singularity":

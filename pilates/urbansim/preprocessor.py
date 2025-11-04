@@ -11,6 +11,7 @@ from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.geog import geoid_to_zone_map
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ skim_dtypes = {
 
 
 def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
-    skims_fname = settings.get("skims_fname", False)
+    skims_fname = get_setting(settings, "shared.skims.fname", False)
 
     try:
         if skim_format == "beam":
@@ -86,9 +87,9 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 return out.to_frame()
             elif skims_fname.endswith("zarr"):
                 beam_output_dir = settings["beam_local_output_folder"]
-                skims_fname = settings["skims_fname"]
+                skims_fname = get_setting(settings, "shared.skims.fname")
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings["region_to_region_id"][settings["region"]]
+                region_id = settings["region_to_region_id"][get_setting(settings, "run.region")]
                 input_skims_location = os.path.join(
                     usim_data_dir, "skims_mpo_{0}.zarr".format(region_id)
                 )
@@ -153,7 +154,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
     skims["to_zone_id"] = skims["to_zone_id"].astype("str")
 
     # for GEOID/FIPS-based skims, we have to convert the zone IDs
-    if settings["skims_zone_type"] in ["block", "block_group"]:
+    if get_setting(settings, "shared.skims.zone_type") in ["block", "block_group"]:
         mapping = geoid_to_zone_map(settings)
         for col in ["from_zone_id", "to_zone_id"]:
             skims[col] = skims[col].map(mapping)
@@ -192,11 +193,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
         Returns:
             Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
         """
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
         year_specific_model_data_fname = settings.get(
             "usim_formattable_input_file_name_year", ""
-        ).format(region_id=region_id, start_year=settings["start_year"])
+        ).format(region_id=region_id, start_year=get_setting(settings, "run.start_year"))
         model_data_fname = settings["usim_formattable_input_file_name"].format(
             region_id=region_id
         )
@@ -238,7 +239,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
 
-        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", settings["beam_local_input_folder"], settings["region"], settings["skims_fname"]))
+        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", settings["beam_local_input_folder"], get_setting(settings, "run.region"), get_setting(settings, "shared.skims.fname")))
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 
         inputs.append(self.provenance_tracker.record_input_file(
@@ -324,7 +325,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         processed_records = RecordStore()
 
         try:
-            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings["region"])
+            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(get_setting(settings, "run.region"))
             if not os.path.exists(geoid_to_zone_fname):
                 mapping = geoid_to_zone_map(settings)
 
@@ -362,11 +363,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
                     source_skims_path = os.path.join(
                         beam_mutable_data_dir,
-                        settings["region"],
-                        settings["skims_fname"],
+                        get_setting(settings, "run.region"),
+                        get_setting(settings, "shared.skims.fname"),
                     )
                     
-                    region_id = settings["region_to_region_id"][settings["region"]]
+                    region_id = settings["region_to_region_id"][get_setting(settings, "run.region")]
                     dest_skims_fname = f"skims_mpo_{region_id}.omx"
                     dest_skims_path = os.path.join(
                         workspace.get_usim_mutable_data_dir(), dest_skims_fname

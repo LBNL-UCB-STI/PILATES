@@ -19,6 +19,7 @@ import logging
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 import warnings
 from shapely.errors import ShapelyDeprecationWarning
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def copy_outputs_to_mep(settings, year, iter):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
         settings["beam_local_output_folder"],
-        settings["region"],
+        get_setting(settings, "run.region"),
         "year-{0}-iteration-{1}".format(year, iter),
     )
 
@@ -168,7 +169,7 @@ def copy_outputs_to_mep(settings, year, iter):
             logger.error("Missing expected beam output file {0}".format(odSkims))
         beam_router_dir = os.path.join(
             settings["beam_local_input_folder"],
-            settings["region"],
+            get_setting(settings, "run.region"),
             settings["beam_router_directory"],
         )
         mep_gtfs_dir = os.path.join(mep_output_data_dir, "GTFS")
@@ -196,7 +197,7 @@ def copy_outputs_to_mep(settings, year, iter):
                 )
             )
 
-        if settings["region"] == "austin":
+        if get_setting(settings, "run.region") == "austin":
             taz_id_col_in = "GEOID"
         else:
             taz_id_col_in = "taz1454"
@@ -215,7 +216,7 @@ def copy_outputs_to_mep(settings, year, iter):
 
 def _load_events_file(settings, year, replanning_iteration_number, beam_iteration=0):
     beam_output_dir = settings["beam_local_output_folder"]
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     iteration_output_dir = "year-{0}-iteration-{1}".format(
         year, replanning_iteration_number
     )
@@ -688,7 +689,7 @@ def _add_geometry_to_events(settings, events):
     events = pd.concat(processed_list)
 
     # Adding the block group information
-    if settings["region"] == "sfbay":
+    if get_setting(settings, "run.region") == "sfbay":
         gdf_labels = get_taz_labels(settings)
         # Census block groups should have 12 digits so adding 0 to the start of it to be compatible with our block group ids
         gdf_labels["bgid"] = "0" + gdf_labels["bgid"].astype(str)
@@ -1070,7 +1071,7 @@ def build_mep_summaries(trips, settings, year, iteration):
     )
 
     beam_output_dir = settings["beam_local_output_folder"]
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     totalsByMode.to_csv(
         os.path.join(beam_output_dir, region, iteration_output_dir, "totalsByMode.csv")
@@ -1112,7 +1113,7 @@ def process_event_file(settings, year, iteration):
         post_output_folder = settings["postprocessing_output_folder"]
 
         filename = "{0}_{1}_{2}-{3}_{4}_iter{6}__{5}.csv.gz".format(
-            settings["region"],
+            get_setting(settings, "run.region"),
             scenario_defs["name"],
             scenario_defs["lever"],
             scenario_defs["lever_position"],
@@ -1142,7 +1143,7 @@ if __name__ == "__main__":
     os.chdir("../..")
     settings = parse_args_and_settings(os.path.join("settings.yaml"))
     beam_output_dir = settings["beam_local_output_folder"]
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     output_path = os.path.join(beam_output_dir, region, "year*")
     outputDirs = glob.glob(output_path)
     yearsAndIters = [

@@ -1,5 +1,6 @@
 import os
 from pilates.utils.provenance import find_project_root
+from pilates.utils.settings_helper import get as get_setting
 
 
 def get_beam_source_dir(settings):
@@ -7,7 +8,7 @@ def get_beam_source_dir(settings):
     Robustly resolve the BEAM source directory, matching logic in pilates/beam/preprocessor.py.
     Returns the absolute path to the BEAM source directory for the given region.
     """
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     # Find the project root by searching upwards for 'pilates' or '.git'
     pilates_root = find_project_root()
     if pilates_root is None:

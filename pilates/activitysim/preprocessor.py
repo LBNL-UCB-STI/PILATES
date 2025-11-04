@@ -27,6 +27,7 @@ from pilates.utils.geog import (
 from pilates.utils.io import read_datastore, datastore_path, get_merged_usim_input_datastore_path
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.database_upload import create_database_manager
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def zone_order(settings, year):
     Numpy Array. One dimension array, the index of the array represents the order.
 
     """
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     mapping = geoid_to_zone_map(settings, year)
 
     if zone_type == "taz":
@@ -157,7 +158,7 @@ def read_zone_geoms(
     Returns a GeoPandas dataframe with the zones geometries.
     """
     store, table_prefix_year = read_datastore(settings, year, True)
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     zone_key = "/{0}_zone_geoms".format(zone_type)
 
     if zone_key in store.keys():
@@ -174,7 +175,7 @@ def read_zone_geoms(
             )
     else:
         logger.info("Downloading zone geometries on the fly!")
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         if zone_type == "taz":
             zones = get_taz_geoms(settings, zone_id_col_out=default_zone_id_col)
             zones.set_index(default_zone_id_col, inplace=True)
@@ -262,8 +263,8 @@ def _load_raw_beam_skims(settings, convertFromCsv=True, blank=False):
     --------
     - pandas DataFrame.
     """
-    zone_type = settings["skims_zone_type"]
-    skims_fname = settings.get("skims_fname", False)
+    zone_type = get_setting(settings, "shared.skims.zone_type")
+    skims_fname = get_setting(settings, "shared.skims.fname", False)
     path_to_beam_skims = os.path.join(settings["beam_local_output_folder"], skims_fname)
 
     if (not os.path.exists(path_to_beam_skims)) & (not convertFromCsv):
@@ -299,7 +300,7 @@ def _load_raw_beam_origin_skims(settings):
     - pandas DataFrame.
     """
 
-    origin_skims_fname = settings.get("origin_skims_fname", False)
+    origin_skims_fname = get_setting(settings, "shared.skims.origin_fname", False)
     path_to_beam_skims = os.path.join(
         settings["beam_local_output_folder"], origin_skims_fname
     )
@@ -325,7 +326,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
     skims_path = os.path.join(output_dir, "skims.omx")
     final_skims_exist = os.path.exists(skims_path)
 
-    skims_fname = settings.get("skims_fname", False)
+    skims_fname = get_setting(settings, "shared.skims.fname", False)
     omx_skim_output = skims_fname.endswith(".omx")
     beam_output_dir = settings["beam_local_output_folder"]
     mutable_skims_location = os.path.join(output_dir, "skims.omx")
@@ -448,7 +449,7 @@ def _create_skims_by_mode(settings, skims_df):
 
     # Settings
     hwy_paths = settings["beam_simulated_hwy_paths"]
-    transit_paths = settings["transit_paths"].keys()
+    transit_paths = get_setting(settings, "shared.skims.transit_paths").keys()
 
     logger.info("Splitting out auto skims.")
     # auto_df = skims_df[skims_df['pathType'].isin(hwy_paths)]
@@ -717,8 +718,8 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
     """Generate transit OMX skims"""
 
     logger.info("Creating transit skims.")
-    transit_paths = settings["transit_paths"]
-    periods = settings["periods"]
+    transit_paths = get_setting(settings, "shared.skims.transit_paths")
+    periods = get_setting(settings, "shared.skims.periods")
     measure_map = settings["beam_asim_transit_measure_map"]
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
@@ -774,7 +775,7 @@ def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
 
     logger.info("Creating ridehail skims.")
     ridehail_path_map = settings["ridehail_path_map"]
-    periods = settings["periods"]
+    periods = get_setting(settings, "shared.skims.periods")
     measure_map = settings["beam_asim_ridehail_measure_map"]
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
@@ -816,7 +817,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
     logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings["ridehail_path_map"]
-    periods = settings["periods"]
+    periods = get_setting(settings, "shared.skims.periods")
     measure_map = settings["beam_asim_ridehail_measure_map"]
 
     num_taz = len(order)
@@ -887,8 +888,8 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
 def _fill_transit_skims(settings, input_skims, order, data_dir):
     logger.info("Merging transit omx skims.")
 
-    transit_paths = settings["transit_paths"]
-    periods = settings["periods"]
+    transit_paths = get_setting(settings, "shared.skims.transit_paths")
+    periods = get_setting(settings, "shared.skims.periods")
     measure_map = settings["beam_asim_transit_measure_map"]
 
     num_taz = len(order)
@@ -994,8 +995,8 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
     logger.info("Merging drive omx skims.")
 
     # Open skims object
-    periods = settings["periods"]
-    paths = settings["hwy_paths"]
+    periods = get_setting(settings, "shared.skims.periods")
+    paths = get_setting(settings, "shared.skims.hwy_paths")
     measure_map = settings["beam_asim_hwy_measure_map"]
 
     num_taz = len(order)
@@ -1085,8 +1086,8 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
     logger.info("Creating drive skims.")
 
     # Open skims object
-    periods = settings["periods"]
-    paths = settings["hwy_paths"]
+    periods = get_setting(settings, "shared.skims.periods")
+    paths = get_setting(settings, "shared.skims.hwy_paths")
     measure_map = settings["beam_asim_hwy_measure_map"]
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
@@ -1522,10 +1523,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
-        skims_fname = settings.get("skims_fname", False)
+        skims_fname = get_setting(settings, "shared.skims.fname", False)
         path_to_beam_skims_in_current_run_workspace = os.path.join(
             workspace.get_beam_mutable_data_dir(),
-            settings["region"],
+            get_setting(settings, "run.region"),
             skims_fname,
         )
 
@@ -1538,7 +1539,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     "pilates",
                     "beam",
                     "production",
-                    settings["region"],
+                    get_setting(settings, "run.region"),
                 )
             )
             dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
@@ -1984,13 +1985,13 @@ def _clean_activitysim_data_for_csv(df: pd.DataFrame, table_name: str) -> pd.Dat
 def enrollment_tables(
     settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
 ):
-    region = settings["region"]
-    FIPS = settings["FIPS"][region]
+    region = get_setting(settings, "run.region")
+    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
-    local_crs = settings["local_crs"][region]
+    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
 
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     path_to_schools_data = "pilates/utils/data/{0}/{1}_{2}.csv".format(
         region, zone_type, enrollment_type
     )
@@ -2032,7 +2033,7 @@ def copy_data_to_mutable_location(
     logger.info(settings)
     input_dir = folder_path
     os.makedirs(input_dir, exist_ok=True)
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     beam_input_dir = settings["beam_local_input_folder"]
     beam_geoms_fname = settings["beam_geoms_fname"]
     beam_router_directory = settings["beam_router_directory"]
@@ -2058,7 +2059,7 @@ def copy_data_to_mutable_location(
     )
 
     configs_source_dir = os.path.join(
-        settings["asim_local_configs_folder"], settings["region"]
+        settings["asim_local_configs_folder"], get_setting(settings, "run.region")
     )
     configs_dest_dir = os.path.abspath(os.path.join(folder_path, "..","..",settings["asim_local_mutable_configs_folder"]))
     logger.info(
@@ -2113,9 +2114,9 @@ def copy_beam_geoms(
         short_name="beam_geoms_reference",
         description="BEAM geometry file",
     )
-    zone_type = settings["skims_zone_type"].lower()
+    zone_type = get_setting(settings, "shared.skims.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
-    mapping = geoid_to_zone_map(settings, settings["start_year"])
+    mapping = geoid_to_zone_map(settings, get_setting(settings, "run.start_year"))
 
     if zone_id_col not in beam_geoms_file.columns:
 
@@ -2441,7 +2442,7 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
     # raw urbansim data that has yet to be touched by pilates)
     geoid_to_zone_mapping_updated = False
 
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     zone_id_col = "{}_{}".format(zone_type, zone_id_col)
 
     if zone_id_col not in blocks.columns:
@@ -2484,7 +2485,7 @@ def _create_land_use_table(
     asim_zone_id_col="TAZ",
 ):
     logger.info("Creating land use table.")
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
 
     schools = enrollment_tables(
         settings, zones, enrollment_type="schools", asim_zone_id_col=asim_zone_id_col
@@ -2505,7 +2506,7 @@ def _create_land_use_table(
         if "STATE" in zones.columns:
             zones.loc[:, "STATE"] = zones["STATE"].astype(str)
         else:
-            zones.loc[:, "STATE"] = settings["FIPS"][settings["region"]]["state"]
+            zones.loc[:, "STATE"] = get_setting(settings, "shared.geography.FIPS")[get_setting(settings, "run.region")]["state"]
         try:
             zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
         except:
@@ -2828,12 +2829,12 @@ def process_raw_h5_files(
     year,
     asim_zone_id_col="TAZ",
 ):
-    region = settings["region"]
-    FIPS = settings["FIPS"][region]
+    region = get_setting(settings, "run.region")
+    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
-    local_crs = settings["local_crs"][region]
-    zone_type = settings["skims_zone_type"]
+    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
 
     # update blocks
     blocks_to_taz_mapping_updated, raw_blocks = _update_blocks_table(
@@ -2960,7 +2961,7 @@ def create_asim_data_from_h5(
         blocks_cols = blocks.columns.tolist()
         logger.info(
             "Storing blocks table with {} zone IDs to disk in .h5 datastore!".format(
-                settings["skims_zone_type"]
+                get_setting(settings, "shared.skims.zone_type")
             )
         )
         if input_zone_id_col not in blocks_cols:

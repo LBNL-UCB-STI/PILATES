@@ -11,6 +11,7 @@ import pandas as pd
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ def _get_usim_datastore_fname(settings, io, year=None):
     if io == "output":
         datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
     elif io == "input":
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
         usim_base_fname = settings["usim_formattable_input_file_name"]
         datastore_name = usim_base_fname.format(region_id=region_id)
@@ -209,7 +210,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         if beamac > 0:
             beam_output_dir = workspace.get_beam_output_dir()
             expected_beam_skims_path = os.path.join(
-                beam_output_dir, settings["skims_fname"]
+                beam_output_dir, get_setting(settings, "shared.skims.fname")
             )
             if os.path.exists(expected_beam_skims_path):
                 logger.info(
@@ -379,7 +380,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 
     # read and format geoid_to_zoneid mapping list
     mapping = pd.read_csv(
-        "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings["region"])
+        "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(get_setting(settings, "run.region"))
     )
     mapping.index = mapping["GEOID"]
     mapping = mapping["zone_id"].to_dict()
@@ -424,7 +425,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
     # read in taz_to_tract conversion matrix (1454*1588)
     taz_to_tract = pd.read_csv(
         "{}/taz_to_tract_{}.csv".format(
-            settings["atlas_host_input_folder"], settings["region"]
+            settings["atlas_host_input_folder"], get_setting(settings, "run.region")
         ),
         index_col=0,
     )

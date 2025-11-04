@@ -11,6 +11,7 @@ import random
 # from collections import OrderedDict
 import logging
 from sortedcontainers import SortedDict
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -548,7 +549,7 @@ def preprocess_usim_for_polaris(
         delete_agents = False
     else:
         # no forecast year so read the input urbansim model from settings
-        region = usim_settings["region"]
+        region = usim_get_setting(settings, "run.region")
         region_id = usim_settings["region_to_region_id"][region]
         usim_base_fname = usim_settings["usim_formattable_input_file_name"]
         usim_base = usim_base_fname.format(region_id=region_id)

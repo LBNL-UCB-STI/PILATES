@@ -7,6 +7,7 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,9 @@ class UrbansimRunner(GenericRunner):
         settings = self.state.full_settings
         year = self.state.current_year
         forecast_year = self.state.forecast_year
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
-        land_use_freq = settings["land_use_freq"]
+        land_use_freq = get_setting(settings, "run.land_use_freq")
         skims_source = settings["travel_model"]
         formattable_usim_cmd = settings["usim_formattable_command"]
         usim_cmd = formattable_usim_cmd.format(
@@ -122,7 +123,7 @@ class UrbansimRunner(GenericRunner):
 
         # Initialize container client
         client = None
-        if settings.get("container_manager") == "docker":
+        if get_setting(settings, "infrastructure.container_manager") == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -181,14 +182,14 @@ class UrbansimRunner(GenericRunner):
         runtime_metadata = {
             "container_command": usim_cmd,
             "runtime_parameters": {
-                "region_id": settings["region_to_region_id"][settings["region"]],
+                "region_id": settings["region_to_region_id"][get_setting(settings, "run.region")],
                 "year": self.state.current_year,
                 "forecast_year": forecast_year,
-                "land_use_freq": settings["land_use_freq"],
+                "land_use_freq": get_setting(settings, "run.land_use_freq"),
                 "skims_source": settings["travel_model"],
             },
             "container_image": land_use_image,
-            "container_manager": settings.get("container_manager", "docker"),
+            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
             "working_directory": settings.get("usim_client_base_folder", "/app"),
         }
 

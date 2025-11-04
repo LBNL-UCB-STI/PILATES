@@ -5,6 +5,7 @@ from pilates.utils.provenance import FileProvenanceTracker
 from pilates.generic.model_factory import ModelFactory
 
 import os
+from pilates.utils.settings_helper import get as get_setting
 
 
 class Initialization(Model):
@@ -135,7 +136,7 @@ class Initialization(Model):
         if self.provenance_tracker is not None:
             init_run_hash = self.provenance_tracker.start_model_run(
                 "initialization",
-                year=settings.get("start_year"),
+                year=get_setting(settings, "run.start_year"),
                 iteration=0,
                 description="Initialization: copying all mutable data",
                 inputs=initialization_records_in,

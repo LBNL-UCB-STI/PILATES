@@ -9,6 +9,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class ActivitysimRunner(GenericRunner):
 
     @staticmethod
     def get_asim_docker_vols(settings, working_dir=None):
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         asim_subdir = settings["region_to_asim_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         if working_dir is not None:
@@ -153,7 +154,7 @@ class ActivitysimRunner(GenericRunner):
                 - model_run_info (ModelRunInfo): Information about the model run
         """
         settings = self.state.full_settings
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         asim_subdir = settings["region_to_asim_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
@@ -173,7 +174,7 @@ class ActivitysimRunner(GenericRunner):
 
         # start docker client
         client = None  # Initialize client to None
-        if settings.get("container_manager") == "docker":
+        if get_setting(settings, "infrastructure.container_manager") == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -305,7 +306,7 @@ class ActivitysimRunner(GenericRunner):
                     "additional_args": additional_args,
                 },
                 "container_image": activity_demand_image,
-                "container_manager": settings.get("container_manager", "docker"),
+                "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
                 "working_directory": asim_workdir,
             }
 
@@ -431,7 +432,7 @@ class ActivitysimRunner(GenericRunner):
                 "additional_args": additional_args,
             },
             "container_image": activity_demand_image,
-            "container_manager": settings.get("container_manager", "docker"),
+            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
             "working_directory": asim_workdir,
         }
 

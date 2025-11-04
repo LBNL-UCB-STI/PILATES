@@ -22,6 +22,7 @@ import glob
 
 from pilates.generic.config_hashing import ConfigHasher
 from pilates.config.schema import get_field_annotations, get_dependency_graph
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class ConfigSnapshotManager:
 
         # Main BEAM config file
         if "beam_config" in settings:
-            region = settings.get("region", "")
+            region = get_setting(settings, "run.region", "")
             beam_config_path = os.path.join(
                 self.project_root,
                 "pilates",
@@ -108,7 +109,7 @@ class ConfigSnapshotManager:
         configs = {}
 
         # ActivitySim configs directory
-        region = settings.get("region", "")
+        region = get_setting(settings, "run.region", "")
         region_to_subdir = settings.get("region_to_asim_subdir", {})
         asim_subdir = region_to_subdir.get(region, region)
 
@@ -294,9 +295,9 @@ class ConfigSnapshotManager:
             # Specific config references for easy access
             "beam_config": settings.get("beam_config"),
             "asim_subdir": settings.get("region_to_asim_subdir", {}).get(
-                settings.get("region", ""), settings.get("region", "")
+                get_setting(settings, "run.region", ""), get_setting(settings, "run.region", "")
             ),
-            "region": settings.get("region"),
+            "region": get_setting(settings, "run.region"),
         }
 
         logger.info(

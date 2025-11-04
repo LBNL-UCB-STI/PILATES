@@ -12,6 +12,7 @@ from pilates.generic.records import RecordStore, Record, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from workflow_state import WorkflowState
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def copy_data_to_mutable_location(
     """
     input_records = []
     output_records = []
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     # Find the project root by searching upwards for 'pilates' or '.git'
     pilates_root = find_project_root()
     if pilates_root is None:
@@ -163,7 +164,7 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
         beam_config_path = os.path.join(
             working_dir,
             settings["beam_local_mutable_data_folder"],
-            settings["region"],
+            get_setting(settings, "run.region"),
             settings["beam_config"],
         )
         if not os.path.exists(beam_config_path):
@@ -217,7 +218,7 @@ def copy_vehicles_from_atlas(
 ):
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
-        settings["region"],
+        get_setting(settings, "run.region"),
         settings["beam_scenario_folder"],
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
@@ -351,7 +352,7 @@ def copy_plans_from_asim(
 ) -> RecordStore:
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
-        settings["region"],
+        get_setting(settings, "run.region"),
         settings["beam_scenario_folder"],
     )
 
@@ -932,7 +933,7 @@ class BeamPreprocessor(GenericPreprocessor):
         if not linkstats_record:
             linkstats_path = os.path.join(
                 workspace.get_beam_mutable_data_dir(),
-                settings["region"],
+                get_setting(settings, "run.region"),
                 settings["beam_router_directory"],
                 "init.linkstats.csv.gz",
             )

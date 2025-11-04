@@ -9,13 +9,14 @@ from tqdm import tqdm
 import os
 
 from pilates.utils.io import read_datastore
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
 
 def get_taz_labels(settings, data_dir="./pilates/postprocessing/data/"):
-    region = settings["region"]
-    zone_type = settings["skims_zone_type"]
+    region = get_setting(settings, "run.region")
+    zone_type = get_setting(settings, "shared.skims.zone_type")
 
     file_name = "{0}_{1}_labels.csv".format(zone_type, region)
     taz_geoms_fpath = os.path.join(data_dir, file_name)
@@ -38,9 +39,9 @@ def get_taz_geoms(
     data_dir="./pilates/postprocessing/data/",
     zone_type=None,
 ):
-    region = settings["region"]
+    region = get_setting(settings, "run.region")
     if zone_type is None:
-        zone_type = settings["skims_zone_type"]
+        zone_type = get_setting(settings, "shared.skims.zone_type")
 
     file_name = "{0}_{1}.shp".format(zone_type, region)
     taz_geoms_fpath = os.path.join(data_dir, file_name)
@@ -163,12 +164,12 @@ def get_county_block_geoms(
 
 
 def get_block_geoms(settings, data_dir="./tmp/"):
-    region = settings["region"] or "beam"
-    FIPS = settings["FIPS"][region]
+    region = get_setting(settings, "run.region") or "beam"
+    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
 
-    zone_type = settings["skims_zone_type"]
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     if zone_type == "taz":
         zone_type_v1 = "block"  # triger block geometries
     else:
@@ -273,8 +274,8 @@ def map_block_to_taz(
     Returns:
         A series named 'zone_id' with 'GEOID' as index name
     """
-    region = settings["region"]
-    local_crs = settings["local_crs"][region]
+    region = get_setting(settings, "run.region")
+    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
 
     if zones_gdf is None:
         zones_gdf = get_taz_geoms(settings, reference_taz_id_col, zone_id_col)
@@ -326,8 +327,8 @@ def geoid_to_zone_map(settings, year=None):
     Returns a dictionary. Keys are GEOIDs and values are the
     corresponding zone_id where the GEOID belongs to.
     """
-    region = settings["region"]
-    zone_type = settings["skims_zone_type"]
+    region = get_setting(settings, "run.region")
+    zone_type = get_setting(settings, "shared.skims.zone_type")
     travel_model = settings.get("travel_model", "beam")
     zone_id_col = "zone_id"
     geoid_to_zone_folder = os.path.join(

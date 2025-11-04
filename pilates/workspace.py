@@ -9,6 +9,7 @@ from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
 from pilates.utils.beam import get_beam_source_dir
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class Workspace:
                 else:
                     self.output_data[model_name] = output_store
                 # asim_config_dir = os.path.join(
-                #     settings.get("asim_local_configs_folder"), settings.get("region")
+                #     settings.get("asim_local_configs_folder"), get_setting(settings, "run.region")
                 # )
                 # self._record_initial_repo_files(
                 #     "activitysim",

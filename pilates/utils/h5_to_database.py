@@ -40,6 +40,7 @@ from pilates.generic.records import (
     OpenLineageEventMetadata,
 )
 from pilates.utils.config_snapshot import ConfigSnapshotManager
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -456,8 +457,8 @@ class H5ActivitySimExtractor:
     ) -> Optional[pd.DataFrame]:
         """Generate land_use table using ActivitySim preprocessor logic."""
         try:
-            region = self.settings["region"]
-            FIPS = self.settings["FIPS"][region]
+            region = self.get_setting(settings, "run.region")
+            FIPS = self.get_setting(settings, "shared.geography.FIPS")[region]
             asim_zone_id_col = "TAZ"
             # TODO: Generalize this or add it to settings.yaml
             input_zone_id_col = self.settings.get("geoms_index_col", "zone_id")

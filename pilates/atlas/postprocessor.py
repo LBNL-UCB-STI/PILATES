@@ -9,6 +9,7 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ def get_usim_datastore_fname(settings, io, year=None):
     if io == "output":
         datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
     elif io == "input":
-        region = settings["region"]
+        region = get_setting(settings, "run.region")
         region_id = settings["region_to_region_id"][region]
         usim_base_fname = settings["usim_formattable_input_file_name"]
         datastore_name = usim_base_fname.format(region_id=region_id)

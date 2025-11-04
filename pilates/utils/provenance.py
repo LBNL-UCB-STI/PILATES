@@ -47,6 +47,7 @@ from pilates.generic.records import (
 from workflow_state import WorkflowState
 from pilates.generic.execution_context import ExecutionContext
 from pilates.utils.config_snapshot import ConfigSnapshotManager
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,8 @@ class ProvenanceTracker:
         return model.lower() if model else model
 
     def initialize_from_settings(self, settings: Dict[str, Any]):
-        self.run_info.start_year = settings.get("start_year")
-        self.run_info.end_year = settings.get("end_year")
+        self.run_info.start_year = get_setting(settings, "run.start_year")
+        self.run_info.end_year = get_setting(settings, "run.end_year")
         self.run_info.settings_hash = None  # FileProvenanceTracker will set this
         models_used = []
         model_keys = [

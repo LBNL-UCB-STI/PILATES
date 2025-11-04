@@ -7,6 +7,7 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 #     vehicle_ownership_model, atlas_image = GenericRunner.get_model_and_image(
 #         settings, "vehicle_ownership_model"
 #     )
-#     freq = settings.get("vehicle_ownership_freq", False)
+#     freq = get_setting(settings, "run.vehicle_ownership_freq", False)
 #     npe = settings.get("atlas_num_processes", False)
 #     nsample = settings.get("atlas_sample_size", False)
 #     beamac = settings.get("atlas_beamac", 0)
@@ -111,7 +112,7 @@ logger = logging.getLogger(__name__)
 #         # Record inputs to accessibility calculation (BEAM skims)
 #         beam_output_dir = workspace.get_beam_output_dir()
 #         expected_beam_skims_path = os.path.join(
-#             beam_output_dir, settings["skims_fname"]
+#             beam_output_dir, get_setting(settings, "shared.skims.fname")
 #         )
 #         provenance_tracker.record_input_file(
 #             f"{vehicle_ownership_model}_preprocessor",
@@ -339,7 +340,7 @@ class AtlasRunner(GenericRunner):
         )
 
         atlas_docker_vols = get_atlas_docker_vols(settings, workspace)
-        freq = settings.get("vehicle_ownership_freq", False)
+        freq = get_setting(settings, "run.vehicle_ownership_freq", False)
         npe = settings.get("atlas_num_processes", False)
         nsample = settings.get("atlas_sample_size", False)
         beamac = settings.get("atlas_beamac", 0)
@@ -364,7 +365,7 @@ class AtlasRunner(GenericRunner):
 
         # Initialize container client
         client = None
-        if settings.get("container_manager") == "docker":
+        if get_setting(settings, "infrastructure.container_manager") == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -449,7 +450,7 @@ class AtlasRunner(GenericRunner):
                 "discIncent": discIncent,
             },
             "container_image": atlas_image,
-            "container_manager": settings.get("container_manager", "docker"),
+            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
             "working_directory": "/",
         }
 
