@@ -232,10 +232,10 @@ def get_atlas_docker_vols(settings, workspace: Workspace):
     atlas_host_output_folder = workspace.get_atlas_output_dir()
 
     atlas_container_input_folder = os.path.abspath(
-        settings["atlas_container_input_folder"]
+        get_setting(settings, "atlas.container_input_folder")
     )
     atlas_container_output_folder = os.path.abspath(
-        settings["atlas_container_output_folder"]
+        get_setting(settings, "atlas.container_output_folder")
     )
     atlas_docker_vols = {
         atlas_host_input_folder: {  ## source location, aka "local"
@@ -261,9 +261,9 @@ def get_atlas_cmd(
     taxfactor,
     discIncent,
 ):
-    basedir = settings.get("basedir", "/")
-    codedir = settings.get("codedir", "/")
-    formattable_atlas_cmd = settings["atlas_formattable_command"]
+    basedir = get_setting(settings, "atlas.basedir", "/")
+    codedir = get_setting(settings, "atlas.codedir", "/")
+    formattable_atlas_cmd = get_setting(settings, "atlas.command_template")
     atlas_cmd = formattable_atlas_cmd.format(
         freq,
         output_year,
@@ -341,14 +341,14 @@ class AtlasRunner(GenericRunner):
 
         atlas_docker_vols = get_atlas_docker_vols(settings, workspace)
         freq = get_setting(settings, "run.vehicle_ownership_freq", False)
-        npe = settings.get("atlas_num_processes", False)
-        nsample = settings.get("atlas_sample_size", False)
-        beamac = settings.get("atlas_beamac", 0)
-        mod = settings.get("atlas_mod", 1)
-        adscen = settings.get("atlas_adscen", False)
-        rebfactor = settings.get("atlas_rebfactor", 0)
-        taxfactor = settings.get("atlas_taxfactor", 0)
-        discIncent = settings.get("atlas_discIncent", 0)
+        npe = get_setting(settings, "atlas.num_processes", False)
+        nsample = get_setting(settings, "atlas.sample_size", False)
+        beamac = get_setting(settings, "atlas.beamac", 0)
+        mod = get_setting(settings, "atlas.mod", 1)
+        adscen = get_setting(settings, "atlas.adscen", False)
+        rebfactor = get_setting(settings, "atlas.rebfactor", 0)
+        taxfactor = get_setting(settings, "atlas.taxfactor", 0)
+        discIncent = get_setting(settings, "atlas.discIncent", 0)
         atlas_cmd = get_atlas_cmd(
             settings,
             freq,

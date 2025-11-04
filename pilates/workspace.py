@@ -65,7 +65,7 @@ class Workspace:
         have_not_copied_usim_data = True
 
         # BEAM
-        if settings.get("travel_model") == "beam":
+        if get_setting(settings, "run.models.travel") == "beam":
             input_dir = self.get_beam_mutable_data_dir()
             os.makedirs(input_dir, exist_ok=True)
             beam_preprocessor = beam_pre.BeamPreprocessor()
@@ -83,7 +83,7 @@ class Workspace:
             "vehicle_ownership_model",
             "land_use_model",
         ]:
-            model_name = settings.get(model_key)
+            model_name = get_setting(settings, f"run.models.{model_key.replace('_model', '')}")
             if not model_name:
                 continue
 
@@ -116,7 +116,7 @@ class Workspace:
                 atlas_pre.copy_data_to_mutable_location(settings, input_dir)
                 os.makedirs(self.get_atlas_output_dir(), exist_ok=True)
                 self._record_initial_files(
-                    "atlas", settings.get("atlas_host_input_folder"), "Atlas input file"
+                    "atlas", get_setting(settings, "atlas.host_input_folder"), "Atlas input file"
                 )
 
             # ActivitySim config copy
@@ -203,8 +203,8 @@ class Workspace:
 
     def get_atlas_mutable_input_dir(self) -> str:
         return os.path.join(
-            self.full_path, self.settings["atlas_host_mutable_input_folder"]
+            self.full_path, get_setting(self.settings, "atlas.host_mutable_input_folder")
         )
 
     def get_atlas_output_dir(self) -> str:
-        return os.path.join(self.full_path, self.settings["atlas_host_output_folder"])
+        return os.path.join(self.full_path, get_setting(self.settings, "atlas.host_output_folder"))

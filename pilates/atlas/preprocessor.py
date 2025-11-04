@@ -206,7 +206,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
 
         # Record BEAM skims as input if needed
-        beamac = settings.get("atlas_beamac", 0)
+        beamac = get_setting(settings, "atlas.beamac", 0)
         if beamac > 0:
             beam_output_dir = workspace.get_beam_output_dir()
             expected_beam_skims_path = os.path.join(
@@ -369,7 +369,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
 def compute_accessibility(path_list, measure_list, settings, year, threshold=500):
     # set where to put atlas csv inputs (processed from urbansim outputs)
-    atlas_input_path = settings["atlas_host_input_folder"] + "/year{}".format(year)
+    atlas_input_path = get_setting(settings, "atlas.host_input_folder") + "/year{}".format(year)
 
     # for each OD, compute minimum time taken by public transit
     # inf means no public transit available; unit = minute
@@ -390,7 +390,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 
     # read in jobs data (keep low_memory=False to solve dtypeerror)
     jobs = pd.read_csv(
-        "{}/year{}/jobs.csv".format(settings["atlas_host_input_folder"], year),
+        "{}/year{}/jobs.csv".format(get_setting(settings, "atlas.host_input_folder"), year),
         low_memory=False,
     )
 
@@ -425,7 +425,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
     # read in taz_to_tract conversion matrix (1454*1588)
     taz_to_tract = pd.read_csv(
         "{}/taz_to_tract_{}.csv".format(
-            settings["atlas_host_input_folder"], get_setting(settings, "run.region")
+            get_setting(settings, "atlas.host_input_folder"), get_setting(settings, "run.region")
         ),
         index_col=0,
     )

@@ -41,11 +41,11 @@ class ActivitysimRunner(GenericRunner):
     def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
         formattable_asim_cmd = get_setting(settings, "activitysim.command_template")
         if not household_sample_size:
-            household_sample_size = settings.get("household_sample_size", 0)
-        num_processes = num_processes or settings.get(
-            "num_processes", multiprocessing.cpu_count() - 1
+            household_sample_size = get_setting(settings, "activitysim.household_sample_size", 0)
+        num_processes = num_processes or get_setting(
+            settings, "activitysim.num_processes", multiprocessing.cpu_count() - 1
         )
-        chunk_size = settings.get("chunk_size", 0)  # default no chunking
+        chunk_size = get_setting(settings, "activitysim.chunk_size", 0)  # default no chunking
         base_asim_cmd = formattable_asim_cmd.format(
             household_sample_size, num_processes, chunk_size
         )
@@ -159,7 +159,7 @@ class ActivitysimRunner(GenericRunner):
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # Get from your config
-        output_directory = settings['output_directory']  # "/global/scratch/users/$USER/pilates-output"
+        output_directory = get_setting(settings, 'run.output_directory')  # "/global/scratch/users/$USER/pilates-output"
 
         # Expand $USER if needed
         output_directory = os.path.expandvars(output_directory)
@@ -277,7 +277,7 @@ class ActivitysimRunner(GenericRunner):
                     logger.info("Creating initial zarr version snapshot after ActivitySim compilation...")
 
                     # Get database path from settings
-                    database_path = settings.get("database", {}).get("path")
+                    database_path = get_setting(settings, "shared.database.path")
                     if database_path:
                         # Initialize zarr version manager
                         zarr_base_path = os.path.dirname(database_path)
@@ -302,7 +302,7 @@ class ActivitysimRunner(GenericRunner):
                 "runtime_parameters": {
                     "household_sample_size": 2500,
                     "num_processes": 1,
-                    "chunk_size": settings.get("chunk_size", 0),
+                    "chunk_size": get_setting(settings, "activitysim.chunk_size", 0),
                     "additional_args": additional_args,
                 },
                 "container_image": activity_demand_image,
@@ -426,9 +426,9 @@ class ActivitysimRunner(GenericRunner):
         runtime_metadata = {
             "container_command": asim_cmd,
             "runtime_parameters": {
-                "household_sample_size": settings.get("household_sample_size", 0),
-                "num_processes": settings.get("num_processes", multiprocessing.cpu_count() - 1),
-                "chunk_size": settings.get("chunk_size", 0),
+                "household_sample_size": get_setting(settings, "activitysim.household_sample_size", 0),
+                "num_processes": get_setting(settings, "activitysim.num_processes", multiprocessing.cpu_count() - 1),
+                "chunk_size": get_setting(settings, "activitysim.chunk_size", 0),
                 "additional_args": additional_args,
             },
             "container_image": activity_demand_image,

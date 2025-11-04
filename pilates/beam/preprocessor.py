@@ -138,7 +138,7 @@ def copy_data_to_mutable_location(
 
     if "beam_skims_shapefile" in settings:
         logger.info(
-            f"[BEAM Preprocessor] Updating beam config to use zone id of {settings['skim_zone_geoid_col']}"
+            f"[BEAM Preprocessor] Updating beam config to use zone id of {get_setting(settings, 'beam.skim_zone_geoid_col')}"
         )
         update_beam_config(
             settings,
@@ -146,7 +146,7 @@ def copy_data_to_mutable_location(
                 0
             ],  # Sorry...
             "skim_zone_geoid_col",
-            settings["skim_zone_geoid_col"],
+            get_setting(settings, "beam.skim_zone_geoid_col"),
         )
     return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
 
@@ -165,7 +165,7 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
             working_dir,
             get_setting(settings, "beam.local_mutable_data_folder"),
             get_setting(settings, "run.region"),
-            settings["beam_config"],
+            get_setting(settings, "beam.config"),
         )
         if not os.path.exists(beam_config_path):
             logger.warning(

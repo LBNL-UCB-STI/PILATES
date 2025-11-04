@@ -448,7 +448,7 @@ def _create_skims_by_mode(settings, skims_df):
     logger.info("Splitting BEAM skims by mode.")
 
     # Settings
-    hwy_paths = settings["beam_simulated_hwy_paths"]
+    hwy_paths = get_setting(settings, "beam.simulated_hwy_paths")
     transit_paths = get_setting(settings, "shared.skims.transit_paths").keys()
 
     logger.info("Splitting out auto skims.")
@@ -634,7 +634,7 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
 
     # TO DO: Include walk and bike distances,
     # for now walk and bike are the same as drive.
-    dist_column = settings["beam_asim_hwy_measure_map"]["DIST"]
+    dist_column = get_setting(settings, "beam.asim_hwy_measure_map")["DIST"]
     if isinstance(input_skims, pd.DataFrame):
         dist_df = input_skims[[dist_column]].groupby(level=[2, 3]).agg("first")
         mx_dist, useDefaults = _build_od_matrix(
@@ -658,7 +658,7 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
     if missing.all():
         logger.info("Imputing all missing distance skims.")
         zones = read_zone_geoms(
-            settings, year, asim_zone_id_col=settings.get("geoms_index_col")
+            settings, year, asim_zone_id_col=get_setting(settings, "shared.skims.geoms_index_col")
         )
         mx_dist = impute_distances(zones)
         output_skims["DIST"] = mx_dist
@@ -720,7 +720,7 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
     logger.info("Creating transit skims.")
     transit_paths = get_setting(settings, "shared.skims.transit_paths")
     periods = get_setting(settings, "shared.skims.periods")
-    measure_map = settings["beam_asim_transit_measure_map"]
+    measure_map = get_setting(settings, "beam.asim_transit_measure_map")
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
     fill_na = 0.0
@@ -773,10 +773,9 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
 def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
     """Generate transit OMX skims"""
 
-    logger.info("Creating ridehail skims.")
-    ridehail_path_map = settings["ridehail_path_map"]
+    ridehail_path_map = get_setting(settings, "beam.ridehail_path_map")
     periods = get_setting(settings, "shared.skims.periods")
-    measure_map = settings["beam_asim_ridehail_measure_map"]
+    measure_map = get_setting(settings, "beam.asim_ridehail_measure_map")
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
     df = ridehail_df.copy()
@@ -818,7 +817,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
 
     ridehail_path_map = settings["ridehail_path_map"]
     periods = get_setting(settings, "shared.skims.periods")
-    measure_map = settings["beam_asim_ridehail_measure_map"]
+    measure_map = get_setting(settings, "beam.asim_ridehail_measure_map")
 
     num_taz = len(order)
 
@@ -997,7 +996,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
     # Open skims object
     periods = get_setting(settings, "shared.skims.periods")
     paths = get_setting(settings, "shared.skims.hwy_paths")
-    measure_map = settings["beam_asim_hwy_measure_map"]
+    measure_map = get_setting(settings, "beam.asim_hwy_measure_map")
 
     num_taz = len(order)
 
@@ -1088,10 +1087,10 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
     # Open skims object
     periods = get_setting(settings, "shared.skims.periods")
     paths = get_setting(settings, "shared.skims.hwy_paths")
-    measure_map = settings["beam_asim_hwy_measure_map"]
+    measure_map = get_setting(settings, "beam.asim_hwy_measure_map")
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
-    beam_hwy_paths = settings["beam_simulated_hwy_paths"]
+    beam_hwy_paths = get_setting(settings, "beam.simulated_hwy_paths")
     fill_na = np.nan
 
     groupBy = auto_df.groupby(level=[0, 1])
@@ -1358,11 +1357,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         urbansim_disabled = land_use_model != "urbansim"
 
         # Check if database is configured
-        db_config = settings.get("database", {})
+        db_config = get_setting(settings, "shared.database", {})
         database_enabled = db_config.get("enabled", False)
 
         # Check if ActivitySim database configuration exists
-        asim_db_config = settings.get("activitysim_database", {})
+        asim_db_config = get_setting(settings, "activitysim.database", {})
         asim_db_enabled = asim_db_config.get("enabled", False)
 
         # Database input mode requires all conditions
@@ -2035,8 +2034,8 @@ def copy_data_to_mutable_location(
     os.makedirs(input_dir, exist_ok=True)
     region = get_setting(settings, "run.region")
     beam_input_dir = get_setting(settings, "beam.local_input_folder")
-    beam_geoms_fname = settings["beam_geoms_fname"]
-    beam_router_directory = settings["beam_router_directory"]
+    beam_geoms_fname = get_setting(settings, "shared.skims.geoms_fname")
+    beam_router_directory = get_setting(settings, "beam.router_directory")
     asim_geoms_location = os.path.join(input_dir, beam_geoms_fname)
 
     beam_geoms_location = os.path.join(
@@ -2044,7 +2043,7 @@ def copy_data_to_mutable_location(
     )
     if "beam_skims_shapefile" in settings:
         beam_shape_location = os.path.join(
-            beam_input_dir, region, settings["beam_skims_shapefile"]
+            beam_input_dir, region, get_setting(settings, "beam.skims_shapefile")
         )
     else:
         logger.warning(
@@ -2154,7 +2153,7 @@ def copy_beam_geoms(
     if beam_shape_location is not None:
         logger.info(
             "Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
-                settings["skim_zone_geoid_col"], settings["skim_zone_source_id_col"]
+                get_setting(settings, "beam.skim_zone_geoid_col"), get_setting(settings,"beam.skim_zone_source_id_col")
             )
         )
         beam_shape_in = provenance_tracker.record_input_file(
@@ -2165,8 +2164,8 @@ def copy_beam_geoms(
         )
         inputs.append(beam_shape_in)
         zones = gpd.read_file(beam_shape_location)
-        zones[settings["skim_zone_source_id_col"]] = (
-            zones[settings["skim_zone_geoid_col"]].astype(str).map(mapping)
+        zones[get_setting(settings,"beam.skim_zone_source_id_col")] = (
+            zones[get_setting(settings, "beam.skim_zone_geoid_col")].astype(str).map(mapping)
         )
         logger.info(
             "Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(
@@ -2682,7 +2681,7 @@ def create_asim_data_from_database(
     optional_tables = ["accessibility", "zones", "maz", "taz"]
 
     # Database configuration for ActivitySim inputs
-    db_config = settings.get("activitysim_database", {})
+    db_config = get_setting(settings, "activitysim.database", {})
     config_hash = db_config.get("config_hash")  # Optional: match specific config
     year = db_config.get("year", state.forecast_year)  # Year to query for
     use_processed = db_config.get(
@@ -2902,7 +2901,7 @@ def create_asim_data_from_h5(
     asim_zone_id_col = "TAZ"
 
     # TODO: Generalize this or add it to settings.yaml
-    input_zone_id_col = settings.get("geoms_index_col", "zone_id")
+    input_zone_id_col = get_setting(settings, "shared.skims.geoms_index_col", "zone_id")
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
