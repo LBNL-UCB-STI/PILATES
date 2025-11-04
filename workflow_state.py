@@ -227,9 +227,29 @@ class WorkflowState:
 
     @classmethod
     def from_settings(cls, settings):
-        start_year = settings["start_year"]
-        end_year = settings["end_year"]
-        travel_model_freq = settings.get("travel_model_freq", 1)
+        # Helper to get value from both nested (Pydantic) and legacy (flat) config formats
+        def get_setting(nested_path, legacy_key, default=None, required=False):
+            """Get setting from nested path first, then legacy key."""
+            value = settings
+            # Try nested path (e.g., "run.start_year")
+            for key in nested_path.split('.'):
+                if isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    # Fall back to legacy key
+                    value = settings.get(legacy_key, default)
+                    break
+
+            if required and value is None:
+                raise KeyError(f"Required setting not found: {nested_path} or {legacy_key}")
+            return value
+
+        # Get settings from nested or legacy locations
+        start_year = get_setting("run.start_year", "start_year", required=True)
+        end_year = get_setting("run.end_year", "end_year", required=True)
+        travel_model_freq = get_setting("run.travel_model_freq", "travel_model_freq", default=1)
+
+        # These are always added at top-level by parse_args_and_settings()
         land_use_enabled = settings["land_use_enabled"]
         vehicle_ownership_model_enabled = settings["vehicle_ownership_model_enabled"]
         activity_demand_enabled = settings["activity_demand_enabled"]
@@ -262,7 +282,7 @@ class WorkflowState:
             data_initialized=data_initialized,
         )
 
-        out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)
+        out._settings["supply_demand_iters"] = get_setting("run.supply_demand_iters", "supply_demand_iters", default=1)
 
         if year:
             # Calculate forecast_year based on current_year and frequency
