@@ -2929,8 +2929,14 @@ def create_asim_data_from_h5(
     # Open the HDF5 store
     store = pd.HDFStore(usim_h5_file_path, mode="r")
 
-    # For the merged input H5, tables are at the root, so no year prefix
-    table_prefix_yr = ""
+    if "households" in store:
+        # For the merged input H5, tables are at the root, so no year prefix
+        table_prefix_yr = ""
+    elif "{0}/households".format(get_setting(settings, "run.start_year")) in store:
+        table_prefix_yr = "{0}/".format(get_setting(settings, "run.start_year"))
+    else:
+        raise ValueError("Check the formatting of the table names in the urbansim data store, current structure is "
+                         f"not recognized: ${store.keys()}")
 
     logger.info(
         "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(

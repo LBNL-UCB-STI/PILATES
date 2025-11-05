@@ -429,7 +429,7 @@ def run_traffic_assignment(
         activity_demand_outputs (RecordStore, optional): Processed activity demand outputs.
     """
     factory = ModelFactory()
-    travel_model = settings.get("travel_model")
+    travel_model = get_setting(settings, "run.models.travel_model")
 
     if travel_model == "polaris":
         # run_polaris(state, settings)
