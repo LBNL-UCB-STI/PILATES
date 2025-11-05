@@ -2829,10 +2829,10 @@ def process_raw_h5_files(
     asim_zone_id_col="TAZ",
 ):
     region = get_setting(settings, "run.region")
-    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
+    FIPS = get_setting(settings, "shared.geography.FIPS")
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
-    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
+    local_crs = FIPS["local_crs"]
     zone_type = get_setting(settings, "shared.skims.zone_type")
 
     # update blocks
