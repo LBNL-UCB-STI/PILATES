@@ -1985,10 +1985,11 @@ def enrollment_tables(
     settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
 ):
     region = get_setting(settings, "run.region")
-    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
+    logger.info("RELEVANT FIPS CODE {0}".format(get_setting(settings, "shared.geography")))
+    FIPS = get_setting(settings, "shared.geography.FIPS")
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
-    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
+    local_crs = get_setting(settings, "shared.geography.local_crs")
 
     zone_type = get_setting(settings, "shared.skims.zone_type")
     path_to_schools_data = "pilates/utils/data/{0}/{1}_{2}.csv".format(
@@ -2505,7 +2506,7 @@ def _create_land_use_table(
         if "STATE" in zones.columns:
             zones.loc[:, "STATE"] = zones["STATE"].astype(str)
         else:
-            zones.loc[:, "STATE"] = get_setting(settings, "shared.geography.FIPS")[get_setting(settings, "run.region")]["state"]
+            zones.loc[:, "STATE"] = get_setting(settings, "shared.geography.FIPS")["state"]
         try:
             zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
         except:
@@ -2829,10 +2830,11 @@ def process_raw_h5_files(
     asim_zone_id_col="TAZ",
 ):
     region = get_setting(settings, "run.region")
+    logger.info("RELEVANT FIPS CODE {0}".format(get_setting(settings, "shared.geography")))
     FIPS = get_setting(settings, "shared.geography.FIPS")
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
-    local_crs = FIPS["local_crs"]
+    local_crs = get_setting(settings, "shared.geography.local_crs")
     zone_type = get_setting(settings, "shared.skims.zone_type")
 
     # update blocks
