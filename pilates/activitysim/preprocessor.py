@@ -2929,7 +2929,7 @@ def create_asim_data_from_h5(
     )
 
     # Open the HDF5 store
-    store = pd.HDFStore(usim_h5_file_path, mode="r")
+    store = pd.HDFStore(usim_h5_file_path, mode="a")
 
     if "households" in store:
         # For the merged input H5, tables are at the root, so no year prefix
@@ -2971,11 +2971,9 @@ def create_asim_data_from_h5(
                 get_setting(settings, "shared.skims.zone_type")
             )
         )
-        logger.info(f"Blocks DataFrame columns: {blocks.columns.tolist()}")
-        logger.info(f"input_zone_id_col: {input_zone_id_col}")
-        logger.info(f"blocks_cols before modification: {blocks_cols}")
-        logger.info(f"blocks.index.name: {blocks.index.name}")
-        store[os.path.join(table_prefix_yr, "blocks")] = blocks
+        if input_zone_id_col not in blocks_cols:
+            blocks_cols += [input_zone_id_col]
+        store[os.path.join(table_prefix_yr, "blocks")] = blocks[blocks_cols]
 
     if num_reassigned > 0:
         jobs_cols = jobs.columns
