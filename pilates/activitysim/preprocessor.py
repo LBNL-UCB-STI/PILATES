@@ -2971,9 +2971,11 @@ def create_asim_data_from_h5(
                 get_setting(settings, "shared.skims.zone_type")
             )
         )
-        if input_zone_id_col not in blocks_cols:
-            blocks_cols += [input_zone_id_col]
-        store[os.path.join(table_prefix_yr, "blocks")] = blocks[blocks_cols]
+        logger.info(f"Blocks DataFrame columns: {blocks.columns.tolist()}")
+        logger.info(f"input_zone_id_col: {input_zone_id_col}")
+        logger.info(f"blocks_cols before modification: {blocks_cols}")
+        logger.info(f"blocks.index.name: {blocks.index.name}")
+        store[os.path.join(table_prefix_yr, "blocks")] = blocks
 
     if num_reassigned > 0:
         jobs_cols = jobs.columns
