@@ -31,9 +31,8 @@ from pilates.utils.provenance import OpenLineageTracker
 from pilates.generic.initialization import Initialization
 
 # NEW: Hierarchical config system imports
-from pilates.config.models import load_config, PilatesConfig
+from pilates.config.models import PilatesConfig
 from pilates.utils.duckdb_manager import DuckDBManager
-from pydantic import ValidationError
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -52,7 +51,6 @@ from pilates.activitysim import postprocessor as asim_post
 from pilates.urbansim import postprocessor as usim_post
 from pilates.utils.io import parse_args_and_settings
 from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
-from pilates.utils.io import compute_model_enabled_flags
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -158,12 +156,14 @@ def find_latest_beam_iteration(beam_output_dir):
 
 
 def warm_start_activities(
-    settings,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
 ):
     """
+    TODO: THIS IS BROKEN
+
     Run ActivitySim warm-start to update UrbanSim inputs with long-term choices.
 
     This function is typically executed only in the initial start year as part of
@@ -178,7 +178,7 @@ def warm_start_activities(
       - Record the postprocessor model run with the provenance tracker
 
     Args:
-        settings (dict): Parsed simulation settings.
+        settings (PilatesConfig): Parsed simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace object with file paths.
         provenance_tracker (OpenLineageTracker): Provenance tracker instance.
@@ -234,8 +234,8 @@ def warm_start_activities(
 
 
 def forecast_land_use(
-    settings,
-    year,
+    settings: PilatesConfig,
+    year: int,
     workflow_state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
@@ -247,7 +247,7 @@ def forecast_land_use(
     `run_land_use`, and verifies UrbanSim outputs exist after completion.
 
     Args:
-        settings (dict): Simulation settings.
+        settings (PilatesConfig): Simulation settings.
         year (int): Current simulation year.
         workflow_state (WorkflowState): Current workflow state instance.
         workspace (Workspace): Workspace for file operations.
@@ -266,7 +266,6 @@ def forecast_land_use(
     )
 
     run_land_use(
-        settings,
         year,
         workflow_state.forecast_year,
         land_use_model,
@@ -299,7 +298,6 @@ def forecast_land_use(
 
 
 def run_land_use(
-    settings,
     year,
     forecast_year,
     land_use_model,
@@ -312,7 +310,6 @@ def run_land_use(
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
 
     Args:
-        settings (dict): Settings for the models and run environment.
         year (int): Current simulation year (start of forecast).
         forecast_year (int): Forecast target year.
         land_use_model (str): Land use model identifier (e.g., 'urbansim').
@@ -360,7 +357,7 @@ def run_land_use(
 
 
 def run_activity_demand(
-    settings,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
@@ -373,7 +370,7 @@ def run_activity_demand(
       - Polaris: logged but not implemented here
 
     Args:
-        settings (dict): Simulation settings.
+        settings (PilatesConfig): Simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace instance for file operations.
         provenance_tracker (OpenLineageTracker): Provenance tracker for model events.
@@ -425,7 +422,7 @@ def run_activity_demand(
 
 
 def run_traffic_assignment(
-    settings,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: OpenLineageTracker,
@@ -439,7 +436,7 @@ def run_traffic_assignment(
         preprocessor with the activity demand outputs as input.
 
     Args:
-        settings (dict): Simulation settings.
+        settings (PilatesConfig): Simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace instance.
         provenance_tracker (OpenLineageTracker): Provenance tracker instance.
