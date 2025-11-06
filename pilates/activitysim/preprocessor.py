@@ -2226,7 +2226,7 @@ def copy_beam_geoms(
 
 
 def _update_persons_table(
-    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
+        persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
 ):
     """Updates person attributes and assigns zones for ActivitySim processing.
 
@@ -2246,7 +2246,8 @@ def _update_persons_table(
     logger.info(
         f"Dropping {unassigned_mask.sum()} people from {unassigned_households.shape[0]} unassigned households"
     )
-    persons = persons.loc[~unassigned_mask]
+
+    persons = persons.loc[~unassigned_mask].copy()
 
     household_zone_map = households["block_id"].map(blocks[asim_zone_id_col])
     persons[asim_zone_id_col] = (
@@ -2266,16 +2267,10 @@ def _update_persons_table(
 
     # Calculate person types more efficiently
     conditions = [
-        (
-            age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
-        ),  # type 1
+        (age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)),  # type 1
         (age_ranges["adult"] & (persons.student == 1)),  # type 3
-        (
-            age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
-        ),  # type 4
-        (
-            age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
-        ),  # type 5
+        (age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)),  # type 4
+        (age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)),  # type 5
         age_ranges["teen"],  # type 6
         age_ranges["child"],  # type 7
         age_ranges["young_child"],  # type 8
@@ -2327,19 +2322,13 @@ def _update_persons_table(
     persons["student"] = pd.to_numeric(persons["student"], errors="coerce").fillna(0)
 
     # Filter invalid records
-    mask = ~persons[asim_zone_id_col].isnull() & (  # Has valid TAZ
-        persons["age"] >= 1.0
-    )  # Not newborn
+    mask = ~persons[asim_zone_id_col].isnull() & (persons["age"] >= 1.0)
 
     if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        mask &= ~(
-            (persons.worker == 1) & (persons.workplace_taz < 0)
-        )  # Valid workplace for workers
-        mask &= ~(
-            (persons.student == 1) & (persons.school_taz < 0)
-        )  # Valid school for students
+        mask &= ~((persons.worker == 1) & (persons.workplace_taz < 0))
+        mask &= ~((persons.student == 1) & (persons.school_taz < 0))
 
-    persons = persons.loc[mask].dropna()
+    persons = persons.loc[mask].dropna().copy()
 
     # Reset member IDs
     persons["member_id"] = persons.groupby("household_id").cumcount() + 1
@@ -2391,7 +2380,9 @@ def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
     households[asim_zone_id_col] = households[asim_zone_id_col].astype(str)
     logger.info("Dropping {0} households without TAZs".format(hh_null_taz.sum()))
     hh_null_taz_id = households.index[hh_null_taz]
-    households = households[~hh_null_taz]
+
+    # CHANGE: Make explicit copy when filtering
+    households = households[~hh_null_taz].copy()
 
     # create new column variables
     s = households.persons
