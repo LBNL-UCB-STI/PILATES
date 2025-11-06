@@ -57,7 +57,7 @@ class UrbansimRunner(GenericRunner):
         year = self.state.current_year
         forecast_year = self.state.forecast_year
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings.region_to_region_id[region]
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
         land_use_freq = settings.run.land_use_freq
         skims_source = settings.run.models.travel
         formattable_usim_cmd = settings.urbansim.command_template
