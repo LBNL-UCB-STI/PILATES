@@ -538,7 +538,7 @@ def main():
             snapshot_manager = ConfigSnapshotManager(
                 os.path.join(output_path, run_name) if run_name else output_path
             )
-            enabled_models = pydantic_config.get_enabled_models()
+            enabled_models = settings.get_enabled_models()
             hierarchical_hashes = snapshot_manager.create_hierarchical_config_hashes(
                 config_snapshot, enabled_models
             )
