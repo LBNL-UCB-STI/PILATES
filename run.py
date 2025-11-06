@@ -552,7 +552,7 @@ def main():
                     logger.info(
                         f"Uploading config hashes to database: {database_config['path']}"
                     )
-                    db = DuckDBManager(database_config["path"])
+                    db = DuckDBManager(database_config.path)
                     db.initialize_database()
                     db.upload_hierarchical_config_hashes(
                         config_snapshot["snapshot_id"], hierarchical_hashes
