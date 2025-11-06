@@ -597,7 +597,7 @@ def main():
         # A. LAND USE FORECASTING
         if state.should_run(WorkflowState.Stage.land_use):
             formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
-            if state.is_start_year() and settings.warm_start_activities:
+            if state.is_start_year() and settings.activitysim.warm_start_activities:
                 logger.info("[Main] Running warm start activities for ActivitySim.")
                 warm_start_activities(settings, state, workspace, provenance_tracker)
             forecast_land_use(settings, year, state, workspace, provenance_tracker)
