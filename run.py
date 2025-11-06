@@ -549,8 +549,8 @@ def main():
                 logger.info(f"  {model_name}: {hash_info['hash'][:16]}...")
 
             # Upload to database if enabled
-            database_config = settings.get("database", {})
-            if database_config.get("enabled") and database_config.get("path"):
+            database_config = settings.shared.database
+            if database_config.enabled and database_config.path:
                 try:
                     logger.info(
                         f"Uploading config hashes to database: {database_config['path']}"
@@ -600,7 +600,7 @@ def main():
         # A. LAND USE FORECASTING
         if state.should_run(WorkflowState.Stage.land_use):
             formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
-            if state.is_start_year() and settings.get("warm_start_activities"):
+            if state.is_start_year() and settings.warm_start_activities:
                 logger.info("[Main] Running warm start activities for ActivitySim.")
                 warm_start_activities(settings, state, workspace, provenance_tracker)
             forecast_land_use(settings, year, state, workspace, provenance_tracker)
@@ -650,7 +650,7 @@ def main():
             else:
                 yrs = [state.year]
 
-            max_retries = settings.get("atlas_max_retries", 3)
+            max_retries = settings.atlas.max_retries
             for atlas_year in yrs:
                 for i in range(max_retries):
                     # Create a lightweight sub-state object for this ATLAS sub-run. It copies
@@ -738,7 +738,7 @@ def main():
 
         # C. SUPPLY/DEMAND LOOP
         if state.should_run(WorkflowState.Stage.supply_demand_loop):
-            total_iters = settings.get("supply_demand_iters", 1)
+            total_iters = settings.supply_demand_iters
             for i in range(state.iteration, total_iters):
                 state.iteration = i
                 formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
@@ -789,9 +789,8 @@ def main():
         if state.should_run(WorkflowState.Stage.postprocessing):
             formatted_print("POST-PROCESSING")
             logger.info("[Main] Running post-processing steps.")
-            if settings.get("mep_metrics_to_create"):
+            if "postprocessing" in settings:
                 process_event_file(settings, state, workspace, provenance_tracker)
-            if settings.get("mep_output_dir"):
                 copy_outputs_to_mep(settings, state, workspace, provenance_tracker)
             state.complete_step(WorkflowState.Stage.postprocessing)
 
