@@ -2964,7 +2964,7 @@ def create_asim_data_from_h5(
     asim_zone_id_col = "TAZ"
 
     # TODO: Generalize this or add it to settings.yaml
-    input_zone_id_col = get_setting(settings, "shared.skims.geoms_index_col", "zone_id")
+    input_zone_id_col = settings.shared.skims.geoms_index_col
 
     # TODO: only call _get_zones_geoms if blocks or colleges or schools
     # don't already have a zone ID (e.g. TAZ). If they all do then we don't
@@ -3028,6 +3028,9 @@ def create_asim_data_from_h5(
             blocks, persons, households, jobs, settings, state.forecast_year
         )
     )
+
+    zone_type = settings.shared.skims.zone_type
+    input_zone_id_col = "{0}_zone_id".format(zone_type)
 
     if blocks_to_taz_mapping_updated:
         blocks_cols = blocks.columns.tolist()
