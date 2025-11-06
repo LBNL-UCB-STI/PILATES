@@ -25,7 +25,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.0.beta.251028
+  beam: docker://haitamlaarabi/beam:1.0.beta.251106
   activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.0.beta.251028
+  beam: haitamlaarabi/beam:1.0.beta.251106
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -44,7 +44,7 @@ skims_zone_type: block_group # one of [taz, block_group, block]
 skims_fname: as-base-skims-seattle-bg.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
 origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
-beam_router_directory: r5/seattle-area-cbg412-ferry-network
+beam_router_directory: r5/seattle-area-cbg120-ferry-network
 beam_geoms_fname: clipped_tazs.csv
 geoms_index_col: GEOID
 
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: pilates-calibration--cbg412ferry-jdeq-FC07-5
+output_run_name: pilates-calibration--jdeq--FC08-5
 
 # URBANSIM
 region_to_region_id:
@@ -100,7 +100,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: scenarios/network-calibration/seattle-pilates--cbg412ferry-jdeq-FC07-5.conf # OR austin-pilates-base.conf
+beam_config: scenarios/network-calibration/seattle-pilates--jdeq--FC08-5.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
