@@ -735,7 +735,7 @@ def main():
 
         # C. SUPPLY/DEMAND LOOP
         if state.should_run(WorkflowState.Stage.supply_demand_loop):
-            total_iters = settings.supply_demand_iters
+            total_iters = settings.run.supply_demand_iters
             for i in range(state.iteration, total_iters):
                 state.iteration = i
                 formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
