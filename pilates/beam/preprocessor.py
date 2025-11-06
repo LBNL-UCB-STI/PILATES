@@ -23,6 +23,13 @@ beam_param_map = {
     "skim_zone_geoid_col": "beam.agentsim.taz.tazIdFieldName",
 }
 
+BEAM_PYDANTIC_PATH_MAP = {
+    "beam_sample": "beam.sample",
+    "beam_replanning_portion": "beam.replanning_portion",
+    "max_plans_memory": "beam.max_plans_memory",
+    "skim_zone_geoid_col": "beam.skim_zone_geoid_col",
+}
+
 
 def copy_data_to_mutable_location(
     settings, output_dir, provenance_tracker: FileProvenanceTracker
@@ -32,7 +39,7 @@ def copy_data_to_mutable_location(
     """
     input_records = []
     output_records = []
-    region = get_setting(settings, "run.region")
+    region = settings.run.region
     # Find the project root by searching upwards for 'pilates' or '.git'
     pilates_root = find_project_root()
     if pilates_root is None:
@@ -136,9 +143,9 @@ def copy_data_to_mutable_location(
             )
         )
 
-    if "beam_skims_shapefile" in settings:
+    if hasattr(settings.beam, "skims_shapefile"):
         logger.info(
-            f"[BEAM Preprocessor] Updating beam config to use zone id of {get_setting(settings, 'beam.skim_zone_geoid_col')}"
+            f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}"
         )
         update_beam_config(
             settings,
@@ -146,7 +153,7 @@ def copy_data_to_mutable_location(
                 0
             ],  # Sorry...
             "skim_zone_geoid_col",
-            get_setting(settings, "beam.skim_zone_geoid_col"),
+            valueOverride=settings.beam.skim_zone_geoid_col,
         )
     return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
 
@@ -155,17 +162,26 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
     """
     Update a BEAM config file parameter with a new value.
     """
-    if param in settings:
+    if param in beam_param_map:
         config_header = beam_param_map[param]
         if valueOverride is None:
-            config_value = settings[param]
+            pydantic_path = BEAM_PYDANTIC_PATH_MAP.get(param)
+            if not pydantic_path:
+                logger.warning(f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config.")
+                return
+            config_value = get_setting(settings, pydantic_path)
         else:
             config_value = valueOverride
+
+        if config_value is None:
+            logger.debug(f"Skipping beam config update for '{param}' because value is None.")
+            return
+
         beam_config_path = os.path.join(
             working_dir,
-            get_setting(settings, "beam.local_mutable_data_folder"),
-            get_setting(settings, "run.region"),
-            get_setting(settings, "beam.config"),
+            settings.beam.local_mutable_data_folder,
+            settings.run.region,
+            settings.beam.config,
         )
         if not os.path.exists(beam_config_path):
             logger.warning(
@@ -218,8 +234,8 @@ def copy_vehicles_from_atlas(
 ):
     beam_scenario_folder = os.path.join(
         workspace.get_beam_mutable_data_dir(),
-        get_setting(settings, "run.region"),
-        get_setting(settings, "beam.scenario_folder"),
+        settings.run.region,
+        settings.beam.scenario_folder,
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
     if state.run_info_path and os.path.exists(state.run_info_path):
@@ -700,11 +716,11 @@ def copy_plans_from_asim(
         return record_list
 
     # Main logic for copy_plans_from_asim
-    if settings.get("copy_plans_from_asim_outputs", True):
+    if True: # Replaces legacy `copy_plans_from_asim_outputs` setting
         logger.info(
             "You have chosen to use final ASIM plans. Will attempt to read files from provenance tracker."
         )
-        file_format = get_setting(settings, "activitysim.file_format", "parquet")
+        file_format = settings.activitysim.file_format
 
         # Find ActivitySim output files using provenance tracker
         required_files = [
@@ -880,14 +896,14 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
         # Update BEAM config
-        if get_setting(settings, "beam.discard_plans_every_year"):
-            update_beam_config(settings, workspace.full_path, "max_plans_memory", 0)
+        if settings.beam.discard_plans_every_year:
+            update_beam_config(settings, workspace.full_path, "max_plans_memory", valueOverride=0)
         else:
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
 
         # Copy vehicle data from Atlas if enabled
         # Only copy on first iteration since vehicles are constant across iterations within a year
-        if settings.get("vehicle_ownership_model_enabled") and self.state.current_inner_iter == 0:
+        if settings.vehicle_ownership_model_enabled and self.state.current_inner_iter == 0:
             copy_vehicles_from_atlas(
                 settings, workspace, self.state, self.provenance_tracker, model_run_hash
             )
@@ -933,8 +949,8 @@ class BeamPreprocessor(GenericPreprocessor):
         if not linkstats_record:
             linkstats_path = os.path.join(
                 workspace.get_beam_mutable_data_dir(),
-                get_setting(settings, "run.region"),
-                get_setting(settings, "beam.router_directory"),
+                settings.run.region,
+                settings.beam.router_directory,
                 "init.linkstats.csv.gz",
             )
             if os.path.exists(linkstats_path):

@@ -34,6 +34,7 @@ from pilates.activitysim.preprocessor import (
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
+from pilates.config.models import PilatesConfig, load_config
 
 
 class MockState:
@@ -51,7 +52,7 @@ class MockWorkspace:
     def __init__(self, temp_dir: str):
         self.temp_dir = temp_dir
         self.full_path = temp_dir
-        self.settings = {"region": "sfbay", "start_year": 2017, "forecast_year": 2017}
+        self.config: PilatesConfig = None
 
     def get_asim_mutable_data_dir(self):
         asim_dir = os.path.join(self.temp_dir, "activitysim", "data")
@@ -121,56 +122,48 @@ class TestDualStorageWorkflow(unittest.TestCase):
         # Load settings from file if provided, otherwise use defaults
         if self.settings_file and os.path.exists(self.settings_file):
             try:
-                import yaml
-
-                with open(self.settings_file, "r") as f:
-                    self.settings = yaml.safe_load(f)
-                print(f"📄 Loaded settings from: {self.settings_file}")
+                self.config = load_config(self.settings_file)
+                print(f"📄 Loaded config from: {self.settings_file}")
 
                 # Override database settings for testing
-                if "database" not in self.settings:
-                    self.settings["database"] = {}
-                self.settings["database"].update(
-                    {"enabled": True, "type": "duckdb", "path": self.db_path}
-                )
+                self.config.shared.database.enabled = True
+                self.config.shared.database.type = "duckdb"
+                self.config.shared.database.path = self.db_path
 
                 # Override ActivitySim database settings for testing
-                if "activitysim_database" not in self.settings:
-                    self.settings["activitysim_database"] = {}
-                self.settings["activitysim_database"].update(
-                    {"enabled": True, "use_processed_data": True}
-                )
+                if self.config.activitysim:
+                    self.config.activitysim.database.enabled = True
+                    self.config.activitysim.database.use_processed_data = True
 
             except Exception as e:
                 print(f"⚠️  Error loading settings file: {e}")
-                print("🔄 Falling back to default test settings...")
-                self.settings = self._get_default_settings()
+                print("🔄 Falling back to default test config...")
+                self.config = self._get_default_config()
         else:
-            self.settings = self._get_default_settings()
+            self.config = self._get_default_config()
 
         # Create mock objects
         self.state = MockState(2017)
         self.workspace = MockWorkspace(self.temp_dir)
+        self.workspace.config = self.config
         self.provenance_tracker = FileProvenanceTracker(run_id="test_dual_storage", output_path=self.temp_dir)
 
         print(f"🧪 Test setup complete - temp dir: {self.temp_dir}")
 
-    def _get_default_settings(self):
-        """Get default test settings."""
-        return {
-            # Database configuration
-            "database": {"enabled": True, "type": "duckdb", "path": self.db_path},
-            # ActivitySim database configuration
-            "activitysim_database": {
-                "enabled": True,
-                "use_processed_data": True,
-                "year": 2017,
-            },
-            # Basic PILATES settings for H5 processing
+    def _get_default_config(self) -> PilatesConfig:
+        """Get default test config as a PilatesConfig object."""
+        config_dict = {
             "run": {
                 "region": "sfbay",
+                "scenario": "test",
                 "start_year": 2017,
                 "end_year": 2017,
+                "output_directory": self.temp_dir,
+                "output_run_name": "test_run",
+                "models": {
+                    "land_use": "urbansim",
+                    "activity_demand": "activitysim",
+                },
             },
             "shared": {
                 "geography": {
@@ -178,35 +171,54 @@ class TestDualStorageWorkflow(unittest.TestCase):
                         "sfbay": {
                             "state": "06",
                             "counties": [
-                                "001",
-                                "013",
-                                "041",
-                                "055",
-                                "075",
-                                "081",
-                                "085",
-                                "095",
-                                "097",
+                                "001", "013", "041", "055", "075", "081", "085", "095", "097"
                             ],
                         }
                     },
-                    "local_crs": {"sfbay": "EPSG:26910"},
+                    "local_crs": "EPSG:26910",
                 },
                 "skims": {
                     "zone_type": "taz",
+                    "fname": "skims.omx",
+                    "geoms_fname": "geoms.csv",
                     "geoms_index_col": "taz1454",
+                },
+                "database": {"enabled": True, "type": "duckdb", "path": self.db_path},
+            },
+            "infrastructure": {
+                "container_manager": "docker",
+                "docker_images": {
+                    "urbansim": "some/image",
+                    "activitysim": "some/image",
                 }
             },
             "urbansim": {
-                "region_mappings": {
-                    "region_to_region_id": {"sfbay": "06197001"}
-                },
                 "local_data_input_folder": "pilates/urbansim/data",
-                "formattable_input_file_name": "custom_mpo_{region_id}_model_data.h5",
                 "local_mutable_data_folder": "urbansim/data/",
-                "formattable_output_file_name": "model_data_{year}.h5",
+                "client_base_folder": "/urbansim",
+                "client_data_folder": "/urbansim/data",
+                "input_file_template": "custom_mpo_06197001_model_data.h5",
+                "input_file_template_year": "model_data_{year}.h5",
+                "output_file_template": "model_data_{year}.h5",
+                "command_template": "echo 'running urbansim'",
+            },
+            "activitysim": {
+                "local_input_folder": "pilates/activitysim/data",
+                "local_mutable_data_folder": os.path.join(self.temp_dir, "activitysim", "data"),
+                "local_output_folder": os.path.join(self.temp_dir, "activitysim", "output"),
+                "local_configs_folder": "pilates/activitysim/configs",
+                "local_mutable_configs_folder": os.path.join(self.temp_dir, "activitysim", "configs"),
+                "validation_folder": os.path.join(self.temp_dir, "activitysim", "validation"),
+                "command_template": "echo 'running asim'",
+                "final_plans_folder": os.path.join(self.temp_dir, "activitysim", "final_plans"),
+                "database": {
+                    "enabled": True,
+                    "use_processed_data": True,
+                    "year": 2017,
+                },
             }
         }
+        return PilatesConfig(**config_dict)
 
     def tearDown(self):
         """Clean up test environment."""
@@ -217,7 +229,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
         """Test H5 structure detection for different formats."""
         print("\n🔍 Testing H5 structure detection...")
 
-        extractor = H5ActivitySimExtractor(self.h5_file_path, self.settings)
+        extractor = H5ActivitySimExtractor(self.h5_file_path, self.config)
 
         # Test structure detection
         table_prefix = extractor._detect_h5_structure(year=2017)
@@ -247,7 +259,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
         print("\n📤 Testing dual extraction from H5...")
 
         extractor = H5ActivitySimExtractor(
-            self.h5_file_path, self.settings, run_id="test_extraction"
+            self.h5_file_path, self.config, run_id="test_extraction"
         )
 
         # Extract both raw and processed data
@@ -292,7 +304,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
         print("   ✅ Database upload successful")
 
         # Verify database contains data
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.config)
         with db_manager:
             # Check that database was initialized
             self.assertTrue(os.path.exists(self.db_path), "Database file should exist")
@@ -319,12 +331,16 @@ class TestDualStorageWorkflow(unittest.TestCase):
             def get_asim_mutable_data_dir(self):
                 return h5_output_dir
 
+            def get_usim_mutable_data_dir(self):
+                return h5_output_dir
+
         h5_workspace = H5MockWorkspace(self.temp_dir)
+        h5_workspace.config = self.config
 
         try:
             # Generate CSVs from H5
             h5_records = create_asim_data_from_h5(
-                settings=self.settings,
+                settings=self.config,
                 state=self.state,
                 workspace=h5_workspace,
                 provenance_tracker=self.provenance_tracker,
@@ -368,10 +384,11 @@ class TestDualStorageWorkflow(unittest.TestCase):
                 return db_output_dir
 
         db_workspace = DBMockWorkspace(self.temp_dir)
+        db_workspace.config = self.config
 
         # Generate CSVs from database
         db_records = create_asim_data_from_database(
-            settings=self.settings,
+            settings=self.config,
             state=self.state,
             workspace=db_workspace,
             provenance_tracker=self.provenance_tracker,

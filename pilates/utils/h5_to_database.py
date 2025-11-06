@@ -463,7 +463,7 @@ class H5ActivitySimExtractor:
             FIPS = get_setting(self.settings, "shared.geography.FIPS")[region]
             asim_zone_id_col = "TAZ"
             # TODO: Generalize this or add it to settings.yaml
-            input_zone_id_col = self.settings.get("geoms_index_col", "zone_id")
+            input_zone_id_col = get_setting(self.settings, "shared.skims.geoms_index_col", default=get_setting(self.settings, "geoms_index_col", "zone_id"))
             zones = read_zone_geoms(
                 self.settings,
                 year or 2017,

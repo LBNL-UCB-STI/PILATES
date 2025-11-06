@@ -7,29 +7,117 @@ This module verifies that:
 3. Simple custom objects can satisfy the protocol
 4. The protocol validation works correctly
 """
+import os
+import tempfile
 
 import pytest
 from types import SimpleNamespace
 from dataclasses import dataclass
 
+import yaml
+
+from pilates.config import PilatesConfig, load_config
 from pilates.generic.execution_context import ExecutionContext, validate_context
 from workflow_state import WorkflowState
+
+
+def create_config(dummy_config_content)->PilatesConfig:
+    # # Create a dummy settings.yaml for PilatesConfig
+    # dummy_config_content = {
+    #     "run": {
+    #         "region": "test",
+    #         "scenario": "test",
+    #         "start_year": 2020,
+    #         "end_year": 2020,
+    #         "output_directory": self.temp_dir,
+    #         "output_run_name": "test_run",
+    #         "models": {
+    #             "land_use": None,
+    #             "travel": None,
+    #             "activity_demand": None,
+    #             "vehicle_ownership": None,
+    #         },
+    #     },
+    #     "shared": {
+    #         "geography": {
+    #             "FIPS": {"county": ["06001"]},
+    #             "local_crs": "EPSG:32048",
+    #         },
+    #         "skims": {
+    #             "zone_type": "taz",
+    #             "fname": "skims.h5",
+    #             "geoms_fname": "geoms.geojson",
+    #             "geoms_index_col": "TAZ",
+    #         },
+    #         "database": {
+    #             "enabled": True,
+    #             "type": "duckdb",
+    #             "path": self.db_path,
+    #         },
+    #     },
+    #     "infrastructure": {
+    #         "container_manager": "docker",
+    #         "singularity_images": {},
+    #         "docker_images": {},
+    #         "docker_config": {"stdout": False, "pull_latest": False},
+    #     },
+    # }
+    temp_dir = tempfile.mkdtemp(prefix="execution_context_test_")
+    # Write the dummy config to a temporary YAML file
+    dummy_config_path = os.path.join(temp_dir, "dummy_settings.yaml")
+    with open(dummy_config_path, "w") as f:
+        yaml.dump(dummy_config_content, f)
+
+    # Load the config using load_config to get a PilatesConfig object
+    settings = load_config(dummy_config_path)
+    return settings
 
 
 def test_workflow_state_satisfies_protocol():
     """Verify that WorkflowState automatically satisfies ExecutionContext protocol."""
     # Create minimal settings for WorkflowState
-    settings = {
-        'start_year': 2020,
-        'end_year': 2030,
-        'travel_model_freq': 5,
-        'land_use_enabled': True,
-        'vehicle_ownership_model_enabled': False,
-        'activity_demand_enabled': True,
-        'traffic_assignment_enabled': True,
-        'replanning_enabled': False,
-        'state_file_loc': '/tmp/test_state.yaml'
+    dummy_config_content = {
+        "run": {
+            "start_year": 2020,
+            "end_year": 2030,
+            "scenario": "test",
+            "region":"test",
+            "output_run_name": "test_run",
+            "state_file_loc": "/tmp/test_state.yaml",
+            "output_directory": "/tmp",
+            "models": {
+                "land_use": None,
+                "travel": None,
+                "activity_demand": None,
+                "vehicle_ownership": None,
+            },
+        },
+        "shared": {
+                "geography": {
+                    "FIPS": {"county": ["06001"]},
+                    "local_crs": "EPSG:32048",
+                },
+                "skims": {
+                    "zone_type": "taz",
+                    "fname": "skims.h5",
+                    "geoms_fname": "geoms.geojson",
+                    "geoms_index_col": "TAZ",
+                },
+                "database": {
+                    "enabled": True,
+                    "type": "duckdb",
+                    "path": "/tmp",
+                },
+            },
+        "infrastructure": {
+            "container_manager": "docker",
+            "singularity_images": {},
+            "docker_images": {},
+            "docker_config": {"stdout": False, "pull_latest": False},
+        },
     }
+
+    settings = create_config(dummy_config_content)
 
     state = WorkflowState.from_settings(settings)
 

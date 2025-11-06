@@ -17,6 +17,8 @@ from pathlib import Path
 # Import PILATES modules
 import sys
 
+from pilates.utils.database import DatabaseManager
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pilates.utils.duckdb_manager import DuckDBManager
@@ -29,6 +31,8 @@ from pilates.atlas.postprocessor import atlas_add_vehileTypeId
 from pilates.generic.records import PilatesRunInfo, FileRecord
 from datetime import datetime
 import uuid
+import yaml
+from pilates.config.models import PilatesConfig, load_config
 
 
 class TestDatabaseComponents(unittest.TestCase):
@@ -39,9 +43,54 @@ class TestDatabaseComponents(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp(prefix="pilates_db_test_")
         self.db_path = os.path.join(self.temp_dir, "test.duckdb")
 
-        self.settings = {
-            "database": {"enabled": True, "type": "duckdb", "path": self.db_path}
+        # Create a dummy settings.yaml for PilatesConfig
+        dummy_config_content = {
+            "run": {
+                "region": "test",
+                "scenario": "test",
+                "start_year": 2020,
+                "end_year": 2020,
+                "output_directory": self.temp_dir,
+                "output_run_name": "test_run",
+                "models": {
+                    "land_use": None,
+                    "travel": None,
+                    "activity_demand": None,
+                    "vehicle_ownership": None,
+                },
+            },
+            "shared": {
+                "geography": {
+                    "FIPS": {"county": ["06001"]},
+                    "local_crs": "EPSG:32048",
+                },
+                "skims": {
+                    "zone_type": "taz",
+                    "fname": "skims.h5",
+                    "geoms_fname": "geoms.geojson",
+                    "geoms_index_col": "TAZ",
+                },
+                "database": {
+                    "enabled": True,
+                    "type": "duckdb",
+                    "path": self.db_path,
+                },
+            },
+            "infrastructure": {
+                "container_manager": "docker",
+                "singularity_images": {},
+                "docker_images": {},
+                "docker_config": {"stdout": False, "pull_latest": False},
+            },
         }
+
+        # Write the dummy config to a temporary YAML file
+        self.dummy_config_path = os.path.join(self.temp_dir, "dummy_settings.yaml")
+        with open(self.dummy_config_path, "w") as f:
+            yaml.dump(dummy_config_content, f)
+
+        # Load the config using load_config to get a PilatesConfig object
+        self.settings = load_config(self.dummy_config_path)
 
     def tearDown(self):
         """Clean up test environment."""
@@ -50,18 +99,14 @@ class TestDatabaseComponents(unittest.TestCase):
 
     def test_database_manager_creation(self):
         """Test creating database manager."""
-        print("\n🗄️  Testing database manager creation...")
-
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
         self.assertIsNotNone(db_manager)
         self.assertIsInstance(db_manager, DuckDBManager)
         print("   ✅ Database manager created successfully")
 
     def test_database_initialization(self):
         """Test database schema initialization."""
-        print("\n🏗️  Testing database initialization...")
-
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
             success = db_manager.initialize_database()
@@ -80,9 +125,11 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test that dual storage tables are created correctly."""
         print("\n🗃️  Testing dual storage table creation...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
+            assert(isinstance(db_manager, DatabaseManager))
+
             db_manager.initialize_database()
             conn = db_manager._get_connection()
 
@@ -122,9 +169,10 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test actual data insertion operations that would catch SQL constraint issues."""
         print("\n💾 Testing data insertion and constraint handling...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
+            assert(isinstance(db_manager, DuckDBManager))
             db_manager.initialize_database()
 
             # First create prerequisite records to satisfy foreign key constraints
@@ -340,7 +388,7 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test run metadata upload operations that would catch INSERT OR REPLACE constraint issues."""
         print("\n📋 Testing run metadata upload and constraint handling...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
             db_manager.initialize_database()
@@ -410,9 +458,10 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test that database operations can handle sequential uploads efficiently (simulating parallel use case)."""
         print("\n⚡ Testing efficient sequential upload functionality...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
+            assert(isinstance(db_manager, DuckDBManager))
             db_manager.initialize_database()
 
             # Create test data for multiple different table types to simulate parallel scenario
@@ -720,7 +769,7 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test handling of different data types in dual storage."""
         print("\n🔢 Testing data type handling...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         # Create test data with various data types
         test_data = pd.DataFrame(
@@ -735,6 +784,8 @@ class TestDatabaseComponents(unittest.TestCase):
         )
 
         with db_manager:
+            assert(isinstance(db_manager, DuckDBManager))
+
             db_manager.initialize_database()
 
             # Store data
@@ -756,22 +807,18 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test error handling in database operations."""
         print("\n⚠️  Testing error handling...")
 
+        bad_settings = self.settings.model_copy(deep=True)
         # Test with invalid database path
-        invalid_settings = {
-            "database": {
-                "enabled": True,
-                "type": "duckdb",
-                "path": "/invalid/path/that/does/not/exist/test.db",
-            }
-        }
+        bad_settings.shared.database.path = "/invalid/path/that/does/not/exist/test.db"
+
 
         # This should return None when database initialization fails
-        db_manager = create_database_manager(invalid_settings)
+        db_manager = create_database_manager(bad_settings.shared.database)
         self.assertIsNone(db_manager)
         print("   ✅ Manager creation properly rejects invalid paths")
 
         # Test with valid manager but non-existent data queries
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
         with db_manager:
             db_manager.initialize_database()
 
@@ -787,7 +834,7 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test that generic data (skims) varies per iteration - demonstrates iteration-specific storage."""
         print("\n🔄 Testing iteration-varying behavior for skims...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
             db_manager.initialize_database()
@@ -877,7 +924,7 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test ATLAS vehicles2 data storage and FK constraints."""
         print("\n🚗 Testing ATLAS vehicles workflow...")
 
-        db_manager = create_database_manager(self.settings)
+        db_manager = create_database_manager(self.settings.shared.database)
 
         with db_manager:
             db_manager.initialize_database()

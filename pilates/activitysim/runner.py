@@ -3,6 +3,7 @@ import multiprocessing
 import os
 from typing import Tuple, Optional
 
+from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
@@ -38,23 +39,21 @@ class ActivitysimRunner(GenericRunner):
         ]
 
     @staticmethod
-    def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
-        formattable_asim_cmd = get_setting(settings, "activitysim.command_template")
+    def get_base_asim_cmd(settings: PilatesConfig, household_sample_size=None, num_processes=None):
+        formattable_asim_cmd = settings.activitysim.command_template
         if not household_sample_size:
-            household_sample_size = get_setting(settings, "activitysim.household_sample_size", 0)
-        num_processes = num_processes or get_setting(
-            settings, "activitysim.num_processes", multiprocessing.cpu_count() - 1
-        )
-        chunk_size = get_setting(settings, "activitysim.chunk_size", 0)  # default no chunking
+            household_sample_size = settings.activitysim.household_sample_size
+        num_processes = num_processes or settings.activitysim.num_processes
+        chunk_size = settings.activitysim.chunk_size  # default no chunking
         base_asim_cmd = formattable_asim_cmd.format(
             household_sample_size, num_processes, chunk_size
         )
         return base_asim_cmd
 
     @staticmethod
-    def get_asim_additional_args(settings, asim_docker_vols, compile):
+    def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
         additional_args = []
-        if get_setting(settings, "activitysim.file_format", "parquet") == "parquet":
+        if settings.activitysim.file_format == "parquet":
             additional_args.append("--persist-sharrow-cache")
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
@@ -73,44 +72,44 @@ class ActivitysimRunner(GenericRunner):
         return additional_args
 
     @staticmethod
-    def get_asim_docker_vols(settings, working_dir=None):
-        region = get_setting(settings, "run.region")
-        asim_subdir = get_setting(settings, "activitysim.region_mappings.region_to_subdir")[region]
+    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
+        region = settings.run.region
+        asim_subdir = settings.activitysim.region_mappings['region_to_subdir'][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         if working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
-                os.path.join(working_dir, get_setting(settings, "activitysim.local_mutable_data_folder"))
+                os.path.join(working_dir, settings.activitysim.local_mutable_data_folder)
             )
             asim_local_output_folder = os.path.abspath(
-                os.path.join(working_dir, get_setting(settings, "activitysim.local_output_folder"))
+                os.path.join(working_dir, settings.activitysim.local_output_folder)
             )
             asim_local_configs_folder = os.path.abspath(
                 os.path.join(
                     working_dir,
-                    get_setting(settings, "activitysim.local_mutable_configs_folder"),
-                    get_setting(settings, "activitysim.main_configs_dir", "configs"),
+                    settings.activitysim.local_mutable_configs_folder,
+                    settings.activitysim.main_configs_dir,
                 )
             )
             asim_local_configs_compile_folder = os.path.abspath(
                 os.path.join(
                     working_dir,
-                    get_setting(settings, "activitysim.local_mutable_configs_folder"),
+                    settings.activitysim.local_mutable_configs_folder,
                     "configs_sh_compile",
                 )
             )
         else:
             asim_local_mutable_data_folder = os.path.abspath(
-                get_setting(settings, "activitysim.local_mutable_data_folder")
+                settings.activitysim.local_mutable_data_folder
             )
             asim_local_output_folder = os.path.abspath(
-                get_setting(settings, "activitysim.local_output_folder")
+                settings.activitysim.local_output_folder
             )
             asim_local_configs_folder = os.path.abspath(
-                os.path.join(get_setting(settings, "activitysim.local_configs_folder"), region, "configs")
+                os.path.join(settings.activitysim.local_configs_folder, region, "configs")
             )
             asim_local_configs_compile_folder = os.path.abspath(
                 os.path.join(
-                    get_setting(settings, "activitysim.local_configs_folder"), region, "configs_sh_compile"
+                    settings.activitysim.local_configs_folder, region, "configs_sh_compile"
                 )
             )
         asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
@@ -154,12 +153,12 @@ class ActivitysimRunner(GenericRunner):
                 - model_run_info (ModelRunInfo): Information about the model run
         """
         settings = self.state.full_settings
-        region = get_setting(settings, "run.region")
-        asim_subdir = get_setting(settings, "activitysim.region_mappings.region_to_subdir")[region]
+        region = settings.run.region
+        asim_subdir = settings.activitysim.region_mappings['region_to_subdir'][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # Get from your config
-        output_directory = get_setting(settings, 'run.output_directory')  # "/global/scratch/users/$USER/pilates-output"
+        output_directory = settings.run.output_directory  # "/global/scratch/users/$USER/pilates-output"
 
         # Expand $USER if needed
         output_directory = os.path.expandvars(output_directory)
@@ -174,7 +173,7 @@ class ActivitysimRunner(GenericRunner):
 
         # start docker client
         client = None  # Initialize client to None
-        if get_setting(settings, "infrastructure.container_manager") == "docker":
+        if settings.infrastructure.container_manager == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -213,7 +212,7 @@ class ActivitysimRunner(GenericRunner):
         )
 
         asim_local_output_folder = os.path.abspath(
-            os.path.join(workspace.full_path, get_setting(settings, "activitysim.local_output_folder"))
+            os.path.join(workspace.full_path, settings.activitysim.local_output_folder)
         )
 
         os.makedirs(os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True)
@@ -277,7 +276,7 @@ class ActivitysimRunner(GenericRunner):
                     logger.info("Creating initial zarr version snapshot after ActivitySim compilation...")
 
                     # Get database path from settings
-                    database_path = get_setting(settings, "shared.database.path")
+                    database_path = settings.shared.database.path
                     if database_path:
                         # Initialize zarr version manager
                         zarr_base_path = os.path.dirname(database_path)
@@ -302,11 +301,11 @@ class ActivitysimRunner(GenericRunner):
                 "runtime_parameters": {
                     "household_sample_size": 2500,
                     "num_processes": 1,
-                    "chunk_size": get_setting(settings, "activitysim.chunk_size", 0),
+                    "chunk_size": settings.activitysim.chunk_size,
                     "additional_args": additional_args,
                 },
                 "container_image": activity_demand_image,
-                "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
+                "container_manager": settings.infrastructure.container_manager,
                 "working_directory": asim_workdir,
             }
 
@@ -426,13 +425,13 @@ class ActivitysimRunner(GenericRunner):
         runtime_metadata = {
             "container_command": asim_cmd,
             "runtime_parameters": {
-                "household_sample_size": get_setting(settings, "activitysim.household_sample_size", 0),
-                "num_processes": get_setting(settings, "activitysim.num_processes", multiprocessing.cpu_count() - 1),
-                "chunk_size": get_setting(settings, "activitysim.chunk_size", 0),
+                "household_sample_size": settings.activitysim.household_sample_size,
+                "num_processes": settings.activitysim.num_processes,
+                "chunk_size": settings.activitysim.chunk_size,
                 "additional_args": additional_args,
             },
             "container_image": activity_demand_image,
-            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
+            "container_manager": settings.infrastructure.container_manager,
             "working_directory": asim_workdir,
         }
 

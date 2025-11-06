@@ -23,19 +23,18 @@ from pilates.utils.database_upload import (
     upload_run_info_to_database,
     batch_upload_runs_to_database,
 )
-from pilates.utils.settings_helper import get as get_setting
+from pilates.config.models import load_config, PilatesConfig
 
 logger = logging.getLogger(__name__)
 
 
-def load_settings(settings_path: str) -> dict:
-    """Load PILATES settings from YAML file."""
+def load_settings(settings_path: str) -> PilatesConfig:
+    """Load PILATES settings from YAML file using Pydantic validation."""
     try:
-        with open(settings_path, "r") as f:
-            return yaml.safe_load(f)
+        return load_config(settings_path)
     except Exception as e:
-        logger.error(f"Failed to load settings from {settings_path}: {e}")
-        return {}
+        logger.error(f"Failed to load and validate settings from {settings_path}: {e}")
+        raise  # Re-raise the exception after logging
 
 
 def find_run_directories(search_path: str) -> list:
@@ -110,7 +109,7 @@ Examples:
         return 1
 
     # Check database configuration
-    db_config = get_setting(settings, "shared.database", {})
+    db_config = settings.shared.database
     if not db_config.get("enabled", False):
         logger.warning("Database upload is not enabled in settings")
         if not args.dry_run:

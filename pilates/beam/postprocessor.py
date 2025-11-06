@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 import openmatrix as omx
 
+from pilates.config import PilatesConfig
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
 
@@ -635,7 +636,7 @@ def _postprocess_tnc_zarr(
             # Original logic seems to set FAR to 0 except where explicitly calculated, or set to a fixed value.
             # The OMX code did not explicitly modify FAR, but the postprocessor had commented out code.
             # Let's default to 0 where TRIPS are zero, or a fixed value if settings provide one.
-            default_far = settings.get("tnc_default_far", 0.0)  # Add this setting
+            default_far = 0.0  # Replaces legacy tnc_default_far setting
 
             # Set FAR to default_far where TRIPS are zero or NaN
             mask_zero_trips = (completed_3d + failed_3d) == 0
@@ -1847,7 +1848,7 @@ def _transfer_tnc_provider_data_zarr(
 
 
 def write_zarr_skim_as_omx_new(
-    all_skims_path, settings, new_skim_name, exclude_tables=None
+    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
 ):
     """
     Write the skims from the Zarr format to an OMX format.
@@ -1856,7 +1857,7 @@ def write_zarr_skim_as_omx_new(
     ----------
     all_skims_path : str
         Path to the main skims Zarr store.
-    settings : dict
+    settings : PilatesConfig
         Settings dictionary, needed for 'region' and 'beam_local_mutable_data_folder'.
     new_skim_name : str
         Name of the new OMX skim file to be created (e.g., 'skims.omx').
@@ -1871,8 +1872,8 @@ def write_zarr_skim_as_omx_new(
     """
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
-    region = get_setting(settings, "run.region")
-    beam_input_dir = get_setting(settings, "beam.local_mutable_data_folder")
+    region = settings.run.region
+    beam_input_dir = settings.beam.local_mutable_data_folder
 
     if not region or not beam_input_dir:
         logger.error(
@@ -2002,7 +2003,7 @@ def write_zarr_skim_as_omx_new(
 
 
 def write_zarr_skim_as_omx(
-    all_skims_path, settings, new_skim_name, exclude_tables=None
+    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
 ):
     """
     Write the skims from the Zarr format to an OMX format.
@@ -2011,7 +2012,7 @@ def write_zarr_skim_as_omx(
     ----------
     all_skims_path : str
         Path to the main skims Zarr store.
-    settings : dict
+    settings : PilatesConfig
         Settings dictionary, needed for 'region' and 'beam_local_input_folder'.
     new_skim_name : str
         Name of the new OMX skim file to be created (e.g., 'skims.omx').
@@ -2281,7 +2282,7 @@ def _merge_beam_skims_to_zarr(
         return None  # Indicate failure
 
     timePeriods = get_setting(settings, "shared.skims.periods")
-    consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
 
     # Step 1: Accumulate completed and failed trips based on format
     completed_failed_dict_all = {}
@@ -3375,7 +3376,7 @@ class BeamPostprocessor(GenericPostprocessor):
                     state=self.state,
                 )
 
-        if settings.get("write_skims_to_omx", False) or get_setting(settings, "run.models.land_use") == "urbansim":
+        if get_setting(settings, "write_skims_to_omx", False) or get_setting(settings, "run.models.land_use") == "urbansim":
             logger.info("Writing skims to OMX file for UrbanSim or other downstream models...")
             if not self.zarr_manager or not self.zarr_manager.path or not os.path.exists(self.zarr_manager.path):
                 logger.error("Zarr manager or path is not available. Cannot write skims to OMX.")

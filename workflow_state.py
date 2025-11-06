@@ -6,6 +6,8 @@ import yaml
 import logging
 import uuid
 
+from pilates.config import PilatesConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +43,7 @@ class WorkflowState:
         sub_stage: Stage | None,
         file_loc: str,
         asim_compiled: bool,
-        full_settings: Optional[dict] = None,
+        full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,  # new
         data_initialized: bool = False,
@@ -226,36 +228,19 @@ class WorkflowState:
         return [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized]
 
     @classmethod
-    def from_settings(cls, settings):
-        # Helper to get value from both nested (Pydantic) and legacy (flat) config formats
-        def get_setting(nested_path, legacy_key, default=None, required=False):
-            """Get setting from nested path first, then legacy key."""
-            value = settings
-            # Try nested path (e.g., "run.start_year")
-            for key in nested_path.split('.'):
-                if isinstance(value, dict) and key in value:
-                    value = value[key]
-                else:
-                    # Fall back to legacy key
-                    value = settings.get(legacy_key, default)
-                    break
-
-            if required and value is None:
-                raise KeyError(f"Required setting not found: {nested_path} or {legacy_key}")
-            return value
-
+    def from_settings(cls, settings: PilatesConfig):
         # Get settings from nested or legacy locations
-        start_year = get_setting("run.start_year", "start_year", required=True)
-        end_year = get_setting("run.end_year", "end_year", required=True)
-        travel_model_freq = get_setting("run.travel_model_freq", "travel_model_freq", default=1)
+        start_year = settings.run.start_year
+        end_year = settings.run.end_year
+        travel_model_freq = settings.run.travel_model_freq
 
         # These are always added at top-level by parse_args_and_settings()
-        land_use_enabled = settings["land_use_enabled"]
-        vehicle_ownership_model_enabled = settings["vehicle_ownership_model_enabled"]
-        activity_demand_enabled = settings["activity_demand_enabled"]
-        traffic_assignment_enabled = settings["traffic_assignment_enabled"]
-        replanning_enabled = settings["replanning_enabled"]
-        file_loc = settings["state_file_loc"]
+        land_use_enabled = getattr(settings, "land_use_enabled", False)
+        vehicle_ownership_model_enabled = getattr(settings, "vehicle_ownership_model_enabled", False)
+        activity_demand_enabled = getattr(settings, "activity_demand_enabled", False)
+        traffic_assignment_enabled = getattr(settings, "traffic_assignment_enabled", False)
+        replanning_enabled = getattr(settings, "replanning_enabled", False)
+        file_loc = getattr(settings, "state_file_loc", 'current_stage.yaml')
 
         [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized] = cls.read_current_stage(file_loc)
 
@@ -282,7 +267,7 @@ class WorkflowState:
             data_initialized=data_initialized,
         )
 
-        out._settings["supply_demand_iters"] = get_setting("run.supply_demand_iters", "supply_demand_iters", default=1)
+        out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
 
         if year:
             # Calculate forecast_year based on current_year and frequency

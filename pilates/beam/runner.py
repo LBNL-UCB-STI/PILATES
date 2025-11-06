@@ -6,6 +6,7 @@ import psutil
 import sys
 from typing import Tuple, List, Optional
 
+from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo, Record
 from pilates.beam.postprocessor import (
@@ -110,28 +111,47 @@ class BeamRunner(GenericRunner):
 
         return output_records
 
+    def get_beam_docker_vols(self, settings: PilatesConfig, workspace: Workspace):
+        region = settings.run.region
+        beam_local_input_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(), region
+        )
+        beam_local_output_folder = os.path.join(workspace.get_beam_output_dir(), region)
+        asim_local_output_folder = workspace.get_asim_output_dir()
+
+        return {
+            beam_local_input_folder: {"bind": "/app/input", "mode": "rw"},
+            beam_local_output_folder: {"bind": "/app/output", "mode": "rw"},
+            asim_local_output_folder: {
+                "bind": "/app/activitysim-output",
+                "mode": "rw",
+            },
+        }
+
     def _run(
         self,
         store: RecordStore,
         workspace: Workspace,
     ) -> Tuple[RecordStore, ModelRunInfo]:
-        """
-        Executes a BEAM model run.
-        """
         settings = self.state.full_settings
-        client = None  # Initialize client to None
-        if get_setting(settings, "infrastructure.container_manager") == "docker":
+        region = settings.run.region
+        beam_workdir = os.path.join("/app/input", region)
+        beam_config = settings.beam.config
+        beam_memory = settings.beam.memory
+
+        # start docker client
+        client = None
+        if settings.infrastructure.container_manager == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
 
-        # 1. PARSE SETTINGS
         travel_model, travel_model_image = self.get_model_and_image(
             settings, "travel_model"
         )
-        beam_config = get_setting(settings, "beam.config")
-        region = get_setting(settings, "run.region")
+        beam_config = settings.beam.config
+        region = settings.run.region
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
 
         abs_beam_input = workspace.get_beam_mutable_data_dir()
@@ -140,10 +160,6 @@ class BeamRunner(GenericRunner):
         # Make sure there's a temp dir for the JVM to use
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
-        beam_memory = get_setting(settings, 
-            "beam.memory",
-            str(int(psutil.virtual_memory().total / (1024.0**3)) - 2) + "g",
-        )
 
         # 2. RUN BEAM
         logger.info(

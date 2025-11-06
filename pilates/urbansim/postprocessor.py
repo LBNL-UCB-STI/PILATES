@@ -3,18 +3,19 @@ import logging
 from typing import Optional
 
 import pandas as pd
+
+from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
-from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
 
 
-def get_usim_datastore_fname(settings, io, year=None):
+def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
     """Construct the UrbanSim datastore filename based on settings.
 
     Args:
@@ -26,11 +27,11 @@ def get_usim_datastore_fname(settings, io, year=None):
         str: The formatted UrbanSim datastore filename.
     """
     if io == "output":
-        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
+        datastore_name = settings.urbansim.output_file_template.format(year=year)
     elif io == "input":
-        region = get_setting(settings, "run.region")
-        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
-        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings['region_to_subdir'][region]
+        usim_base_fname = settings.urbansim.input_file_template
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
         raise ValueError(
@@ -216,7 +217,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
         processed_records = []
 
         try:
-            if get_setting(settings, "run.models.land_use") == "urbansim":
+            if settings.run.models.land_use == "urbansim":
                 create_next_iter_usim_data(
                     settings,
                     self.state.forecast_year,

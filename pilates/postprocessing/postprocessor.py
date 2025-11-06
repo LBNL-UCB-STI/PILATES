@@ -19,7 +19,6 @@ import logging
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 import warnings
 from shapely.errors import ShapelyDeprecationWarning
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +46,13 @@ dtypes = {
 
 
 def copy_outputs_to_mep(settings, year, iter):
-    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
-    mep_output_data_dir = os.path.join(get_setting(settings, "postprocessing.mep_output_folder"), str(year))
+    asim_output_data_dir = settings.activitysim.local_output_folder
+    mep_output_data_dir = os.path.join(settings.postprocessing.mep_output_folder, str(year))
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(
-        get_setting(settings, "beam.local_output_folder"),
-        get_setting(settings, "run.region"),
+        settings.beam.local_output_folder,
+        settings.run.region,
         "year-{0}-iteration-{1}".format(year, iter),
     )
 
@@ -73,7 +72,7 @@ def copy_outputs_to_mep(settings, year, iter):
                 f_out.writelines(f_in)
 
     def copy_urbansim_outputs_to_mep():
-        data_dir = get_setting(settings, "urbansim.local_mutable_data_folder")
+        data_dir = settings.urbansim.local_mutable_data_folder
         usim_output_store_name = get_usim_datastore_fname(
             settings, io="input", year=year
         )
@@ -168,9 +167,9 @@ def copy_outputs_to_mep(settings, year, iter):
         except:
             logger.error("Missing expected beam output file {0}".format(odSkims))
         beam_router_dir = os.path.join(
-            get_setting(settings, "beam.local_input_folder"),
-            get_setting(settings, "run.region"),
-            get_setting(settings, "beam.router_directory"),
+            settings.beam.local_input_folder,
+            settings.run.region,
+            settings.beam.router_directory,
         )
         mep_gtfs_dir = os.path.join(mep_output_data_dir, "GTFS")
         if not os.path.exists(mep_gtfs_dir):
@@ -197,7 +196,7 @@ def copy_outputs_to_mep(settings, year, iter):
                 )
             )
 
-        if get_setting(settings, "run.region") == "austin":
+        if settings.run.region == "austin":
             taz_id_col_in = "GEOID"
         else:
             taz_id_col_in = "taz1454"
@@ -215,8 +214,8 @@ def copy_outputs_to_mep(settings, year, iter):
 
 
 def _load_events_file(settings, year, replanning_iteration_number, beam_iteration=0):
-    beam_output_dir = get_setting(settings, "beam.local_output_folder")
-    region = get_setting(settings, "run.region")
+    beam_output_dir = settings.beam.local_output_folder
+    region = settings.run.region
     iteration_output_dir = "year-{0}-iteration-{1}".format(
         year, replanning_iteration_number
     )
@@ -229,13 +228,13 @@ def _load_events_file(settings, year, replanning_iteration_number, beam_iteratio
     events = pd.read_csv(path, dtype=dtypes)
 
     # Adding scenario info
-    scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
-    events["scenario"] = scenario_defs["name"]
+    scenario_defs = settings.postprocessing.scenario_definitions
+    events["scenario"] = scenario_defs.name
     events["scenario"] = events["scenario"].astype("category")
-    events["lever"] = scenario_defs["lever"]
+    events["lever"] = scenario_defs.lever
     events["lever"] = events["lever"].astype("category")
     events["year"] = year
-    events["lever_position"] = scenario_defs["lever_position"]
+    events["lever_position"] = scenario_defs.lever_position
 
     return events
 
@@ -689,7 +688,7 @@ def _add_geometry_to_events(settings, events):
     events = pd.concat(processed_list)
 
     # Adding the block group information
-    if get_setting(settings, "run.region") == "sfbay":
+    if settings.run.region == "sfbay":
         gdf_labels = get_taz_labels(settings)
         # Census block groups should have 12 digits so adding 0 to the start of it to be compatible with our block group ids
         gdf_labels["bgid"] = "0" + gdf_labels["bgid"].astype(str)
@@ -878,7 +877,7 @@ def _process_person_trip_events(person_trip_events):
 
 
 def _read_asim_utilities(settings, year, iteration):
-    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
+    asim_output_data_dir = settings.activitysim.local_output_folder
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     trip_utility_location = os.path.join(
         asim_output_data_dir, iteration_output_dir, "trip_mode_choice.zip"
@@ -972,7 +971,7 @@ def _merge_trips_with_utilities(asim_trips, asim_utilities, beam_trips):
 
 
 def _read_asim_plans(settings, year, iteration):
-    asim_output_data_dir = get_setting(settings, "activitysim.local_output_folder")
+    asim_output_data_dir = settings.activitysim.local_output_folder
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     path = os.path.join(asim_output_data_dir, iteration_output_dir)
     households = (
@@ -1070,8 +1069,8 @@ def build_mep_summaries(trips, settings, year, iteration):
         * 1609.34
     )
 
-    beam_output_dir = get_setting(settings, "beam.local_output_folder")
-    region = get_setting(settings, "run.region")
+    beam_output_dir = settings.beam.local_output_folder
+    region = settings.run.region
     iteration_output_dir = "year-{0}-iteration-{1}".format(year, iteration)
     totalsByMode.to_csv(
         os.path.join(beam_output_dir, region, iteration_output_dir, "totalsByMode.csv")
@@ -1110,14 +1109,14 @@ def process_event_file(settings, year, iteration):
             print("Error during merging: \n {0}".format(e))
             logger.error("Error during merging: \n {0}".format(e))
 
-        scenario_defs = get_setting(settings, "postprocessing.scenario_definitions")
-        post_output_folder = get_setting(settings, "postprocessing.output_folder")
+        scenario_defs = settings.postprocessing.scenario_definitions
+        post_output_folder = settings.postprocessing.output_folder
 
         filename = "{0}_{1}_{2}-{3}_{4}_iter{6}__{5}.csv.gz".format(
-            get_setting(settings, "run.region"),
-            scenario_defs["name"],
-            scenario_defs["lever"],
-            scenario_defs["lever_position"],
+            settings.run.region,
+            scenario_defs.name,
+            scenario_defs.lever,
+            scenario_defs.lever_position,
             year,
             date.today().strftime("%Y%m%d"),
             iteration,
@@ -1143,8 +1142,8 @@ def process_event_file(settings, year, iteration):
 if __name__ == "__main__":
     os.chdir("../..")
     settings = parse_args_and_settings(os.path.join("settings.yaml"))
-    beam_output_dir = get_setting(settings, "beam.local_output_folder")
-    region = get_setting(settings, "run.region")
+    beam_output_dir = settings.beam.local_output_folder
+    region = settings.run.region
     output_path = os.path.join(beam_output_dir, region, "year*")
     outputDirs = glob.glob(output_path)
     yearsAndIters = [

@@ -31,10 +31,9 @@ from pilates.utils.provenance import OpenLineageTracker
 from pilates.generic.initialization import Initialization
 
 # NEW: Hierarchical config system imports
-from pilates.config.models import load_config, config_to_dict, PilatesConfig
+from pilates.config.models import load_config, PilatesConfig
 from pilates.utils.duckdb_manager import DuckDBManager
 from pydantic import ValidationError
-from pilates.utils.settings_helper import get as get_setting
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -376,7 +375,7 @@ def run_activity_demand(
         RecordStore: Processed outputs (file records) from the activity demand postprocessor.
     """
     factory = ModelFactory()
-    activity_demand_model = get_setting(settings, "run.models.activity_demand")
+    activity_demand_model = settings.run.models.activity_demand
 
     if activity_demand_model == "polaris":
         # POLARIS integration placeholder
@@ -429,7 +428,7 @@ def run_traffic_assignment(
         activity_demand_outputs (RecordStore, optional): Processed activity demand outputs.
     """
     factory = ModelFactory()
-    travel_model = get_setting(settings, "run.models.travel_model")
+    travel_model = settings.run.models.travel
 
     if travel_model == "polaris":
         # run_polaris(state, settings)
@@ -481,19 +480,20 @@ def main():
             logger.info(f"  Years: {pydantic_config.run.start_year}-{pydantic_config.run.end_year}")
             logger.info(f"  Enabled models: {pydantic_config.get_enabled_models()}")
 
-            # Convert back to dict for backward compatibility with existing code
-            settings = config_to_dict(pydantic_config)
+            # settings will be the pydantic model, not a dict
+            settings = pydantic_config
 
             # Preserve command-line overrides from raw_settings
             for key in ['static_skims', 'warm_start_skims', 'asim_validation', 'state_file_loc', 'settings_file',
                        'docker_stdout', 'pull_latest', 'household_sample_size', '_disabled_models']:
                 if key in raw_settings:
-                    settings[key] = raw_settings[key]
+                    setattr(settings, key, raw_settings[key])
 
             # Compute model enabled flags (works with nested config format)
-            disabled_models = settings.get('_disabled_models', '')
+            disabled_models = getattr(settings, '_disabled_models', '')
             enabled_flags = compute_model_enabled_flags(settings, disabled_models)
-            settings.update(enabled_flags)
+            for key, value in enabled_flags.items():
+                setattr(settings, key, value)
         else:
             logger.warning("Config file path not available, using raw settings without validation")
             settings = raw_settings
@@ -504,19 +504,8 @@ def main():
 
     state = WorkflowState.from_settings(settings)
 
-    # Helper to get nested or legacy config values
-    def get_setting(nested_path, legacy_key, default=None):
-        """Get setting from nested path first, then legacy key."""
-        value = settings
-        for key in nested_path.split('.'):
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                return settings.get(legacy_key, default)
-        return value
-
     # Set up provenance tracking and workspace
-    output_directory = get_setting("run.output_directory", "output_directory")
+    output_directory = settings.run.output_directory
     if not output_directory:
         raise ValueError("output_directory not found in config (checked run.output_directory and output_directory)")
     output_path = os.path.realpath(os.path.expandvars(output_directory))
@@ -529,7 +518,7 @@ def main():
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
         # For a fresh run, generate a new timestamped folder name
-        partial_run_name = get_setting("run.output_run_name", "output_run_name", "pilates-run")
+        partial_run_name = settings.run.output_run_name
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     run_id = str(uuid.uuid4())

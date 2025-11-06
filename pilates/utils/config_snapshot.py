@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 import glob
 
+from pilates.config import PilatesConfig
 from pilates.generic.config_hashing import ConfigHasher
 from pilates.config.schema import get_field_annotations, get_dependency_graph
 from pilates.utils.settings_helper import get as get_setting
@@ -71,20 +72,20 @@ class ConfigSnapshotManager:
             logger.warning(f"Could not read config file {file_path}: {e}")
         return None
 
-    def _collect_beam_configs(self, settings: Dict[str, Any]) -> Dict[str, str]:
+    def _collect_beam_configs(self, settings: PilatesConfig) -> Dict[str, str]:
         """Collect BEAM configuration file contents."""
         configs = {}
 
         # Main BEAM config file
         if "beam_config" in settings:
-            region = get_setting(settings, "run.region", "")
+            region = settings.run.region
             beam_config_path = os.path.join(
                 self.project_root,
                 "pilates",
                 "beam",
                 "production",
                 region,
-                settings["beam_config"],
+                settings.beam.config,
             )
             content = self._get_config_file_content(beam_config_path)
             if content:
@@ -104,13 +105,13 @@ class ConfigSnapshotManager:
 
         return configs
 
-    def _collect_activitysim_configs(self, settings: Dict[str, Any]) -> Dict[str, str]:
+    def _collect_activitysim_configs(self, settings: PilatesConfig) -> Dict[str, str]:
         """Collect ActivitySim configuration file contents."""
         configs = {}
 
         # ActivitySim configs directory
-        region = get_setting(settings, "run.region", "")
-        region_to_subdir = settings.get("region_to_asim_subdir", {})
+        region = settings.run.region
+        region_to_subdir = settings.activitysim.region_mappings
         asim_subdir = region_to_subdir.get(region, region)
 
         asim_config_dir = os.path.join(
@@ -137,7 +138,7 @@ class ConfigSnapshotManager:
 
         return configs
 
-    def _collect_urbansim_configs(self, settings: Dict[str, Any]) -> Dict[str, str]:
+    def _collect_urbansim_configs(self, settings: PilatesConfig) -> Dict[str, str]:
         """Collect UrbanSim configuration file contents."""
         configs = {}
 
@@ -156,7 +157,7 @@ class ConfigSnapshotManager:
 
         return configs
 
-    def _collect_atlas_configs(self, settings: Dict[str, Any]) -> Dict[str, str]:
+    def _collect_atlas_configs(self, settings: PilatesConfig) -> Dict[str, str]:
         """Collect ATLAS configuration file contents."""
         configs = {}
 
@@ -179,7 +180,7 @@ class ConfigSnapshotManager:
         return configs
 
     def extract_relevant_pilates_settings(
-        self, settings: Dict[str, Any]
+        self, settings: PilatesConfig
     ) -> Dict[str, Any]:
         """
         Extract PILATES settings that affect model behavior.
@@ -234,12 +235,12 @@ class ConfigSnapshotManager:
 
         relevant_settings = {}
         for key in relevant_keys:
-            if key in settings:
-                relevant_settings[key] = settings[key]
+            if get_setting(settings, key) is not None:
+                relevant_settings[key] = get_setting(settings, key)
 
         return relevant_settings
 
-    def create_config_snapshot(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+    def create_config_snapshot(self, settings: PilatesConfig) -> Dict[str, Any]:
         """
         Create a complete configuration snapshot.
 
@@ -293,10 +294,8 @@ class ConfigSnapshotManager:
             "config_files": all_config_files,
             "pilates_settings": relevant_settings,
             # Specific config references for easy access
-            "beam_config": settings.get("beam_config"),
-            "asim_subdir": settings.get("region_to_asim_subdir", {}).get(
-                get_setting(settings, "run.region", ""), get_setting(settings, "run.region", "")
-            ),
+            "beam_config": get_setting(settings, "beam.config"),
+            "asim_subdir": get_setting(settings, "activitysim.region_mappings", {}).get(get_setting(settings, "run.region"), {}).get("asim_subdir"),
             "region": get_setting(settings, "run.region"),
         }
 

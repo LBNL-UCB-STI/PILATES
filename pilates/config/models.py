@@ -8,7 +8,7 @@ and provenance tracking.
 
 import os
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
@@ -130,7 +130,7 @@ class DockerConfig(BaseModel):
 class InfrastructureConfig(BaseModel):
     """Container management and execution environment."""
 
-    container_manager: str = Field("docker", description="Container manager: docker or singularity")
+    container_manager: Literal["docker","singularity"] = Field("docker", description="Container manager: docker or singularity")
     singularity_images: Dict[str, str] = Field(default_factory=dict, description="Singularity image URIs")
     docker_images: Dict[str, str] = Field(default_factory=dict, description="Docker image tags")
     docker_config: DockerConfig = Field(default_factory=DockerConfig, description="Docker settings")
@@ -192,7 +192,7 @@ class ActivitySimConfig(BaseModel):
     household_sample_size: int = Field(0, description="Household sample size (0 = full population)")
     chunk_size: int = Field(12_000_000_000, description="Memory chunk size")
     num_processes: int = Field(25, description="Number of parallel processes")
-    file_format: str = Field("parquet", description="Output file format")
+    file_format: Literal["parquet", "csv"] = Field("parquet", description="Output file format")
     local_input_folder: str
     local_mutable_data_folder: str
     local_output_folder: str
@@ -211,6 +211,7 @@ class ActivitySimConfig(BaseModel):
     replan_iters: int = Field(0, description="Replanning iterations")
     replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
     replan_after: str = Field("non_mandatory_tour_scheduling", description="Replan after this step")
+    random_seed: Optional[int] = Field(None, description="Base random number generator seed")
     final_plans_folder: str = Field(..., description="Final plans output folder")
 
 
@@ -261,6 +262,9 @@ class PilatesConfig(BaseModel):
 
     This is the top-level model that encompasses all configuration sections.
     """
+
+    class Config:
+        extra = 'allow'
 
     run: RunConfig
     shared: SharedConfig
@@ -342,28 +346,4 @@ def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
     return PilatesConfig(**config_dict)
 
 
-def config_to_dict(config: PilatesConfig) -> Dict[str, Any]:
-    """
-    Convert PilatesConfig to dictionary with both nested and flat keys for backward compatibility.
 
-    Args:
-        config: PilatesConfig object
-
-    Returns:
-        Configuration as dictionary with nested structure PLUS flattened legacy keys
-    """
-    # Start with nested structure
-    result = config.model_dump(exclude_none=True)
-
-    # Add special legacy aliases
-    if 'shared' in result and 'skims' in result['shared']:
-        skims = result['shared']['skims']
-        if 'geoms_fname' in skims:
-            result['beam_geoms_fname'] = skims['geoms_fname']
-        if 'geoms_index_col' in skims:
-            result['geoms_index_col'] = skims['geoms_index_col']
-
-    if 'beam' in result and 'router_directory' in result['beam']:
-        result['beam_router_directory'] = result['beam']['router_directory']
-
-    return result

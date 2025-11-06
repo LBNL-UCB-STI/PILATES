@@ -32,6 +32,8 @@ from openlineage.client.transport.composite import CompositeTransport, Composite
 
 import pyarrow.parquet as pq
 
+from pilates.config import PilatesConfig
+
 set_producer("https://github.com/LBNL-UCB-STI/PILATES")
 
 from pilates.generic.records import (
@@ -44,10 +46,8 @@ from pilates.generic.records import (
     OpenLineageEventMetadata, H5TableRecord, H5FileRecord,
 )
 
-from workflow_state import WorkflowState
 from pilates.generic.execution_context import ExecutionContext
 from pilates.utils.config_snapshot import ConfigSnapshotManager
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -118,15 +118,19 @@ class ProvenanceTracker:
         """
         return model.lower() if model else model
 
-    def initialize_from_settings(self, settings: Dict[str, Any]):
-        self.run_info.start_year = get_setting(settings, "run.start_year")
-        self.run_info.end_year = get_setting(settings, "run.end_year")
+    def initialize_from_settings(self, settings: PilatesConfig):
+        self.run_info.start_year = settings.run.start_year
+        self.run_info.end_year = settings.run.end_year
         self.run_info.settings_hash = None  # FileProvenanceTracker will set this
-        models_used = [
-            get_setting(settings, f"run.models.{model_type}")
-            for model_type in ["land_use", "vehicle_ownership", "activity_demand", "travel"]
-            if get_setting(settings, f"run.models.{model_type}")
-        ]
+        models_used = []
+        if settings.run.models.land_use:
+            models_used.append(settings.run.models.land_use)
+        if settings.run.models.vehicle_ownership:
+            models_used.append(settings.run.models.vehicle_ownership)
+        if settings.run.models.activity_demand:
+            models_used.append(settings.run.models.activity_demand)
+        if settings.run.models.travel:
+            models_used.append(settings.run.models.travel)
         self.run_info.models_used = list(set(models_used))
 
     def record_repo_input(
@@ -541,13 +545,13 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.warning(f"Could not calculate hash for {abs_file_path}: {e}")
             return None
 
-    def _calculate_settings_hash(self, settings: Dict[str, Any]) -> str:
+    def _calculate_settings_hash(self, settings: PilatesConfig) -> str:
         """Return a stable SHA-256 hash of the settings dict.
 
         The settings are serialized with sorted keys so semantically equivalent
         dicts map to the same hash regardless of insertion order.
         """
-        settings_str = json.dumps(settings, sort_keys=True, default=str)
+        settings_str = settings.model_dump_json()
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
     def _get_relative_path(self, file_path: str) -> str:
@@ -569,7 +573,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.warning("Could not find project root. Storing absolute path.")
             return abs_path
 
-    def initialize_from_settings(self, settings: Dict[str, Any]):
+    def initialize_from_settings(self, settings: PilatesConfig):
         super().initialize_from_settings(settings)
         self.run_info.settings_hash = self._calculate_settings_hash(settings)
         self._save_run_info()
@@ -1579,7 +1583,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             if final_transport:
                 self.client = OpenLineageClient(transport=final_transport)
 
-    def initialize_from_settings(self, settings: Dict[str, Any]):
+    def initialize_from_settings(self, settings: PilatesConfig):
         """Override to capture config snapshot during initialization."""
         # Call parent method to set basic fields
         super().initialize_from_settings(settings)

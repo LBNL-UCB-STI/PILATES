@@ -7,7 +7,6 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
@@ -232,10 +231,10 @@ def get_atlas_docker_vols(settings, workspace: Workspace):
     atlas_host_output_folder = workspace.get_atlas_output_dir()
 
     atlas_container_input_folder = os.path.abspath(
-        get_setting(settings, "atlas.container_input_folder")
+        settings.atlas.container_input_folder
     )
     atlas_container_output_folder = os.path.abspath(
-        get_setting(settings, "atlas.container_output_folder")
+        settings.atlas.container_output_folder
     )
     atlas_docker_vols = {
         atlas_host_input_folder: {  ## source location, aka "local"
@@ -261,9 +260,9 @@ def get_atlas_cmd(
     taxfactor,
     discIncent,
 ):
-    basedir = get_setting(settings, "atlas.basedir", "/")
-    codedir = get_setting(settings, "atlas.codedir", "/")
-    formattable_atlas_cmd = get_setting(settings, "atlas.command_template")
+    basedir = settings.atlas.basedir
+    codedir = settings.atlas.codedir
+    formattable_atlas_cmd = settings.atlas.command_template
     atlas_cmd = formattable_atlas_cmd.format(
         freq,
         output_year,
@@ -340,21 +339,27 @@ class AtlasRunner(GenericRunner):
         )
 
         atlas_docker_vols = get_atlas_docker_vols(settings, workspace)
-        freq = get_setting(settings, "run.vehicle_ownership_freq", False)
-        npe = get_setting(settings, "atlas.num_processes", False)
-        nsample = get_setting(settings, "atlas.sample_size", False)
-        beamac = get_setting(settings, "atlas.beamac", 0)
-        mod = get_setting(settings, "atlas.mod", 1)
-        adscen = get_setting(settings, "atlas.adscen", False)
-        rebfactor = get_setting(settings, "atlas.rebfactor", 0)
-        taxfactor = get_setting(settings, "atlas.taxfactor", 0)
-        discIncent = get_setting(settings, "atlas.discIncent", 0)
+        freq = settings.run.vehicle_ownership_freq
+        npe = settings.atlas.num_processes
+        container_input_dir = settings.atlas.container_input_folder
+        container_output_dir = settings.atlas.container_output_folder
+        sample_size = settings.atlas.sample_size
+        # BEAMAC is an integer flag that controls accessibility calculation
+        # 0 = no accessibility calculation
+        # 1 = use BEAM skims to calculate accessibility
+        # 2 = use BEAM skims to calculate accessibility, but only for the first year
+        beamac = settings.atlas.beamac
+        mod = settings.atlas.mod
+        adscen = settings.atlas.adscen
+        rebfactor = settings.atlas.rebfactor
+        taxfactor = settings.atlas.taxfactor
+        discIncent = settings.atlas.discIncent
         atlas_cmd = get_atlas_cmd(
             settings,
             freq,
             self.state.forecast_year,
             npe,
-            nsample,
+            sample_size,
             beamac,
             mod,
             adscen,
@@ -365,7 +370,7 @@ class AtlasRunner(GenericRunner):
 
         # Initialize container client
         client = None
-        if get_setting(settings, "infrastructure.container_manager") == "docker":
+        if settings.infrastructure.container_manager == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -441,7 +446,7 @@ class AtlasRunner(GenericRunner):
                 "freq": freq,
                 "output_year": self.state.forecast_year,
                 "npe": npe,
-                "nsample": nsample,
+                "nsample": sample_size,
                 "beamac": beamac,
                 "mod": mod,
                 "adscen": adscen,
@@ -450,7 +455,7 @@ class AtlasRunner(GenericRunner):
                 "discIncent": discIncent,
             },
             "container_image": atlas_image,
-            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
+            "container_manager": settings.infrastructure.container_manager,
             "working_directory": "/",
         }
 

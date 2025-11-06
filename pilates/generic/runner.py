@@ -2,6 +2,7 @@ import abc
 import logging
 import subprocess
 
+from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 
 try:
@@ -42,14 +43,14 @@ class GenericRunner(ABC, Model):
         return True
 
     @staticmethod
-    def get_model_and_image(settings: dict, model_type: str):
-        manager = get_setting(settings, "infrastructure.container_manager")
+    def get_model_and_image(settings: PilatesConfig, model_type: str):
+        manager = settings.infrastructure.container_manager
         if manager == "docker":
             # Check nested path first, fall back to legacy
-            image_names = get_setting(settings, "infrastructure.docker_images", default={})
+            image_names = settings.infrastructure.docker_images
         elif manager == "singularity":
             # Check nested path first, fall back to legacy
-            image_names = get_setting(settings, "infrastructure.singularity_images", default={})
+            image_names = settings.infrastructure.singularity_images
         else:
             raise ValueError(
                 "Container Manager not specified (container_manager param in settings.yaml)"
@@ -78,7 +79,7 @@ class GenericRunner(ABC, Model):
         image_name = image_names.get(model_name)
         if not image_name:
             raise ValueError(
-                f"No {manager} image specified for model '{model_name}' (model type: {model_type}). Check settings['{manager}_images']."
+                f"No {manager} image specified for model '{model_name}' (model type: {model_type}). Check settings for '{manager}_images'."
             )
 
         return model_name, image_name
@@ -239,8 +240,7 @@ class GenericRunner(ABC, Model):
             logger.info("Running singularity command: %s", " ".join(proc))
 
             # Check if using stubs
-            if settings.get("use_stubs"):
-                # Pass the full command string as config_name to the stub
+            if get_setting(settings, "use_stubs"):                # Pass the full command string as config_name to the stub
                 stub_cmd = [
                     "python",
                     os.path.join(

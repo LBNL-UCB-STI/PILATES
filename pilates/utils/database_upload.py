@@ -11,9 +11,11 @@ import os
 import uuid
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 import pandas as pd
 
+from pilates.config import PilatesConfig
+from pilates.config.models import DatabaseConfig
 from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo
 from pilates.utils.database import DatabaseManager
 from pilates.utils.duckdb_manager import DuckDBManager
@@ -21,7 +23,7 @@ from pilates.utils.duckdb_manager import DuckDBManager
 logger = logging.getLogger(__name__)
 
 
-def create_database_manager(settings: Dict[str, Any]) -> Optional[DatabaseManager]:
+def create_database_manager(settings: DatabaseConfig) -> Optional[DatabaseManager]:
     """
     Create a database manager based on settings configuration.
 
@@ -31,14 +33,14 @@ def create_database_manager(settings: Dict[str, Any]) -> Optional[DatabaseManage
     Returns:
         Configured database manager or None if not configured
     """
-    db_config = settings.get("database", {})
+    db_config = settings
 
-    if not db_config or not db_config.get("enabled", False):
+    if not db_config or not db_config.enabled:
         logger.info("Database upload not configured or disabled")
         return None
 
-    db_type = db_config.get("type", "duckdb").lower()
-    db_path = db_config.get("path")
+    db_type = db_config.type.lower()
+    db_path = db_config.path
 
     if not db_path:
         logger.warning("Database path not specified in configuration")
@@ -51,7 +53,7 @@ def create_database_manager(settings: Dict[str, Any]) -> Optional[DatabaseManage
 
     try:
         if db_type == "duckdb":
-            manager = DuckDBManager(db_path, **db_config)
+            manager = DuckDBManager(db_path)
             if manager.initialize_database():
                 logger.info(f"Initialized DuckDB database at {db_path}")
                 return manager
@@ -284,7 +286,7 @@ def _upload_data_from_file_records(
     return success
 
 
-def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) -> bool:
+def upload_run_info_to_database(run_info_path: str, settings: PilatesConfig) -> bool:
     """
     Upload run information from run_info.json to the configured database.
 
@@ -425,7 +427,7 @@ def upload_run_info_to_database(run_info_path: str, settings: Dict[str, Any]) ->
 
 
 def upload_run_directory_to_database(
-    run_directory: str, settings: Dict[str, Any]
+    run_directory: str, settings: PilatesConfig
 ) -> bool:
     """
     Upload run information from a run directory to the database.
@@ -442,7 +444,7 @@ def upload_run_directory_to_database(
 
 
 def batch_upload_runs_to_database(
-    run_directories: list, settings: Dict[str, Any]
+    run_directories: list, settings: PilatesConfig
 ) -> Dict[str, bool]:
     """
     Upload multiple runs to the database in batch.

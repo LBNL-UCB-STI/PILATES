@@ -206,11 +206,11 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
 
         # Record BEAM skims as input if needed
-        beamac = get_setting(settings, "atlas.beamac", 0)
+        beamac = settings.atlas.beamac
         if beamac > 0:
             beam_output_dir = workspace.get_beam_output_dir()
             expected_beam_skims_path = os.path.join(
-                beam_output_dir, get_setting(settings, "shared.skims.fname")
+                beam_output_dir, settings.shared.skims.fname
             )
             if os.path.exists(expected_beam_skims_path):
                 logger.info(
@@ -369,7 +369,7 @@ class AtlasPreprocessor(GenericPreprocessor):
 
 def compute_accessibility(path_list, measure_list, settings, year, threshold=500):
     # set where to put atlas csv inputs (processed from urbansim outputs)
-    atlas_input_path = get_setting(settings, "atlas.host_input_folder") + "/year{}".format(year)
+    atlas_input_path = settings.atlas.host_input_folder + "/year{}".format(year)
 
     # for each OD, compute minimum time taken by public transit
     # inf means no public transit available; unit = minute
@@ -380,7 +380,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 
     # read and format geoid_to_zoneid mapping list
     mapping = pd.read_csv(
-        "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(get_setting(settings, "run.region"))
+        "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings.run.region)
     )
     mapping.index = mapping["GEOID"]
     mapping = mapping["zone_id"].to_dict()
@@ -390,7 +390,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
 
     # read in jobs data (keep low_memory=False to solve dtypeerror)
     jobs = pd.read_csv(
-        "{}/year{}/jobs.csv".format(get_setting(settings, "atlas.host_input_folder"), year),
+        "{}/year{}/jobs.csv".format(settings.atlas.host_input_folder, year),
         low_memory=False,
     )
 
@@ -425,7 +425,7 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
     # read in taz_to_tract conversion matrix (1454*1588)
     taz_to_tract = pd.read_csv(
         "{}/taz_to_tract_{}.csv".format(
-            get_setting(settings, "atlas.host_input_folder"), get_setting(settings, "run.region")
+            settings.atlas.host_input_folder, settings.run.region
         ),
         index_col=0,
     )
@@ -456,7 +456,7 @@ def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
     # open skims file
     import openmatrix as omx
 
-    skims_dir = get_setting(settings, "activitysim.local_mutable_data_folder")
+    skims_dir = settings.activitysim.local_mutable_data_folder
     skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
 
     # find the path with minimum time for each o-d

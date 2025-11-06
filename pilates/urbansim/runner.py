@@ -7,7 +7,6 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class UrbansimRunner(GenericRunner):
             dict: A dictionary of volume mappings for the Docker container.
         """
         settings = self.state.full_settings
-        usim_remote_data_folder = get_setting(settings, "urbansim.client_data_folder")
+        usim_remote_data_folder = settings.urbansim.client_data_folder
         usim_local_mutable_data_folder = os.path.abspath(output_dir)
         usim_docker_vols = {
             usim_local_mutable_data_folder: {
@@ -57,11 +56,11 @@ class UrbansimRunner(GenericRunner):
         settings = self.state.full_settings
         year = self.state.current_year
         forecast_year = self.state.forecast_year
-        region = get_setting(settings, "run.region")
-        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
-        land_use_freq = get_setting(settings, "run.land_use_freq")
-        skims_source = get_setting(settings, "run.models.travel")
-        formattable_usim_cmd = get_setting(settings, "urbansim.command_template")
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings.region_to_region_id[region]
+        land_use_freq = settings.run.land_use_freq
+        skims_source = settings.run.models.travel
+        formattable_usim_cmd = settings.urbansim.command_template
         usim_cmd = formattable_usim_cmd.format(
             region_id, year, forecast_year, land_use_freq, skims_source
         )
@@ -105,7 +104,7 @@ class UrbansimRunner(GenericRunner):
             )
 
         # Prepare output file path
-        usim_output_store_name = get_setting(settings, "urbansim.output_file_template").format(
+        usim_output_store_name = settings.urbansim.output_file_template.format(
             year=forecast_year
         )
         usim_datastore_fpath = os.path.join(
@@ -123,7 +122,7 @@ class UrbansimRunner(GenericRunner):
 
         # Initialize container client
         client = None
-        if get_setting(settings, "infrastructure.container_manager") == "docker":
+        if settings.infrastructure.container_manager == "docker":
             try:
                 client = self.initialize_docker_client(settings)
             except Exception as e:
@@ -140,7 +139,7 @@ class UrbansimRunner(GenericRunner):
                 volumes=usim_docker_vols,
                 command=usim_cmd,
                 model_name=self.model_name,
-                working_dir=get_setting(settings, "urbansim.client_base_folder", "/app"),
+                working_dir=settings.urbansim.client_base_folder,
             )
 
             if not success:
@@ -182,15 +181,15 @@ class UrbansimRunner(GenericRunner):
         runtime_metadata = {
             "container_command": usim_cmd,
             "runtime_parameters": {
-                "region_id": get_setting(settings, "urbansim.region_mappings.region_to_region_id")[get_setting(settings, "run.region")],
+                "region_id": settings.urbansim.region_mappings['region_to_region_id'][settings.run.region],
                 "year": self.state.current_year,
                 "forecast_year": forecast_year,
-                "land_use_freq": get_setting(settings, "run.land_use_freq"),
-                "skims_source": get_setting(settings, "run.models.travel"),
+                "land_use_freq": settings.run.land_use_freq,
+                "skims_source": settings.run.models.travel,
             },
             "container_image": land_use_image,
-            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
-            "working_directory": get_setting(settings, "urbansim.client_base_folder", "/app"),
+            "container_manager": settings.infrastructure.container_manager,
+            "working_directory": settings.urbansim.client_base_folder,
         }
 
         # Complete provenance tracking

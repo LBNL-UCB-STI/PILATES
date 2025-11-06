@@ -1,3 +1,4 @@
+from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
@@ -24,7 +25,7 @@ class Initialization(Model):
     ):
         super().__init__(model_name, state, provenance_tracker)
 
-    def run(self, settings: dict, workspace: Workspace) -> None:
+    def run(self, settings: PilatesConfig, workspace: Workspace) -> None:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
@@ -36,7 +37,7 @@ class Initialization(Model):
         model_factory = ModelFactory()
 
         # BEAM model initialization
-        if get_setting(settings, "run.models.travel") == "beam":
+        if settings.run.models.travel == "beam":
             beam_preprocessor = model_factory.get_preprocessor(
                 "beam", self.state, self.provenance_tracker
             )
@@ -81,16 +82,17 @@ class Initialization(Model):
                 )
                 if result:
                     rec_in, rec_out = result
-                if model_name in workspace.input_data:
-                    workspace.input_data[model_name] += rec_in
-                else:
-                    workspace.input_data[model_name] = rec_in
-                if model_name in workspace.output_data:
-                    workspace.output_data[model_name] += rec_out
-                else:
-                    workspace.output_data[model_name] = rec_out
+                    if model_name in workspace.input_data:
+                        workspace.input_data[model_name] += rec_in
+                    else:
+                        workspace.input_data[model_name] = rec_in
+                    if model_name in workspace.output_data:
+                        workspace.output_data[model_name] += rec_out
+                    else:
+                        workspace.output_data[model_name] = rec_out
                 have_not_copied_usim_data = False
                 if result:
+                    rec_in, rec_out = result
                     initialization_records_in += rec_in
                     initialization_records_out += rec_out
 

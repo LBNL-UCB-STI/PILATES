@@ -4,79 +4,16 @@ import os
 
 import numpy as np
 import pandas as pd
-from pilates.generic.postprocessor import GenericPostprocessor
+
+from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
+from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
-
-def atlas_update_h5_vehicle(
-    settings: dict,
-    output_year: int,
-    h5_file_path: str,
-    household_v_csv_path: str,
-):
-    """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
-
-    Reads vehicle ownership data from the given CSV file and updates the 'cars'
-    and 'hh_cars' columns in the 'households' table within the specified HDF5 file.
-
-    Args:
-        settings (dict): The simulation settings.
-        output_year (int): The forecast year being processed.
-        h5_file_path (str): The absolute path to the UrbanSim HDF5 file to update.
-        household_v_csv_path (str): The absolute path to the ATLAS householdv CSV file.
-    """
-    if not os.path.exists(h5_file_path) or not os.path.exists(household_v_csv_path):
-        logger.error(
-            f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
-        )
-        return
-
-    logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
-
-    # Read and format ATLAS vehicle ownership output
-    df = pd.read_csv(household_v_csv_path)
-    df = (
-        df.rename(columns={"nvehicles": "cars"})
-        .set_index("household_id")
-        .sort_index(ascending=True)
-    )
-    df["hh_cars"] = pd.cut(
-        df["cars"], bins=[-0.5, 0.5, 1.5, np.inf], labels=["none", "one", "two or more"]
-    )
-
-    logger.info(f"Writing updated household vehicle info to h5 file {h5_file_path}")
-
-    # Read original h5 files and update
-    with pd.HDFStore(h5_file_path, mode="r+") as h5:
-        warm_start = settings.get("warm_start", False)
-        key = f"/{output_year}/households" if not warm_start else "households"
-
-        try:
-            olddf = h5[key]
-        except KeyError:
-            logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
-            return
-
-        olddf.index = olddf.index.astype(int)
-        olddf = olddf.reindex(df.index.astype(int))
-
-        if olddf.shape[0] != df.shape[0]:
-            logger.error("ATLAS household_id mismatch found - NOT updating h5 datastore")
-        else:
-            olddf["cars"] = df["cars"].values
-            olddf["hh_cars"] = df["hh_cars"].values
-            for col in olddf.columns:
-                if olddf[col].dtype.name == "category":
-                    logger.info(f"Converting column {col} from category to str")
-                    olddf[col] = olddf[col].astype(str)
-            h5[key] = olddf
-            logger.info(f"ATLAS update h5 datastore table {key} - done")
 
 
 def atlas_add_vehileTypeId(
@@ -124,7 +61,7 @@ def atlas_add_vehileTypeId(
     df.to_csv(output_vehicles2_csv_path, index=False)
 
 
-def get_usim_datastore_fname(settings, io, year=None):
+def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
     """Construct the UrbanSim datastore filename based on settings.
 
     Args:
@@ -136,11 +73,11 @@ def get_usim_datastore_fname(settings, io, year=None):
         str: The formatted UrbanSim datastore filename.
     """
     if io == "output":
-        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
+        datastore_name = settings.urbansim.output_file_template.format(year=year)
     elif io == "input":
-        region = get_setting(settings, "run.region")
-        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
-        usim_base_fname = get_setting(settings, "urbansim.input_file_template")
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings.region_to_region_id[region]
+        usim_base_fname = settings.urbansim.input_file_template
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
         raise ValueError(
@@ -227,8 +164,8 @@ class AtlasPostprocessor(GenericPostprocessor):
                 model_run_id=model_run_hash,
             )
 
-            # 2. Define the table to be updated
-            table_name = f"/{output_year}/households" if not settings.get("warm_start") else "households"
+            # 2. Define the table to be updated. TODO: Check table names and fall back to /year/households
+            table_name = "households" if self.state.is_start_year() else f"/{output_year}/households"
 
             # 3. Record the source table as an input
             source_table_record = self.provenance_tracker.record_h5_table_input(
@@ -241,7 +178,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             # 4. Perform the update
-            atlas_update_h5_vehicle(settings, output_year, usim_h5_file, atlas_hh_file)
+            self.atlas_update_h5_vehicle(settings, output_year, usim_h5_file, atlas_hh_file)
             logger.info("[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership.")
 
             # 5. Record the updated table as an output
@@ -292,3 +229,68 @@ class AtlasPostprocessor(GenericPostprocessor):
             model_run_hash,
         )
         return RecordStore(recordList=output_records)
+
+    def atlas_update_h5_vehicle(
+            self,
+            settings: PilatesConfig,
+            output_year: int,
+            h5_file_path: str,
+            household_v_csv_path: str,
+    ):
+        """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
+
+        Reads vehicle ownership data from the given CSV file and updates the 'cars'
+        and 'hh_cars' columns in the 'households' table within the specified HDF5 file.
+
+        Args:
+            settings (dict): The simulation settings.
+            output_year (int): The forecast year being processed.
+            h5_file_path (str): The absolute path to the UrbanSim HDF5 file to update.
+            household_v_csv_path (str): The absolute path to the ATLAS householdv CSV file.
+        """
+        if not os.path.exists(h5_file_path) or not os.path.exists(household_v_csv_path):
+            logger.error(
+                f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
+            )
+            return
+
+        logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
+
+        # Read and format ATLAS vehicle ownership output
+        df = pd.read_csv(household_v_csv_path)
+        df = (
+            df.rename(columns={"nvehicles": "cars"})
+            .set_index("household_id")
+            .sort_index(ascending=True)
+        )
+        df["hh_cars"] = pd.cut(
+            df["cars"], bins=[-0.5, 0.5, 1.5, np.inf], labels=["none", "one", "two or more"]
+        )
+
+        logger.info(f"Writing updated household vehicle info to h5 file {h5_file_path}")
+
+        # Read original h5 files and update
+        with pd.HDFStore(h5_file_path, mode="r+") as h5:
+            # The sub-state's `is_start_year` method correctly determines if this is a warm start context
+            key = "households" if self.state.is_start_year() else f"/{output_year}/households"
+
+            try:
+                olddf = h5[key]
+            except KeyError:
+                logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
+                return
+
+            olddf.index = olddf.index.astype(int)
+            olddf = olddf.reindex(df.index.astype(int))
+
+            if olddf.shape[0] != df.shape[0]:
+                logger.error("ATLAS household_id mismatch found - NOT updating h5 datastore")
+            else:
+                olddf["cars"] = df["cars"].values
+                olddf["hh_cars"] = df["hh_cars"].values
+                for col in olddf.columns:
+                    if olddf[col].dtype.name == "category":
+                        logger.info(f"Converting column {col} from category to str")
+                        olddf[col] = olddf[col].astype(str)
+                h5[key] = olddf
+                logger.info(f"ATLAS update h5 datastore table {key} - done")
