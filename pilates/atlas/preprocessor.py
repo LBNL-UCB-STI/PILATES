@@ -25,7 +25,7 @@ def _get_usim_datastore_fname(settings, io, year=None):
     elif io == "input":
         region = get_setting(settings, "run.region")
         region_id = get_setting(
-            settings, "urbansim.region_mappings["region_to_region_id"]"
+            settings, "urbansim.region_mappings.region_to_region_id"
         )[region]
         usim_base_fname = get_setting(settings, "urbansim.input_file_template")
         datastore_name = usim_base_fname.format(region_id=region_id)
