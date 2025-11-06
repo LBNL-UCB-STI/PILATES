@@ -2904,9 +2904,11 @@ def process_raw_h5_files(
     )
     input_zone_id_col = "{0}_zone_id".format(zone_type)
 
-    raw_blocks.rename(
-        columns={input_zone_id_col: asim_zone_id_col}, inplace=True
-    )  # Rename happens here.
+    # Only rename if requested
+    if asim_zone_id_col != input_zone_id_col:
+        raw_blocks.rename(
+            columns={input_zone_id_col: asim_zone_id_col}, inplace=True
+        )
 
     raw_blocks = raw_blocks.loc[:, ~raw_blocks.columns.duplicated()].copy()
 
@@ -3023,28 +3025,26 @@ def create_asim_data_from_h5(
         blocks = store[os.path.join(str(int(table_prefix_yr) - 1), "blocks")]
     jobs = store[os.path.join(table_prefix_yr, "jobs")]
 
-    blocks, persons, households, jobs, num_reassigned, blocks_to_taz_mapping_updated = (
-        process_raw_h5_files(
-            blocks, persons, households, jobs, settings, state.forecast_year
-        )
-    )
+    # Save original columns before processing
+    blocks_cols_original = blocks.columns.tolist()
 
     zone_type = settings.shared.skims.zone_type
     input_zone_id_col = "{0}_zone_id".format(zone_type)
+    asim_zone_id_col = "TAZ"
 
+    blocks, persons, households, jobs, num_reassigned, blocks_to_taz_mapping_updated = (
+        process_raw_h5_files(
+            blocks, persons, households, jobs, settings, state.forecast_year,
+            asim_zone_id_col=input_zone_id_col  # Don't rename yet!
+        )
+    )
+
+    # Save blocks to H5 with the zone-type-specific column name (BEFORE rename)
     if blocks_to_taz_mapping_updated:
         blocks_cols = blocks.columns.tolist()
-        logger.info(
-            "Storing blocks table with {} zone IDs to disk in .h5 datastore!".format(
-                get_setting(settings, "shared.skims.zone_type")
-            )
-        )
-        logger.info(f"Blocks DataFrame columns: {blocks.columns.tolist()}")
-        logger.info(f"input_zone_id_col: {input_zone_id_col}")
-        logger.info(f"blocks_cols before modification: {blocks_cols}")
-        logger.info(f"blocks.index.name: {blocks.index.name}")
-        if input_zone_id_col not in blocks_cols:
-            blocks_cols += [input_zone_id_col]
+        logger.info(f"Storing blocks table with {zone_type} zone IDs to disk in .h5 datastore!")
+        logger.debug(f"Blocks DataFrame columns: {blocks_cols}")
+        logger.debug(f"input_zone_id_col: {input_zone_id_col}")
         store[os.path.join(table_prefix_yr, "blocks")] = blocks[blocks_cols]
 
     if num_reassigned > 0:
@@ -3057,6 +3057,10 @@ def create_asim_data_from_h5(
         store[os.path.join(str(table_prefix_yr), "jobs")] = jobs[jobs_cols]
 
     store.close()
+
+    # NOW rename for ActivitySim usage (after saving to H5)
+    if input_zone_id_col in blocks.columns and input_zone_id_col != asim_zone_id_col:
+        blocks.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
 
     # create land use table
     land_use = _create_land_use_table(
