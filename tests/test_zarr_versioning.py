@@ -38,32 +38,35 @@ def sample_zarr_store(temp_base_dir):
 
     ds = xr.Dataset(
         {
-            'SOV_TIME': (['otaz', 'dtaz', 'time_period'],
-                        np.random.rand(n_zones, n_zones, n_periods).astype('f4')),
-            'SOV_DIST': (['otaz', 'dtaz', 'time_period'],
-                        np.random.rand(n_zones, n_zones, n_periods).astype('f4')),
-            'HOV2_TIME': (['otaz', 'dtaz', 'time_period'],
-                         np.random.rand(n_zones, n_zones, n_periods).astype('f4')),
+            "SOV_TIME": (
+                ["otaz", "dtaz", "time_period"],
+                np.random.rand(n_zones, n_zones, n_periods).astype("f4"),
+            ),
+            "SOV_DIST": (
+                ["otaz", "dtaz", "time_period"],
+                np.random.rand(n_zones, n_zones, n_periods).astype("f4"),
+            ),
+            "HOV2_TIME": (
+                ["otaz", "dtaz", "time_period"],
+                np.random.rand(n_zones, n_zones, n_periods).astype("f4"),
+            ),
         },
         coords={
-            'otaz': np.arange(1, n_zones + 1),
-            'dtaz': np.arange(1, n_zones + 1),
-            'time_period': ['EA', 'AM', 'MD', 'PM', 'EV'],
-        }
+            "otaz": np.arange(1, n_zones + 1),
+            "dtaz": np.arange(1, n_zones + 1),
+            "time_period": ["EA", "AM", "MD", "PM", "EV"],
+        },
     )
 
     # Add metadata
-    ds.attrs['ZARR_WRITE_TIME'] = 1234567890.0
-    ds.attrs['original_zone_ids'] = list(range(1, n_zones + 1))
+    ds.attrs["ZARR_WRITE_TIME"] = 1234567890.0
+    ds.attrs["original_zone_ids"] = list(range(1, n_zones + 1))
 
     # Save to zarr with chunking
     ds.to_zarr(
         zarr_path,
-        mode='w',
-        encoding={
-            var: {'chunks': (n_zones, n_zones, 1)}
-            for var in ds.data_vars
-        }
+        mode="w",
+        encoding={var: {"chunks": (n_zones, n_zones, 1)} for var in ds.data_vars},
     )
 
     return zarr_path
@@ -97,9 +100,7 @@ class TestVersionedZarrStore:
         year = 2011
 
         snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         # Check snapshot ID format
@@ -131,9 +132,9 @@ class TestVersionedZarrStore:
 
         # Verify can open with xarray
         ds = xr.open_zarr(zarr_manager.full_skims_path)
-        assert 'SOV_TIME' in ds
-        assert 'SOV_DIST' in ds
-        assert 'HOV2_TIME' in ds
+        assert "SOV_TIME" in ds
+        assert "SOV_DIST" in ds
+        assert "HOV2_TIME" in ds
 
     def test_create_beam_snapshot(self, zarr_manager, sample_zarr_store, temp_base_dir):
         """Test creating a BEAM iteration snapshot."""
@@ -143,9 +144,7 @@ class TestVersionedZarrStore:
 
         # First create initialization snapshot
         init_snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         # Create a "merged" zarr (slightly modified from original)
@@ -155,13 +154,13 @@ class TestVersionedZarrStore:
         # Modify some values to simulate BEAM merge
         ds = xr.open_zarr(merged_path)
         modified_ds = ds.copy(deep=True)
-        modified_ds['SOV_TIME'].values = modified_ds['SOV_TIME'].values * 1.1
-        modified_ds.to_zarr(merged_path, mode='w')
+        modified_ds["SOV_TIME"].values = modified_ds["SOV_TIME"].values * 1.1
+        modified_ds.to_zarr(merged_path, mode="w")
 
         # Create a partial BEAM zarr (sparse)
         partial_path = temp_base_dir / "beam_partial.zarr"
-        ds_partial = ds[['SOV_TIME', 'SOV_DIST']].copy()  # Fewer variables
-        ds_partial.to_zarr(partial_path, mode='w')
+        ds_partial = ds[["SOV_TIME", "SOV_DIST"]].copy()  # Fewer variables
+        ds_partial.to_zarr(partial_path, mode="w")
 
         # Create BEAM snapshot
         beam_snapshot_id = zarr_manager.create_snapshot_from_beam(
@@ -170,7 +169,7 @@ class TestVersionedZarrStore:
             iteration=iteration,
             beam_partial_zarr_path=str(partial_path),
             merged_full_zarr_path=str(merged_path),
-            parent_snapshot_id=init_snapshot_id
+            parent_snapshot_id=init_snapshot_id,
         )
 
         # Check snapshot ID format
@@ -208,16 +207,13 @@ class TestVersionedZarrStore:
 
         # Create a snapshot
         snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         # Restore to a new location
         restore_path = temp_base_dir / "restored_skims.zarr"
         restored_path = zarr_manager.restore_snapshot(
-            snapshot_id=snapshot_id,
-            target_path=str(restore_path)
+            snapshot_id=snapshot_id, target_path=str(restore_path)
         )
 
         assert Path(restored_path).exists()
@@ -233,8 +229,7 @@ class TestVersionedZarrStore:
         # Check data matches
         for var in ds_original.data_vars:
             np.testing.assert_array_almost_equal(
-                ds_original[var].values,
-                ds_restored[var].values
+                ds_original[var].values, ds_restored[var].values
             )
 
     def test_get_snapshot_info(self, zarr_manager, sample_zarr_store):
@@ -243,9 +238,7 @@ class TestVersionedZarrStore:
         year = 2012
 
         snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         info = zarr_manager.get_snapshot_info(snapshot_id)
@@ -258,7 +251,9 @@ class TestVersionedZarrStore:
         # Test non-existent snapshot
         assert zarr_manager.get_snapshot_info("nonexistent") is None
 
-    def test_get_snapshots_for_run(self, zarr_manager, sample_zarr_store, temp_base_dir):
+    def test_get_snapshots_for_run(
+        self, zarr_manager, sample_zarr_store, temp_base_dir
+    ):
         """Test retrieving all snapshots for a specific run."""
         run_id = "test_run_xyz"
         year = 2011
@@ -268,9 +263,7 @@ class TestVersionedZarrStore:
 
         # Initialization
         init_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
         snapshot_ids.append(init_id)
 
@@ -285,7 +278,7 @@ class TestVersionedZarrStore:
                 iteration=iteration,
                 beam_partial_zarr_path=str(sample_zarr_store),
                 merged_full_zarr_path=str(merged_path),
-                parent_snapshot_id=snapshot_ids[-1]
+                parent_snapshot_id=snapshot_ids[-1],
             )
             snapshot_ids.append(beam_id)
 
@@ -306,9 +299,7 @@ class TestVersionedZarrStore:
 
         # Create a chain of snapshots
         init_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         parent_id = init_id
@@ -322,7 +313,7 @@ class TestVersionedZarrStore:
                 iteration=iteration,
                 beam_partial_zarr_path=str(sample_zarr_store),
                 merged_full_zarr_path=str(merged_path),
-                parent_snapshot_id=parent_id
+                parent_snapshot_id=parent_id,
             )
             parent_id = beam_id
 
@@ -333,7 +324,9 @@ class TestVersionedZarrStore:
         assert lineage[0] == init_id  # First is initialization
         assert lineage[-1] == parent_id  # Last is current
 
-    def test_create_multi_version_view(self, zarr_manager, sample_zarr_store, temp_base_dir):
+    def test_create_multi_version_view(
+        self, zarr_manager, sample_zarr_store, temp_base_dir
+    ):
         """Test creating a multi-version view for cross-version analysis."""
         run_id = "test_run_multiview"
         year = 2011
@@ -349,14 +342,12 @@ class TestVersionedZarrStore:
             ds = xr.open_zarr(sample_zarr_store)
             modified_ds = ds.copy(deep=True)
             # Apply different multiplier for each version
-            modified_ds['SOV_TIME'].values = ds['SOV_TIME'].values * (1.0 + i * 0.2)
-            modified_ds.to_zarr(unique_path, mode='w')
+            modified_ds["SOV_TIME"].values = ds["SOV_TIME"].values * (1.0 + i * 0.2)
+            modified_ds.to_zarr(unique_path, mode="w")
 
             if iteration == -1:
                 snap_id = zarr_manager.create_snapshot_from_initialization(
-                    run_id=run_id,
-                    year=year,
-                    source_zarr_path=str(unique_path)
+                    run_id=run_id, year=year, source_zarr_path=str(unique_path)
                 )
             else:
                 snap_id = zarr_manager.create_snapshot_from_beam(
@@ -365,27 +356,26 @@ class TestVersionedZarrStore:
                     iteration=iteration,
                     beam_partial_zarr_path=str(unique_path),
                     merged_full_zarr_path=str(unique_path),
-                    parent_snapshot_id=snapshot_ids[-1] if snapshot_ids else None
+                    parent_snapshot_id=snapshot_ids[-1] if snapshot_ids else None,
                 )
 
             snapshot_ids.append(snap_id)
 
         # Create multi-version view
         multi_view = zarr_manager.create_multi_version_view(
-            snapshot_ids=snapshot_ids,
-            variables=['SOV_TIME', 'SOV_DIST']
+            snapshot_ids=snapshot_ids, variables=["SOV_TIME", "SOV_DIST"]
         )
 
         # Verify structure
-        assert 'version' in multi_view.dims
+        assert "version" in multi_view.dims
         assert len(multi_view.version) == 3
-        assert 'SOV_TIME' in multi_view
-        assert 'SOV_DIST' in multi_view
-        assert 'HOV2_TIME' not in multi_view  # Filtered out
+        assert "SOV_TIME" in multi_view
+        assert "SOV_DIST" in multi_view
+        assert "HOV2_TIME" not in multi_view  # Filtered out
 
         # Test cross-version slicing
         # Single OD across all versions
-        od_evolution = multi_view['SOV_TIME'].sel(otaz=1, dtaz=5, time_period='AM')
+        od_evolution = multi_view["SOV_TIME"].sel(otaz=1, dtaz=5, time_period="AM")
         assert od_evolution.shape == (3,)  # 3 versions
 
         # Values should be different (we multiplied by different factors)
@@ -396,7 +386,7 @@ class TestVersionedZarrStore:
         assert len(od_evolution) == 3
 
         # Single version slice
-        version_1 = multi_view['SOV_TIME'].sel(version=snapshot_ids[1])
+        version_1 = multi_view["SOV_TIME"].sel(version=snapshot_ids[1])
         assert version_1.shape == (10, 10, 5)  # Original dimensions
 
     def test_delete_snapshot(self, zarr_manager, sample_zarr_store):
@@ -405,9 +395,7 @@ class TestVersionedZarrStore:
         year = 2011
 
         snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         # Verify snapshot exists
@@ -429,9 +417,7 @@ class TestVersionedZarrStore:
         year = 2011
 
         snapshot_id = zarr_manager.create_snapshot_from_initialization(
-            run_id=run_id,
-            year=year,
-            source_zarr_path=str(sample_zarr_store)
+            run_id=run_id, year=year, source_zarr_path=str(sample_zarr_store)
         )
 
         # Create a new manager instance (simulates restart)
@@ -453,9 +439,7 @@ class TestVersionedZarrStore:
         """Test handling of missing source zarr files."""
         with pytest.raises(FileNotFoundError):
             zarr_manager.create_snapshot_from_initialization(
-                run_id="test",
-                year=2011,
-                source_zarr_path="/nonexistent/path.zarr"
+                run_id="test", year=2011, source_zarr_path="/nonexistent/path.zarr"
             )
 
 

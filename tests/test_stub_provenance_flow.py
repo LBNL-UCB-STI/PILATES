@@ -52,10 +52,10 @@ from workflow_state import WorkflowState
 
 
 # Check if we should preserve test output
-PRESERVE_OUTPUT = os.environ.get('PRESERVE_TEST_OUTPUT', None)
-if PRESERVE_OUTPUT == '1':
+PRESERVE_OUTPUT = os.environ.get("PRESERVE_TEST_OUTPUT", None)
+if PRESERVE_OUTPUT == "1":
     # Use absolute path from current working directory (where script was invoked)
-    PRESERVE_OUTPUT = os.path.abspath('./test_output')
+    PRESERVE_OUTPUT = os.path.abspath("./test_output")
 elif PRESERVE_OUTPUT:
     # Convert to absolute path
     PRESERVE_OUTPUT = os.path.abspath(PRESERVE_OUTPUT)
@@ -79,13 +79,13 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
     print(f"\n📦 Preserving test artifacts to: {output_dir}")
 
     # Copy entire test directory, excluding any nested test_output to avoid recursion
-    artifacts_dir = os.path.join(output_dir, 'artifacts')
+    artifacts_dir = os.path.join(output_dir, "artifacts")
     if os.path.exists(artifacts_dir):
         shutil.rmtree(artifacts_dir)
 
     def ignore_test_output(dir, files):
         """Ignore test_output directories to prevent infinite recursion."""
-        return ['test_output'] if 'test_output' in files else []
+        return ["test_output"] if "test_output" in files else []
 
     shutil.copytree(tmpdir, artifacts_dir, ignore=ignore_test_output)
     print(f"   ✅ Copied test artifacts")
@@ -94,13 +94,13 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
     db_files = []
     for root, dirs, files in os.walk(tmpdir):
         for file in files:
-            if file.endswith('.duckdb'):
+            if file.endswith(".duckdb"):
                 db_files.append(os.path.join(root, file))
 
     if db_files:
         # Copy main database to convenient location
         main_db = db_files[0]
-        db_dest = os.path.join(output_dir, 'test_database.duckdb')
+        db_dest = os.path.join(output_dir, "test_database.duckdb")
 
         # If db_manager is provided, ensure it's closed and checkpointed before copying
         if db_manager:
@@ -115,42 +115,41 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
         shutil.copy2(main_db, db_dest)
 
         # Also copy WAL file if it exists (shouldn't after CHECKPOINT, but just in case)
-        wal_file = main_db + '.wal'
+        wal_file = main_db + ".wal"
         if os.path.exists(wal_file):
-            shutil.copy2(wal_file, db_dest + '.wal')
+            shutil.copy2(wal_file, db_dest + ".wal")
 
         print(f"   ✅ Database: {db_dest}")
 
         # Export documentation using the COPIED database
         try:
-            docs_dir = os.path.join(output_dir, 'documentation')
+            docs_dir = os.path.join(output_dir, "documentation")
             os.makedirs(docs_dir, exist_ok=True)
 
             # Create a new database manager for the copied database
             from pilates.utils.duckdb_manager import DuckDBManager
+
             export_db_manager = DuckDBManager(db_dest)
 
             formats = {
-                'markdown': 'schema.md',
-                'json': 'schema.json',
-                'csv': 'schema.csv',
-                'html': 'schema.html'
+                "markdown": "schema.md",
+                "json": "schema.json",
+                "csv": "schema.csv",
+                "html": "schema.html",
             }
 
             for fmt, filename in formats.items():
                 output_path = os.path.join(docs_dir, filename)
                 success = export_db_manager.export_data_dictionary(
-                    output_path,
-                    format=fmt,
-                    include_stats=True
+                    output_path, format=fmt, include_stats=True
                 )
                 if success:
                     print(f"   ✅ Documentation ({fmt}): {output_path}")
 
             # Generate validation report
             report = export_db_manager.generate_validation_report()
-            report_path = os.path.join(docs_dir, 'validation_report.json')
-            with open(report_path, 'w') as f:
+            report_path = os.path.join(docs_dir, "validation_report.json")
+            with open(report_path, "w") as f:
                 json.dump(report, f, indent=2, default=str)
             print(f"   ✅ Validation report: {report_path}")
 
@@ -160,21 +159,25 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
             print(f"   ⚠️  Documentation export failed: {e}")
 
     # Create README for the output
-    readme_path = os.path.join(output_dir, 'README.md')
-    with open(readme_path, 'w') as f:
+    readme_path = os.path.join(output_dir, "README.md")
+    with open(readme_path, "w") as f:
         f.write(f"# Test Output: {test_name}\n\n")
         f.write(f"Generated: {pd.Timestamp.now()}\n\n")
         f.write("## Contents\n\n")
         f.write("### Database\n")
         f.write("- `test_database.duckdb` - Complete test database with provenance\n\n")
         f.write("### Documentation\n")
-        f.write("- `documentation/schema.html` - Open this in a browser for interactive schema docs\n")
+        f.write(
+            "- `documentation/schema.html` - Open this in a browser for interactive schema docs\n"
+        )
         f.write("- `documentation/schema.md` - Markdown schema documentation\n")
         f.write("- `documentation/schema.json` - JSON schema for programmatic access\n")
         f.write("- `documentation/schema.csv` - CSV for Excel\n")
         f.write("- `documentation/validation_report.json` - Data quality report\n\n")
         f.write("### Test Artifacts\n")
-        f.write("- `artifacts/` - Complete test workspace including run_info.json, openlineage.jsonl, etc.\n\n")
+        f.write(
+            "- `artifacts/` - Complete test workspace including run_info.json, openlineage.jsonl, etc.\n\n"
+        )
         f.write("## Quick Start\n\n")
         f.write("### Examine Database\n")
         f.write("```bash\n")
@@ -207,7 +210,9 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
     # Print convenient commands
     if db_files and os.path.exists(db_dest):
         print(f"\n   Quick access commands:")
-        print(f"   • View docs:  open {os.path.join(output_dir, 'documentation/schema.html')}")
+        print(
+            f"   • View docs:  open {os.path.join(output_dir, 'documentation/schema.html')}"
+        )
         print(f"   • Query DB:   duckdb {db_dest}")
         print(f"   • Read more:  cat {readme_path}")
 
@@ -247,7 +252,6 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
         "state_file_loc": os.path.join(tmpdir, "run_state.yaml"),  # This is still flat
         "use_stubs": True,
         "stub_script": str(stub_script),
-
         # Infrastructure settings
         "infrastructure": {
             "container_manager": "singularity",
@@ -257,7 +261,6 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             },
             "docker_images": {},
         },
-
         # ActivitySim settings
         "activitysim": {
             "household_sample_size": 0,  # Added for completeness
@@ -270,13 +273,14 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
                 "tables": ["households", "persons", "beam_plans"],
             },
             "validation_folder": "pilates/activitysim/validation",
-            "region_to_asim_subdir": {"sfbay": "sfbay"},  # This is a mapping, not a direct setting
+            "region_to_asim_subdir": {
+                "sfbay": "sfbay"
+            },  # This is a mapping, not a direct setting
             "database": {
                 "enabled": False,  # Don't try to read from DB in stub test
                 "use_processed_data": False,
             },
         },
-
         # BEAM settings
         "beam": {
             "config": "beam.conf",
@@ -285,7 +289,6 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             "local_input_folder": "pilates/beam/production/",
             "router_directory": "r5/",
         },
-
         # Shared settings
         "shared": {
             "skims": {
@@ -303,7 +306,15 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
                     "sfbay": {
                         "state": "06",
                         "counties": [
-                            "001", "013", "041", "055", "075", "081", "085", "095", "097"
+                            "001",
+                            "013",
+                            "041",
+                            "055",
+                            "075",
+                            "081",
+                            "085",
+                            "095",
+                            "097",
                         ],
                     }
                 },
@@ -315,7 +326,6 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
                 "path": os.path.join(tmpdir, "test_pilates.duckdb"),
             },
         },
-
         # UrbanSim settings
         "urbansim": {
             "local_data_input_folder": "pilates/urbansim/data/",
@@ -324,7 +334,6 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             "output_file_template": "model_data_{year}.h5",
             "region_mappings": {"region_to_region_id": {"sfbay": "06197001"}},
         },
-
         # ATLAS settings
         "atlas": {
             "beamac": 0,
@@ -336,7 +345,7 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             "enabled": True,
             "type": "duckdb",
             "path": os.path.join(tmpdir, "test_pilates.duckdb"),
-        }
+        },
     }
 
 
@@ -357,9 +366,9 @@ class TestStubProvenanceFlow:
         - Archive file tracking (input_data_for_YYYY_outputs.h5)
         - Merged input H5 tracking
         """
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("🧪 Testing UrbanSim/ATLAS/ActivitySim/BEAM Provenance")
-        print("="*60)
+        print("=" * 60)
 
         tmpdir = str(tmp_path)
         settings = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
@@ -389,7 +398,7 @@ class TestStubProvenanceFlow:
             provenance_tracker = OpenLineageTracker(
                 run_id,
                 settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"]
+                folder_name=settings["run"]["output_run_name"],
             )
             provenance_tracker.initialize_from_settings(settings)
 
@@ -426,7 +435,9 @@ class TestStubProvenanceFlow:
             usim_data_path = workspace.get_usim_mutable_data_dir()
             os.makedirs(usim_data_path, exist_ok=True)
 
-            initial_h5 = os.path.join(usim_data_path, "custom_mpo_06197001_model_data.h5")
+            initial_h5 = os.path.join(
+                usim_data_path, "custom_mpo_06197001_model_data.h5"
+            )
             fixtures_dir = Path(__file__).parent / "fixtures"
             fixture_h5 = fixtures_dir / "minimal_urbansim_2017.h5"
             if fixture_h5.exists():
@@ -456,7 +467,9 @@ class TestStubProvenanceFlow:
             )
 
             # Create UrbanSim output H5
-            usim_output_h5 = os.path.join(usim_data_path, f"model_data_{state.current_year}.h5")
+            usim_output_h5 = os.path.join(
+                usim_data_path, f"model_data_{state.current_year}.h5"
+            )
             if fixture_h5.exists():
                 shutil.copy2(fixture_h5, usim_output_h5)
             else:
@@ -501,13 +514,14 @@ class TestStubProvenanceFlow:
 
             # FIX ISSUE 3: Track .RData accessibility files (atlas_beamac=0)
             atlas_input_dir = os.path.join(
-                workspace.get_atlas_mutable_input_dir(),
-                f"year{state.current_year}"
+                workspace.get_atlas_mutable_input_dir(), f"year{state.current_year}"
             )
             os.makedirs(atlas_input_dir, exist_ok=True)
 
             # Create dummy .RData accessibility file
-            rdata_file = os.path.join(atlas_input_dir, f"accessibility_{state.current_year}.RData")
+            rdata_file = os.path.join(
+                atlas_input_dir, f"accessibility_{state.current_year}.RData"
+            )
             with open(rdata_file, "w") as f:
                 f.write("Dummy RData accessibility data")
 
@@ -552,10 +566,14 @@ class TestStubProvenanceFlow:
             )
 
             # Create ATLAS vehicle outputs
-            atlas_output_dir = os.path.join(tmpdir, settings["atlas_host_output_folder"])
+            atlas_output_dir = os.path.join(
+                tmpdir, settings["atlas_host_output_folder"]
+            )
             os.makedirs(atlas_output_dir, exist_ok=True)
 
-            vehicles_file = os.path.join(atlas_output_dir, f"vehicles_{state.current_year}.csv")
+            vehicles_file = os.path.join(
+                atlas_output_dir, f"vehicles_{state.current_year}.csv"
+            )
             with open(vehicles_file, "w") as f:
                 f.write("vehicle_id,household_id,bodytype,modelyear,pred_power\n")
                 f.write("1,1,Car,2015,ICE\n2,2,Car,2018,ICE\n3,3,SUV,2020,BEV\n")
@@ -571,7 +589,9 @@ class TestStubProvenanceFlow:
             )
 
             # FIX ISSUE 1: Create householdv file (contains vehicle counts)
-            householdv_file = os.path.join(atlas_output_dir, f"householdv_{state.current_year}.csv")
+            householdv_file = os.path.join(
+                atlas_output_dir, f"householdv_{state.current_year}.csv"
+            )
             with open(householdv_file, "w") as f:
                 f.write("household_id,nvehicles\n")
                 f.write("1,1\n2,2\n3,1\n4,0\n5,2\n")
@@ -628,9 +648,13 @@ class TestStubProvenanceFlow:
             )
 
             # Create vehicles2 CSV (with vehicleTypeId)
-            vehicles2_file = os.path.join(atlas_output_dir, f"vehicles2_{state.current_year}.csv")
+            vehicles2_file = os.path.join(
+                atlas_output_dir, f"vehicles2_{state.current_year}.csv"
+            )
             with open(vehicles2_file, "w") as f:
-                f.write("vehicle_id,household_id,bodytype,modelyear,pred_power,vehicleTypeId\n")
+                f.write(
+                    "vehicle_id,household_id,bodytype,modelyear,pred_power,vehicleTypeId\n"
+                )
                 f.write("1,1,Car,2015,ICE,Car_ICE_2015\n")
                 f.write("2,2,Car,2018,ICE,Car_ICE_2018\n")
                 f.write("3,3,SUV,2020,BEV,SUV_BEV_2020\n")
@@ -756,12 +780,14 @@ class TestStubProvenanceFlow:
 
             # Create ActivitySim outputs
             asim_output_path = workspace.get_asim_output_dir()
-            fixture_outputs = fixtures_dir / "minimal_activitysim_outputs" / "final_pipeline"
+            fixture_outputs = (
+                fixtures_dir / "minimal_activitysim_outputs" / "final_pipeline"
+            )
             if fixture_outputs.exists():
                 shutil.copytree(
                     fixture_outputs,
                     os.path.join(asim_output_path, "final_pipeline"),
-                    dirs_exist_ok=True
+                    dirs_exist_ok=True,
                 )
             else:
                 for table in ["households", "persons", "beam_plans"]:
@@ -836,7 +862,7 @@ class TestStubProvenanceFlow:
             year_iter_dir = os.path.join(
                 beam_output_path,
                 settings["run"]["region"],
-                f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+                f"year-{state.current_year}-iteration-{state.current_inner_iter}",
             )
             os.makedirs(year_iter_dir, exist_ok=True)
 
@@ -865,14 +891,12 @@ class TestStubProvenanceFlow:
 
                 # Create BEAM partial zarr output (sparse skims from BEAM)
                 beam_iter_dir = os.path.join(
-                    beam_output_path,
-                    "ITERS",
-                    f"it.{state.current_inner_iter}"
+                    beam_output_path, "ITERS", f"it.{state.current_inner_iter}"
                 )
                 os.makedirs(beam_iter_dir, exist_ok=True)
                 beam_partial_zarr = os.path.join(
                     beam_iter_dir,
-                    f"{state.current_inner_iter}.activitySimODSkims_current.zarr"
+                    f"{state.current_inner_iter}.activitySimODSkims_current.zarr",
                 )
 
                 # Copy and modify fixture to simulate partial BEAM output
@@ -902,19 +926,25 @@ class TestStubProvenanceFlow:
             print("\n🔍 Validating provenance chain (Phase 1 improvement)...")
             validation_issues = provenance_tracker.validate_provenance_chain()
 
-            if validation_issues['errors']:
-                print(f"   ❌ Provenance errors found: {len(validation_issues['errors'])}")
-                for error in validation_issues['errors']:
+            if validation_issues["errors"]:
+                print(
+                    f"   ❌ Provenance errors found: {len(validation_issues['errors'])}"
+                )
+                for error in validation_issues["errors"]:
                     print(f"      - {error}")
             else:
                 print("   ✅ No provenance errors detected")
 
-            if validation_issues['warnings']:
-                print(f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}")
-                for warning in validation_issues['warnings'][:3]:
+            if validation_issues["warnings"]:
+                print(
+                    f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}"
+                )
+                for warning in validation_issues["warnings"][:3]:
                     print(f"      - {warning}")
-                if len(validation_issues['warnings']) > 3:
-                    print(f"      ... and {len(validation_issues['warnings']) - 3} more")
+                if len(validation_issues["warnings"]) > 3:
+                    print(
+                        f"      ... and {len(validation_issues['warnings']) - 3} more"
+                    )
             else:
                 print("   ✅ No provenance warnings")
 
@@ -926,7 +956,7 @@ class TestStubProvenanceFlow:
             run_info_path = os.path.join(
                 settings["run"]["output_directory"],
                 settings["run"]["output_run_name"],
-                "run_info.json"
+                "run_info.json",
             )
             assert os.path.exists(run_info_path), "run_info.json should exist"
 
@@ -954,24 +984,32 @@ class TestStubProvenanceFlow:
                 if short_name not in short_names:
                     print(f"   ⚠️  {description} - NOT FOUND")
                     print(f"      Looking for: '{short_name}'")
-                    print(f"      Available: {[s for s in short_names if 'atlas' in s or 'usim' in s]}")
+                    print(
+                        f"      Available: {[s for s in short_names if 'atlas' in s or 'usim' in s]}"
+                    )
                 assert short_name in short_names, f"Missing: {description}"
                 print(f"   ✅ {description}")
 
             # Verify Issue 2: source_file_paths in outputs
             vehicles2_records = [
-                rec for rec in file_records.values()
+                rec
+                for rec in file_records.values()
                 if rec["short_name"] == "atlas_vehicles2_output"
             ]
             assert len(vehicles2_records) > 0, "vehicles2 should be tracked"
-            assert "source_file_paths" in vehicles2_records[0], "vehicles2 missing source_file_paths"
-            assert len(vehicles2_records[0]["source_file_paths"]) > 0, "vehicles2 source_file_paths empty"
+            assert (
+                "source_file_paths" in vehicles2_records[0]
+            ), "vehicles2 missing source_file_paths"
+            assert (
+                len(vehicles2_records[0]["source_file_paths"]) > 0
+            ), "vehicles2 source_file_paths empty"
             print("   ✅ Issue 2: vehicles2 has source_file_paths")
 
             # Check that UrbanSim H5 has source_file_paths (from ATLAS postprocessor update)
             # Note: The H5 file is the same path, so it may be stored under usim_output_h5 key
             usim_h5_records = [
-                rec for rec in file_records.values()
+                rec
+                for rec in file_records.values()
                 if "model_data_2017.h5" in rec.get("file_path", "")
             ]
             # The H5 should have been recorded at least once
@@ -979,16 +1017,21 @@ class TestStubProvenanceFlow:
             # Check if any record has source_file_paths (showing it was updated)
             has_sources = any("source_file_paths" in rec for rec in usim_h5_records)
             if has_sources:
-                print("   ✅ Issue 2: UrbanSim H5 has source_file_paths from ATLAS update")
+                print(
+                    "   ✅ Issue 2: UrbanSim H5 has source_file_paths from ATLAS update"
+                )
             else:
-                print("   ℹ️  Issue 2: H5 file tracked (source_file_paths may be in model_runs)")
+                print(
+                    "   ℹ️  Issue 2: H5 file tracked (source_file_paths may be in model_runs)"
+                )
 
             # Verify Issue 4: ATLAS → ActivitySim linkage
             # Both should reference the same UrbanSim H5 file
             # The H5 file path should be used by both ATLAS and ActivitySim
             usim_h5_path = usim_output_h5  # This is the actual file path
             usim_h5_users = [
-                rec["short_name"] for rec in file_records.values()
+                rec["short_name"]
+                for rec in file_records.values()
                 if rec.get("file_path") == usim_h5_path
             ]
             # Should have been used by multiple models
@@ -999,14 +1042,16 @@ class TestStubProvenanceFlow:
             # Check model run count
             model_run_count = len(run_info["model_runs"])
             expected_runs = 9  # usim_pre, usim, atlas_pre, atlas, atlas_post, asim_pre, asim, beam_pre, beam
-            assert model_run_count >= expected_runs, f"Expected at least {expected_runs} runs, got {model_run_count}"
+            assert (
+                model_run_count >= expected_runs
+            ), f"Expected at least {expected_runs} runs, got {model_run_count}"
             print(f"   ✅ Model runs: {model_run_count} runs tracked")
 
             # Check OpenLineage events
             ol_path = os.path.join(
                 settings["run"]["output_directory"],
                 settings["run"]["output_run_name"],
-                "openlineage.jsonl"
+                "openlineage.jsonl",
             )
             assert os.path.exists(ol_path), "openlineage.jsonl should exist"
 
@@ -1022,6 +1067,7 @@ class TestStubProvenanceFlow:
 
             # Get database manager
             from pilates.utils.database_upload import create_database_manager
+
             db_manager = create_database_manager(settings)
 
             # Initialize variables for summary
@@ -1054,28 +1100,36 @@ class TestStubProvenanceFlow:
                     conn = db_manager._get_connection()
 
                     # Check schema comments
-                    table_comments = conn.execute("""
+                    table_comments = conn.execute(
+                        """
                         SELECT COUNT(*) FROM duckdb_tables()
                         WHERE schema_name = 'main' AND comment IS NOT NULL
-                    """).fetchone()[0]
+                    """
+                    ).fetchone()[0]
                     print(f"   ✅ {table_comments} tables with documentation")
 
                     # Check summary views
-                    views = conn.execute("""
+                    views = conn.execute(
+                        """
                         SELECT COUNT(*) FROM duckdb_tables()
                         WHERE schema_name = 'main' AND table_type = 'VIEW'
-                    """).fetchone()[0]
+                    """
+                    ).fetchone()[0]
                     print(f"   ✅ {views} summary views created")
 
                     # Check schema version
-                    version = conn.execute("""
+                    version = conn.execute(
+                        """
                         SELECT version FROM schema_version ORDER BY version DESC LIMIT 1
-                    """).fetchone()[0]
+                    """
+                    ).fetchone()[0]
                     print(f"   ✅ Schema version: {version}")
 
                     # Test validation report
                     report = db_manager.generate_validation_report()
-                    print(f"   ✅ Validation report: {len(report['errors'])} errors, {len(report['warnings'])} warnings")
+                    print(
+                        f"   ✅ Validation report: {len(report['errors'])} errors, {len(report['warnings'])} warnings"
+                    )
 
                     print("\n   ✅ All documentation features operational!")
 
@@ -1101,45 +1155,79 @@ class TestStubProvenanceFlow:
                 snapshots = manifest["snapshots"]
 
                 # Should have 2 snapshots: initialization + BEAM iteration
-                assert len(snapshots) >= 2, f"Expected at least 2 snapshots, got {len(snapshots)}"
+                assert (
+                    len(snapshots) >= 2
+                ), f"Expected at least 2 snapshots, got {len(snapshots)}"
                 print(f"   ✅ Found {len(snapshots)} zarr snapshots")
 
                 # Verify initialization snapshot
-                assert zarr_snapshot_id in snapshots, f"Initialization snapshot {zarr_snapshot_id} should exist"
+                assert (
+                    zarr_snapshot_id in snapshots
+                ), f"Initialization snapshot {zarr_snapshot_id} should exist"
                 init_snapshot = snapshots[zarr_snapshot_id]
-                assert init_snapshot["snapshot_type"] == "initialization", "First snapshot should be initialization"
-                assert init_snapshot["iteration"] == -1, "Initialization should be iteration -1"
-                assert "full_skims" in init_snapshot, "Initialization should have full_skims"
-                assert init_snapshot["partial_skims"] is None, "Initialization should not have partial_skims"
+                assert (
+                    init_snapshot["snapshot_type"] == "initialization"
+                ), "First snapshot should be initialization"
+                assert (
+                    init_snapshot["iteration"] == -1
+                ), "Initialization should be iteration -1"
+                assert (
+                    "full_skims" in init_snapshot
+                ), "Initialization should have full_skims"
+                assert (
+                    init_snapshot["partial_skims"] is None
+                ), "Initialization should not have partial_skims"
                 print(f"   ✅ Initialization snapshot verified: {zarr_snapshot_id}")
 
                 # Verify BEAM snapshot
-                beam_snapshots = [sid for sid in snapshots if snapshots[sid].get("snapshot_type") == "merged"]
-                assert len(beam_snapshots) >= 1, "Should have at least one BEAM snapshot"
+                beam_snapshots = [
+                    sid
+                    for sid in snapshots
+                    if snapshots[sid].get("snapshot_type") == "merged"
+                ]
+                assert (
+                    len(beam_snapshots) >= 1
+                ), "Should have at least one BEAM snapshot"
 
                 beam_snap = snapshots[beam_snapshots[0]]
-                assert beam_snap["iteration"] == state.current_inner_iter, "BEAM snapshot should have correct iteration"
+                assert (
+                    beam_snap["iteration"] == state.current_inner_iter
+                ), "BEAM snapshot should have correct iteration"
                 assert "full_skims" in beam_snap, "BEAM snapshot should have full_skims"
-                assert "partial_skims" in beam_snap, "BEAM snapshot should have partial_skims"
-                assert beam_snap["parent_snapshot"] == zarr_snapshot_id, "BEAM snapshot should reference parent"
+                assert (
+                    "partial_skims" in beam_snap
+                ), "BEAM snapshot should have partial_skims"
+                assert (
+                    beam_snap["parent_snapshot"] == zarr_snapshot_id
+                ), "BEAM snapshot should reference parent"
                 print(f"   ✅ BEAM snapshot verified: {beam_snapshots[0]}")
 
                 # Verify lineage
                 lineage = zarr_manager.get_snapshot_lineage(beam_snapshots[0])
                 assert len(lineage) == 2, "Lineage should have 2 snapshots"
-                assert lineage[0] == zarr_snapshot_id, "Lineage should start with initialization"
-                assert lineage[1] == beam_snapshots[0], "Lineage should end with BEAM snapshot"
+                assert (
+                    lineage[0] == zarr_snapshot_id
+                ), "Lineage should start with initialization"
+                assert (
+                    lineage[1] == beam_snapshots[0]
+                ), "Lineage should end with BEAM snapshot"
                 print(f"   ✅ Lineage verified: {' → '.join(lineage)}")
 
                 # Verify snapshot info retrieval
                 snapshot_info = zarr_manager.get_snapshot_info(zarr_snapshot_id)
-                assert snapshot_info is not None, "Should be able to retrieve snapshot info"
-                assert "chunk_manifest" in snapshot_info["full_skims"], "Should have chunk manifest"
+                assert (
+                    snapshot_info is not None
+                ), "Should be able to retrieve snapshot info"
+                assert (
+                    "chunk_manifest" in snapshot_info["full_skims"]
+                ), "Should have chunk manifest"
                 print(f"   ✅ Snapshot info retrieval working")
 
                 # Verify snapshots for run
                 run_snapshots = zarr_manager.get_snapshots_for_run(run_id)
-                assert len(run_snapshots) >= 2, "Should have at least 2 snapshots for run"
+                assert (
+                    len(run_snapshots) >= 2
+                ), "Should have at least 2 snapshots for run"
                 print(f"   ✅ Found {len(run_snapshots)} snapshots for run {run_id}")
 
                 print("\n   ✅ All zarr versioning features validated!")
@@ -1147,14 +1235,16 @@ class TestStubProvenanceFlow:
             # ============================================================
             # Preserve Test Artifacts (if requested)
             # ============================================================
-            preserve_test_artifacts(tmpdir, "urbansim_atlas_activitysim_beam", db_manager)
+            preserve_test_artifacts(
+                tmpdir, "urbansim_atlas_activitysim_beam", db_manager
+            )
 
             # ============================================================
             # Test Summary
             # ============================================================
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("✅ URBANSIM/ATLAS/ACTIVITYSIM/BEAM TEST PASSED")
-            print("="*60)
+            print("=" * 60)
             print("ATLAS Provenance Fixes Validated:")
             print("  ✓ Issue 1: householdv tracked as postprocessor input")
             print("  ✓ Issue 2: source_file_paths in outputs")
@@ -1162,7 +1252,9 @@ class TestStubProvenanceFlow:
             print("  ✓ Issue 4: ATLAS → ActivitySim linkage")
             print("\nComplete Chain:")
             print("  UrbanSim → ATLAS → ActivitySim → BEAM")
-            print(f"  {model_run_count} model runs, {len(file_records)} files, {len(events)} events")
+            print(
+                f"  {model_run_count} model runs, {len(file_records)} files, {len(events)} events"
+            )
             if table_comments > 0 or views > 0:
                 print("\nDatabase Documentation:")
                 print(f"  ✓ {table_comments} tables documented")
@@ -1175,7 +1267,7 @@ class TestStubProvenanceFlow:
                 print(f"  ✓ BEAM iteration snapshot created")
                 print(f"  ✓ Snapshot lineage tracking")
                 print(f"  ✓ Manifest persistence")
-            print("="*60)
+            print("=" * 60)
 
         finally:
             os.chdir(original_cwd)
@@ -1191,9 +1283,9 @@ class TestStubProvenanceFlow:
         4. File linkages are correct
         5. Provenance chain is complete
         """
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("🧪 Testing ActivitySim/BEAM Stub Provenance Workflow")
-        print("="*60)
+        print("=" * 60)
 
         tmpdir = str(tmp_path)
         settings = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
@@ -1213,7 +1305,7 @@ class TestStubProvenanceFlow:
             provenance_tracker = OpenLineageTracker(
                 run_id,
                 settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"]
+                folder_name=settings["run"]["output_run_name"],
             )
             provenance_tracker.initialize_from_settings(settings)
 
@@ -1337,12 +1429,14 @@ class TestStubProvenanceFlow:
             os.makedirs(asim_output_path, exist_ok=True)
 
             # Use fixtures if available
-            fixture_outputs = fixtures_dir / "minimal_activitysim_outputs" / "final_pipeline"
+            fixture_outputs = (
+                fixtures_dir / "minimal_activitysim_outputs" / "final_pipeline"
+            )
             if fixture_outputs.exists():
                 shutil.copytree(
                     fixture_outputs,
                     os.path.join(asim_output_path, "final_pipeline"),
-                    dirs_exist_ok=True
+                    dirs_exist_ok=True,
                 )
                 print("   📦 Using fixture ActivitySim outputs")
             else:
@@ -1410,7 +1504,7 @@ class TestStubProvenanceFlow:
             year_iter_dir = os.path.join(
                 beam_output_path,
                 settings["run"]["region"],
-                f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+                f"year-{state.current_year}-iteration-{state.current_inner_iter}",
             )
             os.makedirs(year_iter_dir, exist_ok=True)
 
@@ -1437,11 +1531,13 @@ class TestStubProvenanceFlow:
                 print("\n📸 Creating zarr BEAM iteration snapshot...")
 
                 # Create BEAM partial zarr
-                beam_iter_dir = os.path.join(beam_output_path, "ITERS", f"it.{state.current_inner_iter}")
+                beam_iter_dir = os.path.join(
+                    beam_output_path, "ITERS", f"it.{state.current_inner_iter}"
+                )
                 os.makedirs(beam_iter_dir, exist_ok=True)
                 beam_partial_zarr = os.path.join(
                     beam_iter_dir,
-                    f"{state.current_inner_iter}.activitySimODSkims_current.zarr"
+                    f"{state.current_inner_iter}.activitySimODSkims_current.zarr",
                 )
                 shutil.copytree(fixture_zarr, beam_partial_zarr)
 
@@ -1482,21 +1578,27 @@ class TestStubProvenanceFlow:
             print("\n🔍 Validating provenance chain (Phase 1 improvement)...")
             validation_issues = provenance_tracker.validate_provenance_chain()
 
-            if validation_issues['errors']:
-                print(f"   ❌ Provenance errors found: {len(validation_issues['errors'])}")
-                for error in validation_issues['errors']:
+            if validation_issues["errors"]:
+                print(
+                    f"   ❌ Provenance errors found: {len(validation_issues['errors'])}"
+                )
+                for error in validation_issues["errors"]:
                     print(f"      - {error}")
                 # Don't fail test on errors in stub test, just log them
             else:
                 print("   ✅ No provenance errors detected")
 
-            if validation_issues['warnings']:
-                print(f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}")
+            if validation_issues["warnings"]:
+                print(
+                    f"   ⚠️  Provenance warnings: {len(validation_issues['warnings'])}"
+                )
                 # Only show first 3 warnings to keep output clean
-                for warning in validation_issues['warnings'][:3]:
+                for warning in validation_issues["warnings"][:3]:
                     print(f"      - {warning}")
-                if len(validation_issues['warnings']) > 3:
-                    print(f"      ... and {len(validation_issues['warnings']) - 3} more")
+                if len(validation_issues["warnings"]) > 3:
+                    print(
+                        f"      ... and {len(validation_issues['warnings']) - 3} more"
+                    )
             else:
                 print("   ✅ No provenance warnings")
 
@@ -1509,7 +1611,7 @@ class TestStubProvenanceFlow:
             run_info_path = os.path.join(
                 settings["run"]["output_directory"],
                 settings["run"]["output_run_name"],
-                "run_info.json"
+                "run_info.json",
             )
             assert os.path.exists(run_info_path), "run_info.json should exist"
 
@@ -1547,13 +1649,16 @@ class TestStubProvenanceFlow:
 
             # 4. Verify file linkages (ActivitySim output exists)
             asim_plans_records = [
-                rec for rec in file_records.values()
+                rec
+                for rec in file_records.values()
                 if rec["short_name"] == "activitysim_beam_plans"
             ]
 
             assert len(asim_plans_records) > 0, "ActivitySim plans should be tracked"
             asim_plans_path = asim_plans_records[0]["file_path"]
-            assert os.path.exists(asim_plans_path), "ActivitySim plans file should exist"
+            assert os.path.exists(
+                asim_plans_path
+            ), "ActivitySim plans file should exist"
             print("   ✅ File linkage verified: ActivitySim plans output exists")
 
             # ============================================================
@@ -1564,7 +1669,7 @@ class TestStubProvenanceFlow:
             ol_path = os.path.join(
                 settings["run"]["output_directory"],
                 settings["run"]["output_run_name"],
-                "openlineage.jsonl"
+                "openlineage.jsonl",
             )
             assert os.path.exists(ol_path), "openlineage.jsonl should exist"
 
@@ -1613,20 +1718,26 @@ class TestStubProvenanceFlow:
                 try:
                     # Query for table comments
                     conn = db_manager._get_connection()
-                    table_comments = conn.execute("""
+                    table_comments = conn.execute(
+                        """
                         SELECT table_name, comment
                         FROM duckdb_tables()
                         WHERE schema_name = 'main'
                           AND comment IS NOT NULL
-                    """).fetchall()
+                    """
+                    ).fetchall()
 
                     assert len(table_comments) > 0, "Should have table comments"
-                    print(f"   ✅ Found {len(table_comments)} tables with documentation")
+                    print(
+                        f"   ✅ Found {len(table_comments)} tables with documentation"
+                    )
 
                     # Verify specific important tables have comments
                     table_names = [t[0] for t in table_comments]
-                    for required_table in ['runs', 'file_records', 'model_runs']:
-                        assert required_table in table_names, f"Table {required_table} should have comment"
+                    for required_table in ["runs", "file_records", "model_runs"]:
+                        assert (
+                            required_table in table_names
+                        ), f"Table {required_table} should have comment"
                     print("   ✅ All critical tables have documentation")
 
                 except Exception as e:
@@ -1636,23 +1747,25 @@ class TestStubProvenanceFlow:
                 print("\n   Testing summary views...")
                 try:
                     # Query views from information_schema (more portable)
-                    views = conn.execute("""
+                    views = conn.execute(
+                        """
                         SELECT table_name
                         FROM information_schema.tables
                         WHERE table_schema = 'main'
                           AND table_type = 'VIEW'
-                    """).fetchall()
+                    """
+                    ).fetchall()
 
                     view_names = [v[0] for v in views]
                     expected_views = [
-                        'run_summary',
-                        'data_lineage_summary',
-                        'model_performance_summary',
-                        'household_demographics_summary',
-                        'taz_summary',
-                        'run_comparison',
-                        'employment_by_sector',
-                        'recent_activity'
+                        "run_summary",
+                        "data_lineage_summary",
+                        "model_performance_summary",
+                        "household_demographics_summary",
+                        "taz_summary",
+                        "run_comparison",
+                        "employment_by_sector",
+                        "recent_activity",
                     ]
 
                     for view in expected_views:
@@ -1667,22 +1780,30 @@ class TestStubProvenanceFlow:
                 print("\n   Testing data dictionary export...")
                 try:
                     import tempfile
+
                     with tempfile.TemporaryDirectory() as export_dir:
                         # Test each format
-                        formats = ['markdown', 'json', 'csv', 'html']
+                        formats = ["markdown", "json", "csv", "html"]
                         for fmt in formats:
-                            output_file = os.path.join(export_dir, f"schema.{fmt if fmt != 'markdown' else 'md'}")
+                            output_file = os.path.join(
+                                export_dir,
+                                f"schema.{fmt if fmt != 'markdown' else 'md'}",
+                            )
                             success = db_manager.export_data_dictionary(
                                 output_file,
                                 format=fmt,
-                                include_stats=False  # Skip stats for speed
+                                include_stats=False,  # Skip stats for speed
                             )
                             assert success, f"Export to {fmt} should succeed"
-                            assert os.path.exists(output_file), f"Output file should exist for {fmt}"
+                            assert os.path.exists(
+                                output_file
+                            ), f"Output file should exist for {fmt}"
 
                             # Verify file has content
                             file_size = os.path.getsize(output_file)
-                            assert file_size > 100, f"Export file should have content (got {file_size} bytes)"
+                            assert (
+                                file_size > 100
+                            ), f"Export file should have content (got {file_size} bytes)"
 
                         print(f"   ✅ Successfully exported in {len(formats)} formats")
 
@@ -1694,13 +1815,15 @@ class TestStubProvenanceFlow:
                 try:
                     report = db_manager.generate_validation_report()
 
-                    assert 'errors' in report, "Report should have errors key"
-                    assert 'warnings' in report, "Report should have warnings key"
-                    assert 'statistics' in report, "Report should have statistics key"
-                    assert 'recommendations' in report, "Report should have recommendations key"
+                    assert "errors" in report, "Report should have errors key"
+                    assert "warnings" in report, "Report should have warnings key"
+                    assert "statistics" in report, "Report should have statistics key"
+                    assert (
+                        "recommendations" in report
+                    ), "Report should have recommendations key"
 
                     # Should have some statistics
-                    assert len(report['statistics']) > 0, "Should have statistics"
+                    assert len(report["statistics"]) > 0, "Should have statistics"
 
                     print(f"   ✅ Validation report generated")
                     print(f"      - Errors: {len(report['errors'])}")
@@ -1713,12 +1836,14 @@ class TestStubProvenanceFlow:
                 # Test 5: Verify schema versioning
                 print("\n   Testing schema versioning...")
                 try:
-                    version_info = conn.execute("""
+                    version_info = conn.execute(
+                        """
                         SELECT version, description, pilates_version
                         FROM schema_version
                         ORDER BY version DESC
                         LIMIT 1
-                    """).fetchone()
+                    """
+                    ).fetchone()
 
                     assert version_info is not None, "Should have schema version record"
                     assert version_info[0] >= 1, "Should have version >= 1"
@@ -1734,11 +1859,15 @@ class TestStubProvenanceFlow:
                 print("\n   Testing summary views with data...")
                 try:
                     # Test run_summary view
-                    run_summary = conn.execute("SELECT COUNT(*) FROM run_summary").fetchone()[0]
+                    run_summary = conn.execute(
+                        "SELECT COUNT(*) FROM run_summary"
+                    ).fetchone()[0]
                     print(f"   ✅ run_summary view: {run_summary} runs")
 
                     # Test data_lineage_summary view
-                    lineage_count = conn.execute("SELECT COUNT(*) FROM data_lineage_summary").fetchone()[0]
+                    lineage_count = conn.execute(
+                        "SELECT COUNT(*) FROM data_lineage_summary"
+                    ).fetchone()[0]
                     print(f"   ✅ data_lineage_summary view: {lineage_count} files")
 
                     # Views should have data from our test run
@@ -1750,7 +1879,9 @@ class TestStubProvenanceFlow:
                 print("\n   ✅ All documentation features validated!")
 
             else:
-                print("   ⚠️  No database manager available, skipping documentation tests")
+                print(
+                    "   ⚠️  No database manager available, skipping documentation tests"
+                )
 
             # ============================================================
             # Verify Zarr Versioning
@@ -1766,7 +1897,9 @@ class TestStubProvenanceFlow:
                 with open(manifest_path) as f:
                     manifest = json.load(f)
 
-                assert len(manifest["snapshots"]) >= 2, "Should have at least 2 snapshots"
+                assert (
+                    len(manifest["snapshots"]) >= 2
+                ), "Should have at least 2 snapshots"
                 print(f"   ✅ Found {len(manifest['snapshots'])} zarr snapshots")
 
                 # Verify initialization snapshot
@@ -1776,8 +1909,11 @@ class TestStubProvenanceFlow:
                 print(f"   ✅ Initialization snapshot verified")
 
                 # Verify BEAM snapshot
-                beam_snapshots = [s for s in manifest["snapshots"]
-                                if manifest["snapshots"][s].get("snapshot_type") == "merged"]
+                beam_snapshots = [
+                    s
+                    for s in manifest["snapshots"]
+                    if manifest["snapshots"][s].get("snapshot_type") == "merged"
+                ]
                 assert len(beam_snapshots) >= 1
                 print(f"   ✅ BEAM snapshot verified")
 
@@ -1796,9 +1932,9 @@ class TestStubProvenanceFlow:
             # ============================================================
             # Test Summary
             # ============================================================
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("✅ STUB PROVENANCE TEST PASSED")
-            print("="*60)
+            print("=" * 60)
             print("Validated:")
             print("  ✓ File record creation")
             print("  ✓ Model run tracking")
@@ -1818,7 +1954,7 @@ class TestStubProvenanceFlow:
                 print("  ✓ BEAM iteration snapshot created")
                 print("  ✓ Snapshot lineage tracking")
                 print("  ✓ Manifest persistence")
-            print("="*60)
+            print("=" * 60)
 
         finally:
             os.chdir(original_cwd)
@@ -1827,6 +1963,7 @@ class TestStubProvenanceFlow:
 if __name__ == "__main__":
     # Run the test standalone
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         test = TestStubProvenanceFlow()
         # test.test_activitysim_beam_stub_workflow(Path(tmp))

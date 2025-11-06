@@ -15,6 +15,7 @@ This module defines lightweight record types used by the provenance subsystem:
 These classes are intentionally simple and serializable; they are used to
 assemble OpenLineage Dataset objects and to persist run metadata elsewhere.
 """
+
 import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ class Record:
         exists: Whether the referenced file/resource currently exists.
         openlineage_id: UUID used specifically for OpenLineage; generated if absent.
     """
+
     unique_id: Optional[str] = None
     created_at: Optional[str] = None
     short_name: Optional[str] = None
@@ -65,6 +67,7 @@ class RecordStore:
     It provides simple merging and convenience accessors used during initialization
     and postprocessing.
     """
+
     def __init__(
         self,
         recordDict: Optional[Dict[str, Record]] = None,
@@ -124,7 +127,9 @@ class RecordStore:
         """Return the Record with the given unique_id or None if not present."""
         return self.records.get(unique_id)
 
-    def all_records(self) -> List[Union["FileRecord", "RepoRecord", "H5FileRecord", "H5TableRecord"]]:
+    def all_records(
+        self,
+    ) -> List[Union["FileRecord", "RepoRecord", "H5FileRecord", "H5TableRecord"]]:
         """Return a list of all Record objects currently in the store."""
         return list(self.records.values())
 
@@ -159,6 +164,7 @@ class FileRecord(Record):
         consuming_run_ids: List of model run ids that consume this file.
         schema: Optional schema description used to generate OpenLineage schema facets.
     """
+
     file_path: str
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
@@ -252,6 +258,7 @@ class H5TableRecord(FileRecord):
     The `h5_file_unique_id` links back to the parent H5FileRecord, and
     `table_name` is the internal HDF5 path (e.g., '/households').
     """
+
     h5_file_unique_id: str  # Unique ID of the parent H5FileRecord
     table_name: str
 
@@ -274,6 +281,7 @@ class H5FileRecord(Record):
         table_record_ids: List of unique_ids for contained H5TableRecord entries.
         Other fields are similar to FileRecord and used for provenance linkage.
     """
+
     file_path: str
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
@@ -348,6 +356,7 @@ class RepoRecord(Record):
         repo_path: Filesystem path or URL of the repository.
         accessed_at: ISO timestamp of when the repo was captured/accessed.
     """
+
     repo_path: Optional[str] = None
     description: Optional[str] = None
     accessed_at: Optional[str] = None
@@ -411,6 +420,7 @@ class ModelRunInfo(Record):
         status: Run status string (e.g., 'uninitialized', 'running', 'completed', 'failed').
         metadata: Runtime execution metadata including container command and parameters.
     """
+
     model: str
     year: int
     iteration: Optional[int] = None
@@ -441,6 +451,7 @@ class PilatesRunInfo:
     Contains file and repo records, model run metadata, configuration snapshot,
     and a lightweight list of produced OpenLineage event metadata.
     """
+
     run_id: str
     created_at: str
     start_year: Optional[int] = None
@@ -449,7 +460,9 @@ class PilatesRunInfo:
     settings_hash: Optional[str] = None
     code_version: Optional[str] = None
     hostname: Optional[str] = None
-    file_records: Dict[str, Union["FileRecord", "H5FileRecord", "H5TableRecord"]] = field(default_factory=dict)
+    file_records: Dict[str, Union["FileRecord", "H5FileRecord", "H5TableRecord"]] = (
+        field(default_factory=dict)
+    )
     repo_records: Dict[str, RepoRecord] = field(default_factory=dict)
     model_runs: Dict[str, ModelRunInfo] = field(default_factory=dict)
     config_snapshot: Optional[Dict[str, Any]] = None

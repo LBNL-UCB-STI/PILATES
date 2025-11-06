@@ -76,8 +76,7 @@ def test_phase1_hierarchical_config():
 
     enabled_models = config.get_enabled_models()
     hierarchical_hashes = snapshot_manager.create_hierarchical_config_hashes(
-        snapshot,
-        enabled_models
+        snapshot, enabled_models
     )
 
     print(f"✓ Created hierarchical hashes for {len(hierarchical_hashes)} layers:")
@@ -91,8 +90,11 @@ def test_phase1_hierarchical_config():
 
     # Create temporary database for testing
     import uuid
+
     temp_dir = tempfile.gettempdir()
-    test_db_path = os.path.join(temp_dir, f"test_hierarchical_config_{uuid.uuid4().hex[:8]}.duckdb")
+    test_db_path = os.path.join(
+        temp_dir, f"test_hierarchical_config_{uuid.uuid4().hex[:8]}.duckdb"
+    )
 
     try:
         print(f"Creating test database at: {test_db_path}")
@@ -112,24 +114,23 @@ def test_phase1_hierarchical_config():
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                snapshot['snapshot_id'],
-                snapshot['created_timestamp'],
-                snapshot['config_content_hash'],
-                '{}',  # Simplified for test
-                '{}',  # Simplified for test
-                '{}',  # Simplified for test
-                snapshot.get('beam_config'),
-                snapshot.get('asim_subdir'),
-                snapshot.get('region'),
-            ]
+                snapshot["snapshot_id"],
+                snapshot["created_timestamp"],
+                snapshot["config_content_hash"],
+                "{}",  # Simplified for test
+                "{}",  # Simplified for test
+                "{}",  # Simplified for test
+                snapshot.get("beam_config"),
+                snapshot.get("asim_subdir"),
+                snapshot.get("region"),
+            ],
         )
         print("✓ Config snapshot uploaded")
 
         # Upload hierarchical hashes
         print("\nUploading hierarchical config hashes...")
         db.upload_hierarchical_config_hashes(
-            snapshot['snapshot_id'],
-            hierarchical_hashes
+            snapshot["snapshot_id"], hierarchical_hashes
         )
         print("✓ Hierarchical hashes uploaded")
 
@@ -157,8 +158,8 @@ def test_phase1_hierarchical_config():
         print("SCENARIO: Two runs differ only in BEAM config\n")
 
         # Original config hashes
-        orig_activitysim_hash = hierarchical_hashes['activitysim']['hash']
-        orig_beam_hash = hierarchical_hashes['beam']['hash']
+        orig_activitysim_hash = hierarchical_hashes["activitysim"]["hash"]
+        orig_beam_hash = hierarchical_hashes["beam"]["hash"]
 
         print("Run A (original):")
         print(f"  ActivitySim hash: {orig_activitysim_hash[:16]}...")
@@ -166,8 +167,8 @@ def test_phase1_hierarchical_config():
 
         # Simulate different BEAM config
         modified_config = config_dict.copy()
-        modified_config['beam'] = modified_config['beam'].copy()
-        modified_config['beam']['sample'] = 0.5  # Changed from 1.0
+        modified_config["beam"] = modified_config["beam"].copy()
+        modified_config["beam"]["sample"] = 0.5  # Changed from 1.0
 
         # Recompute hashes
         field_annotations = get_field_annotations()
@@ -175,19 +176,21 @@ def test_phase1_hierarchical_config():
         hasher = ConfigHasher(
             config=modified_config,
             field_annotations=field_annotations,
-            dependency_graph=dependency_graph
+            dependency_graph=dependency_graph,
         )
         modified_hashes = hasher.get_hierarchical_hashes(enabled_models)
 
-        new_activitysim_hash = modified_hashes['activitysim']
-        new_beam_hash = modified_hashes['beam']
+        new_activitysim_hash = modified_hashes["activitysim"]
+        new_beam_hash = modified_hashes["beam"]
 
         print("\nRun B (modified BEAM config):")
         print(f"  ActivitySim hash: {new_activitysim_hash[:16]}...")
         print(f"  BEAM hash:        {new_beam_hash[:16]}...")
 
         print("\nComparison:")
-        asim_match = "✓ SAME" if orig_activitysim_hash == new_activitysim_hash else "✗ DIFF"
+        asim_match = (
+            "✓ SAME" if orig_activitysim_hash == new_activitysim_hash else "✗ DIFF"
+        )
         beam_match = "✓ SAME" if orig_beam_hash == new_beam_hash else "✗ DIFF"
 
         print(f"  ActivitySim: {asim_match}")
@@ -197,7 +200,9 @@ def test_phase1_hierarchical_config():
         if orig_activitysim_hash == new_activitysim_hash:
             print("  ✓ ActivitySim config is IDENTICAL across runs")
             print("  ✓ Can query database for reusable ActivitySim outputs!")
-            print(f"\n  Query: SELECT * FROM file_records WHERE config_hash = '{orig_activitysim_hash[:16]}...'")
+            print(
+                f"\n  Query: SELECT * FROM file_records WHERE config_hash = '{orig_activitysim_hash[:16]}...'"
+            )
         else:
             print("  ✗ ActivitySim config differs - would need to re-run")
 
@@ -232,5 +237,5 @@ def test_phase1_hierarchical_config():
             print(f"\nCleaned up test database: {test_db_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test_phase1_hierarchical_config()

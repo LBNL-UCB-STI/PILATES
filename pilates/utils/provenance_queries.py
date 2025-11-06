@@ -162,7 +162,9 @@ class ProvenanceQuery:
                 return file_hash
         return None
 
-    def _find_ancestors(self, file_hash: str, visited: Set[str] = None) -> List[FileRecord]:
+    def _find_ancestors(
+        self, file_hash: str, visited: Set[str] = None
+    ) -> List[FileRecord]:
         """Recursively find all ancestor files."""
         if visited is None:
             visited = set()
@@ -205,7 +207,10 @@ class ProvenanceQuery:
             if other_hash in visited:
                 continue
 
-            if other_rec.source_file_paths and file_record.file_path in other_rec.source_file_paths:
+            if (
+                other_rec.source_file_paths
+                and file_record.file_path in other_rec.source_file_paths
+            ):
                 descendants.append(other_rec)
                 # Recursively find descendants of descendants
                 descendants.extend(self._find_descendants(other_hash, visited))
@@ -354,9 +359,7 @@ class ProvenanceQuery:
 
         # Count files with/without source_file_paths
         files_with_sources = sum(
-            1
-            for rec in self.run_info.file_records.values()
-            if rec.source_file_paths
+            1 for rec in self.run_info.file_records.values() if rec.source_file_paths
         )
 
         return {

@@ -26,7 +26,11 @@ from pilates.utils.geog import (
     get_taz_geoms,
     geoid_to_zone_map,
 )
-from pilates.utils.io import read_datastore, datastore_path, get_merged_usim_input_datastore_path
+from pilates.utils.io import (
+    read_datastore,
+    datastore_path,
+    get_merged_usim_input_datastore_path,
+)
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
@@ -219,7 +223,9 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
     if valueOverride is None:
         pydantic_path = ASIM_PYDANTIC_PATH_MAP.get(param)
         if not pydantic_path:
-            logger.warning(f"Parameter '{param}' has no defined Pydantic path. Cannot update asim config.")
+            logger.warning(
+                f"Parameter '{param}' has no defined Pydantic path. Cannot update asim config."
+            )
             return
         config_value = get_setting(settings, pydantic_path)
     else:
@@ -227,7 +233,9 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
 
     # Do not update if the value from settings is None
     if config_value is None:
-        logger.debug(f"Skipping asim config update for '{param}' because value is None.")
+        logger.debug(
+            f"Skipping asim config update for '{param}' because value is None."
+        )
         return
 
     path_list = [
@@ -781,6 +789,7 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
                 else:
                     skims[name] = mtx * 100
     skims.close()
+
 
 def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
     """Generate transit OMX skims"""
@@ -1540,10 +1549,12 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
         if not os.path.exists(path_to_beam_skims_in_current_run_workspace):
-            logger.info(f"[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production.")
+            logger.info(
+                f"[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
+            )
             beam_production_path = os.path.abspath(
                 os.path.join(
-                    find_project_root(), # Assuming find_project_root is available
+                    find_project_root(),  # Assuming find_project_root is available
                     "pilates",
                     "beam",
                     "production",
@@ -1552,7 +1563,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             )
             dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
             os.makedirs(dest_dir, exist_ok=True)
-            shutil.copyfile(os.path.join(beam_production_path, skims_fname), path_to_beam_skims_in_current_run_workspace)
+            shutil.copyfile(
+                os.path.join(beam_production_path, skims_fname),
+                path_to_beam_skims_in_current_run_workspace,
+            )
             # Also record provenance for this copy
             self.provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
@@ -1585,7 +1599,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             inputs=input_records_filtered,
         )
 
-        if os.path.exists(path_to_beam_skims_in_current_run_workspace): # <--- This condition should now be true
+        if os.path.exists(
+            path_to_beam_skims_in_current_run_workspace
+        ):  # <--- This condition should now be true
             input_skims_record = self.provenance_tracker.record_input_file(
                 "activitysim_preprocessor",
                 path_to_beam_skims_in_current_run_workspace,
@@ -2068,9 +2084,17 @@ def copy_data_to_mutable_location(
     )
 
     configs_source_dir = os.path.join(
-        get_setting(settings, "activitysim.local_configs_folder"), get_setting(settings, "run.region")
+        get_setting(settings, "activitysim.local_configs_folder"),
+        get_setting(settings, "run.region"),
     )
-    configs_dest_dir = os.path.abspath(os.path.join(folder_path, "..","..",get_setting(settings, "activitysim.local_mutable_configs_folder")))
+    configs_dest_dir = os.path.abspath(
+        os.path.join(
+            folder_path,
+            "..",
+            "..",
+            get_setting(settings, "activitysim.local_mutable_configs_folder"),
+        )
+    )
     logger.info(
         "Moving asim configs from {0} to {1}".format(
             configs_source_dir, configs_dest_dir
@@ -2142,7 +2166,11 @@ def copy_beam_geoms(
             )
 
         elif zone_type == "taz":
-            from_col = get_setting(settings, "shared.skims.geoms_index_col", default=get_setting(settings, "geoms_index_col", "zone_id"))
+            from_col = get_setting(
+                settings,
+                "shared.skims.geoms_index_col",
+                default=get_setting(settings, "geoms_index_col", "zone_id"),
+            )
             to_col = "TAZ"
             logger.info("Renaming TAZ column from {0} to {1}".format(from_col, to_col))
             beam_geoms_file.rename(columns={from_col: to_col}, inplace=True)
@@ -2163,7 +2191,8 @@ def copy_beam_geoms(
     if beam_shape_location is not None:
         logger.info(
             "Mapping BEAM geometry geoid column {0} to zone_id column {1}".format(
-                get_setting(settings, "beam.skim_zone_geoid_col"), get_setting(settings,"beam.skim_zone_source_id_col")
+                get_setting(settings, "beam.skim_zone_geoid_col"),
+                get_setting(settings, "beam.skim_zone_source_id_col"),
             )
         )
         beam_shape_in = provenance_tracker.record_input_file(
@@ -2174,8 +2203,10 @@ def copy_beam_geoms(
         )
         inputs.append(beam_shape_in)
         zones = gpd.read_file(beam_shape_location)
-        zones[get_setting(settings,"beam.skim_zone_source_id_col")] = (
-            zones[get_setting(settings, "beam.skim_zone_geoid_col")].astype(str).map(mapping)
+        zones[get_setting(settings, "beam.skim_zone_source_id_col")] = (
+            zones[get_setting(settings, "beam.skim_zone_geoid_col")]
+            .astype(str)
+            .map(mapping)
         )
         logger.info(
             "Re-saving BEAM geometry shapefile with updated zone_id to {0}".format(
@@ -2515,7 +2546,9 @@ def _create_land_use_table(
         if "STATE" in zones.columns:
             zones.loc[:, "STATE"] = zones["STATE"].astype(str)
         else:
-            zones.loc[:, "STATE"] = get_setting(settings, "shared.geography.FIPS")["state"]
+            zones.loc[:, "STATE"] = get_setting(settings, "shared.geography.FIPS")[
+                "state"
+            ]
         try:
             zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
         except:
@@ -2693,7 +2726,7 @@ def create_asim_data_from_database(
     # Database configuration for ActivitySim inputs
     db_config = settings.activitysim.database
     # config_hash = db_config.config_hash  # Optional: match specific config
-    year = db_config.year # Year to query for
+    year = db_config.year  # Year to query for
     use_processed = db_config.use_processed_data
 
     logger.info(f"📊 Database query parameters:")
@@ -2706,7 +2739,10 @@ def create_asim_data_from_database(
 
     try:
         with db_manager:
-            assert(isinstance(db_manager, DuckDBManager), "This doesn't work with databases beyond duckdb yet")
+            assert (
+                isinstance(db_manager, DuckDBManager),
+                "This doesn't work with databases beyond duckdb yet",
+            )
             # Create ActivitySim input CSV files from database
             tables_created = 0
 
@@ -2839,7 +2875,9 @@ def process_raw_h5_files(
     asim_zone_id_col="TAZ",
 ):
     region = get_setting(settings, "run.region")
-    logger.info("RELEVANT FIPS CODE {0}".format(get_setting(settings, "shared.geography")))
+    logger.info(
+        "RELEVANT FIPS CODE {0}".format(get_setting(settings, "shared.geography"))
+    )
     # -------------------------------------------------------------------------
     # Retrieve the FIPS configuration. Older flat configs store a direct
     # "state" and "counties" entry, while newer hierarchical configs nest these
@@ -2939,7 +2977,9 @@ def create_asim_data_from_h5(
     )
 
     # Determine the correct HDF5 file path (UrbanSim's merged input H5)
-    usim_h5_file_path = get_merged_usim_input_datastore_path(settings, mutable_data_dir=workspace.get_usim_mutable_data_dir())
+    usim_h5_file_path = get_merged_usim_input_datastore_path(
+        settings, mutable_data_dir=workspace.get_usim_mutable_data_dir()
+    )
 
     # Record the H5 datastore as an input to this preprocessor run
     h5_input_record = provenance_tracker.record_input_file(
@@ -2959,8 +2999,10 @@ def create_asim_data_from_h5(
     elif "{0}/households".format(get_setting(settings, "run.start_year")) in store:
         table_prefix_yr = "{0}/".format(get_setting(settings, "run.start_year"))
     else:
-        raise ValueError("Check the formatting of the table names in the urbansim data store, current structure is "
-                         f"not recognized: ${store.keys()}")
+        raise ValueError(
+            "Check the formatting of the table names in the urbansim data store, current structure is "
+            f"not recognized: ${store.keys()}"
+        )
 
     logger.info(
         "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(

@@ -1,4 +1,3 @@
-
 import argparse
 import json
 import logging
@@ -13,11 +12,22 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.duckdb_manager import DuckDBManager
-from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo, H5TableRecord, H5FileRecord
-from pilates.database.schema_generator import _normalize_table_name # Import the normalization function
+from pilates.generic.records import (
+    PilatesRunInfo,
+    FileRecord,
+    ModelRunInfo,
+    H5TableRecord,
+    H5FileRecord,
+)
+from pilates.database.schema_generator import (
+    _normalize_table_name,
+)  # Import the normalization function
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 
 def get_approved_tables(schema_dir: str) -> set:
     """
@@ -25,10 +35,10 @@ def get_approved_tables(schema_dir: str) -> set:
     for .sql files and extracts table names, normalizing them.
     """
     approved_tables = set()
-    
+
     # List of directories to scan
     dirs_to_scan = [schema_dir]
-    generated_dir = os.path.join(schema_dir, 'generated')
+    generated_dir = os.path.join(schema_dir, "generated")
     if os.path.isdir(generated_dir):
         dirs_to_scan.append(generated_dir)
 
@@ -40,35 +50,51 @@ def get_approved_tables(schema_dir: str) -> set:
         for filename in os.listdir(current_dir):
             if filename.endswith(".sql"):
                 try:
-                    with open(os.path.join(current_dir, filename), 'r') as f:
+                    with open(os.path.join(current_dir, filename), "r") as f:
                         content = f.read()
-                        found = re.findall(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", content, re.IGNORECASE)
+                        found = re.findall(
+                            r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)",
+                            content,
+                            re.IGNORECASE,
+                        )
                         for table in found:
                             # Extract year from filename for normalization
-                            match = re.search(r'(\d{4})', filename)
+                            match = re.search(r"(\d{4})", filename)
                             year = int(match.group(1)) if match else None
                             normalized_table_name = _normalize_table_name(table, year)
                             approved_tables.add(normalized_table_name.lower())
                 except IOError as e:
-                    logging.error(f"Could not read schema file {filename} in {current_dir}: {e}")
-    
-    logging.info(f"Found {len(approved_tables)} approved table definitions across scanned directories.")
+                    logging.error(
+                        f"Could not read schema file {filename} in {current_dir}: {e}"
+                    )
+
+    logging.info(
+        f"Found {len(approved_tables)} approved table definitions across scanned directories."
+    )
     return approved_tables
+
 
 def sanitize_name(name: str) -> str:
     """Sanitizes a name to be a valid SQL identifier."""
-    name = name.strip().strip('/')
-    name = re.sub(r'[\s./-]', '_', name)
-    if re.match(r'^[0-9]', name):
-        name = '_' + name
+    name = name.strip().strip("/")
+    name = re.sub(r"[\s./-]", "_", name)
+    if re.match(r"^[0-9]", name):
+        name = "_" + name
     return name.lower()
+
 
 def main():
     """Main function to drive the selective data upload process."""
-    parser = argparse.ArgumentParser(description="Selectively upload table data from a PILATES run to the database.")
+    parser = argparse.ArgumentParser(
+        description="Selectively upload table data from a PILATES run to the database."
+    )
     parser.add_argument("run_info_path", help="Path to the run_info.json file.")
     parser.add_argument("database_path", help="Path to the DuckDB database file.")
-    parser.add_argument("--table", action='append', help="Specify a table to upload. Can be used multiple times. If not provided, all approved tables found in the run will be uploaded.")
+    parser.add_argument(
+        "--table",
+        action="append",
+        help="Specify a table to upload. Can be used multiple times. If not provided, all approved tables found in the run will be uploaded.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.run_info_path):
@@ -77,7 +103,7 @@ def main():
 
     # --- Configuration ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    approved_schema_dir = os.path.join(script_dir, 'schema')
+    approved_schema_dir = os.path.join(script_dir, "schema")
     run_dir = os.path.dirname(args.run_info_path)
 
     # --- Logic ---
@@ -98,7 +124,7 @@ def main():
 
     # Load run_info.json
     try:
-        with open(args.run_info_path, 'r') as f:
+        with open(args.run_info_path, "r") as f:
             run_info = json.load(f)
     except (json.JSONDecodeError, IOError) as e:
         logging.error(f"Failed to read or parse {args.run_info_path}: {e}")
@@ -117,10 +143,9 @@ def main():
         else:
             file_records[uid] = FileRecord(**rec)
     model_runs = {
-        uid: ModelRunInfo(**run)
-        for uid, run in run_info.get("model_runs", {}).items()
+        uid: ModelRunInfo(**run) for uid, run in run_info.get("model_runs", {}).items()
     }
-    
+
     run_info_obj = PilatesRunInfo(
         run_id=run_info.get("run_id"),
         created_at=run_info.get("created_at"),
@@ -143,19 +168,21 @@ def main():
 
     # Find records to upload
     records_to_upload = []
-    for record in run_info.get('file_records', {}).values():
-        if not record.get('schema') or not record.get('short_name'):
+    for record in run_info.get("file_records", {}).values():
+        if not record.get("schema") or not record.get("short_name"):
             continue
-        
+
         # If year is not explicitly in the record, try to extract it from the short_name
-        if record.get('year') is None:
-            match = re.search(r'(\d{4})', record['short_name'])
+        if record.get("year") is None:
+            match = re.search(r"(\d{4})", record["short_name"])
             if match:
-                record['year'] = int(match.group(1))
+                record["year"] = int(match.group(1))
 
         # Normalize table name for comparison and storage
-        normalized_table_name = _normalize_table_name(record['short_name'], record.get('year'))
-        
+        normalized_table_name = _normalize_table_name(
+            record["short_name"], record.get("year")
+        )
+
         if normalized_table_name in upload_list:
             records_to_upload.append(record)
 
@@ -166,19 +193,23 @@ def main():
     # Process each record
     for record in records_to_upload:
         # Normalize table name for logging and data storage
-        normalized_table_name = _normalize_table_name(record['short_name'], record.get('year'))
-        logging.info(f"Processing table '{normalized_table_name}' from source record...")
+        normalized_table_name = _normalize_table_name(
+            record["short_name"], record.get("year")
+        )
+        logging.info(
+            f"Processing table '{normalized_table_name}' from source record..."
+        )
 
         try:
             df = None
             data_file_path = None
 
             # --- Path Resolution Logic ---
-            path_from_record = record['file_path']
-            is_h5_table = record.get('h5_file_unique_id')
+            path_from_record = record["file_path"]
+            is_h5_table = record.get("h5_file_unique_id")
             if is_h5_table:
-                parent_h5_id = record['h5_file_unique_id']
-                path_from_record = run_info['file_records'][parent_h5_id]['file_path']
+                parent_h5_id = record["h5_file_unique_id"]
+                path_from_record = run_info["file_records"][parent_h5_id]["file_path"]
 
             if os.path.isabs(path_from_record):
                 if os.path.exists(path_from_record):
@@ -191,62 +222,83 @@ def main():
                 else:
                     # 2. Try path relative to the parent of the run_info.json directory
                     parent_run_dir = os.path.dirname(run_dir)
-                    candidate_path_from_parent = os.path.join(parent_run_dir, path_from_record)
+                    candidate_path_from_parent = os.path.join(
+                        parent_run_dir, path_from_record
+                    )
                     if os.path.exists(candidate_path_from_parent):
                         data_file_path = candidate_path_from_parent
-            
+
             if not data_file_path:
-                raise FileNotFoundError(f"Could not find data file. Record path: {path_from_record}")
+                raise FileNotFoundError(
+                    f"Could not find data file. Record path: {path_from_record}"
+                )
 
             # --- Data Reading Logic ---
             if is_h5_table:
                 logging.info(f"Inspecting keys in H5 file: {data_file_path}")
-                with pd.HDFStore(data_file_path, mode='r') as store:
+                with pd.HDFStore(data_file_path, mode="r") as store:
                     h5_keys = store.keys()
                     logging.info(f"Available keys: {h5_keys}")
-                    if record['table_name'] not in h5_keys:
-                        raise KeyError(f"Key '{record['table_name']}' not found in H5 file. Please check the file content.")
-                df = pd.read_hdf(data_file_path, key=record['table_name'])
-            elif data_file_path.endswith('.parquet'):
+                    if record["table_name"] not in h5_keys:
+                        raise KeyError(
+                            f"Key '{record['table_name']}' not found in H5 file. Please check the file content."
+                        )
+                df = pd.read_hdf(data_file_path, key=record["table_name"])
+            elif data_file_path.endswith(".parquet"):
                 df = pd.read_parquet(data_file_path)
-            elif data_file_path.endswith('.csv') or data_file_path.endswith('.csv.gz'):
+            elif data_file_path.endswith(".csv") or data_file_path.endswith(".csv.gz"):
                 df = pd.read_csv(data_file_path)
             else:
-                logging.warning(f"Unsupported file type for table {normalized_table_name}: {data_file_path}")
+                logging.warning(
+                    f"Unsupported file type for table {normalized_table_name}: {data_file_path}"
+                )
                 continue
 
             # Rename 'year' column to 'data_year' for specific tables to match schema
-            if normalized_table_name in ['householdv', 'atlas_vehicles_input', 'new_vehicle_annual_medians', 
-                                        'new_vehicle_representative_vehicle', 'new_vehicles', 'vehicles', 
-                                        'atlas_vehicles2_output']:
-                if 'year' in df.columns:
-                    df.rename(columns={'year': 'data_year'}, inplace=True)
+            if normalized_table_name in [
+                "householdv",
+                "atlas_vehicles_input",
+                "new_vehicle_annual_medians",
+                "new_vehicle_representative_vehicle",
+                "new_vehicles",
+                "vehicles",
+                "atlas_vehicles2_output",
+            ]:
+                if "year" in df.columns:
+                    df.rename(columns={"year": "data_year"}, inplace=True)
 
             # Special handling for atlas_jobs_csv sector_id
-            if normalized_table_name == 'atlas_jobs_csv':
-                if 'sector_id' in df.columns:
-                    df['sector_id'] = df['sector_id'].astype(str)
-                    
+            if normalized_table_name == "atlas_jobs_csv":
+                if "sector_id" in df.columns:
+                    df["sector_id"] = df["sector_id"].astype(str)
+
             # Sanitize column names
             df.columns = [sanitize_name(col) for col in df.columns]
             # Add metadata to the dataframe before upload
-            df['run_id'] = run_info['run_id']
-            df['file_record_id'] = record['unique_id']
-            df['year'] = record.get('year')
+            df["run_id"] = run_info["run_id"]
+            df["file_record_id"] = record["unique_id"]
+            df["year"] = record.get("year")
             # Note: Iteration is on the model_run, not the file_record. This is a simplification.
-            df['iteration'] = None
+            df["iteration"] = None
 
             # Upload the data
             success = db_manager.store_generic_table(normalized_table_name, df)
             if success:
-                logging.info(f"Successfully uploaded {len(df)} rows to table '{normalized_table_name}'.")
+                logging.info(
+                    f"Successfully uploaded {len(df)} rows to table '{normalized_table_name}'."
+                )
             else:
-                logging.error(f"Failed to upload data for table '{normalized_table_name}'.")
+                logging.error(
+                    f"Failed to upload data for table '{normalized_table_name}'."
+                )
 
         except Exception as e:
-            logging.error(f"An error occurred while processing table {normalized_table_name}: {e}")
+            logging.error(
+                f"An error occurred while processing table {normalized_table_name}: {e}"
+            )
 
     logging.info("Selective upload process complete.")
+
 
 if __name__ == "__main__":
     main()

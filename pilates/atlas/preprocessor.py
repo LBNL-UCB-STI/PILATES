@@ -19,10 +19,14 @@ logger = logging.getLogger(__name__)
 def _get_usim_datastore_fname(settings, io, year=None):
     # reference: asim postprocessor
     if io == "output":
-        datastore_name = get_setting(settings, "urbansim.output_file_template").format(year=year)
+        datastore_name = get_setting(settings, "urbansim.output_file_template").format(
+            year=year
+        )
     elif io == "input":
         region = get_setting(settings, "run.region")
-        region_id = get_setting(settings, "urbansim.region_mappings.region_to_region_id")[region]
+        region_id = get_setting(
+            settings, "urbansim.region_mappings.region_to_region_id"
+        )[region]
         usim_base_fname = get_setting(settings, "urbansim.input_file_template")
         datastore_name = usim_base_fname.format(region_id=region_id)
 
@@ -58,7 +62,9 @@ class AtlasPreprocessor(GenericPreprocessor):
         input_records = []
         output_records = []
         source_dir = "pilates/atlas/atlas_input"
-        logger.info(f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}")
+        logger.info(
+            f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}"
+        )
 
         for root, dirs, files in os.walk(source_dir):
             for filename in files:
@@ -90,8 +96,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                 input_records.append(input_rec)
                 output_records.append(output_rec)
 
-        logger.info(f"[AtlasPreprocessor] Finished copying {len(output_records)} files.")
-        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
+        logger.info(
+            f"[AtlasPreprocessor] Finished copying {len(output_records)} files."
+        )
+        return RecordStore(recordList=input_records), RecordStore(
+            recordList=output_records
+        )
 
     def _preprocess(
         self,
@@ -112,15 +122,17 @@ class AtlasPreprocessor(GenericPreprocessor):
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
 
-        # --- Ensure global ATLAS input files are present for every year --- 
+        # --- Ensure global ATLAS input files are present for every year ---
         # Source for global files (e.g., cpi.csv, RData files)
         global_source_dir = "pilates/atlas/atlas_input"
         # Destination for global files in the current run's mutable directory
         current_atlas_mutable_input_root = workspace.get_atlas_mutable_input_dir()
 
         # Copy global CSV files
-        for f in glob.glob(os.path.join(global_source_dir, '*.csv')):
-            dest_path = os.path.realpath(os.path.join(current_atlas_mutable_input_root, os.path.basename(f)))
+        for f in glob.glob(os.path.join(global_source_dir, "*.csv")):
+            dest_path = os.path.realpath(
+                os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            )
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
                 self.provenance_tracker.record_input_file(
@@ -129,13 +141,19 @@ class AtlasPreprocessor(GenericPreprocessor):
                     description=f"ATLAS static input file: {os.path.basename(f)}",
                     short_name=os.path.splitext(os.path.basename(f))[0],
                 )
-                logger.info(f"[AtlasPreprocessor] Copied global CSV file: {f} to {dest_path}")
+                logger.info(
+                    f"[AtlasPreprocessor] Copied global CSV file: {f} to {dest_path}"
+                )
             else:
-                logger.debug(f"[AtlasPreprocessor] Global CSV file already exists: {dest_path}")
+                logger.debug(
+                    f"[AtlasPreprocessor] Global CSV file already exists: {dest_path}"
+                )
 
         # Copy global RData files
-        for f in glob.glob(os.path.join(global_source_dir, '*.RData')):
-            dest_path = os.path.realpath(os.path.join(current_atlas_mutable_input_root, os.path.basename(f)))
+        for f in glob.glob(os.path.join(global_source_dir, "*.RData")):
+            dest_path = os.path.realpath(
+                os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
+            )
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
                 self.provenance_tracker.record_input_file(
@@ -144,9 +162,13 @@ class AtlasPreprocessor(GenericPreprocessor):
                     description=f"ATLAS static RData file: {os.path.basename(f)}",
                     short_name=os.path.splitext(os.path.basename(f))[0],
                 )
-                logger.info(f"[AtlasPreprocessor] Copied global RData file: {f} to {dest_path}")
+                logger.info(
+                    f"[AtlasPreprocessor] Copied global RData file: {f} to {dest_path}"
+                )
             else:
-                logger.debug(f"[AtlasPreprocessor] Global RData file already exists: {dest_path}")
+                logger.debug(
+                    f"[AtlasPreprocessor] Global RData file already exists: {dest_path}"
+                )
 
         # --- End Global File Handling ---
 
@@ -154,17 +176,32 @@ class AtlasPreprocessor(GenericPreprocessor):
         if self.state.run_info_path and os.path.exists(self.state.run_info_path):
             # This is a restarted run
             previous_run_dir = os.path.dirname(self.state.run_info_path)
-            logger.info(f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}")
+            logger.info(
+                f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}"
+            )
 
             # 1. Copy base year atlas inputs from previous run
-            old_base_year_input_path = os.path.join(previous_run_dir, 'atlas', 'atlas_input', f"year{self.state.start_year}")
-            new_base_year_input_path = os.path.join(workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}")
-            if os.path.exists(old_base_year_input_path) and not os.path.exists(new_base_year_input_path):
-                logger.info(f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}")
-                shutil.copytree(old_base_year_input_path, new_base_year_input_path, dirs_exist_ok=True, symlinks=True)
-            
+            old_base_year_input_path = os.path.join(
+                previous_run_dir, "atlas", "atlas_input", f"year{self.state.start_year}"
+            )
+            new_base_year_input_path = os.path.join(
+                workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}"
+            )
+            if os.path.exists(old_base_year_input_path) and not os.path.exists(
+                new_base_year_input_path
+            ):
+                logger.info(
+                    f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}"
+                )
+                shutil.copytree(
+                    old_base_year_input_path,
+                    new_base_year_input_path,
+                    dirs_exist_ok=True,
+                    symlinks=True,
+                )
+
             # 2. Set path for UrbanSim output
-            urbansim_output_path = os.path.join(previous_run_dir, 'urbansim', 'data')
+            urbansim_output_path = os.path.join(previous_run_dir, "urbansim", "data")
         else:
             # This is a fresh run
             urbansim_output_path = workspace.get_usim_mutable_data_dir()
@@ -267,12 +304,16 @@ class AtlasPreprocessor(GenericPreprocessor):
         table_records = []
 
         if not h5_file_record:
-            logger.error("[AtlasPreprocessor] Cannot process HDF5 tables, container record not found.")
+            logger.error(
+                "[AtlasPreprocessor] Cannot process HDF5 tables, container record not found."
+            )
             return RecordStore()
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
-            
-            def process_table(table_name_in_h5, output_csv_name, output_short_name, output_description):
+
+            def process_table(
+                table_name_in_h5, output_csv_name, output_short_name, output_description
+            ):
                 try:
                     table_data = data[table_name_in_h5]
                     output_csv_path = f"{atlas_input_path}/{output_csv_name}.csv"
@@ -303,19 +344,52 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
                     output_records.append(csv_record)
                 except KeyError:
-                    logger.warning(f"[AtlasPreprocessor] Table '{table_name_in_h5}' not found in HDF5 file.")
+                    logger.warning(
+                        f"[AtlasPreprocessor] Table '{table_name_in_h5}' not found in HDF5 file."
+                    )
                 except Exception as e:
-                    logger.error(f"[AtlasPreprocessor] Error processing table {table_name_in_h5}: {e}")
+                    logger.error(
+                        f"[AtlasPreprocessor] Error processing table {table_name_in_h5}: {e}"
+                    )
 
-            year_prefix = f"/{self.state.year}" if not self.state.is_start_year() else ""
-            
-            process_table(f"{year_prefix}/households", "households", "atlas_households_csv", "ATLAS households input CSV")
-            process_table(f"{year_prefix}/blocks", "blocks", "atlas_blocks_csv", "ATLAS blocks input CSV")
-            process_table(f"{year_prefix}/persons", "persons", "atlas_persons_csv", "ATLAS persons input CSV")
+            year_prefix = (
+                f"/{self.state.year}" if not self.state.is_start_year() else ""
+            )
+
+            process_table(
+                f"{year_prefix}/households",
+                "households",
+                "atlas_households_csv",
+                "ATLAS households input CSV",
+            )
+            process_table(
+                f"{year_prefix}/blocks",
+                "blocks",
+                "atlas_blocks_csv",
+                "ATLAS blocks input CSV",
+            )
+            process_table(
+                f"{year_prefix}/persons",
+                "persons",
+                "atlas_persons_csv",
+                "ATLAS persons input CSV",
+            )
             if not self.state.is_start_year():
-                 process_table(f"{year_prefix}/graveyard", "grave", "atlas_grave_csv", "ATLAS graveyard input CSV")
-            process_table(f"{year_prefix}/residential_units", "residential", "atlas_residential_csv", "ATLAS residential units input CSV")
-            process_table(f"{year_prefix}/jobs", "jobs", "atlas_jobs_csv", "ATLAS jobs input CSV")
+                process_table(
+                    f"{year_prefix}/graveyard",
+                    "grave",
+                    "atlas_grave_csv",
+                    "ATLAS graveyard input CSV",
+                )
+            process_table(
+                f"{year_prefix}/residential_units",
+                "residential",
+                "atlas_residential_csv",
+                "ATLAS residential units input CSV",
+            )
+            process_table(
+                f"{year_prefix}/jobs", "jobs", "atlas_jobs_csv", "ATLAS jobs input CSV"
+            )
 
             logger.info(
                 f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."

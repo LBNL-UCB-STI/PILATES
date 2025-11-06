@@ -3,7 +3,9 @@ A helper utility for accessing settings from either a Pydantic model or a dict.
 This provides a compatibility layer while migrating from the legacy flat dictionary
 config to the new hierarchical Pydantic models.
 """
+
 from pydantic import BaseModel
+
 
 def get(settings, key, default=None):
     """
@@ -25,14 +27,14 @@ def get(settings, key, default=None):
 
     # Treat the settings object itself as the root for traversal
     current_context = settings
-    
+
     # Handle top-level keys that might exist in the flattened dict
     if isinstance(settings, dict) and key in settings:
         return settings.get(key, default)
 
     # Traverse nested structure
     try:
-        for part in key.split('.'):
+        for part in key.split("."):
             if isinstance(current_context, dict):
                 current_context = current_context[part]
             elif isinstance(current_context, BaseModel):

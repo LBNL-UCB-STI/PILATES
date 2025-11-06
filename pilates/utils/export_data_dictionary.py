@@ -147,9 +147,7 @@ Examples:
 
         else:
             # Export single format
-            logger.info(
-                f"Exporting {args.format} dictionary to {args.output}..."
-            )
+            logger.info(f"Exporting {args.format} dictionary to {args.output}...")
 
             success = db_manager.export_data_dictionary(
                 args.output, format=args.format, include_stats=include_stats

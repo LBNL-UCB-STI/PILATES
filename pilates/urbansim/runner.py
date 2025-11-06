@@ -127,7 +127,9 @@ class UrbansimRunner(GenericRunner):
                 client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
-                self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
+                self.provenance_tracker.complete_model_run(
+                    model_run_hash, status="failed"
+                )
                 raise
 
         # Execute container
@@ -144,8 +146,12 @@ class UrbansimRunner(GenericRunner):
 
             if not success:
                 logger.error("UrbanSim container execution failed")
-                self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-                run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
+                self.provenance_tracker.complete_model_run(
+                    model_run_hash, status="failed"
+                )
+                run_info = self.provenance_tracker.run_info.model_runs.get(
+                    model_run_hash
+                )
                 return RecordStore(), run_info
 
         except Exception as e:
@@ -175,13 +181,17 @@ class UrbansimRunner(GenericRunner):
                 f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}"
             )
             self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-            return RecordStore(), ModelRunInfo(model=self.model_name, year=self.state.current_year)
+            return RecordStore(), ModelRunInfo(
+                model=self.model_name, year=self.state.current_year
+            )
 
         # Prepare runtime metadata
         runtime_metadata = {
             "container_command": usim_cmd,
             "runtime_parameters": {
-                "region_id": settings.urbansim.region_mappings['region_to_region_id'][settings.run.region],
+                "region_id": settings.urbansim.region_mappings["region_to_region_id"][
+                    settings.run.region
+                ],
                 "year": self.state.current_year,
                 "forecast_year": forecast_year,
                 "land_use_freq": settings.run.land_use_freq,

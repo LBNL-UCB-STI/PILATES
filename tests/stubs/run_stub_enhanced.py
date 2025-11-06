@@ -128,15 +128,11 @@ def main():
     parser.add_argument(
         "--config_name", required=True, help="Name of the configuration file"
     )
-    parser.add_argument(
-        "--year", type=int, default=2017, help="Simulation year"
-    )
+    parser.add_argument("--year", type=int, default=2017, help="Simulation year")
     parser.add_argument(
         "--iteration", type=int, default=0, help="Iteration number (for BEAM)"
     )
-    parser.add_argument(
-        "--region", default="sfbay", help="Region name (for BEAM)"
-    )
+    parser.add_argument("--region", default="sfbay", help="Region name (for BEAM)")
     args = parser.parse_args()
 
     print(f"🔧 Running enhanced stub for model: {args.model_name}")

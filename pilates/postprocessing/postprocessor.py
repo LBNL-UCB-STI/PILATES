@@ -47,7 +47,9 @@ dtypes = {
 
 def copy_outputs_to_mep(settings, year, iter):
     asim_output_data_dir = settings.activitysim.local_output_folder
-    mep_output_data_dir = os.path.join(settings.postprocessing.mep_output_folder, str(year))
+    mep_output_data_dir = os.path.join(
+        settings.postprocessing.mep_output_folder, str(year)
+    )
     if not os.path.exists(mep_output_data_dir):
         os.makedirs(mep_output_data_dir)
     beam_iter_output_dir = os.path.join(

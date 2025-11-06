@@ -160,7 +160,6 @@ class BeamRunner(GenericRunner):
         # Make sure there's a temp dir for the JVM to use
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
-
         # 2. RUN BEAM
         logger.info(
             "[BEAM Runner] Starting BEAM container, input: %s, output: %s, config: %s",
@@ -192,43 +191,33 @@ class BeamRunner(GenericRunner):
             # Memory settings (match Xms and Xmx)
             f"-Xms{beam_memory} "
             f"-Xmx{beam_memory} "
-
             # G1GC with more aggressive settings
             "-XX:+UseG1GC "
             "-XX:G1HeapRegionSize=32M "
-
             # More GC threads for burst capacity
             "-XX:ParallelGCThreads=36 "
             "-XX:ConcGCThreads=9 "
-
             "-XX:+UseNUMA "
             "-XX:+AlwaysPreTouch "
-
             # Flexible young gen - WIDE range for adaptability
             "-XX:+UnlockExperimentalVMOptions "
-            "-XX:G1NewSizePercent=40 "          # Min 72 GB young gen
-            "-XX:G1MaxNewSizePercent=60 "       # Max 108 GB young gen
-            "-XX:MaxTenuringThreshold=6 "    # Objects die faster in young gen
-            "-XX:SurvivorRatio=6 "           # 12.5% survivors (helps transit burst)
-            "-XX:MaxGCPauseMillis=5000 "       # Accept 10s pauses for throughput
-            "-XX:G1MixedGCCountTarget=12 "      # Spread old gen work
-
+            "-XX:G1NewSizePercent=40 "  # Min 72 GB young gen
+            "-XX:G1MaxNewSizePercent=60 "  # Max 108 GB young gen
+            "-XX:MaxTenuringThreshold=6 "  # Objects die faster in young gen
+            "-XX:SurvivorRatio=6 "  # 12.5% survivors (helps transit burst)
+            "-XX:MaxGCPauseMillis=5000 "  # Accept 10s pauses for throughput
+            "-XX:G1MixedGCCountTarget=12 "  # Spread old gen work
             # Conservative mixed GC - spread work over more cycles
             "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
-
             # Earlier concurrent marking to avoid surprises
             "-XX:InitiatingHeapOccupancyPercent=30 "
-
             # More evacuation buffer for large populations
-            "-XX:G1ReservePercent=15 "      # I (27GB reserve)
-
+            "-XX:G1ReservePercent=15 "  # I (27GB reserve)
             # Less aggressive old gen collection
             "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
-
             # "-XX:+UnlockDiagnosticVMOptions "
             # "-XX:+LogCompilation "
             # "-XX:+PrintInlining "
-
             # GC logging
             f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
             f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
@@ -247,7 +236,7 @@ class BeamRunner(GenericRunner):
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
-            environment={"JAVA_OPTS": java_opts}
+            environment={"JAVA_OPTS": java_opts},
         )
 
         # Prepare runtime metadata
@@ -260,7 +249,9 @@ class BeamRunner(GenericRunner):
                 "region": region,
             },
             "container_image": travel_model_image,
-            "container_manager": get_setting(settings, "infrastructure.container_manager", "docker"),
+            "container_manager": get_setting(
+                settings, "infrastructure.container_manager", "docker"
+            ),
             "working_directory": "/app",
             "java_opts": java_opts,
         }
@@ -283,7 +274,9 @@ class BeamRunner(GenericRunner):
             self.provenance_tracker.rename_directory(old_path, new_path)
             output_path_for_gather = new_path
         except Exception as e:
-            logger.error(f"Failed to rename BEAM output directory: {e}. Proceeding without rename.")
+            logger.error(
+                f"Failed to rename BEAM output directory: {e}. Proceeding without rename."
+            )
             output_path_for_gather = workspace.get_beam_output_dir()
 
         # 3. ASSEMBLE OUTPUTS
@@ -300,7 +293,9 @@ class BeamRunner(GenericRunner):
             )
 
         run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
-        output_records = self.gather_outputs(output_path_for_gather, run_info, skimFormat)
+        output_records = self.gather_outputs(
+            output_path_for_gather, run_info, skimFormat
+        )
 
         # Record BEAM run completion now that outputs are recorded
         self.provenance_tracker.complete_model_run(

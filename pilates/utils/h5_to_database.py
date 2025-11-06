@@ -283,7 +283,12 @@ class H5ActivitySimExtractor:
             return None
 
     def _create_file_record(
-        self, table_name: str, df: pd.DataFrame, year: Optional[int] = None, iteration: Optional[int] = None, output_path: Optional[str] = None
+        self,
+        table_name: str,
+        df: pd.DataFrame,
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        output_path: Optional[str] = None,
     ) -> FileRecord:
         """
         Create a FileRecord for an extracted table.
@@ -399,13 +404,17 @@ class H5ActivitySimExtractor:
         # Instead of just extracting, we need to process the raw data
         # to get the same results as create_asim_data_from_h5.
 
-        raw_households = self._extract_table_from_h5("households", year, table_type="raw")
+        raw_households = self._extract_table_from_h5(
+            "households", year, table_type="raw"
+        )
         raw_persons = self._extract_table_from_h5("persons", year, table_type="raw")
         raw_jobs = self._extract_table_from_h5("jobs", year, table_type="raw")
         raw_blocks = self._extract_table_from_h5("blocks", year, table_type="raw")
 
         if raw_households is None or raw_persons is None or raw_blocks is None:
-            logger.error("Cannot process ActivitySim inputs: missing raw households, persons, or blocks data.")
+            logger.error(
+                "Cannot process ActivitySim inputs: missing raw households, persons, or blocks data."
+            )
             return {}
 
         asim_zone_id_col = "TAZ"  # This should probably come from settings
@@ -463,7 +472,11 @@ class H5ActivitySimExtractor:
             FIPS = get_setting(self.settings, "shared.geography.FIPS")[region]
             asim_zone_id_col = "TAZ"
             # TODO: Generalize this or add it to settings.yaml
-            input_zone_id_col = get_setting(self.settings, "shared.skims.geoms_index_col", default=get_setting(self.settings, "geoms_index_col", "zone_id"))
+            input_zone_id_col = get_setting(
+                self.settings,
+                "shared.skims.geoms_index_col",
+                default=get_setting(self.settings, "geoms_index_col", "zone_id"),
+            )
             zones = read_zone_geoms(
                 self.settings,
                 year or 2017,
@@ -647,16 +660,20 @@ class H5ActivitySimExtractor:
             # File records for processed ActivitySim tables
             for table_name, df in self.extracted_tables.items():
                 year = df["_year"].iloc[0] if "_year" in df.columns else None
-                iteration = 0 # Assuming 0 for initial extraction
-                file_record = self._create_file_record(f"{table_name}_processed", df, year=year, iteration=iteration)
+                iteration = 0  # Assuming 0 for initial extraction
+                file_record = self._create_file_record(
+                    f"{table_name}_processed", df, year=year, iteration=iteration
+                )
                 file_record.metadata["data_type"] = "processed_activitysim"
                 file_records[file_record.unique_id] = file_record
 
             # File records for raw UrbanSim tables
             for table_name, df in self.raw_tables.items():
                 year = df["_year"].iloc[0] if "_year" in df.columns else None
-                iteration = 0 # Assuming 0 for initial extraction
-                file_record = self._create_file_record(f"{table_name}_raw", df, year=year, iteration=iteration)
+                iteration = 0  # Assuming 0 for initial extraction
+                file_record = self._create_file_record(
+                    f"{table_name}_raw", df, year=year, iteration=iteration
+                )
                 file_record.metadata["data_type"] = "raw_urbansim"
                 file_records[file_record.unique_id] = file_record
 

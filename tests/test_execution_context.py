@@ -7,6 +7,7 @@ This module verifies that:
 3. Simple custom objects can satisfy the protocol
 4. The protocol validation works correctly
 """
+
 import os
 import tempfile
 
@@ -21,7 +22,7 @@ from pilates.generic.execution_context import ExecutionContext, validate_context
 from workflow_state import WorkflowState
 
 
-def create_config(dummy_config_content)->PilatesConfig:
+def create_config(dummy_config_content) -> PilatesConfig:
     # # Create a dummy settings.yaml for PilatesConfig
     # dummy_config_content = {
     #     "run": {
@@ -81,7 +82,7 @@ def test_workflow_state_satisfies_protocol():
             "start_year": 2020,
             "end_year": 2030,
             "scenario": "test",
-            "region":"test",
+            "region": "test",
             "output_run_name": "test_run",
             "state_file_loc": "/tmp/test_state.yaml",
             "output_directory": "/tmp",
@@ -93,22 +94,22 @@ def test_workflow_state_satisfies_protocol():
             },
         },
         "shared": {
-                "geography": {
-                    "FIPS": {"county": ["06001"]},
-                    "local_crs": "EPSG:32048",
-                },
-                "skims": {
-                    "zone_type": "taz",
-                    "fname": "skims.h5",
-                    "geoms_fname": "geoms.geojson",
-                    "geoms_index_col": "TAZ",
-                },
-                "database": {
-                    "enabled": True,
-                    "type": "duckdb",
-                    "path": "/tmp",
-                },
+            "geography": {
+                "FIPS": {"county": ["06001"]},
+                "local_crs": "EPSG:32048",
             },
+            "skims": {
+                "zone_type": "taz",
+                "fname": "skims.h5",
+                "geoms_fname": "geoms.geojson",
+                "geoms_index_col": "TAZ",
+            },
+            "database": {
+                "enabled": True,
+                "type": "duckdb",
+                "path": "/tmp",
+            },
+        },
         "infrastructure": {
             "container_manager": "docker",
             "singularity_images": {},
@@ -125,9 +126,9 @@ def test_workflow_state_satisfies_protocol():
     assert isinstance(state, ExecutionContext)
 
     # Should have all required attributes
-    assert hasattr(state, 'current_year')
-    assert hasattr(state, 'current_major_stage')
-    assert hasattr(state, 'current_inner_iter')
+    assert hasattr(state, "current_year")
+    assert hasattr(state, "current_major_stage")
+    assert hasattr(state, "current_inner_iter")
 
     # Attributes should be accessible and return expected types
     assert isinstance(state.current_year, (int, type(None)))
@@ -140,9 +141,7 @@ def test_workflow_state_satisfies_protocol():
 def test_simple_namespace_satisfies_protocol():
     """Verify that simple namespace objects can satisfy the protocol."""
     context = SimpleNamespace(
-        current_year=2025,
-        current_major_stage="preprocessing",
-        current_inner_iter=0
+        current_year=2025, current_major_stage="preprocessing", current_inner_iter=0
     )
 
     # Should satisfy protocol
@@ -154,6 +153,7 @@ def test_simple_namespace_satisfies_protocol():
 
 def test_dataclass_satisfies_protocol():
     """Verify that dataclasses can satisfy the protocol."""
+
     @dataclass
     class CustomContext:
         current_year: int = 2025
@@ -172,9 +172,7 @@ def test_dataclass_satisfies_protocol():
 def test_protocol_with_none_values():
     """Verify that None values are acceptable for optional context."""
     context = SimpleNamespace(
-        current_year=None,
-        current_major_stage=None,
-        current_inner_iter=None
+        current_year=None, current_major_stage=None, current_inner_iter=None
     )
 
     # Should still satisfy protocol
@@ -192,7 +190,9 @@ def test_protocol_rejects_incomplete_object():
     assert not isinstance(incomplete, ExecutionContext)
 
     # And validation should also fail with TypeError
-    with pytest.raises(TypeError, match="Context must satisfy ExecutionContext protocol"):
+    with pytest.raises(
+        TypeError, match="Context must satisfy ExecutionContext protocol"
+    ):
         validate_context(incomplete)
 
 
@@ -205,9 +205,7 @@ def test_protocol_with_enum_stage():
         ANALYSIS = "analysis"
 
     context = SimpleNamespace(
-        current_year=2025,
-        current_major_stage=Stage.PREPROCESSING,
-        current_inner_iter=0
+        current_year=2025, current_major_stage=Stage.PREPROCESSING, current_inner_iter=0
     )
 
     # Should satisfy protocol (Enum is acceptable)
@@ -217,6 +215,7 @@ def test_protocol_with_enum_stage():
 
 def test_protocol_with_property_methods():
     """Verify that objects with property methods satisfy the protocol."""
+
     class PropertyContext:
         def __init__(self, year, stage, iteration):
             self._year = year

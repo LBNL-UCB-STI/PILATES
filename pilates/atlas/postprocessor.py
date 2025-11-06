@@ -15,7 +15,6 @@ from pilates.utils.provenance import FileProvenanceTracker
 logger = logging.getLogger(__name__)
 
 
-
 def atlas_add_vehileTypeId(
     settings: dict,
     output_year: int,
@@ -143,9 +142,13 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         # --- HDF5 Update and Provenance ---
         usim_h5_path = workspace.get_usim_mutable_data_dir()
-        usim_h5_fname = get_usim_datastore_fname(settings, io="output", year=output_year)
+        usim_h5_fname = get_usim_datastore_fname(
+            settings, io="output", year=output_year
+        )
         usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
-        atlas_hh_file = os.path.join(workspace.get_atlas_output_dir(), f"householdv_{output_year}.csv")
+        atlas_hh_file = os.path.join(
+            workspace.get_atlas_output_dir(), f"householdv_{output_year}.csv"
+        )
 
         if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
             # 1. Record H5 container and householdv.csv as inputs
@@ -165,7 +168,11 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             # 2. Define the table to be updated. TODO: Check table names and fall back to /year/households
-            table_name = "households" if self.state.is_start_year() else f"/{output_year}/households"
+            table_name = (
+                "households"
+                if self.state.is_start_year()
+                else f"/{output_year}/households"
+            )
 
             # 3. Record the source table as an input
             source_table_record = self.provenance_tracker.record_h5_table_input(
@@ -178,13 +185,17 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             # 4. Perform the update
-            self.atlas_update_h5_vehicle(settings, output_year, usim_h5_file, atlas_hh_file)
-            logger.info("[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership.")
+            self.atlas_update_h5_vehicle(
+                settings, output_year, usim_h5_file, atlas_hh_file
+            )
+            logger.info(
+                "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
+            )
 
             # 5. Record the updated table as an output
             updated_table_record = self.provenance_tracker.record_h5_table_output(
                 "atlas_postprocessor",
-                h5_container_record=h5_container_input_record, # The container path is the same
+                h5_container_record=h5_container_input_record,  # The container path is the same
                 table_name=table_name,
                 input_records=[source_table_record, atlas_hh_input_record],
                 description=f"Updated households table after ATLAS run",
@@ -194,12 +205,20 @@ class AtlasPostprocessor(GenericPostprocessor):
             output_records.append(updated_table_record)
 
         # --- vehicleTypeId addition and Provenance ---
-        atlas_veh_file = os.path.join(workspace.get_atlas_output_dir(), f"vehicles_{output_year}.csv")
-        atlas_veh2_file = os.path.join(workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv")
+        atlas_veh_file = os.path.join(
+            workspace.get_atlas_output_dir(), f"vehicles_{output_year}.csv"
+        )
+        atlas_veh2_file = os.path.join(
+            workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
+        )
 
         if os.path.exists(atlas_veh_file):
-            atlas_add_vehileTypeId(settings, output_year, atlas_veh_file, atlas_veh2_file)
-            logger.info("[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs.")
+            atlas_add_vehileTypeId(
+                settings, output_year, atlas_veh_file, atlas_veh2_file
+            )
+            logger.info(
+                "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
+            )
 
             atlas_veh_input_record = self.provenance_tracker.record_input_file(
                 "atlas_postprocessor",
@@ -210,14 +229,16 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             if os.path.exists(atlas_veh2_file):
-                atlas_veh2_output_record = self.provenance_tracker.record_output_file_with_inputs(
-                    "atlas_postprocessor",
-                    atlas_veh2_file,
-                    input_records=[atlas_veh_input_record],
-                    year=output_year,
-                    description=f"ATLAS vehicles2 CSV with vehicleTypeId",
-                    short_name="atlas_vehicles2_output",
-                    model_run_id=model_run_hash,
+                atlas_veh2_output_record = (
+                    self.provenance_tracker.record_output_file_with_inputs(
+                        "atlas_postprocessor",
+                        atlas_veh2_file,
+                        input_records=[atlas_veh_input_record],
+                        year=output_year,
+                        description=f"ATLAS vehicles2 CSV with vehicleTypeId",
+                        short_name="atlas_vehicles2_output",
+                        model_run_id=model_run_hash,
+                    )
                 )
                 output_records.append(atlas_veh2_output_record)
 
@@ -231,11 +252,11 @@ class AtlasPostprocessor(GenericPostprocessor):
         return RecordStore(recordList=output_records)
 
     def atlas_update_h5_vehicle(
-            self,
-            settings: PilatesConfig,
-            output_year: int,
-            h5_file_path: str,
-            household_v_csv_path: str,
+        self,
+        settings: PilatesConfig,
+        output_year: int,
+        h5_file_path: str,
+        household_v_csv_path: str,
     ):
         """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
 
@@ -264,7 +285,9 @@ class AtlasPostprocessor(GenericPostprocessor):
             .sort_index(ascending=True)
         )
         df["hh_cars"] = pd.cut(
-            df["cars"], bins=[-0.5, 0.5, 1.5, np.inf], labels=["none", "one", "two or more"]
+            df["cars"],
+            bins=[-0.5, 0.5, 1.5, np.inf],
+            labels=["none", "one", "two or more"],
         )
 
         logger.info(f"Writing updated household vehicle info to h5 file {h5_file_path}")
@@ -272,7 +295,11 @@ class AtlasPostprocessor(GenericPostprocessor):
         # Read original h5 files and update
         with pd.HDFStore(h5_file_path, mode="r+") as h5:
             # The sub-state's `is_start_year` method correctly determines if this is a warm start context
-            key = "households" if self.state.is_start_year() else f"/{output_year}/households"
+            key = (
+                "households"
+                if self.state.is_start_year()
+                else f"/{output_year}/households"
+            )
 
             try:
                 olddf = h5[key]
@@ -284,7 +311,9 @@ class AtlasPostprocessor(GenericPostprocessor):
             olddf = olddf.reindex(df.index.astype(int))
 
             if olddf.shape[0] != df.shape[0]:
-                logger.error("ATLAS household_id mismatch found - NOT updating h5 datastore")
+                logger.error(
+                    "ATLAS household_id mismatch found - NOT updating h5 datastore"
+                )
             else:
                 olddf["cars"] = df["cars"].values
                 olddf["hh_cars"] = df["hh_cars"].values

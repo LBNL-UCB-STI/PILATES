@@ -39,7 +39,9 @@ class ActivitysimRunner(GenericRunner):
         ]
 
     @staticmethod
-    def get_base_asim_cmd(settings: PilatesConfig, household_sample_size=None, num_processes=None):
+    def get_base_asim_cmd(
+        settings: PilatesConfig, household_sample_size=None, num_processes=None
+    ):
         formattable_asim_cmd = settings.activitysim.command_template
         if not household_sample_size:
             household_sample_size = settings.activitysim.household_sample_size
@@ -74,11 +76,13 @@ class ActivitysimRunner(GenericRunner):
     @staticmethod
     def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
         region = settings.run.region
-        asim_subdir = settings.activitysim.region_mappings['region_to_subdir'][region]
+        asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         if working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
-                os.path.join(working_dir, settings.activitysim.local_mutable_data_folder)
+                os.path.join(
+                    working_dir, settings.activitysim.local_mutable_data_folder
+                )
             )
             asim_local_output_folder = os.path.abspath(
                 os.path.join(working_dir, settings.activitysim.local_output_folder)
@@ -105,11 +109,15 @@ class ActivitysimRunner(GenericRunner):
                 settings.activitysim.local_output_folder
             )
             asim_local_configs_folder = os.path.abspath(
-                os.path.join(settings.activitysim.local_configs_folder, region, "configs")
+                os.path.join(
+                    settings.activitysim.local_configs_folder, region, "configs"
+                )
             )
             asim_local_configs_compile_folder = os.path.abspath(
                 os.path.join(
-                    settings.activitysim.local_configs_folder, region, "configs_sh_compile"
+                    settings.activitysim.local_configs_folder,
+                    region,
+                    "configs_sh_compile",
                 )
             )
         asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
@@ -154,11 +162,13 @@ class ActivitysimRunner(GenericRunner):
         """
         settings = self.state.full_settings
         region = settings.run.region
-        asim_subdir = settings.activitysim.region_mappings['region_to_subdir'][region]
+        asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # Get from your config
-        output_directory = settings.run.output_directory  # "/global/scratch/users/$USER/pilates-output"
+        output_directory = (
+            settings.run.output_directory
+        )  # "/global/scratch/users/$USER/pilates-output"
 
         # Expand $USER if needed
         output_directory = os.path.expandvars(output_directory)
@@ -186,10 +196,12 @@ class ActivitysimRunner(GenericRunner):
             settings, working_dir=workspace.full_path
         )
 
-        asim_docker_vols.update({
-            shared_tmp_dir: {"bind": "/tmp", "mode": "rw"},
-            shared_cache_dir: {"bind": "/app/numba_cache", "mode": "rw"},
-        })
+        asim_docker_vols.update(
+            {
+                shared_tmp_dir: {"bind": "/tmp", "mode": "rw"},
+                shared_cache_dir: {"bind": "/app/numba_cache", "mode": "rw"},
+            }
+        )
 
         activity_demand_model, activity_demand_image = self.get_model_and_image(
             settings, "activity_demand_model"
@@ -215,7 +227,9 @@ class ActivitysimRunner(GenericRunner):
             os.path.join(workspace.full_path, settings.activitysim.local_output_folder)
         )
 
-        os.makedirs(os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True)
+        os.makedirs(
+            os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
+        )
 
         compiled_asim_this_year = False
 
@@ -252,7 +266,7 @@ class ActivitysimRunner(GenericRunner):
                 environment={
                     "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                     "XDG_CACHE_HOME": "/app/numba_cache",
-                }
+                },
             )
 
             output_records = []
@@ -273,7 +287,9 @@ class ActivitysimRunner(GenericRunner):
             # Create initial zarr version snapshot after compilation
             if success and os.path.exists(all_skims_path):
                 try:
-                    logger.info("Creating initial zarr version snapshot after ActivitySim compilation...")
+                    logger.info(
+                        "Creating initial zarr version snapshot after ActivitySim compilation..."
+                    )
 
                     # Get database path from settings
                     database_path = settings.shared.database.path
@@ -291,9 +307,13 @@ class ActivitysimRunner(GenericRunner):
                         )
                         logger.info(f"Created initial zarr snapshot: {snapshot_id}")
                     else:
-                        logger.debug("Database path not configured, skipping zarr snapshot creation")
+                        logger.debug(
+                            "Database path not configured, skipping zarr snapshot creation"
+                        )
                 except Exception as e:
-                    logger.warning(f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.")
+                    logger.warning(
+                        f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot."
+                    )
 
             # Prepare runtime metadata for compilation run
             compile_metadata = {
@@ -389,7 +409,7 @@ class ActivitysimRunner(GenericRunner):
             environment={
                 "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                 "XDG_CACHE_HOME": "/app/numba_cache",
-            }
+            },
         )
 
         run_info = self.provenance_tracker.run_info.model_runs.get(new_asim_run_hash)

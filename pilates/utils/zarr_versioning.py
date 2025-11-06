@@ -151,7 +151,7 @@ class VersionedZarrStore:
         store = zarr.open(str(zarr_path), mode="r")
         # Count only data variables (exclude coordinates)
         all_keys = list(store.array_keys())
-        coord_keys = ['otaz', 'dtaz', 'time_period']  # Known coordinates
+        coord_keys = ["otaz", "dtaz", "time_period"]  # Known coordinates
         n_variables = len([k for k in all_keys if k not in coord_keys])
 
         # Count chunk files
@@ -164,10 +164,9 @@ class VersionedZarrStore:
         )
 
         # Calculate total size
-        total_size_mb = (
-            sum(f.stat().st_size for f in zarr_path.rglob("*") if f.is_file())
-            / (1024 * 1024)
-        )
+        total_size_mb = sum(
+            f.stat().st_size for f in zarr_path.rglob("*") if f.is_file()
+        ) / (1024 * 1024)
 
         return {
             "n_variables": n_variables,
@@ -544,9 +543,7 @@ class VersionedZarrStore:
         Returns:
             xarray Dataset with 'version' dimension added
         """
-        logger.info(
-            f"Creating multi-version view for {len(snapshot_ids)} snapshots"
-        )
+        logger.info(f"Creating multi-version view for {len(snapshot_ids)} snapshots")
 
         # Validate snapshots
         for snap_id in snapshot_ids:

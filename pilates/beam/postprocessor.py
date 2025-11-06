@@ -2066,7 +2066,9 @@ def write_zarr_skim_as_omx(
                     "Zarr uses zero-based zones but no original zone mapping found!"
                 )
                 # Try to reconstruct from settings
-                zone_ids = zone_order(settings, get_setting(settings, "run.start_year", 2015))
+                zone_ids = zone_order(
+                    settings, get_setting(settings, "run.start_year", 2015)
+                )
                 logger.warning(
                     f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
                 )
@@ -2216,7 +2218,7 @@ def _merge_beam_skims_to_zarr(
     model_run_hash=None,
     state=None,
     run_id=None,
-    existing_zarr_manager = None,
+    existing_zarr_manager=None,
 ) -> (Optional[str], Optional[VersionedZarrStore]):
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
@@ -2531,7 +2533,8 @@ def _merge_beam_skims_to_zarr(
     # This should run after the base skims (like SOV) are finalized.
     # This should run regardless of whether new OMX skims were merged.
     logger.info("Copying skims for unobserved modes based on mapping.")
-    mapping = get_setting(settings, 
+    mapping = get_setting(
+        settings,
         "beam.ridehail_path_map",
         {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]},
     )  # Add setting
@@ -2604,9 +2607,13 @@ def _merge_beam_skims_to_zarr(
                 )
                 logger.info(f"Created zarr snapshot: {snapshot_id}")
             else:
-                logger.debug("Database path not configured, skipping zarr snapshot creation")
+                logger.debug(
+                    "Database path not configured, skipping zarr snapshot creation"
+                )
         except Exception as e:
-            logger.warning(f"Failed to create zarr snapshot: {e}. Continuing without snapshot.")
+            logger.warning(
+                f"Failed to create zarr snapshot: {e}. Continuing without snapshot."
+            )
     else:
         zarr_manager = existing_zarr_manager
 
@@ -3001,8 +3008,8 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
             settings, get_setting(settings, "run.start_year", 2015)
         )  # Use .get for start_year safety
         periods = get_setting(settings, "shared.skims.periods")
-        transit_paths_settings = get_setting(settings, 
-            "shared.skims.transit_paths", {}
+        transit_paths_settings = get_setting(
+            settings, "shared.skims.transit_paths", {}
         )  # Use .get for safety
     except Exception as e:
         logger.error(f"Error reading settings for trimming: {e}. Skipping trim.")
@@ -3238,8 +3245,8 @@ class BeamPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
-        self.skim_format = get_setting(self.state.full_settings, 
-            "shared.skims.fname", "skimsActivitySimOD_current"
+        self.skim_format = get_setting(
+            self.state.full_settings, "shared.skims.fname", "skimsActivitySimOD_current"
         )
         self.zarr_manager = None
 
@@ -3279,7 +3286,9 @@ class BeamPostprocessor(GenericPostprocessor):
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
-        zarr_skim_name = f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
+        zarr_skim_name = (
+            f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
+        )
         omx_skim_name = (
             f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}"
         )
@@ -3324,7 +3333,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 logger.warning(
                     "No existing Zarr skims record found, even though the file exists. Will generate a record as an output after merging"
                 )
-            
+
             skim_name = skim_name_found
 
             raw_od_skims_path = os.path.join(
@@ -3349,7 +3358,11 @@ class BeamPostprocessor(GenericPostprocessor):
                 provenance_tracker=self.provenance_tracker,
                 model_run_hash=model_run_hash,
                 state=self.state,
-                run_id=self.provenance_tracker.run_info.run_id if self.provenance_tracker else None,
+                run_id=(
+                    self.provenance_tracker.run_info.run_id
+                    if self.provenance_tracker
+                    else None
+                ),
             )
 
             self.zarr_manager = updated_zarr_store
@@ -3376,10 +3389,21 @@ class BeamPostprocessor(GenericPostprocessor):
                     state=self.state,
                 )
 
-        if get_setting(settings, "write_skims_to_omx", False) or get_setting(settings, "run.models.land_use") == "urbansim":
-            logger.info("Writing skims to OMX file for UrbanSim or other downstream models...")
-            if not self.zarr_manager or not self.zarr_manager.path or not os.path.exists(self.zarr_manager.path):
-                logger.error("Zarr manager or path is not available. Cannot write skims to OMX.")
+        if (
+            get_setting(settings, "write_skims_to_omx", False)
+            or get_setting(settings, "run.models.land_use") == "urbansim"
+        ):
+            logger.info(
+                "Writing skims to OMX file for UrbanSim or other downstream models..."
+            )
+            if (
+                not self.zarr_manager
+                or not self.zarr_manager.path
+                or not os.path.exists(self.zarr_manager.path)
+            ):
+                logger.error(
+                    "Zarr manager or path is not available. Cannot write skims to OMX."
+                )
             else:
                 try:
                     # Record the final Zarr store as the input for this conversion step
@@ -3395,14 +3419,18 @@ class BeamPostprocessor(GenericPostprocessor):
                     vars_to_exclude = []
                     with xr.open_zarr(self.zarr_manager.path) as skims_ds:
                         for key in skims_ds.data_vars:
-                            if key.endswith(f"_TRIPS") or key.endswith(f"_FAILURES") or key.endswith(f"_REJECTIONPROB"):
+                            if (
+                                key.endswith(f"_TRIPS")
+                                or key.endswith(f"_FAILURES")
+                                or key.endswith(f"_REJECTIONPROB")
+                            ):
                                 vars_to_exclude.append(key)
 
                     final_omx_path = write_zarr_skim_as_omx_new(
                         self.zarr_manager.path,
                         settings,
                         get_setting(settings, "shared.skims.fname"),
-                        exclude_tables=vars_to_exclude
+                        exclude_tables=vars_to_exclude,
                     )
 
                     if final_omx_path:
@@ -3423,7 +3451,9 @@ class BeamPostprocessor(GenericPostprocessor):
 
         output_store = RecordStore(recordList=processed_records)
         self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=output_store.all_records()
+            model_run_hash,
+            status="completed",
+            output_records=output_store.all_records(),
         )
 
         return output_store

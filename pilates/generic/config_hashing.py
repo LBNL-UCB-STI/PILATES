@@ -52,6 +52,7 @@ class FieldAnnotation:
         description: Human-readable description
         condition: Optional condition for inclusion (e.g., "year >= end_year")
     """
+
     hash_scope: HashScope
     description: str = ""
     condition: Optional[str] = None
@@ -137,7 +138,7 @@ class ConfigHasher:
         self,
         config: Dict[str, Any],
         field_annotations: Dict[str, FieldAnnotation],
-        dependency_graph: Optional[ModelDependencyGraph] = None
+        dependency_graph: Optional[ModelDependencyGraph] = None,
     ):
         """
         Initialize configuration hasher.
@@ -167,7 +168,7 @@ class ConfigHasher:
         self,
         model_name: str,
         iteration: Optional[Any] = None,
-        include_upstream: bool = True
+        include_upstream: bool = True,
     ) -> str:
         """
         Get hash of configuration affecting a specific model.
@@ -183,13 +184,13 @@ class ConfigHasher:
         relevant_config = {}
 
         # 1. Always include GLOBAL fields
-        relevant_config['global'] = self._extract_fields_by_scope(HashScope.GLOBAL)
+        relevant_config["global"] = self._extract_fields_by_scope(HashScope.GLOBAL)
 
         # 2. Include iteration-dependent fields if applicable (Phase 2)
         if iteration is not None:
             iteration_fields = self._extract_iteration_dependent_fields(iteration)
             if iteration_fields:
-                relevant_config['iteration_dependent'] = iteration_fields
+                relevant_config["iteration_dependent"] = iteration_fields
 
         # 3. Include model-specific configuration
         model_config = self._extract_model_config(model_name)
@@ -198,18 +199,18 @@ class ConfigHasher:
 
         # 4. Include upstream dependencies (if requested)
         if include_upstream:
-            upstream_models = self.dependency_graph.get_upstream_dependencies(model_name)
+            upstream_models = self.dependency_graph.get_upstream_dependencies(
+                model_name
+            )
             for upstream_model in upstream_models:
                 upstream_config = self._extract_model_config(upstream_model)
                 if upstream_config:
-                    relevant_config[f'upstream_{upstream_model}'] = upstream_config
+                    relevant_config[f"upstream_{upstream_model}"] = upstream_config
 
         return self._hash_dict(relevant_config)
 
     def get_hierarchical_hashes(
-        self,
-        enabled_models: List[str],
-        iteration: Optional[Any] = None
+        self, enabled_models: List[str], iteration: Optional[Any] = None
     ) -> Dict[str, str]:
         """
         Get hierarchical hashes for all enabled models.
@@ -226,23 +227,18 @@ class ConfigHasher:
         hashes = {}
 
         # Base hash (affects everything)
-        hashes['base'] = self.get_base_hash()
+        hashes["base"] = self.get_base_hash()
 
         # Model-specific hashes
         for model in enabled_models:
             hashes[model] = self.get_model_hash(
-                model,
-                iteration=iteration,
-                include_upstream=True
+                model, iteration=iteration, include_upstream=True
             )
 
         return hashes
 
     def _extract_fields_by_scope(
-        self,
-        scope: HashScope,
-        config_section: Optional[Dict] = None,
-        prefix: str = ""
+        self, scope: HashScope, config_section: Optional[Dict] = None, prefix: str = ""
     ) -> Dict[str, Any]:
         """
         Extract all fields matching a specific hash scope.
@@ -268,20 +264,13 @@ class ConfigHasher:
                 result[key] = value
             elif isinstance(value, dict):
                 # Recurse into nested config
-                nested = self._extract_fields_by_scope(
-                    scope,
-                    value,
-                    prefix=field_path
-                )
+                nested = self._extract_fields_by_scope(scope, value, prefix=field_path)
                 if nested:
                     result[key] = nested
 
         return result
 
-    def _extract_iteration_dependent_fields(
-        self,
-        iteration: Any
-    ) -> Dict[str, Any]:
+    def _extract_iteration_dependent_fields(self, iteration: Any) -> Dict[str, Any]:
         """
         Extract iteration-dependent fields (Phase 2 - placeholder for now).
 
@@ -331,14 +320,14 @@ class ConfigHashRegistry:
     without passing the hasher around everywhere.
     """
 
-    _instance: Optional['ConfigHashRegistry'] = None
+    _instance: Optional["ConfigHashRegistry"] = None
 
     def __init__(self):
         """Initialize registry."""
         self._hasher: Optional[ConfigHasher] = None
 
     @classmethod
-    def get_instance(cls) -> 'ConfigHashRegistry':
+    def get_instance(cls) -> "ConfigHashRegistry":
         """Get singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
@@ -361,6 +350,7 @@ class ConfigHashRegistry:
 
 # Convenience functions for common operations
 
+
 def create_linear_dependency_graph(models: List[str]) -> ModelDependencyGraph:
     """
     Create a linear dependency graph where each model depends on all previous.
@@ -377,7 +367,7 @@ def create_linear_dependency_graph(models: List[str]) -> ModelDependencyGraph:
 
 
 def annotate_fields(
-    annotations: Dict[str, Dict[str, Any]]
+    annotations: Dict[str, Dict[str, Any]],
 ) -> Dict[str, FieldAnnotation]:
     """
     Convert simple annotation dict to FieldAnnotation objects.
@@ -398,7 +388,7 @@ def annotate_fields(
     result = {}
 
     for field_path, anno_dict in annotations.items():
-        scope_str = anno_dict.get('hash_scope', 'global')
+        scope_str = anno_dict.get("hash_scope", "global")
 
         # Convert string to HashScope enum
         if isinstance(scope_str, str):
@@ -408,8 +398,8 @@ def annotate_fields(
 
         result[field_path] = FieldAnnotation(
             hash_scope=scope,
-            description=anno_dict.get('description', ''),
-            condition=anno_dict.get('condition')
+            description=anno_dict.get("description", ""),
+            condition=anno_dict.get("condition"),
         )
 
     return result

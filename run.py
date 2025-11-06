@@ -326,9 +326,15 @@ def run_land_use(
     factory = ModelFactory()
 
     # Obtain model components for the land use major stage
-    preprocessor = factory.get_preprocessor("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
-    runner = factory.get_runner("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
-    postprocessor = factory.get_postprocessor("urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use)
+    preprocessor = factory.get_preprocessor(
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+    )
+    runner = factory.get_runner(
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+    )
+    postprocessor = factory.get_postprocessor(
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+    )
 
     # 2. PREPARE URBANSIM DATA
     print_str = f"Preparing {year} input data for land use development simulation."
@@ -340,12 +346,13 @@ def run_land_use(
     print_str = f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
     formatted_print(print_str)
 
-
     raw_outputs, run_info = runner.run(input_data, workspace)
 
     # 4. POSTPROCESS URBANSIM OUTPUTS
     # Postprocessor will handle writing outputs and provenance via the provided model_run_hash.
-    postprocessor.postprocess(raw_outputs, workspace, run_info, model_run_hash=model_run_hash)
+    postprocessor.postprocess(
+        raw_outputs, workspace, run_info, model_run_hash=model_run_hash
+    )
 
     logger.info("Done!")
 
@@ -385,11 +392,22 @@ def run_activity_demand(
         return RecordStore()
     elif activity_demand_model == "activitysim":
         preprocessor = factory.get_preprocessor(
-            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand
+            "activitysim",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.activity_demand,
         )
-        runner = factory.get_runner("activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand)
+        runner = factory.get_runner(
+            "activitysim",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.activity_demand,
+        )
         postprocessor = factory.get_postprocessor(
-            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand
+            "activitysim",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.activity_demand,
         )
 
         # Preprocess -> Run -> Postprocess flow
@@ -436,9 +454,24 @@ def run_traffic_assignment(
             "POLARIS module is not activated due to missing polarisruntime library"
         )
     elif travel_model == "beam":
-        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
-        runner = factory.get_runner("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
-        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment)
+        preprocessor = factory.get_preprocessor(
+            "beam",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.traffic_assignment,
+        )
+        runner = factory.get_runner(
+            "beam",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.traffic_assignment,
+        )
+        postprocessor = factory.get_postprocessor(
+            "beam",
+            state,
+            provenance_tracker,
+            major_stage=WorkflowState.Stage.traffic_assignment,
+        )
 
         input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
         raw_outputs, run_info = runner.run(input_data, workspace)
@@ -465,49 +498,15 @@ def main():
 
     # Load settings with Pydantic validation (new hierarchical config system)
     # Try new config format first, fall back to legacy if needed
-    raw_settings = parse_args_and_settings()
-
-    # Attempt to load as new Pydantic config for validation
-    pydantic_config = None
-    try:
-        # Check if config file path is available (from parse_args_and_settings)
-        config_file = raw_settings.get('settings_file')
-        if config_file:
-            logger.info(f"Loading config with Pydantic validation: {config_file}")
-            pydantic_config = load_config(config_file)
-            logger.info(f"✓ Config validated successfully!")
-            logger.info(f"  Region: {pydantic_config.run.region}")
-            logger.info(f"  Years: {pydantic_config.run.start_year}-{pydantic_config.run.end_year}")
-            logger.info(f"  Enabled models: {pydantic_config.get_enabled_models()}")
-
-            # settings will be the pydantic model, not a dict
-            settings = pydantic_config
-
-            # Preserve command-line overrides from raw_settings
-            for key in ['static_skims', 'warm_start_skims', 'asim_validation', 'state_file_loc', 'settings_file',
-                       'docker_stdout', 'pull_latest', 'household_sample_size', '_disabled_models']:
-                if key in raw_settings:
-                    setattr(settings, key, raw_settings[key])
-
-            # Compute model enabled flags (works with nested config format)
-            disabled_models = getattr(settings, '_disabled_models', '')
-            enabled_flags = compute_model_enabled_flags(settings, disabled_models)
-            for key, value in enabled_flags.items():
-                setattr(settings, key, value)
-        else:
-            logger.warning("Config file path not available, using raw settings without validation")
-            settings = raw_settings
-    except (ValidationError, FileNotFoundError, KeyError) as e:
-        logger.warning(f"Could not load config with Pydantic (likely legacy format): {e}")
-        logger.info("Using settings as-is (legacy format)")
-        settings = raw_settings
-
+    settings = parse_args_and_settings()
     state = WorkflowState.from_settings(settings)
 
     # Set up provenance tracking and workspace
     output_directory = settings.run.output_directory
     if not output_directory:
-        raise ValueError("output_directory not found in config (checked run.output_directory and output_directory)")
+        raise ValueError(
+            "output_directory not found in config (checked run.output_directory and output_directory)"
+        )
     output_path = os.path.realpath(os.path.expandvars(output_directory))
     # Determine run_name: if restarting, use the folder name from the previous run_info_path
     if state.run_info_path:
@@ -528,50 +527,54 @@ def main():
 
     # NEW: Create hierarchical config hashes for intelligent caching
     hierarchical_hashes = None
-    if pydantic_config:
-        try:
-            logger.info("Creating hierarchical config hashes for intelligent caching...")
-            # Get the config snapshot that was just created
-            config_snapshot = provenance_tracker.run_info.config_snapshot
-            if config_snapshot:
-                # Create hierarchical hashes using the snapshot manager
-                from pilates.utils.config_snapshot import ConfigSnapshotManager
-                snapshot_manager = ConfigSnapshotManager(
-                    os.path.join(output_path, run_name) if run_name else output_path
-                )
-                enabled_models = pydantic_config.get_enabled_models()
-                hierarchical_hashes = snapshot_manager.create_hierarchical_config_hashes(
-                    config_snapshot,
-                    enabled_models
-                )
-                logger.info(f"✓ Created {len(hierarchical_hashes)} hierarchical config hashes:")
-                for model_name, hash_info in hierarchical_hashes.items():
-                    logger.info(f"  {model_name}: {hash_info['hash'][:16]}...")
+    try:
+        logger.info("Creating hierarchical config hashes for intelligent caching...")
+        # Get the config snapshot that was just created
+        config_snapshot = provenance_tracker.run_info.config_snapshot
+        if config_snapshot:
+            # Create hierarchical hashes using the snapshot manager
+            from pilates.utils.config_snapshot import ConfigSnapshotManager
 
-                # Upload to database if enabled
-                database_config = settings.get("database", {})
-                if database_config.get("enabled") and database_config.get("path"):
-                    try:
-                        logger.info(f"Uploading config hashes to database: {database_config['path']}")
-                        db = DuckDBManager(database_config['path'])
-                        db.initialize_database()
-                        db.upload_hierarchical_config_hashes(
-                            config_snapshot['snapshot_id'],
-                            hierarchical_hashes
-                        )
-                        logger.info("✓ Config hashes uploaded to database successfully")
+            snapshot_manager = ConfigSnapshotManager(
+                os.path.join(output_path, run_name) if run_name else output_path
+            )
+            enabled_models = pydantic_config.get_enabled_models()
+            hierarchical_hashes = snapshot_manager.create_hierarchical_config_hashes(
+                config_snapshot, enabled_models
+            )
+            logger.info(
+                f"✓ Created {len(hierarchical_hashes)} hierarchical config hashes:"
+            )
+            for model_name, hash_info in hierarchical_hashes.items():
+                logger.info(f"  {model_name}: {hash_info['hash'][:16]}...")
 
-                        # Store hierarchical_hashes in provenance tracker for model run linking
-                        provenance_tracker.hierarchical_hashes = hierarchical_hashes
-                        logger.info("✓ Hierarchical hashes stored in provenance tracker")
-                    except Exception as e:
-                        logger.warning(f"Could not upload config hashes to database: {e}")
-                        logger.info("Continuing without database config hash upload...")
-            else:
-                logger.warning("Config snapshot not available, skipping hierarchical hash creation")
-        except Exception as e:
-            logger.warning(f"Could not create hierarchical config hashes: {e}")
-            logger.info("Continuing without hierarchical config hashing...")
+            # Upload to database if enabled
+            database_config = settings.get("database", {})
+            if database_config.get("enabled") and database_config.get("path"):
+                try:
+                    logger.info(
+                        f"Uploading config hashes to database: {database_config['path']}"
+                    )
+                    db = DuckDBManager(database_config["path"])
+                    db.initialize_database()
+                    db.upload_hierarchical_config_hashes(
+                        config_snapshot["snapshot_id"], hierarchical_hashes
+                    )
+                    logger.info("✓ Config hashes uploaded to database successfully")
+
+                    # Store hierarchical_hashes in provenance tracker for model run linking
+                    provenance_tracker.hierarchical_hashes = hierarchical_hashes
+                    logger.info("✓ Hierarchical hashes stored in provenance tracker")
+                except Exception as e:
+                    logger.warning(f"Could not upload config hashes to database: {e}")
+                    logger.info("Continuing without database config hash upload...")
+        else:
+            logger.warning(
+                "Config snapshot not available, skipping hierarchical hash creation"
+            )
+    except Exception as e:
+        logger.warning(f"Could not create hierarchical config hashes: {e}")
+        logger.info("Continuing without hierarchical config hashing...")
 
     workspace = Workspace(
         settings,
@@ -599,12 +602,8 @@ def main():
             formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
             if state.is_start_year() and settings.get("warm_start_activities"):
                 logger.info("[Main] Running warm start activities for ActivitySim.")
-                warm_start_activities(
-                    settings, state, workspace, provenance_tracker
-                )
-            forecast_land_use(
-                settings, year, state, workspace, provenance_tracker
-            )
+                warm_start_activities(settings, state, workspace, provenance_tracker)
+            forecast_land_use(settings, year, state, workspace, provenance_tracker)
             state.complete_step(WorkflowState.Stage.land_use)
 
         # B. VEHICLE OWNERSHIP MODEL (ATLAS)
@@ -616,10 +615,23 @@ def main():
 
             # Use ModelFactory for all model/image lookups
             factory = ModelFactory()
-            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
-            runner = factory.get_runner("atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+            preprocessor = factory.get_preprocessor(
+                "atlas",
+                state,
+                provenance_tracker,
+                major_stage=WorkflowState.Stage.vehicle_ownership_model,
+            )
+            runner = factory.get_runner(
+                "atlas",
+                state,
+                provenance_tracker,
+                major_stage=WorkflowState.Stage.vehicle_ownership_model,
+            )
             postprocessor = factory.get_postprocessor(
-                "atlas", state, provenance_tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model
+                "atlas",
+                state,
+                provenance_tracker,
+                major_stage=WorkflowState.Stage.vehicle_ownership_model,
             )
 
             # Determine if this is a warm start for ATLAS
@@ -630,7 +642,9 @@ def main():
             if forecast:
                 # For forecast, run for all years between state.year and state.forecast_year, step 2
                 # Also ensure the start year is processed to generate its inputs.
-                yrs = [state.year] + [y + 2 for y in range(state.year, state.forecast_year, 2)]
+                yrs = [state.year] + [
+                    y + 2 for y in range(state.year, state.forecast_year, 2)
+                ]
                 if not yrs:
                     yrs = [state.forecast_year]
             else:
@@ -653,7 +667,9 @@ def main():
                             self.start_year = parent_state.start_year
                             self.full_settings = parent_state.full_settings
                             # Provide an is_start_year method consistent with the parent
-                            self.is_start_year = lambda: (year == parent_state.start_year)
+                            self.is_start_year = lambda: (
+                                year == parent_state.start_year
+                            )
 
                         def set_sub_stage_progress(self, sub_stage_progress):
                             state.set_sub_stage_progress(sub_stage_progress)
@@ -678,9 +694,13 @@ def main():
                     raw_outputs, run_info = runner.run(input_data, workspace)
 
                     if run_info and run_info.status == "completed":
-                        logger.info(f"[run.py] [ATLAS] AtlasRunner successful for year {atlas_year} on attempt {i + 1}")
+                        logger.info(
+                            f"[run.py] [ATLAS] AtlasRunner successful for year {atlas_year} on attempt {i + 1}"
+                        )
                         # Postprocess
-                        logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
+                        logger.info(
+                            f"[run.py] [ATLAS] Postprocessing for year {atlas_year}"
+                        )
                         post_run_hash = provenance_tracker.start_model_run(
                             "atlas_postprocessor",
                             atlas_state.current_year,
@@ -694,7 +714,8 @@ def main():
                             post_run_hash,
                         )
                         provenance_tracker.complete_model_run(
-                            post_run_hash, output_records=processed_outputs.all_records()
+                            post_run_hash,
+                            output_records=processed_outputs.all_records(),
                         )
                         logger.info(
                             f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
@@ -705,7 +726,9 @@ def main():
                             f"ATLAS run failed for year {atlas_year} on attempt {i + 1}. Retrying... ({max_retries - i - 1} retries left)"
                         )
                 else:  # This else belongs to the for loop, runs if the loop completes without break
-                    logger.error(f"ATLAS run for year {atlas_year} failed after {max_retries} attempts. Aborting.")
+                    logger.error(
+                        f"ATLAS run for year {atlas_year} failed after {max_retries} attempts. Aborting."
+                    )
                     sys.exit(1)  # Exit the whole simulation
 
             logger.info(

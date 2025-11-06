@@ -16,7 +16,14 @@ import numpy as np
 
 import duckdb
 
-from pilates.generic.records import PilatesRunInfo, OpenLineageEventMetadata, FileRecord, H5FileRecord, H5TableRecord, ModelRunInfo
+from pilates.generic.records import (
+    PilatesRunInfo,
+    OpenLineageEventMetadata,
+    FileRecord,
+    H5FileRecord,
+    H5TableRecord,
+    ModelRunInfo,
+)
 from pilates.utils.database import (
     DatabaseManager,
     DatabaseUploadError,
@@ -49,15 +56,18 @@ def _convert_numpy_types(obj):
     else:
         return obj
 
+
 def _execute_sql_from_file(conn, sql_file_path: str):
     """Helper function to execute SQL commands from a file."""
     try:
-        with open(sql_file_path, 'r') as f:
+        with open(sql_file_path, "r") as f:
             sql_commands = f.read()
             conn.execute(sql_commands)
         logger.info(f"Successfully executed SQL from {os.path.basename(sql_file_path)}")
     except Exception as e:
-        logger.error(f"Failed to execute SQL from {os.path.basename(sql_file_path)}: {e}")
+        logger.error(
+            f"Failed to execute SQL from {os.path.basename(sql_file_path)}: {e}"
+        )
         raise
 
 
@@ -107,10 +117,12 @@ class DuckDBManager(DatabaseManager):
             # Get the directory where this script is located to build absolute paths to schema files
             utils_dir = os.path.dirname(os.path.abspath(__file__))
             pilates_dir = os.path.dirname(utils_dir)
-            schema_dir = os.path.join(pilates_dir, 'database', 'schema')
+            schema_dir = os.path.join(pilates_dir, "database", "schema")
 
             # Dynamically find all SQL files in the schema directory and execute them
-            sql_files_to_execute = sorted([f for f in os.listdir(schema_dir) if f.endswith(".sql")])
+            sql_files_to_execute = sorted(
+                [f for f in os.listdir(schema_dir) if f.endswith(".sql")]
+            )
 
             for sql_file in sql_files_to_execute:
                 full_path = os.path.join(schema_dir, sql_file)
@@ -122,7 +134,6 @@ class DuckDBManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Failed to initialize DuckDB database from SQL files: {e}")
             return False
-
 
     def generate_validation_report(self) -> Dict[str, Any]:
         """
@@ -139,59 +150,81 @@ class DuckDBManager(DatabaseManager):
                 "errors": [],
                 "warnings": [],
                 "statistics": {},
-                "recommendations": []
+                "recommendations": [],
             }
 
             # Check 1: Orphaned file records (run_id doesn't exist in runs)
-            orphaned = conn.execute("""
+            orphaned = conn.execute(
+                """
                 SELECT COUNT(*) as count
                 FROM file_records fr
                 LEFT JOIN runs r ON fr.run_id = r.run_id
                 WHERE r.run_id IS NULL
-            """).fetchone()[0]
+            """
+            ).fetchone()[0]
 
             if orphaned > 0:
-                report["errors"].append(f"{orphaned} file records reference non-existent runs")
+                report["errors"].append(
+                    f"{orphaned} file records reference non-existent runs"
+                )
 
             # Check 2: Model runs without completion time
-            incomplete = conn.execute("""
+            incomplete = conn.execute(
+                """
                 SELECT COUNT(*) as count
                 FROM model_runs
                 WHERE status = 'completed' AND completed_at IS NULL
-            """).fetchone()[0]
+            """
+            ).fetchone()[0]
 
             if incomplete > 0:
-                report["warnings"].append(f"{incomplete} model runs marked complete but missing completion time")
+                report["warnings"].append(
+                    f"{incomplete} model runs marked complete but missing completion time"
+                )
 
             # Check 3: Duplicate household IDs within a run
-            dupes = conn.execute("""
+            dupes = conn.execute(
+                """
                 SELECT run_id, household_id, COUNT(*) as dup_count
                 FROM activitysim_households
                 GROUP BY run_id, household_id
                 HAVING COUNT(*) > 1
-            """).fetchall()
+            """
+            ).fetchall()
 
             if dupes:
-                report["errors"].append(f"{len(dupes)} duplicate household_id values found")
+                report["errors"].append(
+                    f"{len(dupes)} duplicate household_id values found"
+                )
 
             # Check 4: Missing foreign key relationships
-            missing_hh = conn.execute("""
+            missing_hh = conn.execute(
+                """
                 SELECT COUNT(*) as count
                 FROM activitysim_persons p
                 LEFT JOIN activitysim_households h
                     ON p.household_id = h.household_id AND p.run_id = h.run_id
                 WHERE h.household_id IS NULL
-            """).fetchone()[0]
+            """
+            ).fetchone()[0]
 
             if missing_hh > 0:
-                report["errors"].append(f"{missing_hh} persons reference non-existent households")
+                report["errors"].append(
+                    f"{missing_hh} persons reference non-existent households"
+                )
 
             # Statistics
             report["statistics"] = {
                 "total_runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                "total_file_records": conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0],
-                "total_model_runs": conn.execute("SELECT COUNT(*) FROM model_runs").fetchone()[0],
-                "failed_model_runs": conn.execute("SELECT COUNT(*) FROM model_runs WHERE status = 'failed'").fetchone()[0],
+                "total_file_records": conn.execute(
+                    "SELECT COUNT(*) FROM file_records"
+                ).fetchone()[0],
+                "total_model_runs": conn.execute(
+                    "SELECT COUNT(*) FROM model_runs"
+                ).fetchone()[0],
+                "failed_model_runs": conn.execute(
+                    "SELECT COUNT(*) FROM model_runs WHERE status = 'failed'"
+                ).fetchone()[0],
             }
 
             # Try to count data records (may not exist in all databases)
@@ -207,9 +240,13 @@ class DuckDBManager(DatabaseManager):
 
             # Recommendations
             if report["errors"]:
-                report["recommendations"].append("Address data integrity errors before using database for analysis")
+                report["recommendations"].append(
+                    "Address data integrity errors before using database for analysis"
+                )
             if report["statistics"].get("failed_model_runs", 0) > 0:
-                report["recommendations"].append("Investigate failed model runs using recent_activity view")
+                report["recommendations"].append(
+                    "Investigate failed model runs using recent_activity view"
+                )
 
             return report
 
@@ -220,7 +257,7 @@ class DuckDBManager(DatabaseManager):
                 "errors": [f"Validation failed: {str(e)}"],
                 "warnings": [],
                 "statistics": {},
-                "recommendations": []
+                "recommendations": [],
             }
 
     def check_dataset_exists_by_hash(self, unique_id: str) -> bool:
@@ -275,7 +312,6 @@ class DuckDBManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
             return False
-
 
     def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
         """
@@ -381,7 +417,11 @@ class DuckDBManager(DatabaseManager):
                     """,
                     [
                         file_record.unique_id,
-                        'file' if not isinstance(file_record, H5FileRecord) else 'h5_container',
+                        (
+                            "file"
+                            if not isinstance(file_record, H5FileRecord)
+                            else "h5_container"
+                        ),
                         run_info.run_id,
                         file_record.openlineage_id,
                         file_record.file_path,
@@ -412,7 +452,7 @@ class DuckDBManager(DatabaseManager):
                     """,
                     [
                         h5_table_record.unique_id,
-                        'h5_table',
+                        "h5_table",
                         run_info.run_id,
                         h5_table_record.openlineage_id,
                         h5_table_record.file_path,
@@ -456,18 +496,19 @@ class DuckDBManager(DatabaseManager):
             for unique_id in referenced_file_record_ids:
                 # Check if the file_record already exists in the database
                 existing_file_record = conn.execute(
-                    "SELECT unique_id FROM file_records WHERE unique_id = ?", [unique_id]
+                    "SELECT unique_id FROM file_records WHERE unique_id = ?",
+                    [unique_id],
                 ).fetchone()
 
                 if not existing_file_record:
                     # If not in DB, try to find it in the current run_info
                     if unique_id in run_info.file_records:
                         file_record = run_info.file_records[unique_id]
-                        record_type = 'file'
+                        record_type = "file"
                         if isinstance(file_record, H5TableRecord):
-                            record_type = 'h5_table'
+                            record_type = "h5_table"
                         elif isinstance(file_record, H5FileRecord):
-                            record_type = 'h5_container'
+                            record_type = "h5_container"
 
                         conn.execute(
                             """
@@ -497,10 +538,14 @@ class DuckDBManager(DatabaseManager):
                                 file_record.exists,
                             ],
                         )
-                        logger.info(f"Inserted missing referenced file_record: {unique_id}")
+                        logger.info(
+                            f"Inserted missing referenced file_record: {unique_id}"
+                        )
                     else:
                         # If not in DB and not in current run_info, create a minimal placeholder
-                        logger.warning(f"Referenced file_record {unique_id} not found in DB or current run_info. Creating placeholder.")
+                        logger.warning(
+                            f"Referenced file_record {unique_id} not found in DB or current run_info. Creating placeholder."
+                        )
                         conn.execute(
                             """
                             INSERT INTO file_records (
@@ -512,20 +557,20 @@ class DuckDBManager(DatabaseManager):
                             """,
                             [
                                 unique_id,
-                                'placeholder',
-                                run_info.run_id, # Link to current run_id
-                                str(uuid.uuid4()), # Generate a new OpenLineage ID
-                                'unknown',
+                                "placeholder",
+                                run_info.run_id,  # Link to current run_id
+                                str(uuid.uuid4()),  # Generate a new OpenLineage ID
+                                "unknown",
                                 datetime.now().isoformat(),
-                                'missing_reference',
-                                f'Placeholder for missing file_record {unique_id}',
+                                "missing_reference",
+                                f"Placeholder for missing file_record {unique_id}",
                                 None,
                                 [],
                                 None,
                                 [],
                                 [],
-                                '{}',
-                                '{}',
+                                "{}",
+                                "{}",
                                 False,
                             ],
                         )
@@ -666,9 +711,7 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def upload_hierarchical_config_hashes(
-        self,
-        config_snapshot_id: str,
-        hierarchical_hashes: Dict[str, Dict[str, Any]]
+        self, config_snapshot_id: str, hierarchical_hashes: Dict[str, Dict[str, Any]]
     ) -> bool:
         """
         Upload hierarchical configuration hashes (Phase 1).
@@ -689,9 +732,9 @@ class DuckDBManager(DatabaseManager):
             conn = self._get_connection()
 
             for model_name, hash_info in hierarchical_hashes.items():
-                config_hash = hash_info['hash']
-                config_data = hash_info['config_data']
-                config_type = hash_info.get('config_type', model_name)
+                config_hash = hash_info["hash"]
+                config_data = hash_info["config_data"]
+                config_type = hash_info.get("config_type", model_name)
 
                 # Insert into model_configs (deduplicates by hash)
                 conn.execute(
@@ -708,8 +751,8 @@ class DuckDBManager(DatabaseManager):
                         model_name,
                         config_snapshot_id,
                         config_type,
-                        json.dumps(config_data)
-                    ]
+                        json.dumps(config_data),
+                    ],
                 )
 
             logger.info(
@@ -723,9 +766,7 @@ class DuckDBManager(DatabaseManager):
             raise DatabaseUploadError(f"Upload failed: {e}")
 
     def link_model_run_to_config_hashes(
-        self,
-        model_run_id: str,
-        hierarchical_hashes: Dict[str, Dict[str, Any]]
+        self, model_run_id: str, hierarchical_hashes: Dict[str, Dict[str, Any]]
     ) -> bool:
         """
         Link a model run to its hierarchical config hashes.
@@ -744,8 +785,8 @@ class DuckDBManager(DatabaseManager):
             conn = self._get_connection()
 
             for model_name, hash_info in hierarchical_hashes.items():
-                config_hash = hash_info['hash']
-                config_type = hash_info.get('config_type', model_name)
+                config_hash = hash_info["hash"]
+                config_type = hash_info.get("config_type", model_name)
 
                 conn.execute(
                     """
@@ -756,7 +797,7 @@ class DuckDBManager(DatabaseManager):
                     ON CONFLICT (model_run_id, config_type) DO UPDATE
                     SET config_hash = excluded.config_hash
                     """,
-                    [model_run_id, config_hash, config_type]
+                    [model_run_id, config_hash, config_type],
                 )
 
             logger.info(
@@ -769,10 +810,7 @@ class DuckDBManager(DatabaseManager):
             raise DatabaseUploadError(f"Link failed: {e}")
 
     def find_reusable_outputs(
-        self,
-        model_name: str,
-        config_hash: str,
-        year: Optional[int] = None
+        self, model_name: str, config_hash: str, year: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Find model outputs that can be reused based on config hash.
@@ -944,27 +982,69 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "persons":
                 return self._store_persons_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "jobs":
                 return self._store_jobs_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "blocks":
                 return self._store_blocks_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "buildings":
                 return self._store_buildings_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "parcels":
                 return self._store_parcels_raw_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             else:
                 # Store in generic table for other raw data
@@ -1018,20 +1098,49 @@ class DuckDBManager(DatabaseManager):
 
             if table_name == "households":
                 return self._store_households_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "persons":
                 return self._store_persons_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             elif table_name == "land_use":
                 return self._store_land_use_data(
-                    conn, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
             else:
                 # Store in generic table for other ActivitySim inputs (e.g., skims)
                 return self._store_generic_data(
-                    conn, table_name, df, file_record_id, run_id, year, iteration, openlineage_id, table_openlineage_id
+                    conn,
+                    table_name,
+                    df,
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_openlineage_id,
                 )
 
         except Exception as e:
@@ -1077,7 +1186,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1144,7 +1260,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1229,7 +1352,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1284,7 +1414,16 @@ class DuckDBManager(DatabaseManager):
                     file_record_id, run_id, year, iteration, openlineage_id, table_name, data_json, table_openlineage_id
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-                [file_record_id, run_id, year, iteration, openlineage_id, table_name, data_json, table_openlineage_id],
+                [
+                    file_record_id,
+                    run_id,
+                    year,
+                    iteration,
+                    openlineage_id,
+                    table_name,
+                    data_json,
+                    table_openlineage_id,
+                ],
             )
 
             logger.info(
@@ -1336,7 +1475,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1396,7 +1542,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1446,7 +1599,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1512,7 +1672,14 @@ class DuckDBManager(DatabaseManager):
                 df_copy["block_id"] = df_copy["block_id"].astype(str)
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1569,7 +1736,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -1625,7 +1799,14 @@ class DuckDBManager(DatabaseManager):
                     df_copy[col] = None
 
             # Select only the columns we need in the correct order
-            insert_cols = ["file_record_id", "run_id", "year", "iteration", "openlineage_id", "table_openlineage_id"] + expected_cols
+            insert_cols = [
+                "file_record_id",
+                "run_id",
+                "year",
+                "iteration",
+                "openlineage_id",
+                "table_openlineage_id",
+            ] + expected_cols
             df_insert = df_copy[insert_cols]
 
             # Bulk insert using DuckDB's DataFrame integration with UPSERT
@@ -2249,21 +2430,41 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def _export_markdown_dictionary(
-        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+        self,
+        output_path: str,
+        schema_df: pd.DataFrame,
+        fk_df: pd.DataFrame,
+        row_counts: Dict,
     ) -> bool:
         """Export data dictionary as Markdown."""
         try:
             with open(output_path, "w") as f:
                 f.write("# PILATES Database Data Dictionary\n\n")
-                f.write("Auto-generated schema documentation for the PILATES database.\n\n")
-                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write(
+                    "Auto-generated schema documentation for the PILATES database.\n\n"
+                )
+                f.write(
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                )
 
                 f.write("## Table of Contents\n\n")
 
                 # Group by table category
-                metadata_tables = ["runs", "config_snapshots", "file_records", "model_runs", "openlineage_events"]
-                urbansim_tables = [t for t in schema_df["table_name"].unique() if "urbansim" in t and "_raw" in t]
-                activitysim_tables = [t for t in schema_df["table_name"].unique() if "activitysim" in t]
+                metadata_tables = [
+                    "runs",
+                    "config_snapshots",
+                    "file_records",
+                    "model_runs",
+                    "openlineage_events",
+                ]
+                urbansim_tables = [
+                    t
+                    for t in schema_df["table_name"].unique()
+                    if "urbansim" in t and "_raw" in t
+                ]
+                activitysim_tables = [
+                    t for t in schema_df["table_name"].unique() if "activitysim" in t
+                ]
 
                 f.write("### Metadata Tables\n")
                 for table in metadata_tables:
@@ -2306,7 +2507,9 @@ class DuckDBManager(DatabaseManager):
                         # Escape pipe characters in description
                         col_desc = col_desc.replace("|", "\\|")
 
-                        f.write(f"| {col_name} | {col_type} | {nullable} | {col_desc} |\n")
+                        f.write(
+                            f"| {col_name} | {col_type} | {nullable} | {col_desc} |\n"
+                        )
 
                     # Foreign keys
                     if not fk_df.empty:
@@ -2314,7 +2517,9 @@ class DuckDBManager(DatabaseManager):
                         if not table_fks.empty:
                             f.write("\n**Foreign Keys:**\n\n")
                             for _, fk in table_fks.iterrows():
-                                f.write(f"- `{fk['fk_columns']}` → `{fk['pk_table']}.{fk['pk_columns']}`\n")
+                                f.write(
+                                    f"- `{fk['fk_columns']}` → `{fk['pk_table']}.{fk['pk_columns']}`\n"
+                                )
 
                     f.write("\n---\n\n")
 
@@ -2326,7 +2531,11 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def _export_json_dictionary(
-        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+        self,
+        output_path: str,
+        schema_df: pd.DataFrame,
+        fk_df: pd.DataFrame,
+        row_counts: Dict,
     ) -> bool:
         """Export data dictionary as JSON."""
         try:
@@ -2337,36 +2546,40 @@ class DuckDBManager(DatabaseManager):
 
                 columns = []
                 for _, row in table_data.iterrows():
-                    columns.append({
-                        "name": row["column_name"],
-                        "type": row["data_type"],
-                        "nullable": row["is_nullable"] == "YES",
-                        "default": row["column_default"],
-                        "description": row["column_comment"]
-                    })
+                    columns.append(
+                        {
+                            "name": row["column_name"],
+                            "type": row["data_type"],
+                            "nullable": row["is_nullable"] == "YES",
+                            "default": row["column_default"],
+                            "description": row["column_comment"],
+                        }
+                    )
 
                 # Get foreign keys for this table
                 fks = []
                 if not fk_df.empty:
                     table_fks = fk_df[fk_df["fk_table"] == table_name]
                     for _, fk_row in table_fks.iterrows():
-                        fks.append({
-                            "column": fk_row["fk_columns"],
-                            "references_table": fk_row["pk_table"],
-                            "references_column": fk_row["pk_columns"]
-                        })
+                        fks.append(
+                            {
+                                "column": fk_row["fk_columns"],
+                                "references_table": fk_row["pk_table"],
+                                "references_column": fk_row["pk_columns"],
+                            }
+                        )
 
                 tables[table_name] = {
                     "description": table_data.iloc[0]["table_comment"],
                     "row_count": row_counts.get(table_name),
                     "columns": columns,
-                    "foreign_keys": fks
+                    "foreign_keys": fks,
                 }
 
             dictionary = {
                 "database": "PILATES",
                 "generated_at": datetime.now().isoformat(),
-                "tables": tables
+                "tables": tables,
             }
 
             with open(output_path, "w") as f:
@@ -2380,13 +2593,19 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def _export_csv_dictionary(
-        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+        self,
+        output_path: str,
+        schema_df: pd.DataFrame,
+        fk_df: pd.DataFrame,
+        row_counts: Dict,
     ) -> bool:
         """Export data dictionary as CSV."""
         try:
             # Add row counts to schema
             schema_with_counts = schema_df.copy()
-            schema_with_counts["row_count"] = schema_with_counts["table_name"].map(row_counts)
+            schema_with_counts["row_count"] = schema_with_counts["table_name"].map(
+                row_counts
+            )
 
             # Export to CSV
             schema_with_counts.to_csv(output_path, index=False)
@@ -2399,7 +2618,11 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def _export_html_dictionary(
-        self, output_path: str, schema_df: pd.DataFrame, fk_df: pd.DataFrame, row_counts: Dict
+        self,
+        output_path: str,
+        schema_df: pd.DataFrame,
+        fk_df: pd.DataFrame,
+        row_counts: Dict,
     ) -> bool:
         """Export data dictionary as HTML."""
         try:
@@ -2410,18 +2633,30 @@ class DuckDBManager(DatabaseManager):
             html.append("<style>")
             html.append("body { font-family: Arial, sans-serif; margin: 40px; }")
             html.append("h1 { color: #2c3e50; }")
-            html.append("h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }")
-            html.append("table { border-collapse: collapse; width: 100%; margin: 20px 0; }")
-            html.append("th { background-color: #3498db; color: white; padding: 12px; text-align: left; }")
+            html.append(
+                "h2 { color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }"
+            )
+            html.append(
+                "table { border-collapse: collapse; width: 100%; margin: 20px 0; }"
+            )
+            html.append(
+                "th { background-color: #3498db; color: white; padding: 12px; text-align: left; }"
+            )
             html.append("td { border: 1px solid #ddd; padding: 10px; }")
             html.append("tr:nth-child(even) { background-color: #f2f2f2; }")
-            html.append(".table-desc { font-style: italic; color: #555; margin: 10px 0; }")
+            html.append(
+                ".table-desc { font-style: italic; color: #555; margin: 10px 0; }"
+            )
             html.append(".row-count { color: #16a085; font-weight: bold; }")
-            html.append(".fk-section { margin-top: 15px; padding: 10px; background-color: #ecf0f1; }")
+            html.append(
+                ".fk-section { margin-top: 15px; padding: 10px; background-color: #ecf0f1; }"
+            )
             html.append("</style></head><body>")
 
             html.append("<h1>PILATES Database Data Dictionary</h1>")
-            html.append(f"<p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>")
+            html.append(
+                f"<p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>"
+            )
 
             # Table of contents
             html.append("<h2>Table of Contents</h2>")
@@ -2441,16 +2676,20 @@ class DuckDBManager(DatabaseManager):
                     html.append(f'<p class="table-desc">{table_comment}</p>')
 
                 if table_name in row_counts and row_counts[table_name] is not None:
-                    html.append(f'<p class="row-count">Row Count: {row_counts[table_name]:,}</p>')
+                    html.append(
+                        f'<p class="row-count">Row Count: {row_counts[table_name]:,}</p>'
+                    )
 
                 html.append("<table>")
-                html.append("<tr><th>Column</th><th>Type</th><th>Nullable</th><th>Description</th></tr>")
+                html.append(
+                    "<tr><th>Column</th><th>Type</th><th>Nullable</th><th>Description</th></tr>"
+                )
 
                 for _, row in table_data.iterrows():
                     html.append("<tr>")
                     html.append(f"<td><strong>{row['column_name']}</strong></td>")
                     html.append(f"<td>{row['data_type']}</td>")
-                    nullable = "Yes" if row['is_nullable'] == 'YES' else "No"
+                    nullable = "Yes" if row["is_nullable"] == "YES" else "No"
                     html.append(f"<td>{nullable}</td>")
                     html.append(f"<td>{row['column_comment'] or ''}</td>")
                     html.append("</tr>")
@@ -2464,7 +2703,9 @@ class DuckDBManager(DatabaseManager):
                         html.append('<div class="fk-section">')
                         html.append("<strong>Foreign Keys:</strong><ul>")
                         for _, fk in table_fks.iterrows():
-                            html.append(f"<li><code>{fk['fk_columns']}</code> → <code>{fk['pk_table']}.{fk['pk_columns']}</code></li>")
+                            html.append(
+                                f"<li><code>{fk['fk_columns']}</code> → <code>{fk['pk_table']}.{fk['pk_columns']}</code></li>"
+                            )
                         html.append("</ul></div>")
 
             html.append("</body></html>")
@@ -2478,7 +2719,6 @@ class DuckDBManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Failed to export HTML dictionary: {e}")
             return False
-
 
     def store_generic_table(self, table_name: str, df: pd.DataFrame) -> bool:
         """
@@ -2496,14 +2736,14 @@ class DuckDBManager(DatabaseManager):
         """
         try:
             conn = self._get_connection()
-            
+
             # Get column names from the DataFrame
             insert_cols = df.columns.tolist()
-            
+
             # Register the DataFrame as a temporary table
             temp_table_name = f"{table_name}_temp_data"
             conn.register(temp_table_name, df)
-            
+
             # Use INSERT INTO ... SELECT ... to insert data
             conn.execute(
                 f"""
@@ -2511,10 +2751,10 @@ class DuckDBManager(DatabaseManager):
                 SELECT {', '.join(insert_cols)} FROM {temp_table_name}
                 """
             )
-            
+
             # Unregister the temporary table
             conn.unregister(temp_table_name)
-            
+
             return True
         except Exception as e:
             logger.error(f"Failed to insert data into table {table_name}: {e}")

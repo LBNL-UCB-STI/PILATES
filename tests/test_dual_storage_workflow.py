@@ -146,7 +146,9 @@ class TestDualStorageWorkflow(unittest.TestCase):
         self.state = MockState(2017)
         self.workspace = MockWorkspace(self.temp_dir)
         self.workspace.config = self.config
-        self.provenance_tracker = FileProvenanceTracker(run_id="test_dual_storage", output_path=self.temp_dir)
+        self.provenance_tracker = FileProvenanceTracker(
+            run_id="test_dual_storage", output_path=self.temp_dir
+        )
 
         print(f"🧪 Test setup complete - temp dir: {self.temp_dir}")
 
@@ -171,7 +173,15 @@ class TestDualStorageWorkflow(unittest.TestCase):
                         "sfbay": {
                             "state": "06",
                             "counties": [
-                                "001", "013", "041", "055", "075", "081", "085", "095", "097"
+                                "001",
+                                "013",
+                                "041",
+                                "055",
+                                "075",
+                                "081",
+                                "085",
+                                "095",
+                                "097",
                             ],
                         }
                     },
@@ -190,7 +200,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
                 "docker_images": {
                     "urbansim": "some/image",
                     "activitysim": "some/image",
-                }
+                },
             },
             "urbansim": {
                 "local_data_input_folder": "pilates/urbansim/data",
@@ -204,19 +214,29 @@ class TestDualStorageWorkflow(unittest.TestCase):
             },
             "activitysim": {
                 "local_input_folder": "pilates/activitysim/data",
-                "local_mutable_data_folder": os.path.join(self.temp_dir, "activitysim", "data"),
-                "local_output_folder": os.path.join(self.temp_dir, "activitysim", "output"),
+                "local_mutable_data_folder": os.path.join(
+                    self.temp_dir, "activitysim", "data"
+                ),
+                "local_output_folder": os.path.join(
+                    self.temp_dir, "activitysim", "output"
+                ),
                 "local_configs_folder": "pilates/activitysim/configs",
-                "local_mutable_configs_folder": os.path.join(self.temp_dir, "activitysim", "configs"),
-                "validation_folder": os.path.join(self.temp_dir, "activitysim", "validation"),
+                "local_mutable_configs_folder": os.path.join(
+                    self.temp_dir, "activitysim", "configs"
+                ),
+                "validation_folder": os.path.join(
+                    self.temp_dir, "activitysim", "validation"
+                ),
                 "command_template": "echo 'running asim'",
-                "final_plans_folder": os.path.join(self.temp_dir, "activitysim", "final_plans"),
+                "final_plans_folder": os.path.join(
+                    self.temp_dir, "activitysim", "final_plans"
+                ),
                 "database": {
                     "enabled": True,
                     "use_processed_data": True,
                     "year": 2017,
                 },
-            }
+            },
         }
         return PilatesConfig(**config_dict)
 

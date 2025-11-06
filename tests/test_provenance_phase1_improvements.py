@@ -26,9 +26,7 @@ class TestPhase1Improvements:
 
         # Create tracker
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create some dummy input files
@@ -42,10 +40,7 @@ class TestPhase1Improvements:
 
         # Start a model run
         run_hash = tracker.start_model_run(
-            "test_model",
-            2017,
-            0,
-            description="Test run"
+            "test_model", 2017, 0, description="Test run"
         )
 
         # Record inputs using normal method
@@ -109,9 +104,7 @@ class TestPhase1Improvements:
         print("\n🧪 Testing None handling in record_output_file_with_inputs...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         input1 = tmp_path / "input1.csv"
@@ -140,20 +133,23 @@ class TestPhase1Improvements:
 
         # Should only have 1 source file (None values filtered)
         assert len(output_rec.source_file_paths) == 1
-        print(f"   ✅ None values filtered correctly: {len(output_rec.source_file_paths)} source(s)")
+        print(
+            f"   ✅ None values filtered correctly: {len(output_rec.source_file_paths)} source(s)"
+        )
 
-    @pytest.mark.skip(reason="Validation warning for untracked source files not yet implemented")
+    @pytest.mark.skip(
+        reason="Validation warning for untracked source files not yet implemented"
+    )
     def test_source_file_paths_validation_warning(self, tmp_path, caplog):
         """Test that validation warnings are logged for untracked source files."""
         print("\n🧪 Testing source_file_paths validation warnings...")
 
         import logging
+
         caplog.set_level(logging.WARNING)
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         output_file = tmp_path / "output.csv"
@@ -176,21 +172,20 @@ class TestPhase1Improvements:
 
         # Should have logged a warning
         assert any(
-            "not found in file_records" in record.message
-            for record in caplog.records
+            "not found in file_records" in record.message for record in caplog.records
         ), "Should log warning about untracked source file"
 
         print("   ✅ Warning logged for untracked source file")
-        print(f"   📋 Warning message: {[r.message for r in caplog.records if 'not found' in r.message][0][:100]}...")
+        print(
+            f"   📋 Warning message: {[r.message for r in caplog.records if 'not found' in r.message][0][:100]}..."
+        )
 
     def test_validate_provenance_chain_basic(self, tmp_path):
         """Test the validate_provenance_chain method with a clean chain."""
         print("\n🧪 Testing validate_provenance_chain with clean chain...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create a proper chain: input -> model -> output
@@ -226,11 +221,13 @@ class TestPhase1Improvements:
         print(f"   📋 Errors: {len(issues['errors'])}")
 
         # Should have no errors
-        assert len(issues['errors']) == 0, f"Should have no errors, got: {issues['errors']}"
+        assert (
+            len(issues["errors"]) == 0
+        ), f"Should have no errors, got: {issues['errors']}"
         print("   ✅ No errors in clean provenance chain")
 
         # May have some warnings (e.g., about inputs not being outputs)
-        if issues['warnings']:
+        if issues["warnings"]:
             print(f"   ℹ️  Warnings (acceptable): {issues['warnings']}")
 
     def test_validate_provenance_chain_detects_missing_sources(self, tmp_path):
@@ -238,9 +235,7 @@ class TestPhase1Improvements:
         print("\n🧪 Testing validation detects missing source_file_paths...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         output_file = tmp_path / "output.csv"
@@ -264,12 +259,11 @@ class TestPhase1Improvements:
 
         # Should have a warning about missing source_file_paths
         assert any(
-            "has no source_file_paths" in warning
-            for warning in issues['warnings']
+            "has no source_file_paths" in warning for warning in issues["warnings"]
         ), "Should warn about output without source_file_paths"
 
         print(f"   ✅ Detected missing source_file_paths")
-        matching_warnings = [w for w in issues['warnings'] if "source_file_paths" in w]
+        matching_warnings = [w for w in issues["warnings"] if "source_file_paths" in w]
         print(f"   📋 Warning: {matching_warnings[0]}")
 
     def test_validate_provenance_chain_detects_broken_references(self, tmp_path):
@@ -277,9 +271,7 @@ class TestPhase1Improvements:
         print("\n🧪 Testing validation detects broken source references...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         output_file = tmp_path / "output.csv"
@@ -303,8 +295,7 @@ class TestPhase1Improvements:
 
         # Should have an ERROR about broken reference
         assert any(
-            "is not in file_records" in error
-            for error in issues['errors']
+            "is not in file_records" in error for error in issues["errors"]
         ), "Should error on broken source_file_paths reference"
 
         print(f"   ✅ Detected broken source reference")
@@ -315,9 +306,7 @@ class TestPhase1Improvements:
         print("\n🧪 Testing validation detects orphaned files...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         orphan_file = tmp_path / "orphan.csv"
@@ -341,15 +330,16 @@ class TestPhase1Improvements:
         # Should have a warning about orphaned file
         assert any(
             "is not referenced by any model run" in warning
-            for warning in issues['warnings']
+            for warning in issues["warnings"]
         ), "Should warn about orphaned file"
 
         print(f"   ✅ Detected orphaned file")
-        matching_warnings = [w for w in issues['warnings'] if "orphan" in w.lower()]
+        matching_warnings = [w for w in issues["warnings"] if "orphan" in w.lower()]
         print(f"   📋 Warning: {matching_warnings[0]}")
 
 
 if __name__ == "__main__":
     # Run tests standalone
     import sys
+
     pytest.main([__file__, "-v", "-s"] + sys.argv[1:])

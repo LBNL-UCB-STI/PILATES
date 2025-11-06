@@ -167,14 +167,18 @@ def update_beam_config(settings, working_dir, param, valueOverride=None):
         if valueOverride is None:
             pydantic_path = BEAM_PYDANTIC_PATH_MAP.get(param)
             if not pydantic_path:
-                logger.warning(f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config.")
+                logger.warning(
+                    f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
+                )
                 return
             config_value = get_setting(settings, pydantic_path)
         else:
             config_value = valueOverride
 
         if config_value is None:
-            logger.debug(f"Skipping beam config update for '{param}' because value is None.")
+            logger.debug(
+                f"Skipping beam config update for '{param}' because value is None."
+            )
             return
 
         beam_config_path = os.path.join(
@@ -239,9 +243,11 @@ def copy_vehicles_from_atlas(
     )
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
     if state.run_info_path and os.path.exists(state.run_info_path):
-        logger.info(f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
+        logger.info(
+            f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}"
+        )
         previous_run_dir = os.path.dirname(state.run_info_path)
-        atlas_output_data_dir = os.path.join(previous_run_dir, 'atlas', 'atlas_output')
+        atlas_output_data_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
     else:
         atlas_output_data_dir = workspace.get_atlas_output_dir()
 
@@ -264,7 +270,7 @@ def copy_vehicles_from_atlas(
         "beam_preprocessor",
         atlas_vehicle_file_loc,
         short_name="atlas_vehicles2_output",  # Match the short_name from postprocessor
-        model_run_id=model_run_hash
+        model_run_id=model_run_hash,
     )
 
     # FIX: Read uncompressed CSV and write as gzipped
@@ -668,9 +674,7 @@ def copy_plans_from_asim(
                 state=state,
                 short_name="persons_beam_in",
             )
-            _, asim_households_record = asim_file_paths.get(
-                "households", (None, None)
-            )
+            _, asim_households_record = asim_file_paths.get("households", (None, None))
             households_record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_households_path,
@@ -716,7 +720,7 @@ def copy_plans_from_asim(
         return record_list
 
     # Main logic for copy_plans_from_asim
-    if True: # Replaces legacy `copy_plans_from_asim_outputs` setting
+    if True:  # Replaces legacy `copy_plans_from_asim_outputs` setting
         logger.info(
             "You have chosen to use final ASIM plans. Will attempt to read files from provenance tracker."
         )
@@ -740,7 +744,9 @@ def copy_plans_from_asim(
             return RecordStore()
 
         if state.run_info_path and os.path.exists(state.run_info_path):
-            logger.info(f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}")
+            logger.info(
+                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {state.run_info_path}"
+            )
             base_path = os.path.dirname(state.run_info_path)
         else:
             base_path = workspace.output_path
@@ -897,13 +903,18 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Update BEAM config
         if settings.beam.discard_plans_every_year:
-            update_beam_config(settings, workspace.full_path, "max_plans_memory", valueOverride=0)
+            update_beam_config(
+                settings, workspace.full_path, "max_plans_memory", valueOverride=0
+            )
         else:
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
 
         # Copy vehicle data from Atlas if enabled
         # Only copy on first iteration since vehicles are constant across iterations within a year
-        if settings.vehicle_ownership_model_enabled and self.state.current_inner_iter == 0:
+        if (
+            settings.vehicle_ownership_model_enabled
+            and self.state.current_inner_iter == 0
+        ):
             copy_vehicles_from_atlas(
                 settings, workspace, self.state, self.provenance_tracker, model_run_hash
             )

@@ -89,7 +89,9 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                 beam_output_dir = settings.beam.local_output_folder
                 skims_fname = settings.shared.skims.fname
                 mutable_skims_location = os.path.join(beam_output_dir, skims_fname)
-                region_id = settings.urbansim.region_mappings['region_to_region_id'][settings.run.region]
+                region_id = settings.urbansim.region_mappings["region_to_region_id"][
+                    settings.run.region
+                ]
                 input_skims_location = os.path.join(
                     usim_data_dir, "skims_mpo_{0}.zarr".format(region_id)
                 )
@@ -182,7 +184,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
         """
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings['region_to_region_id'][region]
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
 
         # Get the input file templates
         year_template = settings.urbansim.input_file_template_year
@@ -244,23 +246,37 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
 
-        skims_src = os.path.abspath(os.path.join(data_dir, "..","..","..", settings.beam.local_input_folder, settings.run.region, settings.shared.skims.fname))
+        skims_src = os.path.abspath(
+            os.path.join(
+                data_dir,
+                "..",
+                "..",
+                "..",
+                settings.beam.local_input_folder,
+                settings.run.region,
+                settings.shared.skims.fname,
+            )
+        )
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 
-        inputs.append(self.provenance_tracker.record_input_file(
-            "urbansim",
-            skims_src,
-            short_name="omx_skims",
-            description="Raw BEAM OD skims",
-        ))
+        inputs.append(
+            self.provenance_tracker.record_input_file(
+                "urbansim",
+                skims_src,
+                short_name="omx_skims",
+                description="Raw BEAM OD skims",
+            )
+        )
         shutil.copyfile(skims_src, skims_target)
 
-        outputs.append(self.provenance_tracker.record_output_file(
-            "urbansim",
-            skims_target,
-            short_name="omx_skims",
-            description="Raw BEAM OD skims for USim",
-        ))
+        outputs.append(
+            self.provenance_tracker.record_output_file(
+                "urbansim",
+                skims_target,
+                short_name="omx_skims",
+                description="Raw BEAM OD skims for USim",
+            )
+        )
 
         logger.info(
             f"[UrbansimPreprocessor] Copying input beam skims data from {skims_src} to {skims_target}"
@@ -312,7 +328,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         """
         logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
         settings = self.state.full_settings
-        
+
         # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
         os.makedirs(usim_mutable_data_dir, exist_ok=True)
@@ -330,20 +346,25 @@ class UrbansimPreprocessor(GenericPreprocessor):
         processed_records = RecordStore()
 
         try:
-            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings.run.region)
+            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(
+                settings.run.region
+            )
             if not os.path.exists(geoid_to_zone_fname):
                 mapping = geoid_to_zone_map(settings)
 
-            geoid_to_zone_target = os.path.join(workspace.get_usim_mutable_data_dir(), "geoid_to_zone.csv")
+            geoid_to_zone_target = os.path.join(
+                workspace.get_usim_mutable_data_dir(), "geoid_to_zone.csv"
+            )
             shutil.copyfile(geoid_to_zone_fname, geoid_to_zone_target)
             geo_zone_input_rec = self.provenance_tracker.record_input_file(
-                    "urbansim_preprocessor",
-                    geoid_to_zone_fname,
-                    description="Geoid to zone mapping for UrbanSim input",
-                    short_name="geoid_to_zone_mapping",
-                    model_run_id=model_run_hash,
-                )
-            geo_zone_output_rec = self.provenance_tracker.record_output_file_with_inputs(
+                "urbansim_preprocessor",
+                geoid_to_zone_fname,
+                description="Geoid to zone mapping for UrbanSim input",
+                short_name="geoid_to_zone_mapping",
+                model_run_id=model_run_hash,
+            )
+            geo_zone_output_rec = (
+                self.provenance_tracker.record_output_file_with_inputs(
                     "urbansim_preprocessor",
                     geoid_to_zone_fname,
                     input_records=[geo_zone_input_rec],
@@ -351,18 +372,29 @@ class UrbansimPreprocessor(GenericPreprocessor):
                     short_name="usim_skims_input",
                     model_run_id=model_run_hash,
                 )
+            )
             input_records.add_record(geo_zone_input_rec)
             processed_records.add_record(geo_zone_output_rec)
 
-
             # If not the first iteration, check if BEAM is enabled and copy updated skims
-            if self.state.current_year > settings.run.start_year or self.state.iteration > 0:
+            if (
+                self.state.current_year > settings.run.start_year
+                or self.state.iteration > 0
+            ):
                 if settings.run.models.travel == "beam":
-                    logger.info("Updating skims from BEAM mutable output for subsequent iteration.")
-                    if self.state.run_info_path and os.path.exists(self.state.run_info_path):
-                        logger.info(f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
+                    logger.info(
+                        "Updating skims from BEAM mutable output for subsequent iteration."
+                    )
+                    if self.state.run_info_path and os.path.exists(
+                        self.state.run_info_path
+                    ):
+                        logger.info(
+                            f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
+                        )
                         previous_run_dir = os.path.dirname(self.state.run_info_path)
-                        beam_mutable_data_dir = os.path.join(previous_run_dir, 'beam', 'input')
+                        beam_mutable_data_dir = os.path.join(
+                            previous_run_dir, "beam", "input"
+                        )
                     else:
                         beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
 
@@ -371,17 +403,21 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         settings.run.region,
                         settings.shared.skims.fname,
                     )
-                    
-                    region_id = settings.urbansim.region_mappings['region_to_region_id'][settings.run.region]
+
+                    region_id = settings.urbansim.region_mappings[
+                        "region_to_region_id"
+                    ][settings.run.region]
                     dest_skims_fname = f"skims_mpo_{region_id}.omx"
                     dest_skims_path = os.path.join(
                         workspace.get_usim_mutable_data_dir(), dest_skims_fname
                     )
 
                     if os.path.exists(source_skims_path):
-                        logger.info(f"Copying skims from {source_skims_path} to {dest_skims_path}")
+                        logger.info(
+                            f"Copying skims from {source_skims_path} to {dest_skims_path}"
+                        )
                         shutil.copy(source_skims_path, dest_skims_path)
-                        
+
                         skims_input_rec = self.provenance_tracker.record_input_file(
                             "urbansim_preprocessor",
                             source_skims_path,
@@ -400,7 +436,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         if skims_output_rec:
                             processed_records.add_record(skims_output_rec)
                     else:
-                        logger.warning(f"Skims file not found at source: {source_skims_path}")
+                        logger.warning(
+                            f"Skims file not found at source: {source_skims_path}"
+                        )
 
             # Pass through any existing input records
             for record in input_records.all_records():
@@ -413,7 +451,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
             raise
 
         self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=processed_records.all_records()
+            model_run_hash,
+            status="completed",
+            output_records=processed_records.all_records(),
         )
 
         return processed_records

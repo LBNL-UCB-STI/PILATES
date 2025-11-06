@@ -30,7 +30,7 @@ def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
         datastore_name = settings.urbansim.output_file_template.format(year=year)
     elif io == "input":
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings['region_to_subdir'][region]
+        region_id = settings.urbansim.region_mappings["region_to_subdir"][region]
         usim_base_fname = settings.urbansim.input_file_template
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
@@ -53,10 +53,14 @@ def create_next_iter_usim_data(
     input_datastore_name = get_usim_datastore_fname(settings, io="input")
     input_store_path = os.path.join(mutable_data_dir, input_datastore_name)
     archive_fname = f"input_data_for_{forecast_year}_outputs.h5"
-    archived_input_store_path = input_store_path.replace(input_datastore_name, archive_fname)
+    archived_input_store_path = input_store_path.replace(
+        input_datastore_name, archive_fname
+    )
 
     if not os.path.exists(input_store_path):
-        logger.error(f"Input store path {input_store_path} does not exist. Cannot create next iteration data.")
+        logger.error(
+            f"Input store path {input_store_path} does not exist. Cannot create next iteration data."
+        )
         return
 
     # --- Provenance Step 1: Record initial inputs ---
@@ -70,7 +74,9 @@ def create_next_iter_usim_data(
     )
 
     # Record the UrbanSim output H5 from the current run
-    output_store, table_prefix_year = read_datastore(settings, forecast_year, mutable_data_dir=mutable_data_dir)
+    output_store, table_prefix_year = read_datastore(
+        settings, forecast_year, mutable_data_dir=mutable_data_dir
+    )
     output_store_path = output_store._path
     output_store.close()
     output_container = provenance_tracker.record_h5_input_container(
@@ -116,51 +122,76 @@ def create_next_iter_usim_data(
     )
 
     output_store = pd.HDFStore(str(output_store_path), "r")
-    with pd.HDFStore(str(archived_input_store_path), "r") as archived_store, \
-         pd.HDFStore(str(input_store_path), "w") as new_store:
+    with pd.HDFStore(
+        str(archived_input_store_path), "r"
+    ) as archived_store, pd.HDFStore(str(input_store_path), "w") as new_store:
 
         processed_tables = set()
 
         # Copy tables from the current run's output
         for h5_key in output_store.keys():
-            table_name = h5_key.split('/')[-1]
+            table_name = h5_key.split("/")[-1]
             if os.path.join("/", table_prefix_year, table_name) == h5_key:
                 # Record source table from output_store
                 source_table = provenance_tracker.record_h5_table_input(
-                    "urbansim_postprocessor", output_container, h5_key, model_run_id=model_run_hash
+                    "urbansim_postprocessor",
+                    output_container,
+                    h5_key,
+                    model_run_id=model_run_hash,
                 )
                 # Copy data and record output table
                 new_store[table_name] = output_store[h5_key]
                 output_table = provenance_tracker.record_h5_table_output(
-                    "urbansim_postprocessor", final_output_container, table_name, [source_table], model_run_id=model_run_hash
+                    "urbansim_postprocessor",
+                    final_output_container,
+                    table_name,
+                    [source_table],
+                    model_run_id=model_run_hash,
                 )
                 final_table_records.append(output_table)
                 processed_tables.add(table_name)
 
         # Copy missing tables from the archived (original) input store
         for h5_key in archived_store.keys():
-            table_name = h5_key.split('/')[-1]
+            table_name = h5_key.split("/")[-1]
             if table_name not in processed_tables:
-                logger.info(f"Copying '{table_name}' from archived input to new input store!")
+                logger.info(
+                    f"Copying '{table_name}' from archived input to new input store!"
+                )
                 # Record source table from archived_store
                 source_table = provenance_tracker.record_h5_table_input(
-                    "urbansim_postprocessor", archived_container, h5_key, model_run_id=model_run_hash
+                    "urbansim_postprocessor",
+                    archived_container,
+                    h5_key,
+                    model_run_id=model_run_hash,
                 )
                 # Copy data and record output table
                 new_store[table_name] = archived_store[h5_key]
                 output_table = provenance_tracker.record_h5_table_output(
-                    "urbansim_postprocessor", final_output_container, table_name, [source_table], model_run_id=model_run_hash
+                    "urbansim_postprocessor",
+                    final_output_container,
+                    table_name,
+                    [source_table],
+                    model_run_id=model_run_hash,
                 )
                 final_table_records.append(output_table)
 
         if set(new_store.keys()) != set(archived_store.keys()):
-            logger.warning("Mismatch in tables between archived input and new input store after merging.")
-            logger.info(f"New tables: {set(new_store.keys())}. Archived tables: {set(archived_store.keys())}.")
+            logger.warning(
+                "Mismatch in tables between archived input and new input store after merging."
+            )
+            logger.info(
+                f"New tables: {set(new_store.keys())}. Archived tables: {set(archived_store.keys())}."
+            )
 
     output_store.close()
 
-    final_output_container.table_record_ids = [tr.unique_id for tr in final_table_records]
-    provenance_tracker.run_info.file_records[final_output_container.unique_id] = final_output_container
+    final_output_container.table_record_ids = [
+        tr.unique_id for tr in final_table_records
+    ]
+    provenance_tracker.run_info.file_records[final_output_container.unique_id] = (
+        final_output_container
+    )
     logger.info(f"Recorded merged input H5 for provenance: {input_store_path}")
 
 

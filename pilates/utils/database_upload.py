@@ -198,6 +198,7 @@ def _upload_activitysim_csv_data(
         logger.error(f"Failed to upload ActivitySim CSV data: {e}")
         return False
 
+
 def _get_record_val(rec, key, default=None):
     """Helper to get value from either a dict or a dataclass object."""
     if isinstance(rec, dict):
@@ -225,21 +226,29 @@ def _upload_data_from_file_records(
 
         table_name = _get_record_val(record, "table_name")
         if not table_name:
-            logger.warning(f"Skipping H5 table record {record_id} without a table_name.")
+            logger.warning(
+                f"Skipping H5 table record {record_id} without a table_name."
+            )
             continue
 
         # Find the parent H5 container to construct the full file path
         parent_h5_id = _get_record_val(record, "h5_file_unique_id")
         if not parent_h5_id or parent_h5_id not in run_info.file_records:
-            logger.error(f"Could not find parent H5 container for table record {record_id}.")
+            logger.error(
+                f"Could not find parent H5 container for table record {record_id}."
+            )
             success = False
             continue
 
         parent_h5_record = run_info.file_records[parent_h5_id]
-        h5_file_path = os.path.join(run_directory, _get_record_val(parent_h5_record, "file_path"))
+        h5_file_path = os.path.join(
+            run_directory, _get_record_val(parent_h5_record, "file_path")
+        )
 
         if not os.path.exists(h5_file_path):
-            logger.warning(f"H5 file not found, skipping data upload for table '{table_name}' from {h5_file_path}")
+            logger.warning(
+                f"H5 file not found, skipping data upload for table '{table_name}' from {h5_file_path}"
+            )
             continue
 
         # Get the year and iteration for the new columns
@@ -253,7 +262,6 @@ def _upload_data_from_file_records(
             if year is None:
                 year = _get_record_val(model_run, "year")
 
-
         try:
             logger.info(f"Reading table '{table_name}' from H5 file: {h5_file_path}")
             df = pd.read_hdf(h5_file_path, key=table_name)
@@ -263,13 +271,17 @@ def _upload_data_from_file_records(
             if "urbansim" in _get_record_val(record, "models", []):
                 if isinstance(db_manager, DuckDBManager):
                     db_manager.store_urbansim_raw_data(
-                        table_name=table_name.strip("/").split("/")[-1], # Get the base table name
+                        table_name=table_name.strip("/").split("/")[
+                            -1
+                        ],  # Get the base table name
                         df=df,
                         file_record_id=_get_record_val(record, "unique_id"),
                         run_id=run_info.run_id,
                         year=year,
                         iteration=iteration,
-                        openlineage_id=_get_record_val(parent_h5_record, "openlineage_id"),
+                        openlineage_id=_get_record_val(
+                            parent_h5_record, "openlineage_id"
+                        ),
                         table_openlineage_id=_get_record_val(record, "openlineage_id"),
                     )
                 else:
@@ -277,10 +289,14 @@ def _upload_data_from_file_records(
                         f"Database manager is not a DuckDBManager, cannot store raw urbansim data for table '{table_name}'."
                     )
             else:
-                logger.info(f"No specific data store method for table '{table_name}'. Skipping data upload.")
+                logger.info(
+                    f"No specific data store method for table '{table_name}'. Skipping data upload."
+                )
 
         except Exception as e:
-            logger.error(f"Failed to read or upload table '{table_name}' from {h5_file_path}: {e}")
+            logger.error(
+                f"Failed to read or upload table '{table_name}' from {h5_file_path}: {e}"
+            )
             success = False
 
     return success
@@ -385,19 +401,31 @@ def upload_run_info_to_database(run_info_path: str, settings: PilatesConfig) -> 
 
             # Upload Zarr manifest data if available
             for file_record in run_info.file_records.values():
-                if file_record.short_name and file_record.short_name.startswith("zarr_manifest_"):
+                if file_record.short_name and file_record.short_name.startswith(
+                    "zarr_manifest_"
+                ):
                     run_directory = os.path.dirname(run_info_path)
-                    manifest_full_path = os.path.join(run_directory, file_record.file_path)
+                    manifest_full_path = os.path.join(
+                        run_directory, file_record.file_path
+                    )
                     if os.path.exists(manifest_full_path):
                         try:
-                            with open(manifest_full_path, 'r') as mf:
+                            with open(manifest_full_path, "r") as mf:
                                 manifest_content = json.load(mf)
-                            db_manager.upload_zarr_manifest_data(run_info.run_id, manifest_content)
-                            logger.info(f"Uploaded Zarr manifest data from {file_record.file_name}")
+                            db_manager.upload_zarr_manifest_data(
+                                run_info.run_id, manifest_content
+                            )
+                            logger.info(
+                                f"Uploaded Zarr manifest data from {file_record.file_name}"
+                            )
                         except Exception as e:
-                            logger.error(f"Failed to upload Zarr manifest data from {file_record.file_path}: {e}")
+                            logger.error(
+                                f"Failed to upload Zarr manifest data from {file_record.file_path}: {e}"
+                            )
                     else:
-                        logger.warning(f"Zarr manifest file not found at {manifest_full_path}")
+                        logger.warning(
+                            f"Zarr manifest file not found at {manifest_full_path}"
+                        )
 
             # Try to upload ActivitySim CSV data if present
             data_success = _upload_activitysim_csv_data(
@@ -405,8 +433,9 @@ def upload_run_info_to_database(run_info_path: str, settings: PilatesConfig) -> 
             )
 
             # Upload data from file records
-            record_data_success = _upload_data_from_file_records(run_info_path, run_info, db_manager)
-
+            record_data_success = _upload_data_from_file_records(
+                run_info_path, run_info, db_manager
+            )
 
             if metadata_success and data_success and record_data_success:
                 logger.info(

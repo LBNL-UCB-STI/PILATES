@@ -90,11 +90,15 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
         scenario_init_file = get_setting(polaris_settings, "scenario_main_init", None)
         scenario_main_file = get_setting(polaris_settings, "scenario_main")
         vehicle_file_base = get_setting(polaris_settings, "vehicle_file_basename", None)
-        vehicle_file_fleet_base = get_setting(polaris_settings, "fleet_vehicle_file_basename", None)
+        vehicle_file_fleet_base = get_setting(
+            polaris_settings, "fleet_vehicle_file_basename", None
+        )
         num_threads = get_setting(polaris_settings, "num_threads")
         num_abm_runs = get_setting(polaris_settings, "num_abm_runs")
         block_loc_file_name = get_setting(polaris_settings, "block_loc_file_name")
-        population_scale_factor = get_setting(polaris_settings, "population_scale_factor")
+        population_scale_factor = get_setting(
+            polaris_settings, "population_scale_factor"
+        )
         archive_dir = get_setting(polaris_settings, "archive_dir")
 
         # create the output directory if it doesn't exist
@@ -106,7 +110,9 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
     block_loc_file = "{0}/{1}".format(str(data_dir), block_loc_file_name)
     vot_level = polaris_settings.get("vot_level")
 
-    usim_output_dir = os.path.abspath(usim_get_setting(settings, "urbansim.local_mutable_data_folder"))
+    usim_output_dir = os.path.abspath(
+        usim_get_setting(settings, "urbansim.local_mutable_data_folder")
+    )
 
     # store the original inputs
     supply_db_name = db_name + "-Supply.sqlite"

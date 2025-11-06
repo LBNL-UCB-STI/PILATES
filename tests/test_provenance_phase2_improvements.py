@@ -25,9 +25,7 @@ class TestPhase2Improvements:
         print("\n🧪 Testing record_input_from_previous_output...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create a file
@@ -64,17 +62,18 @@ class TestPhase2Improvements:
 
         tracker.complete_model_run(run2)
 
-    def test_record_input_from_previous_output_validation_warning(self, tmp_path, caplog):
+    def test_record_input_from_previous_output_validation_warning(
+        self, tmp_path, caplog
+    ):
         """Test that validation warns if expected producing model doesn't match."""
         print("\n🧪 Testing producing model validation...")
 
         import logging
+
         caplog.set_level(logging.WARNING)
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         h5_file = tmp_path / "model_data.h5"
@@ -112,9 +111,7 @@ class TestPhase2Improvements:
         print("\n🧪 Testing ProvenanceQuery.find_outputs_of_model...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create some files
@@ -148,9 +145,7 @@ class TestPhase2Improvements:
         print("\n🧪 Testing ProvenanceQuery.trace_file_lineage...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create a lineage chain: input -> intermediate -> output
@@ -212,9 +207,7 @@ class TestPhase2Improvements:
         print("\n🧪 Testing ProvenanceQuery.get_summary_statistics...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         # Create some files from different models
@@ -249,9 +242,7 @@ class TestPhase2Improvements:
         print("\n🧪 Testing ProvenanceQuery.find_broken_source_paths...")
 
         tracker = FileProvenanceTracker(
-            run_id="test_run",
-            output_path=str(tmp_path),
-            folder_name="test"
+            run_id="test_run", output_path=str(tmp_path), folder_name="test"
         )
 
         output_file = tmp_path / "output.csv"
@@ -284,4 +275,5 @@ class TestPhase2Improvements:
 if __name__ == "__main__":
     # Run tests standalone
     import sys
+
     pytest.main([__file__, "-v", "-s"] + sys.argv[1:])

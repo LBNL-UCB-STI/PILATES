@@ -295,7 +295,9 @@ class ConfigSnapshotManager:
             "pilates_settings": relevant_settings,
             # Specific config references for easy access
             "beam_config": get_setting(settings, "beam.config"),
-            "asim_subdir": get_setting(settings, "activitysim.region_mappings", {}).get(get_setting(settings, "run.region"), {}).get("asim_subdir"),
+            "asim_subdir": get_setting(settings, "activitysim.region_mappings", {})
+            .get(get_setting(settings, "run.region"), {})
+            .get("asim_subdir"),
             "region": get_setting(settings, "run.region"),
         }
 
@@ -377,9 +379,7 @@ class ConfigSnapshotManager:
         return hashlib.sha256(config_json.encode()).hexdigest()
 
     def create_hierarchical_config_hashes(
-        self,
-        config_snapshot: Dict[str, Any],
-        enabled_models: List[str]
+        self, config_snapshot: Dict[str, Any], enabled_models: List[str]
     ) -> Dict[str, Dict[str, Any]]:
         """
         Create hierarchical config hashes for intelligent caching (Phase 1).
@@ -403,7 +403,7 @@ class ConfigSnapshotManager:
         """
         # Build config dict suitable for ConfigHasher
         # (using pilates_settings from snapshot)
-        config_for_hashing = config_snapshot.get('pilates_settings', {})
+        config_for_hashing = config_snapshot.get("pilates_settings", {})
 
         # Get field annotations and dependency graph
         field_annotations = get_field_annotations()
@@ -413,7 +413,7 @@ class ConfigSnapshotManager:
         hasher = ConfigHasher(
             config=config_for_hashing,
             field_annotations=field_annotations,
-            dependency_graph=dependency_graph
+            dependency_graph=dependency_graph,
         )
 
         # Get hierarchical hashes
@@ -424,20 +424,20 @@ class ConfigSnapshotManager:
 
         for model_name, hash_value in hash_results.items():
             # Extract the config data that was hashed
-            if model_name == 'base':
+            if model_name == "base":
                 # Base config: global fields only
                 config_data = hasher._extract_fields_by_scope(
-                    hasher.field_annotations.get('run', {}).get('hash_scope', 'global')
+                    hasher.field_annotations.get("run", {}).get("hash_scope", "global")
                 )
             else:
                 # Model config: extract model-specific section
                 config_data = config_for_hashing.get(model_name, {})
 
             result[model_name] = {
-                'hash': hash_value,
-                'config_data': config_data,
-                'config_type': model_name,
-                'model_name': model_name
+                "hash": hash_value,
+                "config_data": config_data,
+                "config_type": model_name,
+                "model_name": model_name,
             }
 
         logger.info(

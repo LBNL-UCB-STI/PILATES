@@ -65,7 +65,9 @@ class GenericRunner(ABC, Model):
         }
 
         nested_path = model_type_mapping.get(model_type, model_type)
-        model_name = get_setting(settings, nested_path, default=get_setting(settings, model_type))
+        model_name = get_setting(
+            settings, nested_path, default=get_setting(settings, model_type)
+        )
         if not model_name:
             # If model type is optional (e.g., vehicle_ownership_model), return None
             optional_models = [
@@ -101,15 +103,25 @@ class GenericRunner(ABC, Model):
                 - data (RecordStore): The raw output files that have been prepared to run the model
                 - model_run_info (ModelRunInfo): Information about the model run
         """
-        if self.state.current_major_stage == self.major_stage and self.state.sub_stage_progress == "postprocessor":
+        if (
+            self.state.current_major_stage == self.major_stage
+            and self.state.sub_stage_progress == "postprocessor"
+        ):
             logger.info("Skipping runner, loading outputs from provenance.")
-            runner_run = self.provenance_tracker.get_latest_completed_model_run(self.model_name, self.state.current_year, self.state.current_inner_iter)
+            runner_run = self.provenance_tracker.get_latest_completed_model_run(
+                self.model_name, self.state.current_year, self.state.current_inner_iter
+            )
             if runner_run:
-                raw_outputs = RecordStore.from_file_records(runner_run.output_record_hashes, self.provenance_tracker.run_info.file_records)
+                raw_outputs = RecordStore.from_file_records(
+                    runner_run.output_record_hashes,
+                    self.provenance_tracker.run_info.file_records,
+                )
                 run_info = runner_run
                 return raw_outputs, run_info
             else:
-                logger.warning("Could not find completed runner run in provenance, re-running runner.")
+                logger.warning(
+                    "Could not find completed runner run in provenance, re-running runner."
+                )
                 self.state.set_sub_stage_progress("runner")
                 return self._run(store, workspace)
         else:
@@ -166,7 +178,9 @@ class GenericRunner(ABC, Model):
             bool: True if the container/stub ran successfully (exit code 0), False otherwise.
         """
         if client:  # Docker client is available
-            docker_stdout = get_setting(settings, "infrastructure.docker_config.stdout", False)
+            docker_stdout = get_setting(
+                settings, "infrastructure.docker_config.stdout", False
+            )
             logger.info("Running docker container: %s, command: %s", image, command)
             run_kwargs = {
                 "volumes": volumes,
@@ -240,7 +254,9 @@ class GenericRunner(ABC, Model):
             logger.info("Running singularity command: %s", " ".join(proc))
 
             # Check if using stubs
-            if get_setting(settings, "use_stubs"):                # Pass the full command string as config_name to the stub
+            if get_setting(
+                settings, "use_stubs"
+            ):  # Pass the full command string as config_name to the stub
                 stub_cmd = [
                     "python",
                     os.path.join(
@@ -307,8 +323,12 @@ class GenericRunner(ABC, Model):
     @staticmethod
     def initialize_docker_client(settings):
         land_use_model = get_setting(settings, "run.models.land_use", False)
-        vehicle_ownership_model = get_setting(settings, "run.models.vehicle_ownership", False)  ## ATLAS
-        activity_demand_model = get_setting(settings, "run.models.activity_demand", False)
+        vehicle_ownership_model = get_setting(
+            settings, "run.models.vehicle_ownership", False
+        )  ## ATLAS
+        activity_demand_model = get_setting(
+            settings, "run.models.activity_demand", False
+        )
         travel_model = get_setting(settings, "run.models.travel", False)
         models = [
             land_use_model,
@@ -317,7 +337,9 @@ class GenericRunner(ABC, Model):
             travel_model,
         ]
         image_names = get_setting(settings, "infrastructure.docker_images")
-        pull_latest = get_setting(settings, "infrastructure.docker_config.pull_latest", False)
+        pull_latest = get_setting(
+            settings, "infrastructure.docker_config.pull_latest", False
+        )
 
         client = docker.from_env()
         if pull_latest:

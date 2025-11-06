@@ -8,6 +8,7 @@ from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
+
 class GenericPreprocessor(ABC, Model):
     """
     Abstract base class for all model preprocessors.
@@ -44,13 +45,25 @@ class GenericPreprocessor(ABC, Model):
         """
         Preprocess input data for the model.
         """
-        if self.state.current_major_stage == self.major_stage and self.state.sub_stage_progress in ["runner", "postprocessor"]:
+        if (
+            self.state.current_major_stage == self.major_stage
+            and self.state.sub_stage_progress in ["runner", "postprocessor"]
+        ):
             logger.info("Skipping preprocessor, loading outputs from provenance.")
-            preprocessor_run = self.provenance_tracker.get_latest_completed_model_run(f"{self.model_name}_preprocessor", self.state.current_year, self.state.current_inner_iter)
+            preprocessor_run = self.provenance_tracker.get_latest_completed_model_run(
+                f"{self.model_name}_preprocessor",
+                self.state.current_year,
+                self.state.current_inner_iter,
+            )
             if preprocessor_run:
-                return RecordStore.from_file_records(preprocessor_run.output_record_hashes, self.provenance_tracker.run_info.file_records)
+                return RecordStore.from_file_records(
+                    preprocessor_run.output_record_hashes,
+                    self.provenance_tracker.run_info.file_records,
+                )
             else:
-                logger.warning("Could not find completed preprocessor run in provenance, re-running preprocessor.")
+                logger.warning(
+                    "Could not find completed preprocessor run in provenance, re-running preprocessor."
+                )
                 self.state.set_sub_stage_progress("preprocessor")
                 return self._preprocess(workspace, previous_records)
         else:

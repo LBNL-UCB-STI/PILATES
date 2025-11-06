@@ -8,9 +8,11 @@ from pathlib import Path
 # Add the project root to the Python path to allow imports from pilates.*
 project_root = Path(__file__).resolve().parent.parent.parent
 import sys
+
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.duckdb_manager import DuckDBManager
+
 
 class TestInitDbSchema(unittest.TestCase):
     """Tests for the init_db_schema.py script."""
@@ -19,9 +21,13 @@ class TestInitDbSchema(unittest.TestCase):
         """Set up a temporary directory and database path for testing."""
         self.temp_dir = tempfile.mkdtemp(prefix="pilates_test_db_init_")
         self.db_path = os.path.join(self.temp_dir, "test.duckdb")
-        self.script_path = Path(__file__).parent.parent / "pilates" / "database" / "init_db_schema.py"
+        self.script_path = (
+            Path(__file__).parent.parent / "pilates" / "database" / "init_db_schema.py"
+        )
         self.script_path = str(self.script_path.resolve())
-        self.python_executable = sys.executable # Use the same python executable that is running the tests
+        self.python_executable = (
+            sys.executable
+        )  # Use the same python executable that is running the tests
 
     def tearDown(self):
         """Clean up the temporary directory after testing."""
@@ -38,7 +44,7 @@ class TestInitDbSchema(unittest.TestCase):
             [self.python_executable, self.script_path, self.db_path],
             capture_output=True,
             text=True,
-            check=False # Do not raise an exception for non-zero exit codes
+            check=False,  # Do not raise an exception for non-zero exit codes
         )
 
         # Print output for debugging
@@ -49,10 +55,16 @@ class TestInitDbSchema(unittest.TestCase):
         print("---------------------")
 
         # Assert that the script exited successfully
-        self.assertEqual(result.returncode, 0, f"Script failed with exit code {result.returncode}. Stderr: {result.stderr}")
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Script failed with exit code {result.returncode}. Stderr: {result.stderr}",
+        )
 
         # Assert that the database file was created
-        self.assertTrue(os.path.exists(self.db_path), "DuckDB database file was not created.")
+        self.assertTrue(
+            os.path.exists(self.db_path), "DuckDB database file was not created."
+        )
         print(f"   ✅ Database file created at: {self.db_path}")
 
         # Connect to the database and verify tables
@@ -89,6 +101,7 @@ class TestInitDbSchema(unittest.TestCase):
                 print(f"   ✅ Table '{table}' exists.")
 
         print("   ✅ All expected tables verified.")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -225,7 +225,15 @@ class WorkflowState:
         sub_stage_progress = data.get("sub_stage_progress", None)
         run_info_path = data.get("run_info_path", None)
         data_initialized = data.get("data_initialized", False)
-        return [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized]
+        return [
+            year,
+            stage,
+            iteration,
+            asim_compiled,
+            sub_stage_progress,
+            run_info_path,
+            data_initialized,
+        ]
 
     @classmethod
     def from_settings(cls, settings: PilatesConfig):
@@ -236,13 +244,25 @@ class WorkflowState:
 
         # These are always added at top-level by parse_args_and_settings()
         land_use_enabled = getattr(settings, "land_use_enabled", False)
-        vehicle_ownership_model_enabled = getattr(settings, "vehicle_ownership_model_enabled", False)
+        vehicle_ownership_model_enabled = getattr(
+            settings, "vehicle_ownership_model_enabled", False
+        )
         activity_demand_enabled = getattr(settings, "activity_demand_enabled", False)
-        traffic_assignment_enabled = getattr(settings, "traffic_assignment_enabled", False)
+        traffic_assignment_enabled = getattr(
+            settings, "traffic_assignment_enabled", False
+        )
         replanning_enabled = getattr(settings, "replanning_enabled", False)
-        file_loc = getattr(settings, "state_file_loc", 'current_stage.yaml')
+        file_loc = getattr(settings, "state_file_loc", "current_stage.yaml")
 
-        [year, stage, iteration, asim_compiled, sub_stage_progress, run_info_path, data_initialized] = cls.read_current_stage(file_loc)
+        [
+            year,
+            stage,
+            iteration,
+            asim_compiled,
+            sub_stage_progress,
+            run_info_path,
+            data_initialized,
+        ] = cls.read_current_stage(file_loc)
 
         year = year or start_year
 

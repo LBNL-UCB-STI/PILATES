@@ -83,7 +83,9 @@ class Workspace:
             "vehicle_ownership_model",
             "land_use_model",
         ]:
-            model_name = get_setting(settings, f"run.models.{model_key.replace('_model', '')}")
+            model_name = get_setting(
+                settings, f"run.models.{model_key.replace('_model', '')}"
+            )
             if not model_name:
                 continue
 
@@ -116,7 +118,9 @@ class Workspace:
                 atlas_pre.copy_data_to_mutable_location(settings, input_dir)
                 os.makedirs(self.get_atlas_output_dir(), exist_ok=True)
                 self._record_initial_files(
-                    "atlas", get_setting(settings, "atlas.host_input_folder"), "Atlas input file"
+                    "atlas",
+                    get_setting(settings, "atlas.host_input_folder"),
+                    "Atlas input file",
                 )
 
             # ActivitySim config copy
@@ -177,21 +181,27 @@ class Workspace:
     # Path getter methods
     def get_usim_mutable_data_dir(self) -> str:
         return os.path.join(
-            self.full_path, get_setting(self.settings, "urbansim.local_mutable_data_folder")
+            self.full_path,
+            get_setting(self.settings, "urbansim.local_mutable_data_folder"),
         )
 
     def get_asim_mutable_data_dir(self) -> str:
         return os.path.join(
-            self.full_path, get_setting(self.settings, "activitysim.local_mutable_data_folder")
+            self.full_path,
+            get_setting(self.settings, "activitysim.local_mutable_data_folder"),
         )
 
     def get_asim_mutable_configs_dir(self) -> str:
         return os.path.join(
-            self.full_path, get_setting(self.settings, "activitysim.local_configs_folder")
+            self.full_path,
+            get_setting(self.settings, "activitysim.local_configs_folder"),
         )
 
     def get_asim_output_dir(self) -> str:
-        return os.path.join(self.full_path, get_setting(self.settings, "activitysim.local_output_folder"))
+        return os.path.join(
+            self.full_path,
+            get_setting(self.settings, "activitysim.local_output_folder"),
+        )
 
     def get_beam_mutable_data_dir(self) -> str:
         return os.path.join(
@@ -199,12 +209,17 @@ class Workspace:
         )
 
     def get_beam_output_dir(self) -> str:
-        return os.path.join(self.full_path, get_setting(self.settings, "beam.local_output_folder"))
+        return os.path.join(
+            self.full_path, get_setting(self.settings, "beam.local_output_folder")
+        )
 
     def get_atlas_mutable_input_dir(self) -> str:
         return os.path.join(
-            self.full_path, get_setting(self.settings, "atlas.host_mutable_input_folder")
+            self.full_path,
+            get_setting(self.settings, "atlas.host_mutable_input_folder"),
         )
 
     def get_atlas_output_dir(self) -> str:
-        return os.path.join(self.full_path, get_setting(self.settings, "atlas.host_output_folder"))
+        return os.path.join(
+            self.full_path, get_setting(self.settings, "atlas.host_output_folder")
+        )

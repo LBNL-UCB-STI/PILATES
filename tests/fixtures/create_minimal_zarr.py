@@ -30,17 +30,21 @@ def create_minimal_zarr():
 
     # Create minimal skim data (3x3x1 for each variable)
     # Shape should be (otaz, dtaz, time_period) = (3, 3, 1)
-    sov_time = np.array([
-        [[10.5], [12.0], [14.5]],  # zone 1 to zones 1,2,3
-        [[12.0], [15.2], [18.0]],  # zone 2 to zones 1,2,3
-        [[14.5], [18.0], [20.1]],  # zone 3 to zones 1,2,3
-    ])
+    sov_time = np.array(
+        [
+            [[10.5], [12.0], [14.5]],  # zone 1 to zones 1,2,3
+            [[12.0], [15.2], [18.0]],  # zone 2 to zones 1,2,3
+            [[14.5], [18.0], [20.1]],  # zone 3 to zones 1,2,3
+        ]
+    )
 
-    hov2_time = np.array([
-        [[11.0], [13.0], [15.0]],
-        [[13.0], [16.0], [19.0]],
-        [[15.0], [19.0], [21.0]],
-    ])
+    hov2_time = np.array(
+        [
+            [[11.0], [13.0], [15.0]],
+            [[13.0], [16.0], [19.0]],
+            [[15.0], [19.0], [21.0]],
+        ]
+    )
 
     # Create xarray Dataset
     ds = xr.Dataset(
@@ -57,11 +61,13 @@ def create_minimal_zarr():
     # Remove existing if present
     if zarr_path.exists():
         import shutil
+
         shutil.rmtree(zarr_path)
 
     # Use zarr v2 explicitly
     import os
-    os.environ['ZARR_V3_EXPERIMENTAL_API'] = '0'
+
+    os.environ["ZARR_V3_EXPERIMENTAL_API"] = "0"
 
     # Save with xarray (defaults to zarr v2 when v3 is not enabled)
     ds.to_zarr(zarr_path, mode="w")

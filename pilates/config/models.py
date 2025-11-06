@@ -19,23 +19,21 @@ logger = logging.getLogger(__name__)
 # RUN-LEVEL CONFIGURATION
 # =============================================================================
 
+
 class ModelSelection(BaseModel):
     """Which models are enabled for this run."""
+
     land_use: Optional[str] = Field(
-        None,
-        description="Land use model (urbansim, or null to disable)"
+        None, description="Land use model (urbansim, or null to disable)"
     )
     travel: Optional[str] = Field(
-        None,
-        description="Travel model (beam, polaris, or null to disable)"
+        None, description="Travel model (beam, polaris, or null to disable)"
     )
     activity_demand: Optional[str] = Field(
-        None,
-        description="Activity demand model (activitysim, or null to disable)"
+        None, description="Activity demand model (activitysim, or null to disable)"
     )
     vehicle_ownership: Optional[str] = Field(
-        None,
-        description="Vehicle ownership model (atlas, or null to disable)"
+        None, description="Vehicle ownership model (atlas, or null to disable)"
     )
 
 
@@ -43,7 +41,9 @@ class RunConfig(BaseModel):
     """Top-level run configuration affecting workflow orchestration."""
 
     # Core simulation parameters (GLOBAL scope)
-    region: str = Field(..., description="Geographic region (seattle, sfbay, austin, etc.)")
+    region: str = Field(
+        ..., description="Geographic region (seattle, sfbay, austin, etc.)"
+    )
     scenario: str = Field(..., description="Scenario name")
     start_year: int = Field(..., description="First simulation year", ge=1900, le=2100)
     end_year: int = Field(..., description="Final simulation year", ge=1900, le=2100)
@@ -51,8 +51,12 @@ class RunConfig(BaseModel):
     # Model execution frequencies (GLOBAL scope)
     land_use_freq: int = Field(1, description="How often land use model runs", ge=1)
     travel_model_freq: int = Field(1, description="How often travel model runs", ge=1)
-    vehicle_ownership_freq: int = Field(1, description="How often vehicle model runs", ge=1)
-    supply_demand_iters: int = Field(6, description="Supply-demand loop iterations", ge=1)
+    vehicle_ownership_freq: int = Field(
+        1, description="How often vehicle model runs", ge=1
+    )
+    supply_demand_iters: int = Field(
+        6, description="Supply-demand loop iterations", ge=1
+    )
 
     # Output configuration (METADATA scope)
     output_directory: str = Field(..., description="Where to write outputs")
@@ -61,12 +65,14 @@ class RunConfig(BaseModel):
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
 
-    @field_validator('end_year')
+    @field_validator("end_year")
     @classmethod
     def validate_end_year(cls, v, info):
         """Ensure end_year >= start_year."""
-        if 'start_year' in info.data and v < info.data['start_year']:
-            raise ValueError(f"end_year ({v}) must be >= start_year ({info.data['start_year']})")
+        if "start_year" in info.data and v < info.data["start_year"]:
+            raise ValueError(
+                f"end_year ({v}) must be >= start_year ({info.data['start_year']})"
+            )
         return v
 
 
@@ -74,16 +80,13 @@ class RunConfig(BaseModel):
 # SHARED CONFIGURATION
 # =============================================================================
 
+
 class GeographyConfig(BaseModel):
     """Geographic configuration used by multiple models."""
 
-    FIPS: Dict[str, Any] = Field(
-        ...,
-        description="FIPS codes for study area"
-    )
+    FIPS: Dict[str, Any] = Field(..., description="FIPS codes for study area")
     local_crs: str = Field(
-        ...,
-        description="Local coordinate reference system (e.g., EPSG:32048)"
+        ..., description="Local coordinate reference system (e.g., EPSG:32048)"
     )
 
 
@@ -97,7 +100,9 @@ class SkimsConfig(BaseModel):
     geoms_index_col: str = Field(..., description="Geometry index column")
     hwy_paths: List[str] = Field(default_factory=list, description="Highway path types")
     periods: List[str] = Field(default_factory=list, description="Time periods")
-    transit_paths: Optional[Dict[str, List[str]]] = Field(None, description="Transit path definitions")
+    transit_paths: Optional[Dict[str, List[str]]] = Field(
+        None, description="Transit path definitions"
+    )
 
 
 class DatabaseConfig(BaseModel):
@@ -120,6 +125,7 @@ class SharedConfig(BaseModel):
 # INFRASTRUCTURE CONFIGURATION
 # =============================================================================
 
+
 class DockerConfig(BaseModel):
     """Docker-specific settings."""
 
@@ -130,29 +136,44 @@ class DockerConfig(BaseModel):
 class InfrastructureConfig(BaseModel):
     """Container management and execution environment."""
 
-    container_manager: Literal["docker","singularity"] = Field("docker", description="Container manager: docker or singularity")
-    singularity_images: Dict[str, str] = Field(default_factory=dict, description="Singularity image URIs")
-    docker_images: Dict[str, str] = Field(default_factory=dict, description="Docker image tags")
-    docker_config: DockerConfig = Field(default_factory=DockerConfig, description="Docker settings")
+    container_manager: Literal["docker", "singularity"] = Field(
+        "docker", description="Container manager: docker or singularity"
+    )
+    singularity_images: Dict[str, str] = Field(
+        default_factory=dict, description="Singularity image URIs"
+    )
+    docker_images: Dict[str, str] = Field(
+        default_factory=dict, description="Docker image tags"
+    )
+    docker_config: DockerConfig = Field(
+        default_factory=DockerConfig, description="Docker settings"
+    )
 
 
 # =============================================================================
 # MODEL-SPECIFIC CONFIGURATIONS
 # =============================================================================
 
+
 class UrbanSimConfig(BaseModel):
     """UrbanSim land use model configuration."""
 
-    region_id: Optional[str] = Field(None, description="Region ID (computed from region if not provided)")
+    region_id: Optional[str] = Field(
+        None, description="Region ID (computed from region if not provided)"
+    )
     local_data_input_folder: str = Field(..., description="Local input data folder")
     local_mutable_data_folder: str = Field(..., description="Mutable data folder")
     client_base_folder: str = Field(..., description="Container base folder")
     client_data_folder: str = Field(..., description="Container data folder")
     input_file_template: str = Field(..., description="Input file naming template")
-    input_file_template_year: str = Field(..., description="Year-specific input file template")
+    input_file_template_year: str = Field(
+        ..., description="Year-specific input file template"
+    )
     output_file_template: str = Field(..., description="Output file naming template")
     command_template: str = Field(..., description="Command template")
-    region_mappings: Dict[str, Any] = Field(default_factory=dict, description="Region-specific mappings")
+    region_mappings: Dict[str, Any] = Field(
+        default_factory=dict, description="Region-specific mappings"
+    )
 
 
 class AtlasConfig(BaseModel):
@@ -182,17 +203,23 @@ class ActivitySimDatabaseConfig(BaseModel):
     """ActivitySim database input mode configuration."""
 
     enabled: bool = Field(False, description="Enable database input mode")
-    use_processed_data: bool = Field(True, description="Use pre-processed data (fast path)")
+    use_processed_data: bool = Field(
+        True, description="Use pre-processed data (fast path)"
+    )
     year: Optional[int] = Field(None, description="Year for data retrieval")
 
 
 class ActivitySimConfig(BaseModel):
     """ActivitySim activity-based demand model configuration."""
 
-    household_sample_size: int = Field(0, description="Household sample size (0 = full population)")
+    household_sample_size: int = Field(
+        0, description="Household sample size (0 = full population)"
+    )
     chunk_size: int = Field(12_000_000_000, description="Memory chunk size")
     num_processes: int = Field(25, description="Number of parallel processes")
-    file_format: Literal["parquet", "csv"] = Field("parquet", description="Output file format")
+    file_format: Literal["parquet", "csv"] = Field(
+        "parquet", description="Output file format"
+    )
     local_input_folder: str
     local_mutable_data_folder: str
     local_output_folder: str
@@ -200,18 +227,35 @@ class ActivitySimConfig(BaseModel):
     local_mutable_configs_folder: str
     validation_folder: str
     subdir: str = Field("configs", description="Config subdirectory")
-    main_configs_dir: str = Field("configs_extended", description="Main configs directory")
-    region_mappings: Dict[str, Any] = Field(default_factory=dict, description="Region-specific mappings")
-    from_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(default_factory=dict, description="UrbanSim → ActivitySim column mappings")
-    to_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(default_factory=dict, description="ActivitySim → UrbanSim column mappings")
-    output_tables: Dict[str, Any] = Field(default_factory=dict, description="Output table configuration")
+    main_configs_dir: str = Field(
+        "configs_extended", description="Main configs directory"
+    )
+    region_mappings: Dict[str, Any] = Field(
+        default_factory=dict, description="Region-specific mappings"
+    )
+    from_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
+        default_factory=dict, description="UrbanSim → ActivitySim column mappings"
+    )
+    to_urbansim_col_maps: Dict[str, Dict[str, str]] = Field(
+        default_factory=dict, description="ActivitySim → UrbanSim column mappings"
+    )
+    output_tables: Dict[str, Any] = Field(
+        default_factory=dict, description="Output table configuration"
+    )
     command_template: str = Field(..., description="Command template")
-    database: ActivitySimDatabaseConfig = Field(default_factory=ActivitySimDatabaseConfig, description="Database input configuration")
+    database: ActivitySimDatabaseConfig = Field(
+        default_factory=ActivitySimDatabaseConfig,
+        description="Database input configuration",
+    )
     warm_start_activities: bool = Field(False, description="Warm start activities")
     replan_iters: int = Field(0, description="Replanning iterations")
     replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
-    replan_after: str = Field("non_mandatory_tour_scheduling", description="Replan after this step")
-    random_seed: Optional[int] = Field(None, description="Base random number generator seed")
+    replan_after: str = Field(
+        "non_mandatory_tour_scheduling", description="Replan after this step"
+    )
+    random_seed: Optional[int] = Field(
+        None, description="Base random number generator seed"
+    )
     final_plans_folder: str = Field(..., description="Final plans output folder")
 
 
@@ -220,7 +264,9 @@ class BeamConfig(BaseModel):
 
     config: str = Field(..., description="Main BEAM config file")
     sample: float = Field(1.0, description="Population sample fraction", ge=0.0, le=1.0)
-    replanning_portion: float = Field(0.4, description="Replanning portion", ge=0.0, le=1.0)
+    replanning_portion: float = Field(
+        0.4, description="Replanning portion", ge=0.0, le=1.0
+    )
     memory: str = Field("180g", description="JVM memory allocation")
     local_input_folder: str
     local_mutable_data_folder: str
@@ -230,18 +276,31 @@ class BeamConfig(BaseModel):
     skims_shapefile: str
     skim_zone_source_id_col: str
     skim_zone_geoid_col: str
-    discard_plans_every_year: bool = Field(False, description="Discard plans every year")
+    discard_plans_every_year: bool = Field(
+        False, description="Discard plans every year"
+    )
     max_plans_memory: int = Field(5, description="Max plans in memory")
-    simulated_hwy_paths: List[str] = Field(default_factory=list, description="Simulated highway paths")
-    asim_hwy_measure_map: Dict[str, Optional[str]] = Field(default_factory=dict, description="Highway measure mappings")
-    asim_transit_measure_map: Dict[str, Optional[str]] = Field(default_factory=dict, description="Transit measure mappings")
-    asim_ridehail_measure_map: Dict[str, Optional[str]] = Field(default_factory=dict, description="Ridehail measure mappings")
-    ridehail_path_map: Dict[str, str] = Field(default_factory=dict, description="Ridehail path mappings")
+    simulated_hwy_paths: List[str] = Field(
+        default_factory=list, description="Simulated highway paths"
+    )
+    asim_hwy_measure_map: Dict[str, Optional[str]] = Field(
+        default_factory=dict, description="Highway measure mappings"
+    )
+    asim_transit_measure_map: Dict[str, Optional[str]] = Field(
+        default_factory=dict, description="Transit measure mappings"
+    )
+    asim_ridehail_measure_map: Dict[str, Optional[str]] = Field(
+        default_factory=dict, description="Ridehail measure mappings"
+    )
+    ridehail_path_map: Dict[str, str] = Field(
+        default_factory=dict, description="Ridehail path mappings"
+    )
 
 
 # =============================================================================
 # POSTPROCESSING CONFIGURATION
 # =============================================================================
+
 
 class PostprocessingConfig(BaseModel):
     """Postprocessing and validation configuration."""
@@ -256,6 +315,7 @@ class PostprocessingConfig(BaseModel):
 # TOP-LEVEL PILATES CONFIGURATION
 # =============================================================================
 
+
 class PilatesConfig(BaseModel):
     """
     Complete PILATES configuration.
@@ -264,7 +324,7 @@ class PilatesConfig(BaseModel):
     """
 
     class Config:
-        extra = 'allow'
+        extra = "allow"
 
     run: RunConfig
     shared: SharedConfig
@@ -275,15 +335,19 @@ class PilatesConfig(BaseModel):
     beam: Optional[BeamConfig] = None
     postprocessing: Optional[PostprocessingConfig] = None
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_model_configs(self):
         """Ensure enabled models have configurations."""
         if self.run.models.land_use and not self.urbansim:
             raise ValueError("land_use model is enabled but urbansim config is missing")
         if self.run.models.vehicle_ownership and not self.atlas:
-            raise ValueError("vehicle_ownership model is enabled but atlas config is missing")
+            raise ValueError(
+                "vehicle_ownership model is enabled but atlas config is missing"
+            )
         if self.run.models.activity_demand and not self.activitysim:
-            raise ValueError("activity_demand model is enabled but activitysim config is missing")
+            raise ValueError(
+                "activity_demand model is enabled but activitysim config is missing"
+            )
         if self.run.models.travel and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
         return self
@@ -306,6 +370,7 @@ class PilatesConfig(BaseModel):
 # UTILITY FUNCTIONS
 # =============================================================================
 
+
 def load_config(config_path: str) -> PilatesConfig:
     """
     Load and validate PILATES configuration from YAML file.
@@ -323,7 +388,7 @@ def load_config(config_path: str) -> PilatesConfig:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
 
     # Pydantic will validate on instantiation
@@ -344,6 +409,3 @@ def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
         ValidationError: If config is invalid
     """
     return PilatesConfig(**config_dict)
-
-
-

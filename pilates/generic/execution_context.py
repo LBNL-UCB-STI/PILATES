@@ -192,7 +192,7 @@ def validate_context(context: ExecutionContext) -> None:
         )
 
     # Check required attributes are accessible
-    required = ['current_year', 'current_major_stage', 'current_inner_iter']
+    required = ["current_year", "current_major_stage", "current_inner_iter"]
     for attr in required:
         if not hasattr(context, attr):
             raise AttributeError(f"Context missing required attribute: {attr}")

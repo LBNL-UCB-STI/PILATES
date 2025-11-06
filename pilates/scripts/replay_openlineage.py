@@ -21,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+
 def replay_events(file_path: str, marquez_url: str):
     """Reads a .jsonl file and sends each line as a POST request to the Marquez API.
 
@@ -29,13 +30,13 @@ def replay_events(file_path: str, marquez_url: str):
         marquez_url (str): The URL of the Marquez API endpoint (e.g., http://localhost:5002/api/v1/lineage).
     """
     logging.info(f"Starting replay of events from '{file_path}' to '{marquez_url}'")
-    
+
     headers = {"Content-Type": "application/json"}
     event_count = 0
     success_count = 0
 
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for i, line in enumerate(f):
                 line_num = i + 1
                 if not line.strip():
@@ -50,7 +51,9 @@ def replay_events(file_path: str, marquez_url: str):
                     response = requests.post(marquez_url, data=line, headers=headers)
 
                     if response.status_code == 201 or response.status_code == 200:
-                        logging.info(f"Successfully sent event {line_num} (RunID: {event_data.get('run', {}).get('runId')})")
+                        logging.info(
+                            f"Successfully sent event {line_num} (RunID: {event_data.get('run', {}).get('runId')})"
+                        )
                         success_count += 1
                     else:
                         logging.error(
@@ -60,10 +63,12 @@ def replay_events(file_path: str, marquez_url: str):
                 except json.JSONDecodeError:
                     logging.error(f"Skipping line {line_num}: Invalid JSON.")
                 except requests.exceptions.RequestException as e:
-                    logging.error(f"Failed to connect to Marquez at {marquez_url}. Aborting. Error: {e}")
+                    logging.error(
+                        f"Failed to connect to Marquez at {marquez_url}. Aborting. Error: {e}"
+                    )
                     # Stop replay on connection error
                     break
-                
+
                 # Add a small delay to avoid overwhelming the Marquez instance
                 time.sleep(0.1)
 
@@ -72,24 +77,28 @@ def replay_events(file_path: str, marquez_url: str):
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
     finally:
-        logging.info(f"Replay finished. Sent {success_count}/{event_count} events successfully.")
+        logging.info(
+            f"Replay finished. Sent {success_count}/{event_count} events successfully."
+        )
+
 
 def main():
     """Parses command-line arguments and starts the replay process."""
-    parser = argparse.ArgumentParser(description="Replay OpenLineage events to a Marquez instance.")
+    parser = argparse.ArgumentParser(
+        description="Replay OpenLineage events to a Marquez instance."
+    )
     parser.add_argument(
-        "--file",
-        required=True,
-        help="Path to the openlineage.jsonl file."
+        "--file", required=True, help="Path to the openlineage.jsonl file."
     )
     parser.add_argument(
         "--url",
         default="http://localhost:5002/api/v1/lineage",
-        help="The URL of the Marquez API endpoint. Defaults to http://localhost:5002/api/v1/lineage"
+        help="The URL of the Marquez API endpoint. Defaults to http://localhost:5002/api/v1/lineage",
     )
     args = parser.parse_args()
 
     replay_events(args.file, args.url)
+
 
 if __name__ == "__main__":
     main()
