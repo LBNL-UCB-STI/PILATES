@@ -185,20 +185,28 @@ class FileRecord(Record):
 
     def _validate_path_storage(self):
         """Log warning if file_path is absolute (should be relative to project root)."""
-        if self.file_path and os.path.isabs(self.file_path):
+        if not self.file_path:
+            return
+
+        if os.path.isabs(self.file_path):
             from pilates.utils.provenance import find_project_root
             project_root = find_project_root()
             if project_root and self.file_path.startswith(project_root):
+                rel_path = os.path.relpath(self.file_path, project_root)
                 logger.warning(
                     f"FileRecord '{self.short_name}' has absolute path '{self.file_path}' "
-                    f"but should be relative to project root. Consider storing as: "
-                    f"'{os.path.relpath(self.file_path, project_root)}'"
+                    f"but should be relative to project root. Consider storing as: '{rel_path}'"
                 )
             else:
                 logger.debug(
-                    f"FileRecord '{self.short_name}' has absolute path '{self.file_path}' "
-                    f"which is outside project root - this may be intentional for external data"
+                    f"FileRecord '{self.short_name}' has absolute path outside project root - "
+                    f"this may be intentional for external data"
                 )
+        elif self.file_path.startswith('..'):
+            # Paths starting with .. are relative but might go outside project root
+            logger.debug(
+                f"FileRecord '{self.short_name}' uses parent directory reference: '{self.file_path}'"
+            )
 
     def get_absolute_path(self, project_root: Optional[str] = None) -> str:
         """
@@ -307,6 +315,24 @@ class H5TableRecord(FileRecord):
 
     h5_file_unique_id: str  # Unique ID of the parent H5FileRecord
     table_name: str
+
+    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+        """Get the absolute path for this table's parent H5 file + table path."""
+        # For H5 tables, file_path is like "path/to/file.h5/households"
+        # We need to handle this specially
+        from pilates.utils.provenance import find_project_root
+
+        if os.path.isabs(self.file_path):
+            return os.path.normpath(self.file_path)
+
+        if project_root is None:
+            project_root = find_project_root()
+
+        if project_root:
+            return os.path.normpath(os.path.join(project_root, self.file_path))
+        else:
+            logger.warning(f"Could not find project root for H5 table {self.file_path}")
+            return os.path.normpath(os.path.abspath(self.file_path))
 
     def __post_init__(self):
         # Preserve behavior from FileRecord and ensure an openlineage id exists.

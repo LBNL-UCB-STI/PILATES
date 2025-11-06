@@ -420,15 +420,17 @@ def create_usim_input_data(
     logger.info("Closing all open h5 files")
 
     # --- Record Output ---
-    all_source_paths = asim_source_paths + [archive_path, usim_output_store_path]
+    all_source_paths = asim_source_paths + [
+        provenance_tracker.get_relative_path(archive_path),
+        provenance_tracker.get_relative_path(usim_output_store_path)
+    ]
     output_record = provenance_tracker.record_output_file(
         model_name,
         input_store_path,  # The path to the newly created H5 file
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
         model_run_id=model_run_hash,
-        source_file_paths=all_source_paths,
-        updated_children=updated_tables,  # Pass the list you already track!
+        source_file_paths=all_source_paths
     )
 
     return input_store_path, output_record

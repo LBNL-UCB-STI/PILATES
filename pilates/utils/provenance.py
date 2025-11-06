@@ -436,7 +436,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             logger.debug(f"Skipping missing file: {file_path}")
             return None, None
         path_to_use = abs_path or file_path
-        relative_path = self._get_relative_path(path_to_use)
+        relative_path = self.get_relative_path(path_to_use)
         return path_to_use, relative_path
 
     def _calculate_directory_hash(
@@ -563,7 +563,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         settings_str = settings.model_dump_json()
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
-    def _get_relative_path(self, file_path: str) -> str:
+    def get_relative_path(self, file_path: str) -> str:
         """Compute a path for storing in run_info relative to the project root."""
         abs_path = os.path.abspath(file_path)
         project_root = find_project_root()
@@ -609,7 +609,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         if not abs_path:
             logger.warning(f"Skipping missing repository for {model}: {repo_path}")
             return
-        relative_path = self._get_relative_path(abs_path)
+        relative_path = self.get_relative_path(abs_path)
 
         repo_record = RepoRecord(
             unique_id=git_hash,
@@ -1207,7 +1207,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             file_record.description = description
         if source_file_paths:
             file_record.source_file_paths = [
-                self._get_relative_path(p) for p in source_file_paths
+                self.get_relative_path(p) for p in source_file_paths
             ]
         if source_run_id:
             file_record.producing_run_id = source_run_id
@@ -1468,7 +1468,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                     # Need to check both absolute and relative paths
                     source_found = any(
                         rec.file_path == source_path
-                        or self._get_relative_path(rec.file_path) == source_path
+                        or self.get_relative_path(rec.file_path) == source_path
                         for rec in self.run_info.file_records.values()
                     )
                     if not source_found:
