@@ -15,7 +15,7 @@ This module defines lightweight record types used by the provenance subsystem:
 These classes are intentionally simple and serializable; they are used to
 assemble OpenLineage Dataset objects and to persist run metadata elsewhere.
 """
-
+import os
 import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -178,6 +178,52 @@ class FileRecord(Record):
     def __hash__(self):
         return hash(self.unique_id)
 
+    def __post_init__(self):
+        """Validate that file_path is stored as relative path."""
+        super().__post_init__()
+        self._validate_path_storage()
+
+    def _validate_path_storage(self):
+        """Log warning if file_path is absolute (should be relative to project root)."""
+        if self.file_path and os.path.isabs(self.file_path):
+            from pilates.utils.provenance import find_project_root
+            project_root = find_project_root()
+            if project_root and self.file_path.startswith(project_root):
+                logger.warning(
+                    f"FileRecord '{self.short_name}' has absolute path '{self.file_path}' "
+                    f"but should be relative to project root. Consider storing as: "
+                    f"'{os.path.relpath(self.file_path, project_root)}'"
+                )
+            else:
+                logger.debug(
+                    f"FileRecord '{self.short_name}' has absolute path '{self.file_path}' "
+                    f"which is outside project root - this may be intentional for external data"
+                )
+
+    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+        """
+        Get the absolute path for this file.
+
+        Args:
+            project_root: Optional project root path. If not provided, will search for it.
+
+        Returns:
+            Absolute path to the file
+        """
+        from pilates.utils.provenance import find_project_root
+
+        if os.path.isabs(self.file_path):
+            return os.path.normpath(self.file_path)
+
+        if project_root is None:
+            project_root = find_project_root()
+
+        if project_root:
+            return os.path.normpath(os.path.join(project_root, self.file_path))
+        else:
+            # Fallback
+            return os.path.normpath(os.path.abspath(self.file_path))
+
     def _create_schema(self) -> Dict[str, SchemaDatasetFacet]:
         """
         Create OpenLineage schema facet if `schema` is provided.
@@ -295,11 +341,49 @@ class H5FileRecord(Record):
 
     def __post_init__(self):
         super().__post_init__()
+        self._validate_path_storage()
         # Ensure unique_id is based on the hash of the H5 file content
         # This will be set during creation in the postprocessor
         if self.unique_id is None:
             # A placeholder unique_id if not explicitly provided, will be overwritten by hash
             self.unique_id = str(uuid.uuid4())
+
+    def _validate_path_storage(self):
+        """Log warning if file_path is absolute (should be relative to project root)."""
+        if self.file_path and os.path.isabs(self.file_path):
+            from pilates.utils.provenance import find_project_root
+            project_root = find_project_root()
+            if project_root and self.file_path.startswith(project_root):
+                logger.warning(
+                    f"H5FileRecord '{self.short_name}' has absolute path '{self.file_path}' "
+                    f"but should be relative to project root. Consider storing as: "
+                    f"'{os.path.relpath(self.file_path, project_root)}'"
+                )
+
+    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+        """
+        Get the absolute path for this file.
+
+        Args:
+            project_root: Optional project root path. If not provided, will search for it.
+
+        Returns:
+            Absolute path to the file
+        """
+        from pilates.utils.provenance import find_project_root
+
+        if os.path.isabs(self.file_path):
+            return os.path.normpath(self.file_path)
+
+        if project_root is None:
+            project_root = find_project_root()
+
+        if project_root:
+            return os.path.normpath(os.path.join(project_root, self.file_path))
+        else:
+            # Fallback
+            logger.warning(f"Could not find project root for H5 file {self.file_path}, using absolute path fallback")
+            return os.path.normpath(os.path.abspath(self.file_path))
 
     def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
         """

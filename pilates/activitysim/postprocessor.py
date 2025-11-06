@@ -201,58 +201,6 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-# def _copy_with_compression_asim_file_to_asim_archive(
-#     file_path,
-#     file_name,
-#     year,
-#     replanning_iteration_number,
-#     fmt,
-#     provenance_tracker: "FileProvenanceTracker",
-# ):
-#     iteration_folder_name = "year-{0}-iteration-{1}".format(
-#         year, replanning_iteration_number
-#     )
-#     iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
-#     if not os.path.exists(os.path.abspath(iteration_folder_path)):
-#         os.makedirs(iteration_folder_path, exist_ok=True)
-#     input_file_path = locate_asim_file(file_name, fmt)
-#     target_file_path = os.path.join(iteration_folder_path, file_name)
-#     if target_file_path.endswith(".csv"):
-#         target_file_path += ".gz"
-#         if os.path.exists(file_path):
-#             with open(input_file_path, "rb") as f_in, gzip.open(
-#                 target_file_path, "wb"
-#             ) as f_out:
-#                 f_out.writelines(f_in)
-#             # Record the archived file path
-#             provenance_tracker.record_output_file(
-#                 "activitysim",
-#                 target_file_path,
-#                 year=year,
-#                 description=f"Archived ActivitySim output: {file_name}",
-#             )
-#     elif os.path.isdir(os.path.abspath(input_file_path)):
-#         logger.warning(
-#             "Skipping compression for directory: {0}".format(input_file_path)
-#         )
-#         # make_archive(input_file_path, target_file_path + ".zip")
-#         # # Record the archived file path
-#         # provenance_tracker.record_output_file(
-#         #     "activitysim",
-#         #     target_file_path + ".zip",
-#         #     year=year,
-#         #     description=f"Archived ActivitySim output: {file_name}",
-#         # )
-#     else:
-#         shutil.copy(input_file_path, target_file_path + ".parquet")
-#         # Record the archived file path
-#         provenance_tracker.record_output_file(
-#             "activitysim",
-#             target_file_path + ".parquet",
-#             year=year,
-#             description=f"Archived ActivitySim output: {file_name}",
-#         )
-
 
 def create_beam_input_data(
     settings,
@@ -653,7 +601,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
-                source = os.path.join(workspace.output_path, record.file_path)
+                source = record.get_absolute_path()
                 target = os.path.join(
                     iteration_folder_path,
                     record.short_name.replace("_asim_out", "") + ".parquet",
