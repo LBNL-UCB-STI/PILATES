@@ -3062,6 +3062,14 @@ def create_asim_data_from_h5(
     if input_zone_id_col in blocks.columns and input_zone_id_col != asim_zone_id_col:
         blocks.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
 
+    # Also need to rename in households, persons, and jobs since they reference blocks
+    if input_zone_id_col in households.columns:
+        households.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
+    if input_zone_id_col in persons.columns:
+        persons.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
+    if input_zone_id_col in jobs.columns:
+        jobs.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
+
     # create land use table
     land_use = _create_land_use_table(
         settings,
