@@ -131,7 +131,6 @@ def read_skims(settings, mode="a", data_dir=None, file_name="skims.omx"):
 
 
 def zone_id_to_taz(zones, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"):
-    logger.info("Zone columns: {0}".format(zones.columns))
     if zones.index.name != asim_zone_id_col:
         if asim_zone_id_col in zones.columns:
             logger.info("Setting column {0} to index".format(asim_zone_id_col))
@@ -144,7 +143,6 @@ def zone_id_to_taz(zones, asim_zone_id_col="TAZ", default_zone_id_col="zone_id")
             )
             zones.index.name = asim_zone_id_col
         elif asim_zone_id_col not in zones.columns:
-            logger.info(str(zones.columns))
             zones.rename(columns={default_zone_id_col: asim_zone_id_col}, inplace=True)
             zones.set_index(asim_zone_id_col, inplace=True)
             logger.info(
