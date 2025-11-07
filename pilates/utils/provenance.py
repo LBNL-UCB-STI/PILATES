@@ -296,6 +296,11 @@ class FileProvenanceTracker(ProvenanceTracker):
         super().__init__(run_id, output_path, folder_name)
         self.output_path = os.path.abspath(output_path) if output_path else None
         self.folder_name = folder_name
+        self.workspace_root = (
+            os.path.join(self.output_path, self.folder_name)
+            if self.folder_name and self.output_path
+            else self.output_path
+        )
         self.run_info_path = self._get_run_info_path()
         self.run_info = self._initialize_run_info()
         logger.info(f"FileProvenanceTracker initialized for run ID: {self.run_id}")
@@ -564,22 +569,21 @@ class FileProvenanceTracker(ProvenanceTracker):
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
     def get_relative_path(self, file_path: str) -> str:
-        """Compute a path for storing in run_info relative to the project root."""
+        """Compute a path for storing in run_info relative to the workspace root."""
         abs_path = os.path.abspath(file_path)
-        project_root = find_project_root()
-        if project_root:
+        if self.workspace_root:
             try:
-                # Return path relative to project root
-                return os.path.relpath(abs_path, project_root)
+                # Return path relative to workspace root
+                return os.path.relpath(abs_path, self.workspace_root)
             except ValueError:
                 # Fallback to absolute path if on a different drive (e.g., Windows)
                 logger.warning(
-                    f"Could not create relative path for {abs_path} relative to {project_root}. Storing absolute path."
+                    f"Could not create relative path for {abs_path} relative to {self.workspace_root}. Storing absolute path."
                 )
                 return abs_path
         else:
-            # Fallback to absolute path if project root can't be found
-            logger.warning("Could not find project root. Storing absolute path.")
+            # Fallback to absolute path if workspace root isn't set
+            logger.warning("Workspace root not set. Storing absolute path.")
             return abs_path
 
     def initialize_from_settings(self, settings: PilatesConfig):
@@ -1292,6 +1296,11 @@ class FileProvenanceTracker(ProvenanceTracker):
             file_record.description = description
         if year:
             file_record.year = year
+
+        if source_file_paths:
+            file_record.source_file_paths = [
+                self.get_relative_path(p) for p in source_file_paths
+            ]
 
         run_id_producing = model_run_id or self.current_model_run_id
         if run_id_producing:

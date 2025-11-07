@@ -2252,7 +2252,7 @@ def _merge_beam_skims_to_zarr(
 
     if current_skims_path is None or not os.path.exists(current_skims_path):
         logger.warning(f"No current skims found. Skipping merge.")
-        return None
+        return None, existing_zarr_manager
 
     if current_skims_path.endswith(".zarr"):
         input_format = "zarr"
@@ -3337,7 +3337,7 @@ class BeamPostprocessor(GenericPostprocessor):
             skim_name = skim_name_found
 
             raw_od_skims_path = os.path.join(
-                workspace.output_path,
+                workspace.full_path,
                 next(
                     record.file_path
                     for record in raw_outputs.all_records()

@@ -240,6 +240,9 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             "start_year": 2017,
             "end_year": 2017,
             "travel_model_freq": 1,
+            "land_use_freq": 1,
+            "vehicle_ownership_freq": 1,
+            "supply_demand_iters": 1,
             "output_directory": tmpdir,
             "output_run_name": "stub-test",
             "models": {
@@ -258,40 +261,48 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
             "singularity_images": {
                 "activitysim": "dummy_image",
                 "beam": "dummy_image",
+                "urbansim": "dummy_image",
+                "atlas": "dummy_image",
             },
             "docker_images": {},
         },
         # ActivitySim settings
         "activitysim": {
-            "household_sample_size": 0,  # Added for completeness
+            "household_sample_size": 0,
+            "local_input_folder": "activitysim/data/",
             "local_mutable_data_folder": "activitysim/data/",
             "local_output_folder": "activitysim/output/",
             "local_configs_folder": "pilates/activitysim/configs/",
             "local_mutable_configs_folder": "activitysim/configs/",
+            "validation_folder": "pilates/activitysim/validation",
+            "command_template": "run_activitysim",
+            "final_plans_folder": "activitysim/output/final_plans",
             "output_tables": {
                 "prefix": "final_",
                 "tables": ["households", "persons", "beam_plans"],
             },
-            "validation_folder": "pilates/activitysim/validation",
-            "region_to_asim_subdir": {
-                "sfbay": "sfbay"
-            },  # This is a mapping, not a direct setting
+            "region_mappings": {"region_to_asim_subdir": {"sfbay": "sfbay"}},
             "database": {
-                "enabled": False,  # Don't try to read from DB in stub test
+                "enabled": False,
                 "use_processed_data": False,
             },
         },
         # BEAM settings
         "beam": {
             "config": "beam.conf",
+            "local_input_folder": "pilates/beam/production/",
             "local_mutable_data_folder": "beam/input/",
             "local_output_folder": "beam/beam_output/",
-            "local_input_folder": "pilates/beam/production/",
             "router_directory": "r5/",
+            "scenario_folder": "beam/scenarios",
+            "skims_shapefile": "skims.shp",
+            "skim_zone_source_id_col": "taz",
+            "skim_zone_geoid_col": "geoid",
         },
         # Shared settings
         "shared": {
             "skims": {
+                "zone_type": "taz",
                 "fname": "skims.omx",
                 "origin_fname": "origin_skims.csv.gz",
                 "geoms_fname": "taz1454.csv",
@@ -306,19 +317,11 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
                     "sfbay": {
                         "state": "06",
                         "counties": [
-                            "001",
-                            "013",
-                            "041",
-                            "055",
-                            "075",
-                            "081",
-                            "085",
-                            "095",
-                            "097",
+                            "001", "013", "041", "055", "075", "081", "085", "095", "097",
                         ],
                     }
                 },
-                "local_crs": {"sfbay": "EPSG:26910"},
+                "local_crs": "EPSG:26910",
             },
             "database": {
                 "enabled": True,
@@ -330,16 +333,26 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
         "urbansim": {
             "local_data_input_folder": "pilates/urbansim/data/",
             "local_mutable_data_folder": "urbansim/data/",
+            "client_base_folder": "/urbansim",
+            "client_data_folder": "/urbansim/data",
             "input_file_template": "custom_mpo_{region_id}_model_data.h5",
+            "input_file_template_year": "custom_mpo_{region_id}_model_data_{year}.h5",
             "output_file_template": "model_data_{year}.h5",
+            "command_template": "run_urbansim",
             "region_mappings": {"region_to_region_id": {"sfbay": "06197001"}},
         },
         # ATLAS settings
         "atlas": {
-            "beamac": 0,
-            "host_output_folder": "atlas/output",
             "host_input_folder": "atlas/input",
+            "warmstart_input_folder": "atlas/input_warmstart",
             "host_mutable_input_folder": "atlas/input",
+            "host_output_folder": "atlas/output",
+            "container_input_folder": "/atlas/input",
+            "container_output_folder": "/atlas/output",
+            "basedir": "/atlas",
+            "codedir": "/atlas/code",
+            "command_template": "run_atlas",
+            "beamac": 0,
         },
         "database": {
             "enabled": True,
@@ -371,22 +384,28 @@ class TestStubProvenanceFlow:
         print("=" * 60)
 
         tmpdir = str(tmp_path)
-        settings = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
+        settings_dict = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
 
         # Enable UrbanSim and ATLAS for this test
-        settings["land_use_enabled"] = True
-        settings["land_use_model"] = "urbansim"
-        settings["vehicle_ownership_model_enabled"] = True
-        settings["vehicle_ownership_model"] = "atlas"
-        settings["activity_demand_enabled"] = True
-        settings["traffic_assignment_enabled"] = True
-        settings["replanning_enabled"] = True
+        settings_dict["land_use_enabled"] = True
+        settings_dict["land_use_model"] = "urbansim"
+        settings_dict["vehicle_ownership_model_enabled"] = True
+        settings_dict["vehicle_ownership_model"] = "atlas"
+        settings_dict["activity_demand_enabled"] = True
+        settings_dict["traffic_assignment_enabled"] = True
+        settings_dict["replanning_enabled"] = True
+        settings_dict["run"]["models"]["land_use"] = "urbansim"
+        settings_dict["run"]["models"]["vehicle_ownership"] = "atlas"
+
 
         # ATLAS-specific settings
-        settings["atlas_beamac"] = 0  # Use .RData files (tests Issue 3)
-        settings["atlas_host_output_folder"] = "atlas/output"
-        settings["atlas_host_input_folder"] = "atlas/input"
-        settings["atlas_host_mutable_input_folder"] = "atlas/input"  # For workspace
+        settings_dict["atlas_beamac"] = 0  # Use .RData files (tests Issue 3)
+        settings_dict["atlas_host_output_folder"] = "atlas/output"
+        settings_dict["atlas_host_input_folder"] = "atlas/input"
+        settings_dict["atlas_host_mutable_input_folder"] = "atlas/input"  # For workspace
+
+        from pilates.config.models import validate_config
+        settings_obj = validate_config(settings_dict)
 
         # Change to temp directory for test
         original_cwd = os.getcwd()
@@ -397,21 +416,21 @@ class TestStubProvenanceFlow:
             run_id = str(uuid.uuid4())
             provenance_tracker = OpenLineageTracker(
                 run_id,
-                settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                folder_name=settings_obj.run.output_run_name,
             )
-            provenance_tracker.initialize_from_settings(settings)
+            provenance_tracker.initialize_from_settings(settings_obj)
 
             # Create workspace
             workspace = Workspace(
-                settings,
-                settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"],
+                settings_obj,
+                settings_obj.run.output_directory,
+                folder_name=settings_obj.run.output_run_name,
                 provenance_tracker=provenance_tracker,
             )
 
             # Create workflow state
-            state = WorkflowState.from_settings(settings)
+            state = WorkflowState.from_settings(settings_obj)
 
             print("\n📋 Test Setup Complete")
             print(f"   Run ID: {run_id}")
@@ -567,7 +586,7 @@ class TestStubProvenanceFlow:
 
             # Create ATLAS vehicle outputs
             atlas_output_dir = os.path.join(
-                tmpdir, settings["atlas_host_output_folder"]
+                tmpdir, settings_dict["atlas_host_output_folder"]
             )
             os.makedirs(atlas_output_dir, exist_ok=True)
 
@@ -861,7 +880,7 @@ class TestStubProvenanceFlow:
             beam_output_path = workspace.get_beam_output_dir()
             year_iter_dir = os.path.join(
                 beam_output_path,
-                settings["run"]["region"],
+                settings_dict["run"]["region"],
                 f"year-{state.current_year}-iteration-{state.current_inner_iter}",
             )
             os.makedirs(year_iter_dir, exist_ok=True)
@@ -954,8 +973,8 @@ class TestStubProvenanceFlow:
             print("\n🔍 Verifying complete provenance chain...")
 
             run_info_path = os.path.join(
-                settings["run"]["output_directory"],
-                settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                settings_obj.run.output_run_name,
                 "run_info.json",
             )
             assert os.path.exists(run_info_path), "run_info.json should exist"
@@ -1049,8 +1068,8 @@ class TestStubProvenanceFlow:
 
             # Check OpenLineage events
             ol_path = os.path.join(
-                settings["run"]["output_directory"],
-                settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                settings_obj.run.output_run_name,
                 "openlineage.jsonl",
             )
             assert os.path.exists(ol_path), "openlineage.jsonl should exist"
@@ -1066,9 +1085,7 @@ class TestStubProvenanceFlow:
             print("\n📤 Uploading to database...")
 
             # Get database manager
-            from pilates.utils.database_upload import create_database_manager
-
-            db_manager = create_database_manager(settings)
+            db_manager = create_database_manager(settings_obj.shared.database)
 
             # Initialize variables for summary
             table_comments = 0
@@ -1288,12 +1305,17 @@ class TestStubProvenanceFlow:
         print("=" * 60)
 
         tmpdir = str(tmp_path)
-        settings = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
-        settings["activity_demand_enabled"] = True
-        settings["traffic_assignment_enabled"] = True
-        settings["replanning_enabled"] = True
-        settings["land_use_enabled"] = False
-        settings["vehicle_ownership_model_enabled"] = False
+        settings_dict = get_minimal_settings(tmpdir, use_enhanced_stubs=True)
+        settings_dict["activity_demand_enabled"] = True
+        settings_dict["traffic_assignment_enabled"] = True
+        settings_dict["replanning_enabled"] = True
+        settings_dict["land_use_enabled"] = False
+        settings_dict["vehicle_ownership_model_enabled"] = False
+        settings_dict["run"]["models"]["land_use"] = None
+        settings_dict["run"]["models"]["vehicle_ownership"] = None
+
+        from pilates.config.models import validate_config
+        settings_obj = validate_config(settings_dict)
 
         # Change to temp directory for test
         original_cwd = os.getcwd()
@@ -1304,21 +1326,21 @@ class TestStubProvenanceFlow:
             run_id = str(uuid.uuid4())
             provenance_tracker = OpenLineageTracker(
                 run_id,
-                settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                folder_name=settings_obj.run.output_run_name,
             )
-            provenance_tracker.initialize_from_settings(settings)
+            provenance_tracker.initialize_from_settings(settings_obj)
 
             # Create workspace
             workspace = Workspace(
-                settings,
-                settings["run"]["output_directory"],
-                folder_name=settings["run"]["output_run_name"],
+                settings_obj,
+                settings_obj.run.output_directory,
+                folder_name=settings_obj.run.output_run_name,
                 provenance_tracker=provenance_tracker,
             )
 
             # Create workflow state
-            state = WorkflowState.from_settings(settings)
+            state = WorkflowState.from_settings(settings_obj)
 
             # Get model factory
             factory = ModelFactory()
@@ -1503,7 +1525,7 @@ class TestStubProvenanceFlow:
             beam_output_path = workspace.get_beam_output_dir()
             year_iter_dir = os.path.join(
                 beam_output_path,
-                settings["run"]["region"],
+                settings_obj.run.region,
                 f"year-{state.current_year}-iteration-{state.current_inner_iter}",
             )
             os.makedirs(year_iter_dir, exist_ok=True)
@@ -1555,7 +1577,7 @@ class TestStubProvenanceFlow:
 
             # Upload to database for examination
             print("\n📤 Uploading to database...")
-            db_manager = create_database_manager(settings)
+            db_manager = create_database_manager(settings_obj.shared.database)
             if db_manager:
                 print("   ✅ Database manager created successfully")
 
@@ -1609,8 +1631,8 @@ class TestStubProvenanceFlow:
 
             # Check run_info.json
             run_info_path = os.path.join(
-                settings["run"]["output_directory"],
-                settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                settings_obj.run.output_run_name,
                 "run_info.json",
             )
             assert os.path.exists(run_info_path), "run_info.json should exist"
@@ -1656,10 +1678,12 @@ class TestStubProvenanceFlow:
 
             assert len(asim_plans_records) > 0, "ActivitySim plans should be tracked"
             asim_plans_path = asim_plans_records[0]["file_path"]
+            # The path from the record is relative to the run directory, but the CWD is the parent tmpdir
+            full_plans_path = os.path.join(settings_obj.run.output_run_name, asim_plans_path)
             assert os.path.exists(
-                asim_plans_path
-            ), "ActivitySim plans file should exist"
-            print("   ✅ File linkage verified: ActivitySim plans output exists")
+                full_plans_path
+            ), f"ActivitySim plans file should exist at {full_plans_path}"
+            print(f"   ✅ File linkage verified: ActivitySim plans output exists at {full_plans_path}")
 
             # ============================================================
             # Verify OpenLineage Events
@@ -1667,8 +1691,8 @@ class TestStubProvenanceFlow:
             print("\n🔍 Verifying OpenLineage events...")
 
             ol_path = os.path.join(
-                settings["run"]["output_directory"],
-                settings["run"]["output_run_name"],
+                settings_obj.run.output_directory,
+                settings_obj.run.output_run_name,
                 "openlineage.jsonl",
             )
             assert os.path.exists(ol_path), "openlineage.jsonl should exist"
@@ -1966,5 +1990,5 @@ if __name__ == "__main__":
 
     with tempfile.TemporaryDirectory() as tmp:
         test = TestStubProvenanceFlow()
-        # test.test_activitysim_beam_stub_workflow(Path(tmp))
+        test.test_activitysim_beam_stub_workflow(Path(tmp))
         test.test_urbansim_atlas_activitysim_beam_stub_workflow(Path(tmp))

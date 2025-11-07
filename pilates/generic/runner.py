@@ -108,33 +108,30 @@ class GenericRunner(ABC, Model):
     def get_model_and_image(settings: PilatesConfig, model_type: str):
         manager = settings.infrastructure.container_manager
         if manager == "docker":
-            # Check nested path first, fall back to legacy
             image_names = settings.infrastructure.docker_images
         elif manager == "singularity":
-            # Check nested path first, fall back to legacy
             image_names = settings.infrastructure.singularity_images
         else:
             raise ValueError(
                 "Container Manager not specified (container_manager param in settings.yaml)"
             )
 
-        # Map legacy model_type keys to nested paths
-        model_type_mapping = {
-            "land_use_model": "run.models.land_use",
-            "travel_model": "run.models.travel",
-            "activity_demand_model": "run.models.activity_demand",
-            "vehicle_ownership_model": "run.models.vehicle_ownership",
+        # Map legacy model_type keys to their new paths under run.models
+        model_name_map = {
+            "land_use_model": settings.run.models.land_use,
+            "travel_model": settings.run.models.travel,
+            "activity_demand_model": settings.run.models.activity_demand,
+            "vehicle_ownership_model": settings.run.models.vehicle_ownership,
         }
 
-        nested_path = model_type_mapping.get(model_type, model_type)
-        model_name = get_setting(
-            settings, nested_path, default=get_setting(settings, model_type)
-        )
+        model_name = model_name_map.get(model_type)
+
+        # Fallback for custom or non-standard model types passed in tests
+        if model_name is None:
+            model_name = getattr(settings.run.models, model_type, None)
+
         if not model_name:
-            # If model type is optional (e.g., vehicle_ownership_model), return None
-            optional_models = [
-                "vehicle_ownership_model"
-            ]  # Add other optional models here
+            optional_models = ["vehicle_ownership_model"]
             if model_type in optional_models:
                 return None, None
             else:

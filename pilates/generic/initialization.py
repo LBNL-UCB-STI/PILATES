@@ -55,14 +55,13 @@ class Initialization(Model):
                 workspace.output_data["beam"] = rec_out
 
         # Other models
-        model_keys_mapping = {
-            "activity_demand_model": "run.models.activity_demand",
-            "vehicle_ownership_model": "run.models.vehicle_ownership",
-            "land_use_model": "run.models.land_use",
+        model_map = {
+            "activity_demand": settings.run.models.activity_demand,
+            "vehicle_ownership": settings.run.models.vehicle_ownership,
+            "land_use": settings.run.models.land_use,
         }
 
-        for legacy_key, nested_key in model_keys_mapping.items():
-            model_name = get_setting(settings, nested_key)
+        for model_key, model_name in model_map.items():
             if not model_name:
                 continue
 

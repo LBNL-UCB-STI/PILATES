@@ -11,6 +11,7 @@ This module verifies that:
 import tempfile
 import os
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from pilates.utils.provenance import OpenLineageTracker
 from workflow_state import WorkflowState
@@ -19,17 +20,21 @@ from workflow_state import WorkflowState
 def test_backward_compat_state_parameter():
     """Verify that old 'state=' parameter still works."""
     # Create minimal settings for WorkflowState
-    settings = {
-        "start_year": 2020,
-        "end_year": 2030,
-        "travel_model_freq": 5,
-        "land_use_enabled": True,
-        "vehicle_ownership_model_enabled": False,
-        "activity_demand_enabled": True,
-        "traffic_assignment_enabled": True,
-        "replanning_enabled": False,
-        "state_file_loc": "/tmp/test_state_backcompat.yaml",
-    }
+    settings = MagicMock()
+    settings.run.start_year = 2020
+    settings.run.end_year = 2030
+    settings.run.travel_model_freq = 5
+    settings.run.land_use_freq = 1
+    settings.run.vehicle_ownership_freq = 1
+    settings.run.models.land_use = "urbansim"
+    settings.run.models.vehicle_ownership = None
+    settings.run.models.activity_demand = "activitysim"
+    settings.run.models.travel = "beam"
+    settings.activitysim.replan_iters = 0
+    settings.warm_start_skims = False
+    settings.static_skims = False
+    settings.provenance.context_file_path = None
+    settings.state_file_loc = "/tmp/test_state_backcompat.yaml"
 
     state = WorkflowState.from_settings(settings)
 
@@ -56,17 +61,22 @@ def test_backward_compat_state_parameter():
 def test_new_context_parameter():
     """Verify that new 'context=' parameter works."""
     # Create minimal settings for WorkflowState
-    settings = {
-        "start_year": 2020,
-        "end_year": 2030,
-        "travel_model_freq": 5,
-        "land_use_enabled": True,
-        "vehicle_ownership_model_enabled": False,
-        "activity_demand_enabled": True,
-        "traffic_assignment_enabled": True,
-        "replanning_enabled": False,
-        "state_file_loc": "/tmp/test_state_context.yaml",
-    }
+    settings = MagicMock()
+    settings.run.start_year = 2020
+    settings.run.end_year = 2030
+    settings.run.travel_model_freq = 5
+    settings.run.land_use_freq = 1
+    settings.run.vehicle_ownership_freq = 1
+    settings.run.models.land_use = "urbansim"
+    settings.run.models.vehicle_ownership = None
+    settings.run.models.activity_demand = "activitysim"
+    settings.run.models.travel = "beam"
+    settings.activitysim.replan_iters = 0
+    settings.warm_start_skims = False
+    settings.static_skims = False
+    settings.provenance.context_file_path = None
+    settings.state_file_loc = "/tmp/test_state_context.yaml"
+
 
     state = WorkflowState.from_settings(settings)
 
@@ -138,17 +148,21 @@ def test_no_context_works():
 
 def test_context_takes_precedence():
     """Verify that context= takes precedence over state= if both provided."""
-    settings = {
-        "start_year": 2020,
-        "end_year": 2030,
-        "travel_model_freq": 5,
-        "land_use_enabled": True,
-        "vehicle_ownership_model_enabled": False,
-        "activity_demand_enabled": True,
-        "traffic_assignment_enabled": True,
-        "replanning_enabled": False,
-        "state_file_loc": "/tmp/test_state_precedence.yaml",
-    }
+    settings = MagicMock()
+    settings.run.start_year = 2020
+    settings.run.end_year = 2030
+    settings.run.travel_model_freq = 5
+    settings.run.land_use_freq = 1
+    settings.run.vehicle_ownership_freq = 1
+    settings.run.models.land_use = "urbansim"
+    settings.run.models.vehicle_ownership = None
+    settings.run.models.activity_demand = "activitysim"
+    settings.run.models.travel = "beam"
+    settings.activitysim.replan_iters = 0
+    settings.warm_start_skims = False
+    settings.static_skims = False
+    settings.provenance.context_file_path = None
+    settings.state_file_loc = "/tmp/test_state_precedence.yaml"
 
     state = WorkflowState.from_settings(settings)
 

@@ -80,28 +80,16 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
 
     init = Initialization("init", None, None)
     workspace = DummyWorkspace()
-    settings = {
-        "run": {
-            "models": {
-                "travel": "beam",
-                "activity_demand": "dummy_activity",
-                "vehicle_ownership": "dummy_vehicle",
-                "land_use": "urbansim",
-            }
-        },
-        "beam": {
-            "model": "beam",  # This is a placeholder, actual beam config would be here
-        },
-        "urbansim": {
-            "model": "urbansim",  # This is a placeholder, actual urbansim config would be here
-        },
-        "activitysim": {
-            "model": "activitysim",  # This is a placeholder, actual activitysim config would be here
-        },
-        "atlas": {
-            "model": "atlas",  # This is a placeholder, actual atlas config would be here
-        },
-    }
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="beam",
+                activity_demand="dummy_activity",
+                vehicle_ownership="dummy_vehicle",
+                land_use="urbansim",
+            )
+        )
+    )
 
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
@@ -133,10 +121,16 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
     init = Initialization("init", None, None)
     workspace = DummyWorkspace()
     # Settings only contains a model that is not in the loop (e.g., no beam)
-    settings = {
-        "travel_model": "none",
-        # No keys for activity_demand_model, vehicle_ownership_model, land_use_model
-    }
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="none",
+                land_use=None,
+                activity_demand=None,
+                vehicle_ownership=None,
+            )
+        )
+    )
 
     # Should complete without exception
     init.run(settings, workspace)

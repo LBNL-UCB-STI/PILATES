@@ -321,7 +321,7 @@ def find_activitysim_output_files(
                     abs_path = file_record.file_path
                 else:
                     abs_path = os.path.join(
-                        workspace.output_path or workspace.full_path,
+                        workspace.full_path,
                         file_record.file_path,
                     )
 
@@ -749,7 +749,7 @@ def copy_plans_from_asim(
             )
             base_path = os.path.dirname(state.run_info_path)
         else:
-            base_path = workspace.output_path
+            base_path = workspace.full_path
 
         asim_file_paths = {}
         for record in input_records.all_records():

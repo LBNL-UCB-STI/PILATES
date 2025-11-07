@@ -158,7 +158,7 @@ class ProvenanceQuery:
         for file_hash, file_rec in self.run_info.file_records.items():
             if short_name and file_rec.short_name == short_name:
                 return file_hash
-            if file_path and file_path in file_rec.file_path:
+            if file_path and file_path == file_rec.file_path:
                 return file_hash
         return None
 
