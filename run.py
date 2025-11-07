@@ -550,7 +550,7 @@ def main():
             if database_config.enabled and database_config.path:
                 try:
                     logger.info(
-                        f"Uploading config hashes to database: {database_config['path']}"
+                        f"Uploading config hashes to database: {database_config.path}"
                     )
                     db = DuckDBManager(database_config.path)
                     db.initialize_database()
