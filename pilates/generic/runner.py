@@ -43,7 +43,7 @@ class GenericRunner(ABC, Model):
         """
         Set up Apptainer/Singularity cache directories.
 
-        Uses local node storage (/local or /tmp) for cache when available for faster
+        Uses local node storage (/local) for cache when available for faster
         extraction, while keeping outputs on scratch for large file I/O.
 
         Args:
@@ -51,19 +51,35 @@ class GenericRunner(ABC, Model):
         """
         # Try to use fast local storage for cache (in order of preference)
         cache_base = None
-        local_options = ['/local', os.environ.get('TMPDIR', ''), '/tmp']
+        local_options = [
+            '/local',  # Prioritize /local (853GB available)
+            os.environ.get('TMPDIR', ''),
+            '/tmp'  # Last resort - only 7.4GB
+        ]
 
         for option in local_options:
             if option and os.path.exists(option) and os.access(option, os.W_OK):
-                cache_base = option
-                logger.info(f"[{self.model_name}] Using local storage for cache: {cache_base}")
-                break
+                # Check if there's enough space (require at least 20GB free)
+                try:
+                    stat = os.statvfs(option)
+                    free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+                    if free_gb >= 20:
+                        cache_base = option
+                        logger.info(
+                            f"[{self.model_name}] Using local storage for cache: {cache_base} ({free_gb:.1f}GB free)")
+                        break
+                    else:
+                        logger.debug(f"[{self.model_name}] Skipping {option} - only {free_gb:.1f}GB free")
+                except Exception as e:
+                    logger.debug(f"[{self.model_name}] Could not check space on {option}: {e}")
+                    continue
 
         if not cache_base:
             # Fall back to scratch if no local storage available
             output_base = os.path.expandvars(settings.run.output_directory)
             cache_base = output_base
-            logger.warning(f"[{self.model_name}] No local storage found, using scratch for cache (may be slow)")
+            logger.warning(
+                f"[{self.model_name}] No suitable local storage found, using scratch for cache (may be slow)")
 
         # Define cache directory paths
         apptainer_cache = os.path.join(cache_base, ".apptainer", "cache")

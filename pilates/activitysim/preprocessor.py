@@ -2009,7 +2009,6 @@ def enrollment_tables(
     settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
 ):
     region = settings.run.region
-    logger.info("RELEVANT FIPS CODE {0}".format(settings.shared.geography))
     FIPS = settings.shared.geography.FIPS
     state_fips = FIPS["state"]
     county_codes = FIPS["counties"]
@@ -2865,9 +2864,6 @@ def process_raw_h5_files(
     asim_zone_id_col="TAZ",
 ):
     region = get_setting(settings, "run.region")
-    logger.info(
-        "RELEVANT FIPS CODE {0}".format(get_setting(settings, "shared.geography"))
-    )
     # -------------------------------------------------------------------------
     # Retrieve the FIPS configuration. Older flat configs store a direct
     # "state" and "counties" entry, while newer hierarchical configs nest these
