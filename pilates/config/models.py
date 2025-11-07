@@ -65,6 +65,12 @@ class RunConfig(BaseModel):
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
 
+    @field_validator("output_directory")
+    @classmethod
+    def expand_env_vars(cls, v):
+        """Expand environment variables in output_directory."""
+        return os.path.expandvars(v)
+
     @field_validator("end_year")
     @classmethod
     def validate_end_year(cls, v, info):
@@ -111,6 +117,12 @@ class DatabaseConfig(BaseModel):
     enabled: bool = Field(False, description="Enable database storage")
     type: str = Field("duckdb", description="Database type")
     path: str = Field(..., description="Database file path")
+
+    @field_validator("path")
+    @classmethod
+    def expand_env_vars(cls, v):
+        """Expand environment variables in database path."""
+        return os.path.expandvars(v)
 
 
 class SharedConfig(BaseModel):
