@@ -323,6 +323,7 @@ class AtlasRunner(GenericRunner):
             self.state.current_year,
         )
         settings = self.state.full_settings
+        self.setup_container_cache_dirs(settings)
 
         # Start provenance tracking for this run
         model_run_hash = self.provenance_tracker.start_model_run(

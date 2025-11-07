@@ -1,5 +1,6 @@
 import abc
 import logging
+import os
 import subprocess
 
 from pilates.config import PilatesConfig
@@ -37,6 +38,35 @@ class GenericRunner(ABC, Model):
         super().__init__(model_name, state, provenance_tracker, major_stage)  # new
         self.required_input_files = []
         self.required_output_files = []
+
+    def setup_container_cache_dirs(self, settings: PilatesConfig):
+        """
+        Set up Apptainer/Singularity cache directories in the output directory
+        to avoid filling up home directory quota on HPC systems.
+
+        Args:
+            settings: PilatesConfig object containing run configuration
+        """
+        output_base = settings.run.output_directory
+
+        # Define cache directory paths
+        apptainer_cache = os.path.join(output_base, ".apptainer", "cache")
+        apptainer_tmp = os.path.join(output_base, ".apptainer", "tmp")
+        singularity_cache = os.path.join(output_base, ".singularity", "cache")
+        singularity_tmp = os.path.join(output_base, ".singularity", "tmp")
+
+        # Set environment variables for Singularity/Apptainer
+        os.environ["APPTAINER_CACHEDIR"] = apptainer_cache
+        os.environ["APPTAINER_TMPDIR"] = apptainer_tmp
+        os.environ["SINGULARITY_CACHEDIR"] = singularity_cache
+        os.environ["SINGULARITY_TMPDIR"] = singularity_tmp
+
+        # Create directories
+        for cache_dir in [apptainer_cache, apptainer_tmp, singularity_cache, singularity_tmp]:
+            os.makedirs(cache_dir, exist_ok=True)
+
+        logger.info(f"[{self.model_name}] Set Apptainer cache to: {apptainer_cache}")
+        logger.info(f"[{self.model_name}] Set Apptainer tmp to: {apptainer_tmp}")
 
     def check_required_input_files(self, inputStore: RecordStore) -> bool:
         # TODO: Implement a check for required input files. Requires Record.simple_name

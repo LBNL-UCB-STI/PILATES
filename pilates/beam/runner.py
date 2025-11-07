@@ -139,6 +139,8 @@ class BeamRunner(GenericRunner):
         beam_config = settings.beam.config
         beam_memory = settings.beam.memory
 
+        self.setup_container_cache_dirs(settings)
+
         # start docker client
         client = None
         if settings.infrastructure.container_manager == "docker":

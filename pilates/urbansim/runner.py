@@ -92,6 +92,7 @@ class UrbansimRunner(GenericRunner):
         )
         settings = self.state.full_settings
         forecast_year = self.state.forecast_year
+        self.setup_container_cache_dirs(settings)
 
         # Start provenance tracking for this run if no hash is provided
         if model_run_hash is None:

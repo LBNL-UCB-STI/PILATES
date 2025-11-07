@@ -165,6 +165,8 @@ class ActivitysimRunner(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
+        self.setup_container_cache_dirs(settings)
+
         # Get from your config
         output_directory = (
             settings.run.output_directory

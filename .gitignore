@@ -111,3 +111,6 @@ pilates_conda_env_setup4hima.txt
 *.DS_Store
 .idea
 .aider*
+
+.apptainer/
+.singularity/
