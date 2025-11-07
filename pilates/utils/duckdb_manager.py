@@ -736,10 +736,10 @@ class DuckDBManager(DatabaseManager):
                 config_data = hash_info["config_data"]
                 config_type = hash_info.get("config_type", model_name)
 
-                # Insert into model_configs (deduplicates by hash)
+                # Insert into config_snapshots (deduplicates by hash)
                 conn.execute(
                     """
-                    INSERT INTO model_configs (
+                    INSERT INTO config_snapshots (
                         config_hash, model_name, config_snapshot_id,
                         config_type, config_data
                     )

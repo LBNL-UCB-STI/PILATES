@@ -603,7 +603,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
-                source = record.get_absolute_path()
+                source = record.get_absolute_path(base_path=workspace.full_path)
                 target = os.path.join(
                     iteration_folder_path,
                     record.short_name.replace("_asim_out", "") + ".parquet",

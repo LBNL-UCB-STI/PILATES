@@ -208,29 +208,19 @@ class FileRecord(Record):
                 f"FileRecord '{self.short_name}' uses parent directory reference: '{self.file_path}'"
             )
 
-    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+    def get_absolute_path(self, base_path: str) -> str:
         """
-        Get the absolute path for this file.
+        Get the absolute path for this file, resolved against the provided base_path.
 
         Args:
-            project_root: Optional project root path. If not provided, will search for it.
+            base_path: The base path against which to resolve the file_path.
 
         Returns:
             Absolute path to the file
         """
-        from pilates.utils.provenance import find_project_root
-
         if os.path.isabs(self.file_path):
             return os.path.normpath(self.file_path)
-
-        if project_root is None:
-            project_root = find_project_root()
-
-        if project_root:
-            return os.path.normpath(os.path.join(project_root, self.file_path))
-        else:
-            # Fallback
-            return os.path.normpath(os.path.abspath(self.file_path))
+        return os.path.normpath(os.path.join(base_path, self.file_path))
 
     def _create_schema(self) -> Dict[str, SchemaDatasetFacet]:
         """
@@ -316,23 +306,11 @@ class H5TableRecord(FileRecord):
     h5_file_unique_id: str  # Unique ID of the parent H5FileRecord
     table_name: str
 
-    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+    def get_absolute_path(self, base_path: str) -> str:
         """Get the absolute path for this table's parent H5 file + table path."""
-        # For H5 tables, file_path is like "path/to/file.h5/households"
-        # We need to handle this specially
-        from pilates.utils.provenance import find_project_root
-
         if os.path.isabs(self.file_path):
             return os.path.normpath(self.file_path)
-
-        if project_root is None:
-            project_root = find_project_root()
-
-        if project_root:
-            return os.path.normpath(os.path.join(project_root, self.file_path))
-        else:
-            logger.warning(f"Could not find project root for H5 table {self.file_path}")
-            return os.path.normpath(os.path.abspath(self.file_path))
+        return os.path.normpath(os.path.join(base_path, self.file_path))
 
     def __post_init__(self):
         # Preserve behavior from FileRecord and ensure an openlineage id exists.
@@ -386,30 +364,20 @@ class H5FileRecord(Record):
                     f"'{os.path.relpath(self.file_path, project_root)}'"
                 )
 
-    def get_absolute_path(self, project_root: Optional[str] = None) -> str:
+
+    def get_absolute_path(self, base_path: str) -> str:
         """
-        Get the absolute path for this file.
+        Get the absolute path for this file, resolved against the provided base_path.
 
         Args:
-            project_root: Optional project root path. If not provided, will search for it.
+            base_path: The base path against which to resolve the file_path.
 
         Returns:
             Absolute path to the file
         """
-        from pilates.utils.provenance import find_project_root
-
         if os.path.isabs(self.file_path):
             return os.path.normpath(self.file_path)
-
-        if project_root is None:
-            project_root = find_project_root()
-
-        if project_root:
-            return os.path.normpath(os.path.join(project_root, self.file_path))
-        else:
-            # Fallback
-            logger.warning(f"Could not find project root for H5 file {self.file_path}, using absolute path fallback")
-            return os.path.normpath(os.path.abspath(self.file_path))
+        return os.path.normpath(os.path.join(base_path, self.file_path))
 
     def toDataset(self, namespace: Optional[str] = "default") -> Dataset:
         """
