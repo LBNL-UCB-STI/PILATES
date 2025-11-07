@@ -41,19 +41,35 @@ class GenericRunner(ABC, Model):
 
     def setup_container_cache_dirs(self, settings: PilatesConfig):
         """
-        Set up Apptainer/Singularity cache directories in the output directory
-        to avoid filling up home directory quota on HPC systems.
+        Set up Apptainer/Singularity cache directories.
+
+        Uses local node storage (/local or /tmp) for cache when available for faster
+        extraction, while keeping outputs on scratch for large file I/O.
 
         Args:
             settings: PilatesConfig object containing run configuration
         """
-        output_base = settings.run.output_directory
+        # Try to use fast local storage for cache (in order of preference)
+        cache_base = None
+        local_options = ['/local', os.environ.get('TMPDIR', ''), '/tmp']
+
+        for option in local_options:
+            if option and os.path.exists(option) and os.access(option, os.W_OK):
+                cache_base = option
+                logger.info(f"[{self.model_name}] Using local storage for cache: {cache_base}")
+                break
+
+        if not cache_base:
+            # Fall back to scratch if no local storage available
+            output_base = os.path.expandvars(settings.run.output_directory)
+            cache_base = output_base
+            logger.warning(f"[{self.model_name}] No local storage found, using scratch for cache (may be slow)")
 
         # Define cache directory paths
-        apptainer_cache = os.path.join(output_base, ".apptainer", "cache")
-        apptainer_tmp = os.path.join(output_base, ".apptainer", "tmp")
-        singularity_cache = os.path.join(output_base, ".singularity", "cache")
-        singularity_tmp = os.path.join(output_base, ".singularity", "tmp")
+        apptainer_cache = os.path.join(cache_base, ".apptainer", "cache")
+        apptainer_tmp = os.path.join(cache_base, ".apptainer", "tmp")
+        singularity_cache = os.path.join(cache_base, ".singularity", "cache")
+        singularity_tmp = os.path.join(cache_base, ".singularity", "tmp")
 
         # Set environment variables for Singularity/Apptainer
         os.environ["APPTAINER_CACHEDIR"] = apptainer_cache
