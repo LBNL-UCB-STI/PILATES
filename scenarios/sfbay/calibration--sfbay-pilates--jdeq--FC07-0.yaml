@@ -5,7 +5,7 @@
 ############################
 
 # scenario defs
-region: seattle
+region: sfbay
 scenario: base
 start_year: 2017
 end_year: 2018
@@ -40,13 +40,13 @@ docker_stdout: False
 pull_latest: False
 
 # skim settings
-skims_zone_type: block_group # one of [taz, block_group, block]
-skims_fname: as-base-skims-seattle-bg.omx
+skims_zone_type: taz # one of [taz, block_group, block]
+skims_fname: as-base-skims-sfbay-taz.omx
 # skims_fname: as-base-skims-austin-bg.csv.gz
-origin_skims_fname: as-origin-skims-seattle-bg.csv.gz #file or folder name.
-beam_router_directory: r5/seattle-area-cbg120-ferry-network
+origin_skims_fname: as-origin-skims-sfbay-taz.csv.gz #file or folder name.
+beam_router_directory: r5/sfbay-area-cbg5500-network
 beam_geoms_fname: clipped_tazs.csv
-geoms_index_col: GEOID
+geoms_index_col: taz1454
 
 # region_zone_type:
 #   austin: block_groups # one of [taz, block_groups, block]
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: pilates-calibration--jdeq--FC07-0
+output_run_name: pilates-calibration--jdeq--cbg5500wc--FC07-0
 
 # URBANSIM
 region_to_region_id:
@@ -100,7 +100,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: scenarios/network-calibration/seattle-pilates--jdeq--FC07-0.conf # OR austin-pilates-base.conf
+beam_config: scenarios/network-calibration/sfbay-pilates--jdeq--cbg5500wc--FC07-0.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -119,7 +119,6 @@ beam_simulated_hwy_paths:
   - SOV
   - HOV2
   - HOV3
-file_format: "parquet"
 
 # POLARIS
 polaris_local_data_folder: pilates/polaris/data
