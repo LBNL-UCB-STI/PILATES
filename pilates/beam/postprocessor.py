@@ -3373,7 +3373,9 @@ class BeamPostprocessor(GenericPostprocessor):
                 all_skims_path,
                 model_run_id=model_run_hash,
                 description="Zarr skims store updated with BEAM outputs.",
-                short_name="zarr_skims",
+                short_name=f"zarr_skims_{self.state.current_year}_{self.state.current_inner_iter}",
+                year=self.state.current_year,
+                context=self.state,
             )
             if output_rec:
                 processed_records.append(output_rec)

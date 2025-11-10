@@ -143,6 +143,17 @@ class ActivitysimRunner(GenericRunner):
         }
         return asim_docker_vols
 
+    def _parse_year_iteration_from_short_name(self, short_name: str) -> Tuple[int, int]:
+        parts = short_name.split('_')
+        if len(parts) >= 3 and parts[0] == 'zarr' and parts[1] == 'skims':
+            try:
+                year = int(parts[2])
+                iteration = int(parts[3])
+                return year, iteration
+            except ValueError:
+                pass
+        return 0, 0 # Default or error case
+
     def _run(
         self,
         store: RecordStore,
@@ -278,7 +289,8 @@ class ActivitysimRunner(GenericRunner):
                 all_skims_path,
                 model_run_id=asim_compile_run_hash,
                 description="Zarr skims initialized from omx.",
-                short_name="zarr_skims",
+                short_name=f"zarr_skims_{self.state.current_year}_-1",
+                context=self.state
             )
             if zarr_skims_rec:
                 output_records.append(zarr_skims_rec)
@@ -347,33 +359,53 @@ class ActivitysimRunner(GenericRunner):
                 last_beam_post_records = self.provenance_tracker.run_info.get_latest_model_run_output_records(
                     "beam_postprocessor"
                 )
-                zarr_skims_rec = next(
-                    r for r in last_beam_post_records if r.short_name == "zarr_skims"
+
+                zarr_skims_recs = sorted(
+                    [r for r in last_beam_post_records if r.short_name.startswith("zarr_skims")],
+                    key=lambda r: self._parse_year_iteration_from_short_name(r.short_name)
                 )
-                logger.info(
+                if zarr_skims_recs:
+                    zarr_skims_rec = zarr_skims_recs[-1]
+                    logger.info(
                     f"Using zarr skims from last BEAM postprocessor run: {zarr_skims_rec.file_path}"
                 )
+                else:
+                    logger.warning("No zarr skims found as inputs to the previous ASIM run. OMX skims will be used.")
+                    zarr_skims_rec = None
             else:
                 last_asim_run_hash = (
                     self.provenance_tracker.run_info.get_latest_model_run("activitysim")
                 )
-                last_asim_run_input_hashes = (
-                    self.provenance_tracker.run_info.model_runs[
-                        last_asim_run_hash
-                    ].input_record_hashes
-                )
-                last_asim_run_input_records = [
-                    self.provenance_tracker.run_info.file_records.get(h)
-                    for h in last_asim_run_input_hashes
-                ]
-                zarr_skims_rec = next(
-                    r
-                    for r in last_asim_run_input_records
-                    if r.short_name == "zarr_skims"
-                )
-                logger.info(
-                    f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}"
-                )
+                if last_asim_run_hash:
+                    last_asim_run_input_hashes = (
+                        self.provenance_tracker.run_info.model_runs[
+                            last_asim_run_hash
+                        ].input_record_hashes
+                    )
+                    last_asim_run_input_records = [
+                        self.provenance_tracker.run_info.file_records.get(h)
+                        for h in last_asim_run_input_hashes
+                    ]
+                    # Filter and sort to find the most recent versioned zarr_skims
+                    zarr_skims_recs = sorted(
+                        [r for r in last_asim_run_input_records if r and r.short_name.startswith("zarr_skims")],
+                        key=lambda r: self._parse_year_iteration_from_short_name(r.short_name)
+                    )
+                    if zarr_skims_recs:
+                        zarr_skims_rec = zarr_skims_recs[-1]
+                        logger.info(
+                            f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}"
+                        )
+                    else:
+                        logger.warning(
+                            "No zarr skims found as inputs to the previous ASIM run. OMX skims will be used."
+                        )
+                        zarr_skims_rec = None
+                else:
+                    logger.warning(
+                        "No previous ASIM run found. OMX skims will be used."
+                    )
+                    zarr_skims_rec = None
 
         if zarr_skims_rec:
             filtered_store.remove_record_type("omx_skims")

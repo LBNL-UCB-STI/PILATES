@@ -672,7 +672,7 @@ def copy_plans_from_asim(
                 description="Merged persons for BEAM input",
                 model_run_id=model_run_hash,
                 state=state,
-                short_name="persons_beam_in",
+                short_name=f"persons_beam_in_{state.current_year}_{state.current_inner_iter}",
             )
             _, asim_households_record = asim_file_paths.get("households", (None, None))
             households_record = provenance_tracker.record_output_file_with_inputs(
@@ -681,18 +681,23 @@ def copy_plans_from_asim(
                 input_records=[asim_households_record],
                 description="Merged households for BEAM input",
                 model_run_id=model_run_hash,
-                state=state,
-                short_name="households_beam_in",
+                context=state,
+                short_name=f"households_beam_in_{state.current_year}_{state.current_inner_iter}",
             )
             _, asim_plans_record = asim_file_paths.get("beam_plans", (None, None))
+            
+            merged_plans_inputs = [asim_plans_record]
+            if beam_plans_record:
+                merged_plans_inputs.append(beam_plans_record)
+
             plans_record = provenance_tracker.record_output_file_with_inputs(
                 "beam_preprocessor",
                 beam_plans_path,
-                input_records=[asim_plans_record],
+                input_records=merged_plans_inputs,
                 description="Merged plans for BEAM input",
                 model_run_id=model_run_hash,
-                state=state,
-                short_name="plans_beam_in",
+                context=state,
+                short_name=f"plans_beam_in_{state.current_year}_{state.current_inner_iter}",
             )
             record_list = [plans_record, households_record, persons_record]
         else:
@@ -710,8 +715,8 @@ def copy_plans_from_asim(
                     input_records=[asim_plans_record],
                     description="Copied plans for BEAM input (no merge)",
                     model_run_id=model_run_hash,
-                    state=state,
-                    short_name="plans_beam_in",
+                    context=state,
+                    short_name=f"plans_beam_in_{state.current_year}_{state.current_inner_iter}",
                 )
                 record_list = [plans_record]
             else:
@@ -874,6 +879,7 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         settings = self.state.full_settings
         iteration_number = self.state.iteration
+        previous_beam_records = []
 
         # Start by retrieving what Initialization stored
         input_records = workspace.output_data.get("beam", RecordStore())
@@ -881,17 +887,25 @@ class BeamPreprocessor(GenericPreprocessor):
 
         asim_post_records = previous_records.all_records()
         for record in asim_post_records:
-            if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
+            short_name = record.short_name.rsplit("_", 2)[0]
+            if short_name in self.required_input_data:
                 input_records.add_record(record)
 
-        previous_beam_records = (
-            self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
-        )
-        for record in previous_beam_records:
-            if (record.short_name.rsplit("_", 2)[0] in self.required_input_data) and (
-                "_sub" not in record.short_name
-            ):
-                input_records.add_record(record)
+        # If this is a replanning iteration, we need to get the outputs from the previous BEAM run
+        if self.state.current_inner_iter > 0:
+            previous_beam_records = (
+                self.provenance_tracker.run_info.get_model_run_output_records(
+                    "beam",
+                    year=self.state.current_year,
+                    iteration=self.state.current_inner_iter - 1,
+                )
+            )
+            for record in previous_beam_records:
+                short_name = record.short_name.rsplit("_", 2)[0]
+                if (short_name in self.required_input_data) and (
+                    "_sub" not in record.short_name
+                ):
+                    input_records.add_record(record)
 
         model_run_hash = self.provenance_tracker.start_model_run(
             "beam_preprocessor",
