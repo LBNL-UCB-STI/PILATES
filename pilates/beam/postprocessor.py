@@ -2546,10 +2546,6 @@ def _merge_beam_skims_to_zarr(
     # Ensure zarr_version=2 for compatibility
     try:
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
-        if "preprocessed" not in skims_ds["otaz"].attrs:
-            skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
-        if "preprocessed" not in skims_ds["dtaz"].attrs:
-            skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
         skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (

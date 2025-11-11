@@ -165,6 +165,39 @@ class TestDatabaseComponents(unittest.TestCase):
                 )
                 print(f"   ✅ Processed table {table} exists")
 
+    def test_config_snapshot_insert(self):
+        """Test that inserting into config_snapshots works without a config_hash column."""
+        import json
+        db_manager = create_database_manager(self.settings.shared.database)
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+            # Insert a minimal config snapshot
+            snapshot_id = f"snap_{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                """
+                INSERT INTO config_snapshots (
+                    snapshot_id, created_timestamp, config_content_hash,
+                    git_hashes, config_files, pilates_settings,
+                    beam_config, asim_subdir, region
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    snapshot_id,
+                    datetime.now().isoformat(),
+                    "dummy_hash",
+                    json.dumps({}),
+                    json.dumps({}),
+                    json.dumps({}),
+                    "beam.cfg",
+                    "asim_subdir",
+                    "test_region",
+                ],
+            )
+            # Verify insertion
+            result = conn.execute("SELECT * FROM config_snapshots WHERE snapshot_id = ?", [snapshot_id]).fetchone()
+            self.assertIsNotNone(result, "Config snapshot should be inserted successfully")
+
     def test_data_storage_and_retrieval(self):
         """Test actual data insertion operations that would catch SQL constraint issues."""
         print("\n💾 Testing data insertion and constraint handling...")

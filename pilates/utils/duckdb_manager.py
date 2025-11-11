@@ -739,7 +739,7 @@ class DuckDBManager(DatabaseManager):
                 # Insert into config_snapshots (deduplicates by hash)
                 conn.execute(
                     """
-                    INSERT INTO config_snapshots (
+                    INSERT INTO model_configs (
                         config_hash, model_name, config_snapshot_id,
                         config_type, config_data
                     )
