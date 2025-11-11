@@ -6,9 +6,11 @@ from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, Record, FileRecord
+from pilates.utils.geog import geoid_to_zone_map
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from workflow_state import WorkflowState
@@ -29,6 +31,80 @@ BEAM_PYDANTIC_PATH_MAP = {
     "max_plans_memory": "beam.max_plans_memory",
     "skim_zone_geoid_col": "beam.skim_zone_geoid_col",
 }
+
+
+def sort_beam_shapefile_by_canonical_order(settings, workspace, provenance_tracker, model_run_hash):
+    """
+    Sorts the BEAM zone shapefile to match the canonical order derived from
+    the UrbanSim datastore, ensuring consistency between BEAM and ActivitySim.
+    """
+    logger.info("--- Sorting BEAM Shapefile by Canonical Zone Order ---")
+    try:
+        # 1. Get Canonical Order from Pilates (via geoid_to_zone_map)
+        mapping = geoid_to_zone_map(settings)
+        pilates_order_df = pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
+        pilates_order_df["zone_id"] = pd.to_numeric(pilates_order_df["zone_id"])
+        pilates_order_df = pilates_order_df.sort_values("zone_id")
+        pilates_canonical_order = pilates_order_df.index.tolist()
+        logger.info(f"Generated canonical order for {len(pilates_canonical_order)} zones.")
+
+        # 2. Load BEAM Shapefile
+        region = settings.run.region
+        # Use the mutable data folder as the shapefile will be modified in place
+        beam_mutable_folder = workspace.get_beam_mutable_data_dir()
+        shapefile_relative_path = settings.beam.skims_shapefile
+        shapefile_path = os.path.join(beam_mutable_folder, region, shapefile_relative_path)
+
+        if not os.path.exists(shapefile_path):
+            logger.error(f"BEAM shapefile not found at '{shapefile_path}'. Skipping sorting.")
+            return
+
+        # Record the original shapefile as an input
+        input_shapefile_record = provenance_tracker.record_input_file(
+            "beam_preprocessor",
+            shapefile_path,
+            short_name="beam_zone_shapefile",
+            description="Original BEAM zone shapefile, to be sorted.",
+            model_run_id=model_run_hash,
+        )
+
+        logger.info(f"Loading BEAM shapefile from: {shapefile_path}")
+        shapefile_gdf = gpd.read_file(shapefile_path)
+
+        # 3. Re-sort the GeoDataFrame
+        geoid_col = settings.beam.skim_zone_geoid_col
+        if geoid_col not in shapefile_gdf.columns:
+            logger.error(f"GEOID column '{geoid_col}' not found in shapefile. Skipping sorting.")
+            return
+
+        # Check if sorting is necessary
+        current_order = shapefile_gdf[geoid_col].tolist()
+        if current_order == pilates_canonical_order:
+            logger.info("Shapefile is already sorted correctly. No changes needed.")
+            return
+
+        logger.info("Shapefile order does not match canonical order. Re-sorting...")
+        shapefile_gdf[geoid_col] = shapefile_gdf[geoid_col].astype(str)
+        shapefile_gdf_sorted = shapefile_gdf.set_index(geoid_col).reindex(pilates_canonical_order).reset_index()
+
+        # 4. Overwrite the shapefile
+        logger.info(f"Overwriting shapefile at {shapefile_path} with sorted version.")
+        shapefile_gdf_sorted.to_file(shapefile_path, driver='ESRI Shapefile')
+
+        # Record the new, sorted shapefile as an output
+        provenance_tracker.record_output_file_with_inputs(
+            "beam_preprocessor",
+            shapefile_path,  # Same path, as it's overwritten
+            input_records=[input_shapefile_record],
+            short_name="beam_zone_shapefile_sorted",
+            description="BEAM zone shapefile sorted by canonical order.",
+            model_run_id=model_run_hash,
+        )
+        logger.info("--- Shapefile Sorting Complete ---")
+
+    except Exception as e:
+        logger.error(f"An error occurred during shapefile sorting: {e}", exc_info=True)
+        raise
 
 
 def copy_data_to_mutable_location(
@@ -922,6 +998,11 @@ class BeamPreprocessor(GenericPreprocessor):
             )
         else:
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
+
+        # Sort the shapefile to ensure consistent zone ordering
+        sort_beam_shapefile_by_canonical_order(
+            settings, workspace, self.provenance_tracker, model_run_hash
+        )
 
         # Copy vehicle data from Atlas if enabled
         # Only copy on first iteration since vehicles are constant across iterations within a year
