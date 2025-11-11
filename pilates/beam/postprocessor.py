@@ -9,6 +9,7 @@ import numpy as np
 import openmatrix as omx
 
 from pilates.config import PilatesConfig
+from pilates.utils.geog import geoid_to_zone_map
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
 
@@ -22,6 +23,8 @@ from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
+
+import pandas as pd
 
 
 logger = logging.getLogger(__name__)
@@ -2207,6 +2210,80 @@ def write_zarr_skim_as_omx(
             except Exception as e:
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
+def verify_skim_zone_order(settings, skim_file_path: str):
+    """
+    Verifies that the zone order in a skim file (Zarr or OMX) matches the
+    canonical order from geoid_to_zone_map.
+
+    Args:
+        settings: The PilatesConfig object.
+        skim_file_path: Path to the skim file to verify.
+
+    Raises:
+        ValueError: If the zone orders do not match.
+    """
+    logger.info(f"--- Verifying zone order for skim file: {skim_file_path} ---")
+
+    # 1. Get Canonical Order
+    mapping = geoid_to_zone_map(settings)
+    canonical_order_df = pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
+    canonical_order_df["zone_id"] = pd.to_numeric(canonical_order_df["zone_id"])
+    canonical_order_df = canonical_order_df.sort_values("zone_id")
+    canonical_order = canonical_order_df.index.tolist()
+    logger.info(f"Successfully loaded canonical order for {len(canonical_order)} zones.")
+
+    # 2. Get Skim File Order
+    skim_order = None
+    if skim_file_path.endswith(".zarr") or skim_file_path.endswith(".zarr.zip"):
+        # Use xarray.open_zarr for consistency with the rest of the code
+        # xarray.open_zarr does not take a 'mode' argument directly
+        store = xr.open_zarr(skim_file_path)
+        if 'original_zone_ids' in store['otaz'].attrs:
+            skim_order = store['otaz'].attrs['original_zone_ids']
+            logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr attributes.")
+        else:
+            raise ValueError("Zarr file does not contain 'original_zone_ids' metadata.")
+
+    elif skim_file_path.endswith(".omx"):
+        with omx.open_file(skim_file_path, 'r') as f:
+            if 'TAZ' in f.list_mappings():
+                # The mapping values are the GEOIDs, and they are 0-indexed
+                # corresponding to the matrix order.
+                mapping_items = sorted(f.mapping('TAZ').items(), key=lambda item: item[1])
+                skim_order = [item[0] for item in mapping_items]
+                logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
+            else:
+                raise ValueError("OMX file does not contain 'TAZ' mapping.")
+    else:
+        logger.warning(f"Unsupported file type for zone order verification: {skim_file_path}")
+        return
+
+    # 3. Compare Orders
+    if skim_order is None:
+        raise ValueError("Could not extract zone order from skim file.")
+
+    if len(skim_order) != len(canonical_order):
+        msg = (
+            f"Zone count mismatch! Canonical order has {len(canonical_order)} zones, "
+            f"but skim file has {len(skim_order)} zones."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if skim_order != canonical_order:
+        # Find first mismatch for detailed error message
+        for i, (canonical_id, skim_id) in enumerate(zip(canonical_order, skim_order)):
+            if canonical_id != skim_id:
+                msg = (
+                    f"FATAL: Skim zone order does not match canonical order! "
+                    f"This indicates silent data corruption is occurring in the BEAM run. "
+                    f"First mismatch at index {i}: Canonical='{canonical_id}', Skim='{skim_id}'"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+    
+    logger.info("--- Zone order verification successful. ---")
+
 
 def _merge_beam_skims_to_zarr(
     all_skims_path,
@@ -2254,6 +2331,9 @@ def _merge_beam_skims_to_zarr(
         logger.warning(f"No current skims found. Skipping merge.")
         return None, existing_zarr_manager
 
+    # ---> INSERT RUNTIME VERIFICATION HERE <---
+    verify_skim_zone_order(settings, current_skims_path)
+
     if current_skims_path.endswith(".zarr"):
         input_format = "zarr"
         partial_skims_ds = xr.open_zarr(current_skims_path)
@@ -2281,7 +2361,7 @@ def _merge_beam_skims_to_zarr(
                 skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
     except Exception as e:
         logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
-        return None  # Indicate failure
+        return None, None  # Indicate failure
 
     timePeriods = get_setting(settings, "shared.skims.periods")
     consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
