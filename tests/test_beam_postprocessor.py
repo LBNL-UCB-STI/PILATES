@@ -207,7 +207,7 @@ class TestBeamPostprocessor:
         mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Skim zone order does not match canonical order!"):
+        with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_scrambled,
@@ -247,7 +247,7 @@ class TestBeamPostprocessor:
         mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Skim zone order does not match canonical order!"):
+        with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_0_based_int_ids,
@@ -261,13 +261,14 @@ class TestBeamPostprocessor:
         self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_1_based_int_ids
     ):
         """
-        Test that merging BEAM skims with 1-based integer zone IDs raises a ValueError.
+        Test that merging BEAM skims with 1-based integer zone IDs raises a ValueError
+        due to non-0-based otaz coordinates.
         """
         # Arrange
         mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Skim zone order does not match canonical order!"):
+        with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_1_based_int_ids,

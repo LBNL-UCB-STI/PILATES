@@ -2275,13 +2275,27 @@ def verify_skim_zone_order(settings, skim_file_path: str):
         for i, (canonical_id, skim_id) in enumerate(zip(canonical_order, skim_order)):
             if canonical_id != skim_id:
                 msg = (
-                    f"FATAL: Skim zone order does not match canonical order! "
+                    f"FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order! "
                     f"This indicates silent data corruption is occurring in the BEAM run. "
                     f"First mismatch at index {i}: Canonical='{canonical_id}', Skim='{skim_id}'"
                 )
                 logger.error(msg)
                 raise ValueError(msg)
     
+    # NEW CHECK: Verify that the actual otaz coordinates are 0-based
+    expected_otaz_coords = np.arange(len(canonical_order))
+    actual_otaz_coords = store.coords["otaz"].values
+    
+    if not np.array_equal(actual_otaz_coords, expected_otaz_coords):
+        msg = (
+            f"FATAL: Zarr 'otaz' coordinates are not 0-based as expected! "
+            f"Expected 0-based coordinates up to {len(canonical_order) - 1}, "
+            f"but found coordinates starting with {actual_otaz_coords[0]} and ending with {actual_otaz_coords[-1]}. "
+            f"This indicates BEAM produced 1-based coordinates, which will cause ActivitySim to fail."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
     logger.info("--- Zone order verification successful. ---")
 
 
@@ -2626,6 +2640,12 @@ def _merge_beam_skims_to_zarr(
     # Ensure zarr_version=2 for compatibility
     try:
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
+        # Add the 'preprocessed' attribute now that we've verified coordinates are 0-based
+        if "preprocessed" not in skims_ds["otaz"].attrs:
+            skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
+        if "preprocessed" not in skims_ds["dtaz"].attrs:
+            skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
+
         skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (
