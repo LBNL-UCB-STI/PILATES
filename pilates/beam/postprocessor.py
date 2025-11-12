@@ -15,8 +15,9 @@ from pilates.utils.zarr_versioning import VersionedZarrStore
 
 try:
     import xarray as xr
+    import zarr
 except:
-    print("FAILED TO LOAD XARRAY")
+    print("FAILED TO LOAD XARRAY or ZARR")
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
@@ -2234,21 +2235,37 @@ def verify_skim_zone_order(settings, skim_file_path: str):
 
     # 2. Get Skim File Order
     skim_order = None
+    store = None
     if skim_file_path.endswith(".zarr") or skim_file_path.endswith(".zarr.zip"):
-        # Use xarray.open_zarr for consistency with the rest of the code
-        # xarray.open_zarr does not take a 'mode' argument directly
-        store = xr.open_zarr(skim_file_path)
-        if 'original_zone_ids' in store['otaz'].attrs:
-            skim_order = store['otaz'].attrs['original_zone_ids']
-            logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr attributes.")
-        else:
-            raise ValueError("Zarr file does not contain 'original_zone_ids' metadata.")
+        try:
+            store = xr.open_zarr(skim_file_path)
+            if 'original_zone_ids' in store.attrs:
+                skim_order = store.attrs['original_zone_ids']
+                logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr root attributes.")
+            elif 'original_zone_ids' in store['otaz'].attrs:
+                skim_order = store['otaz'].attrs['original_zone_ids']
+                logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr 'otaz' attributes (legacy).")
+            else:
+                raise ValueError("Zarr file does not contain 'original_zone_ids' metadata in root or 'otaz' attributes.")
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Could not find 'original_zone_ids' on first attempt ({e}). Trying to consolidate metadata.")
+            if store:
+                store.close()
+            try:
+                import zarr
+                zarr.consolidate_metadata(skim_file_path)
+                store = xr.open_zarr(skim_file_path, consolidated=True)
+                if 'original_zone_ids' in store.attrs:
+                    skim_order = store.attrs['original_zone_ids']
+                    logger.info(f"Extracted {len(skim_order)} zone IDs after consolidating metadata.")
+                else:
+                    raise ValueError("Zarr file does not contain 'original_zone_ids' metadata even after consolidation.")
+            except Exception as consolidation_error:
+                 raise ValueError(f"Zarr file does not contain 'original_zone_ids' metadata. Consolidation attempt failed: {consolidation_error}")
 
     elif skim_file_path.endswith(".omx"):
         with omx.open_file(skim_file_path, 'r') as f:
             if 'TAZ' in f.list_mappings():
-                # The mapping values are the GEOIDs, and they are 0-indexed
-                # corresponding to the matrix order.
                 mapping_items = sorted(f.mapping('TAZ').items(), key=lambda item: item[1])
                 skim_order = [item[0] for item in mapping_items]
                 logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
@@ -2259,42 +2276,45 @@ def verify_skim_zone_order(settings, skim_file_path: str):
         return
 
     # 3. Compare Orders
-    if skim_order is None:
-        raise ValueError("Could not extract zone order from skim file.")
+    try:
+        if skim_order is None:
+            raise ValueError("Could not extract zone order from skim file.")
 
-    if len(skim_order) != len(canonical_order):
-        msg = (
-            f"Zone count mismatch! Canonical order has {len(canonical_order)} zones, "
-            f"but skim file has {len(skim_order)} zones."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
+        if len(skim_order) != len(canonical_order):
+            msg = (
+                f"Zone count mismatch! Canonical order has {len(canonical_order)} zones, "
+                f"but skim file has {len(skim_order)} zones."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
 
-    if skim_order != canonical_order:
-        # Find first mismatch for detailed error message
-        for i, (canonical_id, skim_id) in enumerate(zip(canonical_order, skim_order)):
-            if canonical_id != skim_id:
+        if skim_order != canonical_order:
+            for i, (canonical_id, skim_id) in enumerate(zip(canonical_order, skim_order)):
+                if canonical_id != skim_id:
+                    msg = (
+                        f"FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order! "
+                        f"This indicates silent data corruption is occurring in the BEAM run. "
+                        f"First mismatch at index {i}: Canonical='{canonical_id}', Skim='{skim_id}'"
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+        
+        if store:
+            expected_otaz_coords = np.arange(len(canonical_order))
+            actual_otaz_coords = store.coords["otaz"].values
+            
+            if not np.array_equal(actual_otaz_coords, expected_otaz_coords):
                 msg = (
-                    f"FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order! "
-                    f"This indicates silent data corruption is occurring in the BEAM run. "
-                    f"First mismatch at index {i}: Canonical='{canonical_id}', Skim='{skim_id}'"
+                    f"FATAL: Zarr 'otaz' coordinates are not 0-based as expected! "
+                    f"Expected 0-based coordinates up to {len(canonical_order) - 1}, "
+                    f"but found coordinates starting with {actual_otaz_coords[0]} and ending with {actual_otaz_coords[-1]}. "
+                    f"This indicates BEAM produced 1-based coordinates, which will cause ActivitySim to fail."
                 )
                 logger.error(msg)
                 raise ValueError(msg)
-    
-    # NEW CHECK: Verify that the actual otaz coordinates are 0-based
-    expected_otaz_coords = np.arange(len(canonical_order))
-    actual_otaz_coords = store.coords["otaz"].values
-    
-    if not np.array_equal(actual_otaz_coords, expected_otaz_coords):
-        msg = (
-            f"FATAL: Zarr 'otaz' coordinates are not 0-based as expected! "
-            f"Expected 0-based coordinates up to {len(canonical_order) - 1}, "
-            f"but found coordinates starting with {actual_otaz_coords[0]} and ending with {actual_otaz_coords[-1]}. "
-            f"This indicates BEAM produced 1-based coordinates, which will cause ActivitySim to fail."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
+    finally:
+        if store:
+            store.close()
 
     logger.info("--- Zone order verification successful. ---")
 
