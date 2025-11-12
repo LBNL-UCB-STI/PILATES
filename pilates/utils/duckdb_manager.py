@@ -313,6 +313,51 @@ class DuckDBManager(DatabaseManager):
             logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
             return False
 
+    def upload_config_snapshot(self, config_snapshot: Dict[str, Any]) -> bool:
+        """
+        Upload a single config snapshot to the database.
+        """
+        try:
+            conn = self._get_connection()
+            config_snapshot_id = config_snapshot.get("snapshot_id")
+
+            # Check if config snapshot already exists
+            existing = conn.execute(
+                "SELECT snapshot_id FROM config_snapshots WHERE snapshot_id = ?",
+                [config_snapshot_id],
+            ).fetchone()
+
+            if not existing:
+                conn.execute(
+                    """
+                    INSERT INTO config_snapshots (
+                        snapshot_id, created_timestamp, config_content_hash,
+                        git_hashes, config_files, pilates_settings,
+                        beam_config, asim_subdir, region
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    [
+                        config_snapshot_id,
+                        config_snapshot.get("created_timestamp"),
+                        config_snapshot.get("config_content_hash"),
+                        json.dumps(config_snapshot.get("git_hashes", {})),
+                        json.dumps(
+                            config_snapshot.get("config_files", {})
+                        ),
+                        json.dumps(
+                            config_snapshot.get("pilates_settings", {})
+                        ),
+                        config_snapshot.get("beam_config"),
+                        config_snapshot.get("asim_subdir"),
+                        config_snapshot.get("region"),
+                    ],
+                )
+                logger.info(f"Uploaded config snapshot {config_snapshot_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload config snapshot {config_snapshot.get('snapshot_id')}: {e}")
+            return False
+
     def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
         """
         Upload complete run data to DuckDB.

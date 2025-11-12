@@ -554,6 +554,7 @@ def main():
                     )
                     db = DuckDBManager(database_config.path)
                     db.initialize_database()
+                    db.upload_config_snapshot(config_snapshot)
                     db.upload_hierarchical_config_hashes(
                         config_snapshot["snapshot_id"], hierarchical_hashes
                     )
