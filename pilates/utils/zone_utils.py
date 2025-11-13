@@ -3,7 +3,7 @@ import os
 import pandas as pd
 
 from pilates.utils.io import read_datastore
-from pilates.utils.settings_helper import get as get_setting
+from pilates.activitysim.preprocessor import read_zone_geoms
 
 logger = logging.getLogger(__name__)
 
@@ -31,65 +31,35 @@ def generate_canonical_zones_file(settings, year, output_path):
         logger.info("Canonical zones file already exists. Skipping generation.")
         return output_path
 
-    if zone_type == "block_group":
-        store, table_prefix_yr = read_datastore(settings, year)
-        blocks_key = os.path.join(table_prefix_yr, "blocks")
-        if blocks_key not in store:
-            blocks_key = "blocks"
-        
-        blocks = store.get(blocks_key)
-        store.close()
-        
-        if blocks is None:
-            raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
-        
-        if 'zone_id' not in blocks.columns: # Only need zone_id for TAZs
-            raise ValueError("blocks table for block_group must contain 'zone_id' column.")
-            
-        # The canonical zones should be the unique TAZ IDs that block groups aggregate to.
-        # Extract unique TAZ IDs from the 'zone_id' column of the blocks table.
-        unique_tazs = blocks['zone_id'].unique()
-        
-        # Sort by TAZ ID numerically to ensure a stable order before assigning sequential asim_id
-        unique_tazs.sort() # Assuming zone_id are numeric or convertible to numeric
-        
-        df = pd.DataFrame({'zone_key': unique_tazs})
-        df['asim_id'] = range(1, len(df) + 1) # Assign sequential 1-based asim_id
-
-    elif zone_type == "taz":
-        # For TAZs, the zone_key is the TAZ ID itself (e.g., from taz1454).
-        # A new, sequential asim_id is generated for matrix indexing.
-        store, table_prefix_yr = read_datastore(settings, year)
-        blocks_key = os.path.join(table_prefix_yr, "blocks")
-        if blocks_key not in store:
-            blocks_key = "blocks"
-            
-        blocks = store.get(blocks_key)
-        store.close()
-        
-        if blocks is None:
-            raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
-        
-        taz_col = 'taz_zone_id'  # Verified from H5 inspection
-        if taz_col not in blocks.columns:
-            raise ValueError(f"'{taz_col}' not found in 'blocks' table.")
-            
-        unique_tazs = blocks[taz_col].unique()
-        unique_tazs.sort()  # Ensure stable order before assigning IDs
-        df = pd.DataFrame({'zone_key': unique_tazs})
-        df['asim_id'] = range(1, len(df) + 1)
+    # Use read_zone_geoms to get the authoritative, sorted list of zones
+    # This function handles downloading geoms if needed and sorts them consistently
+    zones_gdf = read_zone_geoms(
+        settings, 
+        year, 
+        asim_zone_id_col="TAZ", # ActivitySim's expected TAZ column name
+        default_zone_id_col=get_setting(settings, "shared.skims.geoms_index_col")
+    )
+    
+    # The index of zones_gdf is the sorted zone_id (TAZ ID)
+    canonical_zone_keys = zones_gdf.index.unique().tolist()
+    
+    # Create the DataFrame for canonical_zones.csv
+    df = pd.DataFrame({'zone_key': canonical_zone_keys})
+    df['asim_id'] = range(1, len(df) + 1) # Assign sequential 1-based asim_id
 
     if df is not None:
         # Final processing and save
         df['zone_key'] = df['zone_key'].astype(str)
         df['asim_id'] = df['asim_id'].astype(int)
-        df = df.sort_values('asim_id').reset_index(drop=True)
+        # The zones_gdf is already sorted, so we just need to ensure the DataFrame is consistent
+        df = df.sort_values('asim_id').reset_index(drop=True) # Sort by asim_id to be explicit
         
         df.to_csv(output_path, index=False)
         logger.info(f"Successfully generated canonical zones file with {len(df)} zones.")
         return output_path
     else:
-        raise ValueError(f"Unsupported zone_type for canonical zone generation: {zone_type}")
+        # This else branch should ideally not be reached with the new logic
+        raise ValueError(f"Failed to generate canonical zones for zone_type: {zone_type}")
 
 
 def get_canonical_zones(workspace):
