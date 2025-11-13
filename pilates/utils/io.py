@@ -216,6 +216,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
                         raise KeyError(
                             f"No households table found in year-specific file {usim_datastore_year_fpath}. Tables: {store.keys()}"
                         )
+                usim_datastore = usim_datastore_year  # For logging
                 usim_datastore_fpath = usim_datastore_year_fpath
                 use_year_specific = True
             else:
