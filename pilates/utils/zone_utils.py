@@ -107,27 +107,28 @@ def get_block_to_zone_mapping(settings, year):
     if blocks is None:
         raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
 
-    taz_col = get_setting(settings, "shared.skims.geoms_index_col")
-    if not taz_col:
+    # The column in the blocks table that contains the TAZ ID
+    # This is typically 'zone_id' for block_group regions or 'taz_zone_id' for TAZ regions.
+    # It is configured via 'shared.skims.geoms_index_col' in settings.
+    taz_id_column_name = get_setting(settings, "shared.skims.geoms_index_col")
+    
+    if not taz_id_column_name:
         # Fallback for older configs or if not explicitly set
         zone_type = get_setting(settings, "shared.skims.zone_type")
         if zone_type == "taz":
-            taz_col = 'taz_zone_id'
+            taz_id_column_name = 'taz_zone_id'
         elif zone_type == "block_group":
-            taz_col = 'zone_id' # Assuming 'zone_id' for block_group regions
+            taz_id_column_name = 'zone_id' # For Seattle, 'zone_id' is the TAZ ID in blocks table
         else:
-            raise ValueError("Cannot determine TAZ column name. Set 'shared.skims.geoms_index_col' in settings.")
+            raise ValueError("Cannot determine TAZ ID column name. Set 'shared.skims.geoms_index_col' in settings.")
 
-    if taz_col not in blocks.columns:
-        raise ValueError(f"'{taz_col}' not found in 'blocks' table.")
+    if taz_id_column_name not in blocks.columns:
+        raise ValueError(f"'{taz_id_column_name}' not found in 'blocks' table. Please ensure 'shared.skims.geoms_index_col' in settings points to the column containing TAZ IDs in the blocks table.")
 
     # The index of the blocks table is the block GEOID (e.g., 'block_id')
-    # We need to ensure the index is what we think it is.
-    if blocks.index.name != 'block_id':
-        logger.warning(f"Blocks table index is named '{blocks.index.name}', expected 'block_id'. Assuming it contains GEOIDs.")
-
-    mapping_df = blocks[[taz_col]]
-    mapping = mapping_df[taz_col].to_dict()
+    # We want to map this index (block GEOID) to the TAZ ID column.
+    mapping_df = blocks[[taz_id_column_name]]
+    mapping = mapping_df[taz_id_column_name].to_dict()
     logger.info(f"Successfully created block to zone mapping for {len(mapping)} blocks.")
 
     return mapping
