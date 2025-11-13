@@ -43,20 +43,18 @@ def generate_canonical_zones_file(settings, year, output_path):
         if blocks is None:
             raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
         
-        if 'block_group_id' not in blocks.columns or 'zone_id' not in blocks.columns:
-            raise ValueError("blocks table for block_group must contain 'block_group_id' and 'zone_id' columns.")
+        if 'zone_id' not in blocks.columns: # Only need zone_id for TAZs
+            raise ValueError("blocks table for block_group must contain 'zone_id' column.")
             
-        # Create a DataFrame with block_group_id as zone_key and zone_id as asim_id
-        # We need to ensure uniqueness of block_group_id and zone_id pairs
-        df = blocks[['block_group_id', 'zone_id']].drop_duplicates().copy()
-        df.rename(columns={'block_group_id': 'zone_key', 'zone_id': 'asim_id'}, inplace=True)
+        # The canonical zones should be the unique TAZ IDs that block groups aggregate to.
+        # Extract unique TAZ IDs from the 'zone_id' column of the blocks table.
+        unique_tazs = blocks['zone_id'].unique()
         
-        # Sort by asim_id (TAZ ID) numerically, then assign sequential 1-based asim_id
-        # This mimics the sorting logic in read_zone_geoms
-        df['asim_id_numeric'] = df['asim_id'].astype(int) # Temporary column for numeric sort
-        df = df.sort_values('asim_id_numeric').reset_index(drop=True)
-        df['asim_id'] = range(1, len(df) + 1) # Re-assign sequential 1-based asim_id
-        df.drop(columns=['asim_id_numeric'], inplace=True) # Drop temporary column
+        # Sort by TAZ ID numerically to ensure a stable order before assigning sequential asim_id
+        unique_tazs.sort() # Assuming zone_id are numeric or convertible to numeric
+        
+        df = pd.DataFrame({'zone_key': unique_tazs})
+        df['asim_id'] = range(1, len(df) + 1) # Assign sequential 1-based asim_id
 
     elif zone_type == "taz":
         # For TAZs, the zone_key is the TAZ ID itself (e.g., from taz1454).
