@@ -110,20 +110,31 @@ def get_block_to_zone_mapping(settings, year):
     # The column in the blocks table that contains the TAZ ID
     # This is typically 'zone_id' for block_group regions or 'taz_zone_id' for TAZ regions.
     # It is configured via 'shared.skims.geoms_index_col' in settings.
-    taz_id_column_name = get_setting(settings, "shared.skims.geoms_index_col")
     
-    if not taz_id_column_name:
-        # Fallback for older configs or if not explicitly set
-        zone_type = get_setting(settings, "shared.skims.zone_type")
-        if zone_type == "taz":
-            taz_id_column_name = 'taz_zone_id'
-        elif zone_type == "block_group":
-            taz_id_column_name = 'zone_id' # For Seattle, 'zone_id' is the TAZ ID in blocks table
-        else:
-            raise ValueError("Cannot determine TAZ ID column name. Set 'shared.skims.geoms_index_col' in settings.")
-
-    if taz_id_column_name not in blocks.columns:
-        raise ValueError(f"'{taz_id_column_name}' not found in 'blocks' table. Please ensure 'shared.skims.geoms_index_col' in settings points to the column containing TAZ IDs in the blocks table.")
+    zone_type = get_setting(settings, "shared.skims.zone_type")
+    
+    # Determine the correct column name for TAZ ID based on zone_type
+    taz_id_column_name = None
+    if zone_type == "taz":
+        taz_id_column_name = 'taz_zone_id' # Standard for TAZ regions
+    elif zone_type == "block_group":
+        taz_id_column_name = 'zone_id' # Standard for Seattle block_group regions
+    
+    # Allow override from settings if explicitly provided and valid
+    configured_geoms_index_col = get_setting(settings, "shared.skims.geoms_index_col")
+    if configured_geoms_index_col and configured_geoms_index_col in blocks.columns:
+        # If geoms_index_col is set and exists in blocks, and it's not 'GEOID' (which is block_id)
+        # then use it as the TAZ ID column. This handles cases where it might be 'TAZ' or 'taz1454'.
+        if configured_geoms_index_col != 'GEOID' and configured_geoms_index_col != 'block_group_id':
+            taz_id_column_name = configured_geoms_index_col
+    
+    if not taz_id_column_name or taz_id_column_name not in blocks.columns:
+        raise ValueError(
+            f"Cannot determine TAZ ID column name for zone_type '{zone_type}'. "
+            f"Attempted to use '{taz_id_column_name}' but it's not in 'blocks' table columns: {blocks.columns.tolist()}. "
+            f"Please ensure 'shared.skims.geoms_index_col' in settings points to the column containing TAZ IDs in the blocks table, "
+            f"or that the default fallback for '{zone_type}' is correct."
+        )
 
     # The index of the blocks table is the block GEOID (e.g., 'block_id')
     # We want to map this index (block GEOID) to the TAZ ID column.
