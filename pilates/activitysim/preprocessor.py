@@ -2416,6 +2416,18 @@ def _create_land_use_table(
     logger.info("Creating land use table.")
     zone_type = get_setting(settings, "shared.skims.zone_type")
 
+    # DIAGNOSTIC LOGGING
+    logger.info(f"=== DIAGNOSTIC INFO FOR LAND USE TABLE ===")
+    logger.info(f"zones index: name={zones.index.name}, dtype={zones.index.dtype}, len={len(zones)}")
+    logger.info(f"zones index sample (first 10): {zones.index[:10].tolist()}")
+    logger.info(f"persons[{asim_zone_id_col}]: dtype={persons[asim_zone_id_col].dtype if asim_zone_id_col in persons.columns else 'MISSING'}, nunique={persons[asim_zone_id_col].nunique() if asim_zone_id_col in persons.columns else 'N/A'}")
+    logger.info(f"persons[{asim_zone_id_col}] sample: {persons[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in persons.columns else 'N/A'}")
+    logger.info(f"households[{asim_zone_id_col}]: dtype={households[asim_zone_id_col].dtype if asim_zone_id_col in households.columns else 'MISSING'}, nunique={households[asim_zone_id_col].nunique() if asim_zone_id_col in households.columns else 'N/A'}")
+    logger.info(f"households[{asim_zone_id_col}] sample: {households[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in households.columns else 'N/A'}")
+    logger.info(f"jobs[{asim_zone_id_col}]: dtype={jobs[asim_zone_id_col].dtype if asim_zone_id_col in jobs.columns else 'MISSING'}, nunique={jobs[asim_zone_id_col].nunique() if asim_zone_id_col in jobs.columns else 'N/A'}")
+    logger.info(f"jobs[{asim_zone_id_col}] sample: {jobs[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in jobs.columns else 'N/A'}")
+    logger.info(f"==========================================")
+
     schools = enrollment_tables(
         settings, zones, enrollment_type="schools", asim_zone_id_col=asim_zone_id_col
     )
