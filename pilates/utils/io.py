@@ -194,20 +194,50 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         logger.info(
             f"Year {year}, start year {start_year}, warm_start {warm_start}, urbansim_enabled {urbansim_enabled}"
         )
-        table_prefix_yr = ""  # input data store tables have no year prefix
-        usim_datastore = get_setting(settings, "urbansim.input_file_template").format(
-            region_id=region_id
-        )
-        usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
-        store = pd.HDFStore(usim_datastore_fpath)
-        if "households" not in store:
-            table_prefix_yr = str(year)
-            if f"{table_prefix_yr}/households" not in store:
-                raise KeyError(
-                    f"No households table of either format found in {usim_datastore_fpath}. Tables: {store.keys()}"
-                )
+
+        # Try year-specific input file first if available
+        year_template = get_setting(settings, "urbansim.input_file_template_year", None)
+        use_year_specific = False
+
+        if year_template:
+            usim_datastore_year = year_template.format(region_id=region_id, year=year, start_year=year)
+            usim_datastore_year_fpath = os.path.join(data_loc, usim_datastore_year)
+
+            if os.path.exists(usim_datastore_year_fpath):
+                logger.info(f"Using year-specific input file: {usim_datastore_year}")
+                store = pd.HDFStore(usim_datastore_year_fpath)
+                # Year-specific files have year-prefixed tables
+                table_prefix_yr = str(year)
+                if f"{table_prefix_yr}/households" not in store:
+                    # Fallback: maybe tables are at root level
+                    if "households" in store:
+                        table_prefix_yr = ""
+                    else:
+                        raise KeyError(
+                            f"No households table found in year-specific file {usim_datastore_year_fpath}. Tables: {store.keys()}"
+                        )
+                usim_datastore_fpath = usim_datastore_year_fpath
+                use_year_specific = True
             else:
-                logger.info(f"Using {table_prefix_yr}/households table")
+                logger.info(f"Year-specific file not found: {usim_datastore_year_fpath}")
+                logger.info(f"Falling back to base input file")
+
+        # Fall back to base input file if year-specific doesn't exist or isn't configured
+        if not use_year_specific:
+            table_prefix_yr = ""  # input data store tables have no year prefix
+            usim_datastore = get_setting(settings, "urbansim.input_file_template").format(
+                region_id=region_id
+            )
+            usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
+            store = pd.HDFStore(usim_datastore_fpath)
+            if "households" not in store:
+                table_prefix_yr = str(year)
+                if f"{table_prefix_yr}/households" not in store:
+                    raise KeyError(
+                        f"No households table of either format found in {usim_datastore_fpath}. Tables: {store.keys()}"
+                    )
+                else:
+                    logger.info(f"Using {table_prefix_yr}/households table")
 
     # Otherwise we read from the land use outputs
     else:
