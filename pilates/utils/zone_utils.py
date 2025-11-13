@@ -185,19 +185,45 @@ def read_zone_geoms(
     zone_type = settings.shared.skims.zone_type
     zone_key = "/{0}_zone_geoms".format(zone_type)
 
+    # Check if zone geometries are already in the H5 datastore
+    # BUT: We need to validate they have correct format (not corrupted by int conversion bug)
+    zones_from_cache = None
     if zone_key in store.keys():
         logger.info("Loading {0} zone geometries from .h5 datastore!".format(zone_type))
-        zones = store[zone_key]
+        zones_cached = store[zone_key]
 
-        if "geometry" in zones.columns:
-            zones.loc[:, "geometry"] = zones.loc[:, "geometry"].apply(wkt.loads)
-            zones = gpd.GeoDataFrame(zones, geometry="geometry", crs="EPSG:4326")
+        if "geometry" in zones_cached.columns:
+            # Check if the cached zones have valid zone IDs
+            # If index or GEOID column looks like sequential integers (1, 2, 3)
+            # instead of proper GEOIDs, the cache is corrupted
+            if zones_cached.index.name and zones_cached.index.name != 'index':
+                sample_id = str(zones_cached.index[0]) if len(zones_cached) > 0 else ""
+            elif 'GEOID' in zones_cached.columns:
+                sample_id = str(zones_cached['GEOID'].iloc[0]) if len(zones_cached) > 0 else ""
+            else:
+                sample_id = ""
+
+            # If zone_type is block_group or block, we expect 12-15 digit GEOIDs
+            # If we see short IDs like "1", "2", etc., the cache is corrupted
+            is_census_geography = zone_type in ['block', 'block_group', 'tract']
+            cache_looks_valid = len(sample_id) >= 12 if is_census_geography else True
+
+            if cache_looks_valid:
+                logger.info("  Cache appears valid, using cached geometries")
+                zones_cached.loc[:, "geometry"] = zones_cached.loc[:, "geometry"].apply(wkt.loads)
+                zones_from_cache = gpd.GeoDataFrame(zones_cached, geometry="geometry", crs="EPSG:4326")
+            else:
+                logger.warning(f"  Cached zone_geoms appear corrupted (sample_id='{sample_id}' for {zone_type})")
+                logger.warning("  Will re-download zone geometries and update cache")
+                # Delete the corrupted cache
+                del store[zone_key]
         else:
             raise KeyError(
                 "Table 'zone_geoms' exists in the .h5 datastore but "
                 "no geometry column was found!"
             )
-    else:
+
+    if zones_from_cache is None:
         logger.info("Downloading zone geometries on the fly!")
         region = settings.run.region
         if zone_type == "taz":
@@ -212,6 +238,19 @@ def read_zone_geoms(
             zones.set_index(default_zone_id_col, inplace=True)
             assert zones.index.inferred_type == "string", "zone_id dtype should be str"
 
+        # IMPORTANT: Sort zones BEFORE saving to H5 to ensure consistent ordering
+        # For GEOIDs (12+ digits), preserve string format; for simple IDs, sort numerically
+        sample_id = str(zones.index[0]) if len(zones) > 0 else ""
+        if len(sample_id) >= 12:
+            # GEOIDs - preserve string format and sort lexicographically
+            zones.index = zones.index.astype(str)
+            zones = zones.sort_index()
+        else:
+            # Simple numeric IDs - sort numerically then convert back to string
+            zones.index = zones.index.astype(int)
+            zones = zones.sort_index()
+            zones.index = zones.index.astype(str)
+
         # save zone geoms in .h5 datastore so we don't
         # have to do this again
         out_zones = pd.DataFrame(zones.copy())
@@ -219,27 +258,14 @@ def read_zone_geoms(
 
         logger.info("Storing zone geometries to .h5 datastore!")
         store[zone_key] = out_zones
+    else:
+        # Use cached zones
+        zones = zones_from_cache
 
     store.close()
 
-    # Sort zones by zone_id.
-    # For numeric-like zone IDs (like 1, 2, 10), we need to sort numerically.
-    # For GEOIDs (like block groups with leading zeros), we need to preserve the string format.
-    # Try to detect if these are numeric zone IDs or GEOIDs.
-    sample_id = str(zones.index[0]) if len(zones) > 0 else ""
-
-    # If the zone ID looks like a GEOID (12+ digits), keep it as string and sort lexicographically
-    # Otherwise, do numeric sorting
-    if len(sample_id) >= 12:
-        # These are likely GEOIDs (census block groups are 12 digits)
-        # Sort as strings to preserve order
-        zones.index = zones.index.astype(str)
-        zones = zones.sort_index()
-    else:
-        # These are likely simple numeric zone IDs
-        # Convert to int for proper numeric sorting
-        zones.index = zones.index.astype(int)
-        zones = zones.sort_index()
-        zones.index = zones.index.astype(str)
+    # Zones are already sorted (either from cache or sorted before saving)
+    # Just ensure index is string type for consistency
+    zones.index = zones.index.astype(str)
 
     return zone_id_to_taz(zones, asim_zone_id_col, default_zone_id_col)
