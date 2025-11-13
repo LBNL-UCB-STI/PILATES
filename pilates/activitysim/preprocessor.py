@@ -2519,9 +2519,37 @@ def _create_land_use_table(
     sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
     jobs_agg["OTHEMPN"] = jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)
 
+    # --- DIAGNOSTIC: Check aggregated data before join ---
+    logger.info("=== PRE-JOIN DIAGNOSTICS ===")
+    logger.info(f"persons_agg index: dtype={persons_agg.index.dtype}, len={len(persons_agg)}, sample={persons_agg.index[:5].tolist()}")
+    logger.info(f"households_agg index: dtype={households_agg.index.dtype}, len={len(households_agg)}, sample={households_agg.index[:5].tolist()}")
+    logger.info(f"jobs_agg index: dtype={jobs_agg.index.dtype}, len={len(jobs_agg)}, sample={jobs_agg.index[:5].tolist()}")
+    logger.info(f"zones index: dtype={zones.index.dtype}, len={len(zones)}, sample={zones.index[:5].tolist()}")
+
+    # Check overlap
+    zones_ids = set(zones.index.astype(str))
+    persons_ids = set(persons_agg.index.astype(str))
+    households_ids = set(households_agg.index.astype(str))
+    jobs_ids = set(jobs_agg.index.astype(str))
+
+    logger.info(f"Zone IDs in zones but not in persons_agg: {len(zones_ids - persons_ids)}")
+    logger.info(f"Zone IDs in persons_agg but not in zones: {len(persons_ids - zones_ids)}")
+    if (persons_ids - zones_ids):
+        logger.info(f"  Examples: {list(persons_ids - zones_ids)[:10]}")
+    logger.info("============================")
+
     # --- Join all aggregated data to the zones table ---
     logger.info("Joining aggregated data to zones.")
     zones = zones.join([persons_agg, households_agg, jobs_agg]).fillna(0)
+
+    # --- DIAGNOSTIC: Check result after join ---
+    logger.info("=== POST-JOIN DIAGNOSTICS ===")
+    logger.info(f"zones.TOTPOP.sum() = {zones.TOTPOP.sum()}")
+    logger.info(f"zones.TOTHH.sum() = {zones.TOTHH.sum()}")
+    logger.info(f"zones.TOTEMP.sum() = {zones.TOTEMP.sum()}")
+    logger.info(f"Number of zones with TOTPOP > 0: {(zones.TOTPOP > 0).sum()}")
+    logger.info("=============================")
+
 
     zones.loc[:, "SHPOP62P"] = (
         (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
