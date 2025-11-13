@@ -162,9 +162,9 @@ def beam_iteration_zarr_1_based_int_ids(beam_iteration_zarr_base):
 class TestBeamPostprocessor:
     """Tests for the BEAM Postprocessor's skim merging logic."""
 
-    @patch('pilates.beam.postprocessor.geoid_to_zone_map')
+    @patch('pilates.beam.postprocessor.get_canonical_zones')
     def test_merge_beam_skims_to_zarr_valid(
-        self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_valid
+        self, mock_get_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_valid
     ):
         """
         Test the basic merge functionality with valid BEAM skims:
@@ -172,7 +172,11 @@ class TestBeamPostprocessor:
         - Checks that data from the partial skim is merged into the main skim.
         """
         # Arrange
-        mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
+        mock_get_canonical_zones.return_value = pd.DataFrame({
+            'zone_key': CANONICAL_GEOID_ORDER,
+            'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+        })
+        mock_workspace = MagicMock() # Create a mock workspace
 
         # Act
         _merge_beam_skims_to_zarr(
@@ -180,10 +184,11 @@ class TestBeamPostprocessor:
             iteration_skims_path=beam_iteration_zarr_valid,
             beam_output_dir="", # Not used in this logic path
             settings=mock_settings,
+            workspace=mock_workspace # Pass the mock workspace
         )
 
         # Assert
-        mock_geoid_map.assert_called_once_with(mock_settings)
+        mock_get_canonical_zones.assert_called_once_with(mock_workspace) # Assert with workspace
 
         updated_ds = xr.open_zarr(initial_main_zarr)
         assert "SOV_TRIPS" in updated_ds.data_vars, "SOV_TRIPS was not merged into the main Zarr file."
@@ -196,15 +201,19 @@ class TestBeamPostprocessor:
         assert "original_zone_ids" in updated_ds.attrs
         assert updated_ds.attrs["original_zone_ids"] == CANONICAL_GEOID_ORDER
 
-    @patch('pilates.beam.postprocessor.geoid_to_zone_map')
+    @patch('pilates.beam.postprocessor.get_canonical_zones')
     def test_merge_beam_skims_to_zarr_scrambled_order_raises_error(
-        self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_scrambled
+        self, mock_get_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_scrambled
     ):
         """
         Test that merging BEAM skims with scrambled zone order raises a ValueError.
         """
         # Arrange
-        mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
+        mock_get_canonical_zones.return_value = pd.DataFrame({
+            'zone_key': CANONICAL_GEOID_ORDER,
+            'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+        })
+        mock_workspace = MagicMock()
 
         # Act & Assert
         with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
@@ -213,18 +222,23 @@ class TestBeamPostprocessor:
                 iteration_skims_path=beam_iteration_zarr_scrambled,
                 beam_output_dir="",
                 settings=mock_settings,
+                workspace=mock_workspace
             )
-        mock_geoid_map.assert_called_once_with(mock_settings)
+        mock_get_canonical_zones.assert_called_once_with(mock_workspace)
 
-    @patch('pilates.beam.postprocessor.geoid_to_zone_map')
+    @patch('pilates.beam.postprocessor.get_canonical_zones')
     def test_merge_beam_skims_to_zarr_missing_attr_raises_error(
-        self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_missing_attr
+        self, mock_get_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_missing_attr
     ):
         """
         Test that merging BEAM skims missing the original_zone_ids attribute raises a ValueError.
         """
         # Arrange
-        mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
+        mock_get_canonical_zones.return_value = pd.DataFrame({
+            'zone_key': CANONICAL_GEOID_ORDER,
+            'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+        })
+        mock_workspace = MagicMock()
 
         # Act & Assert
         with pytest.raises(ValueError, match="Zarr file does not contain 'original_zone_ids' metadata."):
@@ -233,18 +247,23 @@ class TestBeamPostprocessor:
                 iteration_skims_path=beam_iteration_zarr_missing_attr,
                 beam_output_dir="",
                 settings=mock_settings,
+                workspace=mock_workspace
             )
-        mock_geoid_map.assert_called_once_with(mock_settings)
+        mock_get_canonical_zones.assert_called_once_with(mock_workspace)
 
-    @patch('pilates.beam.postprocessor.geoid_to_zone_map')
+    @patch('pilates.beam.postprocessor.get_canonical_zones')
     def test_merge_beam_skims_to_zarr_0_based_int_ids_raises_error(
-        self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_0_based_int_ids
+        self, mock_get_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_0_based_int_ids
     ):
         """
         Test that merging BEAM skims with 0-based integer zone IDs raises a ValueError.
         """
         # Arrange
-        mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
+        mock_get_canonical_zones.return_value = pd.DataFrame({
+            'zone_key': CANONICAL_GEOID_ORDER,
+            'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+        })
+        mock_workspace = MagicMock()
 
         # Act & Assert
         with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
@@ -253,19 +272,24 @@ class TestBeamPostprocessor:
                 iteration_skims_path=beam_iteration_zarr_0_based_int_ids,
                 beam_output_dir="",
                 settings=mock_settings,
+                workspace=mock_workspace
             )
-        mock_geoid_map.assert_called_once_with(mock_settings)
+        mock_get_canonical_zones.assert_called_once_with(mock_workspace)
 
-    @patch('pilates.beam.postprocessor.geoid_to_zone_map')
+    @patch('pilates.beam.postprocessor.get_canonical_zones')
     def test_merge_beam_skims_to_zarr_1_based_int_ids_raises_error(
-        self, mock_geoid_map, mock_settings, initial_main_zarr, beam_iteration_zarr_1_based_int_ids
+        self, mock_get_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_1_based_int_ids
     ):
         """
         Test that merging BEAM skims with 1-based integer zone IDs raises a ValueError
         due to non-0-based otaz coordinates.
         """
         # Arrange
-        mock_geoid_map.return_value = {geoid: i for i, geoid in enumerate(CANONICAL_GEOID_ORDER)}
+        mock_get_canonical_zones.return_value = pd.DataFrame({
+            'zone_key': CANONICAL_GEOID_ORDER,
+            'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+        })
+        mock_workspace = MagicMock()
 
         # Act & Assert
         with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
@@ -274,5 +298,6 @@ class TestBeamPostprocessor:
                 iteration_skims_path=beam_iteration_zarr_1_based_int_ids,
                 beam_output_dir="",
                 settings=mock_settings,
+                workspace=mock_workspace
             )
-        mock_geoid_map.assert_called_once_with(mock_settings)
+        mock_get_canonical_zones.assert_called_once_with(mock_workspace)

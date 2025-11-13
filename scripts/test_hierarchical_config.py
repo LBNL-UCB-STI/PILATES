@@ -20,7 +20,7 @@ from pathlib import Path
 # Add pilates to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pilates.config.models import load_config, config_to_dict
+from pilates.config.models import load_config
 from pilates.config.schema import get_field_annotations, get_dependency_graph
 from pilates.generic.config_hashing import ConfigHasher
 from pilates.utils.config_snapshot import ConfigSnapshotManager
@@ -59,7 +59,7 @@ def test_phase1_hierarchical_config():
     print_section("Step 2: Create Config Snapshot")
 
     # Convert config to dict for snapshot manager
-    config_dict = config_to_dict(config)
+    config_dict = config.model_dump()
     workspace_path = os.getcwd()
 
     snapshot_manager = ConfigSnapshotManager(workspace_path)

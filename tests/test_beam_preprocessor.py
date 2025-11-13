@@ -18,6 +18,9 @@ def mock_workspace(tmp_path):
     """Create a mock workspace with temporary directories."""
     workspace = MagicMock()
     
+    # Set full_path to tmp_path for canonical_zones.csv
+    workspace.full_path = tmp_path
+
     # Create temp dirs for beam and urbansim
     beam_mutable_dir = tmp_path / "beam" / "input"
     usim_mutable_dir = tmp_path / "urbansim" / "data"
@@ -27,6 +30,14 @@ def mock_workspace(tmp_path):
     workspace.get_beam_mutable_data_dir.return_value = beam_mutable_dir
     workspace.get_usim_mutable_data_dir.return_value = usim_mutable_dir
     
+    # Create a dummy canonical_zones.csv
+    canonical_zones_df = pd.DataFrame({
+        'zone_key': CANONICAL_GEOID_ORDER,
+        'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
+    })
+    canonical_zones_path = tmp_path / "canonical_zones.csv"
+    canonical_zones_df.to_csv(canonical_zones_path, index=False)
+
     return workspace
 
 @pytest.fixture

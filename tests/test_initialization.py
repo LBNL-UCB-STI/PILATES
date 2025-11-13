@@ -46,6 +46,7 @@ class DummyWorkspace:
         self.atlas_mutable_input_dir = "/tmp/atlas_in"
         self.atlas_output_dir = "/tmp/atlas_out"
         self.activitysim_mutable_dir = "/tmp/asim"
+        self.full_path = "/tmp"
 
     def get_beam_mutable_data_dir(self):
         return self.beam_mutable_dir
@@ -87,6 +88,12 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
                 activity_demand="dummy_activity",
                 vehicle_ownership="dummy_vehicle",
                 land_use="urbansim",
+            ),
+            start_year=2020
+        ),
+        shared=SimpleNamespace(
+            skims=SimpleNamespace(
+                zone_type="block_group"
             )
         )
     )
@@ -128,6 +135,12 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
                 land_use=None,
                 activity_demand=None,
                 vehicle_ownership=None,
+            ),
+            start_year=2020
+        ),
+        shared=SimpleNamespace(
+            skims=SimpleNamespace(
+                zone_type="block_group"
             )
         )
     )

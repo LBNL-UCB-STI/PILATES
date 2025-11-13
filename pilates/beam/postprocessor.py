@@ -9,7 +9,7 @@ import numpy as np
 import openmatrix as omx
 
 from pilates.config import PilatesConfig
-from pilates.utils.geog import geoid_to_zone_map
+from pilates.utils.zone_utils import get_canonical_zones
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
 
@@ -2211,14 +2211,15 @@ def write_zarr_skim_as_omx(
             except Exception as e:
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
-def verify_skim_zone_order(settings, skim_file_path: str):
+def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"):
     """
     Verifies that the zone order in a skim file (Zarr or OMX) matches the
-    canonical order from geoid_to_zone_map.
+    canonical order from the canonical_zones.csv file.
 
     Args:
         settings: The PilatesConfig object.
         skim_file_path: Path to the skim file to verify.
+        workspace: The current run's workspace object.
 
     Raises:
         ValueError: If the zone orders do not match.
@@ -2226,12 +2227,9 @@ def verify_skim_zone_order(settings, skim_file_path: str):
     logger.info(f"--- Verifying zone order for skim file: {skim_file_path} ---")
 
     # 1. Get Canonical Order
-    mapping = geoid_to_zone_map(settings)
-    canonical_order_df = pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
-    canonical_order_df["zone_id"] = pd.to_numeric(canonical_order_df["zone_id"])
-    canonical_order_df = canonical_order_df.sort_values("zone_id")
-    canonical_order = canonical_order_df.index.tolist()
-    logger.info(f"Successfully loaded canonical order for {len(canonical_order)} zones.")
+    canonical_zones_df = get_canonical_zones(workspace)
+    canonical_order = canonical_zones_df['zone_key'].tolist()
+    logger.info(f"Successfully loaded canonical order for {len(canonical_order)} zones from canonical_zones.csv.")
 
     # 2. Get Skim File Order
     skim_order = None
@@ -2324,6 +2322,7 @@ def _merge_beam_skims_to_zarr(
     iteration_skims_path,
     beam_output_dir,
     settings,
+    workspace,
     override=None,
     provenance_tracker=None,
     model_run_hash=None,
@@ -2366,7 +2365,7 @@ def _merge_beam_skims_to_zarr(
         return None, existing_zarr_manager
 
     # ---> INSERT RUNTIME VERIFICATION HERE <---
-    verify_skim_zone_order(settings, current_skims_path)
+    verify_skim_zone_order(settings, current_skims_path, workspace)
 
     if current_skims_path.endswith(".zarr"):
         input_format = "zarr"
@@ -3470,6 +3469,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 iteration_skims_path=raw_od_skims_path,
                 beam_output_dir=beam_output_dir,
                 settings=settings,
+                workspace=workspace,
                 override=raw_od_skims_path,
                 provenance_tracker=self.provenance_tracker,
                 model_run_hash=model_run_hash,

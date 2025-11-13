@@ -4,9 +4,13 @@ from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils.zone_utils import generate_canonical_zones_file
 
 import os
 from pilates.utils.settings_helper import get as get_setting
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Initialization(Model):
@@ -134,6 +138,22 @@ class Initialization(Model):
                     workspace.output_data[model_name] = rec_out
 
         # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
+
+        # Generate the canonical zones file, which is the single source of truth for zone ordering
+        logger.info("--- Generating Canonical Zones File ---")
+        canonical_zones_path = os.path.join(workspace.full_path, 'canonical_zones.csv')
+        generate_canonical_zones_file(settings, get_setting(settings, "run.start_year"), canonical_zones_path)
+        logger.info("--- Canonical Zones File Generated ---")
+
+        # Record the canonical zones file as an output of initialization
+        canonical_zones_record = self.provenance_tracker.record_output_file(
+            "initialization",
+            canonical_zones_path,
+            description="Canonical zone definition file",
+            short_name="canonical_zones",
+        )
+        if canonical_zones_record:
+            initialization_records_out.add_record(canonical_zones_record)
 
         # Record the combined initialization provenance as a single job.
         if self.provenance_tracker is not None:

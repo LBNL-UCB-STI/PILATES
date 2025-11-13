@@ -319,86 +319,13 @@ def get_zone_from_points(df, zones_gdf, local_crs):
 
 
 def geoid_to_zone_map(settings, year=None):
-    """ "
-    Maps the GEOID to a unique zone_id.
-
-    Returns
-    --------
-    Returns a dictionary. Keys are GEOIDs and values are the
-    corresponding zone_id where the GEOID belongs to.
     """
-    region = get_setting(settings, "run.region")
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-    travel_model = get_setting(settings, "run.models.travel", "beam")
-    zone_id_col = "zone_id"
-    geoid_to_zone_folder = os.path.join(
-        "pilates", "utils", "data", region, travel_model or "beam"
+    DEPRECATED. This function is ambiguous and has been replaced by more specific
+    functions in `pilates.utils.zone_utils`.
+
+    - To get the canonical zone definition, use `get_canonical_zones`.
+    - To get a block-to-zone mapping, use `get_block_to_zone_mapping`.
+    """
+    raise DeprecationWarning(
+        "geoid_to_zone_map is deprecated. Use functions from pilates.utils.zone_utils instead."
     )
-
-    if not os.path.exists(geoid_to_zone_folder):
-        os.makedirs(geoid_to_zone_folder)
-
-    geoid_to_zone_fpath = os.path.join(
-        geoid_to_zone_folder,
-        "{2}_geoid_to_zone.csv".format(region, travel_model, zone_type),
-    )
-
-    if os.path.isfile(geoid_to_zone_fpath):
-        logger.info("Reading GEOID to zone mapping.")
-        geoid_to_zone = pd.read_csv(
-            geoid_to_zone_fpath, dtype={"GEOID": str, zone_id_col: str}
-        )
-
-        num_zones = geoid_to_zone[zone_id_col].nunique()
-
-        if zone_type != "taz":
-            assert geoid_to_zone[zone_id_col].astype(int).min() == 1
-            assert geoid_to_zone[zone_id_col].astype(int).max() == num_zones
-
-        mapping = geoid_to_zone.set_index("GEOID")[zone_id_col].to_dict()
-
-    else:
-        logger.info("Zone mapping not found. Creating it on the fly.")
-
-        if zone_type == "taz":
-            logger.info("Mapping block IDs to TAZ")
-            geoid_to_zone = map_block_to_taz(
-                settings,
-                region,
-                zone_id_col=zone_id_col,
-                reference_taz_id_col="taz1454",
-            )
-            mapping = geoid_to_zone.to_dict()
-
-        elif zone_type == "block_group":
-            store, table_prefix_yr = read_datastore(settings, year)
-            blocks = store[os.path.join(table_prefix_yr, "blocks")]
-            bgs = store["block_group_zone_geoms"]
-            order = blocks.index.str[:12].unique().intersection(bgs["geoid10"])
-            store.close()
-
-        elif zone_type == "block":
-            store, table_prefix_year = read_datastore(settings, year)
-            blocks = store[os.path.join(table_prefix_year, "blocks")]
-            order = blocks.index.unique()
-            store.close()
-
-        else:
-            logger.info(
-                "Define a valid zone type value. Options "
-                "['taz', 'block_group', 'block']"
-            )
-
-        # zone IDs are generated on-the-fly for GEOID/FIPS-based skims
-        if zone_type in ["block", "block_group"]:
-            geoid_to_zone = pd.DataFrame(
-                {"GEOID": order, "zone_id": range(1, len(order) + 1)}, dtype=str
-            )
-
-            geoid_to_zone = geoid_to_zone.set_index("GEOID")[zone_id_col]
-            mapping = geoid_to_zone.to_dict()
-
-        # Save file to disk
-        geoid_to_zone.to_csv(geoid_to_zone_fpath)
-
-    return mapping

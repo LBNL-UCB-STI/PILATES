@@ -24,8 +24,8 @@ from pilates.utils.geog import (
     get_block_geoms,
     get_zone_from_points,
     get_taz_geoms,
-    geoid_to_zone_map,
 )
+from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones
 from pilates.utils.io import (
     read_datastore,
     datastore_path,
@@ -89,26 +89,18 @@ default_fare_dollars = {
 #########################
 #### Common functions ###
 #########################
-def zone_order(settings, year):
+def zone_order(settings, workspace):
     """
-    Returns the order of the zones to create consistent skims.
+    Returns the order of the zones to create consistent skims by reading
+    the authoritative canonical_zones.csv file.
 
     Return:
     -------
-    Numpy Array. One dimension array, the index of the array represents the order.
+    Numpy Array. One dimension array of zone keys.
 
     """
-    zone_type = settings.shared.skims.zone_type
-    mapping = geoid_to_zone_map(settings, year)
-
-    if zone_type == "taz":
-        num_taz = len(set(mapping.values()))
-        order = np.array(range(1, num_taz + 1)).astype(str)
-    else:
-        order = pd.DataFrame.from_dict(
-            mapping, orient="index", columns=["zone_id"]
-        ).astype(int)
-        order = np.array(order.sort_values("zone_id").index)
+    canonical_zones_df = get_canonical_zones(workspace)
+    order = canonical_zones_df['zone_key'].values
     return order
 
 
@@ -186,7 +178,7 @@ def read_zone_geoms(
             zones = get_taz_geoms(settings, zone_id_col_out=default_zone_id_col)
             zones.set_index(default_zone_id_col, inplace=True)
         else:
-            mapping = geoid_to_zone_map(settings, year)
+            mapping = get_block_to_zone_mapping(settings, year)
             zones = get_block_geoms(settings)
             # zones['GEOID'] = zones['GEOID'].astype(str)
             assert is_string_dtype(zones["GEOID"]), "GEOID dtype should be str"
@@ -377,7 +369,7 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
     return False, False, False
 
 
-def _raw_beam_skims_preprocess(settings, year, skims_df):
+def _raw_beam_skims_preprocess(settings, year, skims_df, workspace):
     """
     Validates and preprocess raw beam skims.
 
@@ -396,7 +388,7 @@ def _raw_beam_skims_preprocess(settings, year, skims_df):
     destination_taz = skims_df.destination.unique()
     assert len(origin_taz) == len(destination_taz)
 
-    order = zone_order(settings, year)
+    order = zone_order(settings, workspace)
 
     test_1 = set(origin_taz).issubset(set(order))
     test_2 = set(destination_taz).issubset(set(order))
@@ -422,7 +414,7 @@ def _raw_beam_skims_preprocess(settings, year, skims_df):
     return skims_df
 
 
-def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df):
+def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df, workspace):
     """
     Validates and preprocess raw beam skims.
 
@@ -439,7 +431,7 @@ def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df):
     # Validations:
     origin_taz = origin_skims_df.origin.unique()
 
-    order = zone_order(settings, year)
+    order = zone_order(settings, workspace)
 
     #     test_1 = set(origin_taz).issubset(set(order))
     #     test_2 = set(destination_taz).issubset(set(order))
@@ -1186,7 +1178,7 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) -> str:
+def create_skims_from_beam(settings, state, workspace, output_dir=None, overwrite=False) -> str:
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings.activitysim.local_mutable_data_folder
@@ -1203,7 +1195,7 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) ->
     )
     validation = settings.asim_validation
 
-    order = zone_order(settings, state.forecast_year)
+    order = zone_order(settings, workspace)
 
     if new:
         tempSkims = _load_raw_beam_skims(settings, convertFromCsv, blankSkims)
@@ -1211,11 +1203,11 @@ def create_skims_from_beam(settings, state, output_dir=None, overwrite=False) ->
             skims = tempSkims.loc[
                 tempSkims.origin.isin(order) & tempSkims.destination.isin(order), :
             ]
-            skims = _raw_beam_skims_preprocess(settings, state.year, skims)
+            skims = _raw_beam_skims_preprocess(settings, state.year, skims, workspace)
             auto_df, transit_df = _create_skims_by_mode(settings, skims)
             ridehail_df = _load_raw_beam_origin_skims(settings)
             ridehail_df = _raw_beam_origin_skims_preprocess(
-                settings, state.year, ridehail_df
+                settings, state.year, ridehail_df, workspace
             )
 
             # Create skims
@@ -1312,7 +1304,7 @@ def plot_skims(
     fig.savefig(save_path)
 
 
-def skim_validations(settings, year, order, data_dir=None):
+def skim_validations(settings, year, order, workspace, data_dir=None):
     logger.info("Generating skims validation plots.")
     skims = read_skims(settings, mode="r", data_dir=data_dir)
     zone = read_zone_geoms(
@@ -1615,7 +1607,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         else:
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             skims_loc = create_skims_from_beam(
-                settings, self.state, output_dir=workspace.get_asim_mutable_data_dir()
+                settings, self.state, workspace, output_dir=workspace.get_asim_mutable_data_dir()
             )
 
         # Record the skims file as an OUTPUT of the preprocessor
@@ -2147,7 +2139,7 @@ def copy_beam_geoms(
     )
     zone_type = get_setting(settings, "shared.skims.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
-    mapping = geoid_to_zone_map(settings, get_setting(settings, "run.start_year"))
+    mapping = get_block_to_zone_mapping(settings, get_setting(settings, "run.start_year"))
 
     if zone_id_col not in beam_geoms_file.columns:
 
@@ -2476,7 +2468,7 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
 
     if zone_id_col not in blocks.columns:
 
-        mapping = geoid_to_zone_map(settings, year)
+        mapping = get_block_to_zone_mapping(settings, year)
 
         if zone_type == "block":
             logger.info("Mapping block IDs")

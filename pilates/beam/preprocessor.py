@@ -10,7 +10,7 @@ import geopandas as gpd
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, Record, FileRecord
-from pilates.utils.geog import geoid_to_zone_map
+from pilates.utils.zone_utils import get_canonical_zones
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from workflow_state import WorkflowState
@@ -35,18 +35,15 @@ BEAM_PYDANTIC_PATH_MAP = {
 
 def sort_beam_shapefile_by_canonical_order(settings, workspace, provenance_tracker, model_run_hash):
     """
-    Sorts the BEAM zone shapefile to match the canonical order derived from
-    the UrbanSim datastore, ensuring consistency between BEAM and ActivitySim.
+    Sorts the BEAM zone shapefile to match the canonical order defined in
+    the canonical_zones.csv file, ensuring consistency between BEAM and ActivitySim.
     """
     logger.info("--- Sorting BEAM Shapefile by Canonical Zone Order ---")
     try:
-        # 1. Get Canonical Order from Pilates (via geoid_to_zone_map)
-        mapping = geoid_to_zone_map(settings)
-        pilates_order_df = pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
-        pilates_order_df["zone_id"] = pd.to_numeric(pilates_order_df["zone_id"])
-        pilates_order_df = pilates_order_df.sort_values("zone_id")
-        pilates_canonical_order = pilates_order_df.index.tolist()
-        logger.info(f"Generated canonical order for {len(pilates_canonical_order)} zones.")
+        # 1. Get Canonical Order from the canonical_zones.csv file
+        canonical_zones_df = get_canonical_zones(workspace)
+        pilates_canonical_order = canonical_zones_df['zone_key'].tolist()
+        logger.info(f"Loaded canonical order for {len(pilates_canonical_order)} zones from canonical_zones.csv.")
 
         # 2. Load BEAM Shapefile
         region = settings.run.region
@@ -78,7 +75,7 @@ def sort_beam_shapefile_by_canonical_order(settings, workspace, provenance_track
             return
 
         # Check if sorting is necessary
-        current_order = shapefile_gdf[geoid_col].tolist()
+        current_order = shapefile_gdf[geoid_col].astype(str).tolist()
         if current_order == pilates_canonical_order:
             logger.info("Shapefile is already sorted correctly. No changes needed.")
             return

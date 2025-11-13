@@ -10,8 +10,8 @@ import numpy as np
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
-from pilates.utils.geog import geoid_to_zone_map
 from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.zone_utils import get_block_to_zone_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -346,35 +346,28 @@ class UrbansimPreprocessor(GenericPreprocessor):
         processed_records = RecordStore()
 
         try:
-            geoid_to_zone_fname = "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(
-                settings.run.region
+            # Generate the block-to-zone mapping for UrbanSim
+            logger.info("Generating block-to-zone mapping for UrbanSim.")
+            mapping = get_block_to_zone_mapping(settings, self.state.start_year)
+            
+            # Save the mapping to a CSV file in the mutable data directory
+            block_to_zone_mapping_fname = "block_to_zone_mapping.csv"
+            block_to_zone_mapping_path = os.path.join(
+                workspace.get_usim_mutable_data_dir(), block_to_zone_mapping_fname
             )
-            if not os.path.exists(geoid_to_zone_fname):
-                mapping = geoid_to_zone_map(settings)
-
-            geoid_to_zone_target = os.path.join(
-                workspace.get_usim_mutable_data_dir(), "geoid_to_zone.csv"
+            pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"]).to_csv(
+                block_to_zone_mapping_path, index_label="geoid"
             )
-            shutil.copyfile(geoid_to_zone_fname, geoid_to_zone_target)
-            geo_zone_input_rec = self.provenance_tracker.record_input_file(
+            
+            # Record provenance for the generated mapping file
+            mapping_output_rec = self.provenance_tracker.record_output_file(
                 "urbansim_preprocessor",
-                geoid_to_zone_fname,
-                description="Geoid to zone mapping for UrbanSim input",
-                short_name="geoid_to_zone_mapping",
+                block_to_zone_mapping_path,
+                description="Block to zone mapping for UrbanSim input",
+                short_name="block_to_zone_mapping",
                 model_run_id=model_run_hash,
             )
-            geo_zone_output_rec = (
-                self.provenance_tracker.record_output_file_with_inputs(
-                    "urbansim_preprocessor",
-                    geoid_to_zone_fname,
-                    input_records=[geo_zone_input_rec],
-                    description="Copied skims for UrbanSim consumption",
-                    short_name="usim_skims_input",
-                    model_run_id=model_run_hash,
-                )
-            )
-            input_records.add_record(geo_zone_input_rec)
-            processed_records.add_record(geo_zone_output_rec)
+            processed_records.add_record(mapping_output_rec)
 
             # If not the first iteration, check if BEAM is enabled and copy updated skims
             if (
