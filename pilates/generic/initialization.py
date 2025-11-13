@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
@@ -25,7 +27,7 @@ class Initialization(Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
+        provenance_tracker: Optional[FileProvenanceTracker],
     ):
         super().__init__(model_name, state, provenance_tracker)
 
@@ -145,18 +147,18 @@ class Initialization(Model):
         generate_canonical_zones_file(settings, get_setting(settings, "run.start_year"), canonical_zones_path)
         logger.info("--- Canonical Zones File Generated ---")
 
-        # Record the canonical zones file as an output of initialization
-        canonical_zones_record = self.provenance_tracker.record_output_file(
-            "initialization",
-            canonical_zones_path,
-            description="Canonical zone definition file",
-            short_name="canonical_zones",
-        )
-        if canonical_zones_record:
-            initialization_records_out.add_record(canonical_zones_record)
-
         # Record the combined initialization provenance as a single job.
         if self.provenance_tracker is not None:
+            # Record the canonical zones file as an output of initialization
+            canonical_zones_record = self.provenance_tracker.record_output_file(
+                "initialization",
+                canonical_zones_path,
+                description="Canonical zone definition file",
+                short_name="canonical_zones",
+            )
+            if canonical_zones_record:
+                initialization_records_out.add_record(canonical_zones_record)
+
             init_run_hash = self.provenance_tracker.start_model_run(
                 "initialization",
                 year=get_setting(settings, "run.start_year"),

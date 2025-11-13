@@ -8,7 +8,7 @@ class Model:
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
+        provenance_tracker: Optional[FileProvenanceTracker],
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
         self.model_name = model_name

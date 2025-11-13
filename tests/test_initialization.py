@@ -1,8 +1,11 @@
+import os
+
 import pytest
 from types import SimpleNamespace
 
 from pilates.generic.initialization import Initialization
 from pilates.generic.records import RecordStore, Record, FileRecord, RepoRecord
+from unittest.mock import patch
 
 # ----------------------------------------------------------------------
 # Dummy objects to replace real model components
@@ -69,7 +72,8 @@ class DummyWorkspace:
 # ----------------------------------------------------------------------
 
 
-def test_initialization_runs_beam_and_urbansim(monkeypatch):
+@patch('pilates.generic.initialization.generate_canonical_zones_file')
+def test_initialization_runs_beam_and_urbansim(mock_generate_canonical_zones_file, monkeypatch):
     """
     Verify that Initialization.run correctly aggregates provenance records
     for beam and urbansim models using the dummy preprocessor.
@@ -101,6 +105,13 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
 
+    # Assert that generate_canonical_zones_file was called
+    mock_generate_canonical_zones_file.assert_called_once_with(
+        settings,
+        settings.run.start_year,
+        os.path.join(workspace.full_path, 'canonical_zones.csv')
+    )
+
     # After run, provenance records should be stored in workspace dicts
     # Two records per model (input + output)
     assert "beam" in workspace.input_data
@@ -116,7 +127,8 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
             assert isinstance(rec, Record)
 
 
-def test_initialization_handles_missing_models_gracefully(monkeypatch):
+@patch('pilates.generic.initialization.generate_canonical_zones_file')
+def test_initialization_handles_missing_models_gracefully(mock_generate_canonical_zones_file, monkeypatch):
     """
     If a model key is missing from settings, Initialization should simply skip it
     without raising errors.
@@ -147,6 +159,13 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
 
     # Should complete without exception
     init.run(settings, workspace)
+
+    # Assert that generate_canonical_zones_file was called
+    mock_generate_canonical_zones_file.assert_called_once_with(
+        settings,
+        settings.run.start_year,
+        os.path.join(workspace.full_path, 'canonical_zones.csv')
+    )
 
     # No data should have been added to workspace dictionaries
     assert workspace.input_data == {}

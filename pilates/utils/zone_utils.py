@@ -32,23 +32,31 @@ def generate_canonical_zones_file(settings, year, output_path):
         return output_path
 
     if zone_type == "block_group":
-        # For block groups, the zone_key is the GEOID.
-        # The asim_id is the existing TAZ ID from the land_use table.
         store, table_prefix_yr = read_datastore(settings, year)
-        land_use_key = os.path.join(table_prefix_yr, "land_use")
-        if land_use_key not in store:
-            land_use_key = "land_use"
+        blocks_key = os.path.join(table_prefix_yr, "blocks")
+        if blocks_key not in store:
+            blocks_key = "blocks"
         
-        land_use = store.get(land_use_key)
+        blocks = store.get(blocks_key)
         store.close()
         
-        if land_use is None:
-            raise KeyError(f"Could not find '{land_use_key}' table in datastore.")
-        if 'geoid10' not in land_use.columns or 'TAZ' not in land_use.columns:
-            raise ValueError("land_use table for block_group must contain 'geoid10' and 'TAZ' columns.")
+        if blocks is None:
+            raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
         
-        df = land_use[['geoid10', 'TAZ']].copy()
-        df.rename(columns={'geoid10': 'zone_key', 'TAZ': 'asim_id'}, inplace=True)
+        if 'block_group_id' not in blocks.columns or 'zone_id' not in blocks.columns:
+            raise ValueError("blocks table for block_group must contain 'block_group_id' and 'zone_id' columns.")
+            
+        # Create a DataFrame with block_group_id as zone_key and zone_id as asim_id
+        # We need to ensure uniqueness of block_group_id and zone_id pairs
+        df = blocks[['block_group_id', 'zone_id']].drop_duplicates().copy()
+        df.rename(columns={'block_group_id': 'zone_key', 'zone_id': 'asim_id'}, inplace=True)
+        
+        # Sort by asim_id (TAZ ID) numerically, then assign sequential 1-based asim_id
+        # This mimics the sorting logic in read_zone_geoms
+        df['asim_id_numeric'] = df['asim_id'].astype(int) # Temporary column for numeric sort
+        df = df.sort_values('asim_id_numeric').reset_index(drop=True)
+        df['asim_id'] = range(1, len(df) + 1) # Re-assign sequential 1-based asim_id
+        df.drop(columns=['asim_id_numeric'], inplace=True) # Drop temporary column
 
     elif zone_type == "taz":
         # For TAZs, the zone_key is the TAZ ID itself (e.g., from taz1454).
@@ -123,7 +131,15 @@ def get_block_to_zone_mapping(settings, year):
     if blocks is None:
         raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
 
-    taz_col = 'taz_zone_id'
+    zone_type = get_setting(settings, "shared.skims.zone_type")
+
+    if zone_type == "taz":
+        taz_col = 'taz_zone_id'
+    elif zone_type == "block_group":
+        taz_col = 'zone_id'
+    else:
+        raise ValueError(f"Unsupported zone_type for block_group generation: {zone_type}")
+
     if taz_col not in blocks.columns:
         raise ValueError(f"'{taz_col}' not found in 'blocks' table.")
 
