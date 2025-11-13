@@ -165,9 +165,18 @@ def get_county_block_geoms(
 
 def get_block_geoms(settings, data_dir="./tmp/"):
     region = get_setting(settings, "run.region") or "beam"
-    FIPS = get_setting(settings, "shared.geography.FIPS")[region]
-    state_fips = FIPS["state"]
-    county_codes = FIPS["counties"]
+
+    # Handle both flat and nested FIPS config structures
+    FIPS = get_setting(settings, "shared.geography.FIPS")
+    if isinstance(FIPS, dict) and "state" not in FIPS:
+        # Region-nested structure: drill down using the current region
+        region_fips = FIPS.get(region, {})
+        state_fips = region_fips["state"]
+        county_codes = region_fips["counties"]
+    else:
+        # Flat structure
+        state_fips = FIPS["state"]
+        county_codes = FIPS["counties"]
 
     zone_type = get_setting(settings, "shared.skims.zone_type")
     if zone_type == "taz":

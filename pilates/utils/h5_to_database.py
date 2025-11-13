@@ -469,7 +469,16 @@ class H5ActivitySimExtractor:
         """Generate land_use table using ActivitySim preprocessor logic."""
         try:
             region = get_setting(self.settings, "run.region")
-            FIPS = get_setting(self.settings, "shared.geography.FIPS")[region]
+
+            # Handle both flat and nested FIPS config structures
+            FIPS_config = get_setting(self.settings, "shared.geography.FIPS")
+            if isinstance(FIPS_config, dict) and "state" not in FIPS_config:
+                # Region-nested structure
+                FIPS = FIPS_config.get(region, {})
+            else:
+                # Flat structure
+                FIPS = FIPS_config
+
             asim_zone_id_col = "TAZ"
             # TODO: Generalize this or add it to settings.yaml
             input_zone_id_col = get_setting(
