@@ -2372,21 +2372,34 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
     geoid_to_zone_mapping_updated = False
 
     zone_type = get_setting(settings, "shared.skims.zone_type")
-    # The column name in blocks that will hold the TAZ ID for ActivitySim
-    asim_taz_col_name = "TAZ" # ActivitySim expects "TAZ"
+    zone_id_col = "{}_{}".format(zone_type, zone_id_col)
 
-    if asim_taz_col_name not in blocks.columns:
+    if zone_id_col not in blocks.columns:
+
         mapping = get_block_to_zone_mapping(settings, year)
-        # Apply the mapping from block_id (index) to TAZ ID
-        blocks[asim_taz_col_name] = blocks.index.astype(str).map(mapping)
+
+        if zone_type == "block":
+            logger.info("Mapping block IDs")
+            blocks[zone_id_col] = blocks.index.astype(str).replace(mapping)
+
+        elif zone_type == "block_group":
+            logger.info("Mapping blocks to block group IDS")
+            blocks[zone_id_col] = blocks.block_group_id.astype(str).replace(mapping)
+
+        elif zone_type == "taz":
+            logger.info("Mapping block IDs to TAZ")
+            blocks[zone_id_col] = blocks.index.astype(str)
+            blocks[zone_id_col] = blocks[zone_id_col].replace(mapping)
+
         geoid_to_zone_mapping_updated = True
+
     else:
         logger.info(
-            "Blocks table already has TAZ IDs. Make sure skim zones "
+            "Blocks table already has zone IDs. Make sure skim zones "
             "haven't changed."
         )
 
-    blocks[asim_taz_col_name] = blocks[asim_taz_col_name].astype(str)
+    blocks[zone_id_col] = blocks[zone_id_col].astype(str)
 
     return geoid_to_zone_mapping_updated, blocks
 
@@ -2930,11 +2943,11 @@ def create_asim_data_from_h5(
 
     store.close()
 
-    # NOW rename for ActivitySim usage (BEFORE calling _create_land_use_table)
-    # The asim_zone_id_col is "TAZ"
+    # NOW rename for ActivitySim usage (after saving to H5)
     if input_zone_id_col in blocks.columns and input_zone_id_col != asim_zone_id_col:
         blocks.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
 
+    # Also need to rename in households, persons, and jobs since they reference blocks
     if input_zone_id_col in households.columns:
         households.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
     if input_zone_id_col in persons.columns:
