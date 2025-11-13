@@ -6,31 +6,22 @@ import time
 from multiprocessing import Pool, cpu_count
 from typing import Optional, List, Tuple
 
-import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import openmatrix as omx
 import pandas as pd
 import requests
-from pandas.api.types import is_string_dtype
+import geopandas as gpd
 from shapely import wkt
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.duckdb_manager import DuckDBManager
-from pilates.utils.geog import (
-    get_block_geoms,
-    get_zone_from_points,
-    get_taz_geoms,
-)
-from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones
-from pilates.utils.io import (
-    read_datastore,
-    datastore_path,
-    get_merged_usim_input_datastore_path,
-)
+from pilates.utils.geog import get_zone_from_points, get_block_geoms
+from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones, read_zone_geoms
+from pilates.utils.io import get_merged_usim_input_datastore_path
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
@@ -120,89 +111,6 @@ def read_skims(settings, mode="a", data_dir=None, file_name="skims.omx"):
     path = os.path.join(data_dir, file_name)
     skims = omx.open_file(path, mode=mode)
     return skims
-
-
-def zone_id_to_taz(zones, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"):
-    if zones.index.name != asim_zone_id_col:
-        if asim_zone_id_col in zones.columns:
-            logger.info("Setting column {0} to index".format(asim_zone_id_col))
-            zones.set_index(asim_zone_id_col, inplace=True)
-        elif zones.index.name == default_zone_id_col:
-            logger.info(
-                "Renaming index from {0} to {1}".format(
-                    default_zone_id_col, asim_zone_id_col
-                )
-            )
-            zones.index.name = asim_zone_id_col
-        elif asim_zone_id_col not in zones.columns:
-            zones.rename(columns={default_zone_id_col: asim_zone_id_col}, inplace=True)
-            zones.set_index(asim_zone_id_col, inplace=True)
-            logger.info(
-                "Setting column {0} to index and renaming it {1}".format(
-                    default_zone_id_col, asim_zone_id_col
-                )
-            )
-        else:
-            logger.error("Not sure what column in the zones table is the zone ID!")
-    else:
-        logger.info("Zone index is already named {0}".format(asim_zone_id_col))
-    return zones
-
-
-def read_zone_geoms(
-    settings, year, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"
-):
-    """
-    Returns a GeoPandas dataframe with the zones geometries.
-    """
-    store, table_prefix_year = read_datastore(settings, year, True)
-    zone_type = settings.shared.skims.zone_type
-    zone_key = "/{0}_zone_geoms".format(zone_type)
-
-    if zone_key in store.keys():
-        logger.info("Loading {0} zone geometries from .h5 datastore!".format(zone_type))
-        zones = store[zone_key]
-
-        if "geometry" in zones.columns:
-            zones.loc[:, "geometry"] = zones.loc[:, "geometry"].apply(wkt.loads)
-            zones = gpd.GeoDataFrame(zones, geometry="geometry", crs="EPSG:4326")
-        else:
-            raise KeyError(
-                "Table 'zone_geoms' exists in the .h5 datastore but "
-                "no geometry column was found!"
-            )
-    else:
-        logger.info("Downloading zone geometries on the fly!")
-        region = settings.run.region
-        if zone_type == "taz":
-            zones = get_taz_geoms(settings, zone_id_col_out=default_zone_id_col)
-            zones.set_index(default_zone_id_col, inplace=True)
-        else:
-            mapping = get_block_to_zone_mapping(settings, year)
-            zones = get_block_geoms(settings)
-            # zones['GEOID'] = zones['GEOID'].astype(str)
-            assert is_string_dtype(zones["GEOID"]), "GEOID dtype should be str"
-            zones.loc[:, default_zone_id_col] = zones.loc[:, "GEOID"].replace(mapping)
-            zones.set_index(default_zone_id_col, inplace=True)
-            assert zones.index.inferred_type == "string", "zone_id dtype should be str"
-
-        # save zone geoms in .h5 datastore so we don't
-        # have to do this again
-        out_zones = pd.DataFrame(zones.copy())
-        out_zones.loc[:, "geometry"] = out_zones["geometry"].apply(lambda x: x.wkt)
-
-        logger.info("Storing zone geometries to .h5 datastore!")
-        store[zone_key] = out_zones
-
-    store.close()
-
-    # Sort zones by zone_id.
-    # momentary int transformation to
-    # make sure it sort 1, 2, 10 instead of '1', 10', '2'
-    zones.index = zones.index.astype(int)
-    zones = zones.sort_index()
-    zones.index = zones.index.astype(str)
-    return zone_id_to_taz(zones, asim_zone_id_col, default_zone_id_col)
 
 
 asim_param_map = {"random_seed": "rng_base_seed"}
