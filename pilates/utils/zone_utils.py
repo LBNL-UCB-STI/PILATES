@@ -228,13 +228,14 @@ def read_zone_geoms(
             zones.set_index(default_zone_id_col, inplace=True)
         else:
             mapping = get_block_to_zone_mapping(settings, year)
-            from pilates.utils.geog import get_block_geoms
-            zones = get_block_geoms(settings, year=year)
+            from pilates.utils.geog import get_taz_geoms
+            zones = get_taz_geoms(settings, taz_id_col_in="geoid10", zone_id_col_out=default_zone_id_col)
             # zones['GEOID'] = zones['GEOID'].astype(str)
             assert is_string_dtype(zones["GEOID"]), "GEOID dtype should be str"
-            zones.loc[:, default_zone_id_col] = zones.loc[:, "GEOID"].replace(mapping)
+            # zones.loc[:, default_zone_id_col] = zones.loc[:, "GEOID"].replace(mapping)
+            zones[default_zone_id_col] = zones[default_zone_id_col].astype(str)
             zones.set_index(default_zone_id_col, inplace=True)
-            assert zones.index.inferred_type == "string", "zone_id dtype should be str"
+            # assert zones.index.inferred_type == "string", "zone_id dtype should be str"
 
         # IMPORTANT: Sort zones BEFORE saving to H5 to ensure consistent ordering
         # For GEOIDs (12+ digits), preserve string format; for simple IDs, sort numerically
@@ -252,7 +253,7 @@ def read_zone_geoms(
         # save zone geoms in .h5 datastore so we don't
         # have to do this again
         out_zones = pd.DataFrame(zones.copy())
-        out_zones.loc[:, "geometry"] = out_zones["geometry"].apply(lambda x: x.wkt)
+        out_zones.loc[:, "geometry"] = out_zones["geometry"].apply(lambda x: x.wkt if x is not None else None)
 
         logger.info("Storing zone geometries to .h5 datastore!")
         store[zone_key] = out_zones

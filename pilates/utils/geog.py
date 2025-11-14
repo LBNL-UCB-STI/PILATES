@@ -81,14 +81,15 @@ def get_taz_geoms(
         print(list(gdf))
         if region == "austin":
             from pilates.utils.zone_utils import get_block_to_zone_mapping
-            mapping = get_block_to_zone_mapping(settings, year=None)
+            mapping = get_block_to_zone_mapping(settings, year=settings.run.start_year)
             logger.info("Mapping block group IDs to TAZ ids")
             gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
         if region == "seattle":
-            from pilates.utils.zone_utils import get_block_to_zone_mapping
-            mapping = get_block_to_zone_mapping(settings, year=None)
-            logger.info("Mapping block group IDs to TAZ ids")
-            gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
+            logger.info("Keeping block group IDs in column {0}".format(taz_id_col_in))
+            # from pilates.utils.zone_utils import get_block_to_zone_mapping
+            # mapping = get_block_to_zone_mapping(settings, year=settings.run.start_year)
+            # logger.info("Mapping block group IDs to TAZ ids")
+            # gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
         elif region == "sfbay":
             print(f"renaming {taz_id_col_in} to {zone_id_col_out}")
             gdf.rename(columns={taz_id_col_in: zone_id_col_out}, inplace=True)
@@ -187,7 +188,7 @@ def get_block_geoms(settings, data_dir="./tmp/", year=None):
         zone_type_v1 = zone_type
 
     all_block_geoms = []
-    file_name = "{0}_{1}.shp".format(zone_type_v1, region)
+    file_name = "{0}_{1}.shp".format(zone_type, region)
 
     if os.path.exists(os.path.join(data_dir, file_name)):
         logger.info("Loading block geoms from disk!")
