@@ -80,11 +80,13 @@ def get_taz_geoms(
         gdf = gdf.set_crs("EPSG:4326", allow_override=True)
         print(list(gdf))
         if region == "austin":
-            mapping = geoid_to_zone_map(settings)
+            from pilates.utils.zone_utils import get_block_to_zone_mapping
+            mapping = get_block_to_zone_mapping(settings, year=None)
             logger.info("Mapping block group IDs to TAZ ids")
             gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
         if region == "seattle":
-            mapping = geoid_to_zone_map(settings)
+            from pilates.utils.zone_utils import get_block_to_zone_mapping
+            mapping = get_block_to_zone_mapping(settings, year=None)
             logger.info("Mapping block group IDs to TAZ ids")
             gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
         elif region == "sfbay":
@@ -105,7 +107,7 @@ def get_county_block_geoms(
         base_url = (
             "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/"
             #             'Tracts_Blocks/MapServer/12/query?where=STATE%3D{0}+and+COUNTY%3D{1}' #2020 census
-            "tigerWMS_Census2010/MapServer/18/query?where=STATE%3D{0}+and+COUNTY%3D{1}"  # 2010 census
+            "tigerWMS_Census2010/MapServer/18/query?where=STATE%3D'{0}'+and+COUNTY%3D'{1}'"  # 2010 census
             "&resultRecordCount={2}&resultOffset={3}&orderBy=GEOID"
             "&outFields=GEOID%2CSTATE%2CCOUNTY%2CTRACT%2CBLKGRP%2CBLOCK%2CCENTLAT"
             '%2CCENTLON&outSR=%7B"wkid"+%3A+4326%7D&f=json'
@@ -115,7 +117,7 @@ def get_county_block_geoms(
         base_url = (
             "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/"
             #             'Tracts_Blocks/MapServer/11/query?where=STATE%3D{0}+and+COUNTY%3D{1}' #2020 census
-            "tigerWMS_Census2010/MapServer/16/query?where=STATE%3D{0}+and+COUNTY%3D{1}"  # 2010 census
+            "tigerWMS_Census2010/MapServer/16/query?where=STATE%3D'{0}'+and+COUNTY%3D'{1}'"  # 2010 census
             "&resultRecordCount={2}&resultOffset={3}&orderBy=GEOID"
             "&outFields=GEOID%2CSTATE%2CCOUNTY%2CTRACT%2CBLKGRP%2CCENTLAT"
             '%2CCENTLON&outSR=%7B"wkid"+%3A+4326%7D&f=json'
@@ -163,7 +165,7 @@ def get_county_block_geoms(
     return gdf
 
 
-def get_block_geoms(settings, data_dir="./tmp/"):
+def get_block_geoms(settings, data_dir="./tmp/", year=None):
     region = get_setting(settings, "run.region") or "beam"
 
     # Handle both flat and nested FIPS config structures
@@ -209,7 +211,8 @@ def get_block_geoms(settings, data_dir="./tmp/"):
 
         # make sure geometries match with geometries in blocks table
         if zone_type in ["block", "block_group"]:
-            geoids = list(geoid_to_zone_map(settings, year=None).keys())
+            from pilates.utils.zone_utils import get_block_to_zone_mapping
+            geoids = list(get_block_to_zone_mapping(settings, year=year).keys())
             blocks_gdf = blocks_gdf[blocks_gdf.GEOID.isin(geoids)]
 
         # save to disk

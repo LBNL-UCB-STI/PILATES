@@ -7,11 +7,7 @@ from pandas.api.types import is_string_dtype
 
 from pilates.utils.io import read_datastore
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.geog import (
-    get_block_geoms,
-    get_zone_from_points,
-    get_taz_geoms,
-)
+# Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +223,13 @@ def read_zone_geoms(
         logger.info("Downloading zone geometries on the fly!")
         region = settings.run.region
         if zone_type == "taz":
+            from pilates.utils.geog import get_taz_geoms
             zones = get_taz_geoms(settings, zone_id_col_out=default_zone_id_col)
             zones.set_index(default_zone_id_col, inplace=True)
         else:
             mapping = get_block_to_zone_mapping(settings, year)
-            zones = get_block_geoms(settings)
+            from pilates.utils.geog import get_block_geoms
+            zones = get_block_geoms(settings, year=year)
             # zones['GEOID'] = zones['GEOID'].astype(str)
             assert is_string_dtype(zones["GEOID"]), "GEOID dtype should be str"
             zones.loc[:, default_zone_id_col] = zones.loc[:, "GEOID"].replace(mapping)
