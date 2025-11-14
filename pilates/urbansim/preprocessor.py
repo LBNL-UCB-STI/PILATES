@@ -347,8 +347,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
             # Generate the block-to-zone mapping for UrbanSim
             logger.info("Generating block-to-zone mapping for UrbanSim.")
             from pilates.utils.zone_utils import get_block_to_zone_mapping
-            mapping = get_block_to_zone_mapping(settings, self.state.start_year, workspace)
-            
+
+            mapping = get_block_to_zone_mapping(
+                settings, self.state.start_year, workspace
+            )
+
             # Save the mapping to a CSV file in the mutable data directory
             block_to_zone_mapping_fname = "block_to_zone_mapping.csv"
             block_to_zone_mapping_path = os.path.join(
@@ -357,7 +360,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"]).to_csv(
                 block_to_zone_mapping_path, index_label="geoid"
             )
-            
+
             # Record provenance for the generated mapping file
             mapping_output_rec = self.provenance_tracker.record_output_file(
                 "urbansim_preprocessor",

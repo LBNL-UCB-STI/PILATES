@@ -20,7 +20,11 @@ from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
-from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones, load_canonical_zones
+from pilates.utils.zone_utils import (
+    get_block_to_zone_mapping,
+    get_canonical_zones,
+    load_canonical_zones,
+)
 from pilates.utils.io import get_merged_usim_input_datastore_path, read_datastore
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
@@ -91,7 +95,7 @@ def zone_order(settings, workspace):
 
     """
     canonical_zones_df = get_canonical_zones(settings, workspace)
-    order = canonical_zones_df['zone_key'].values
+    order = canonical_zones_df["zone_key"].values
     return order
 
 
@@ -1084,7 +1088,9 @@ def _create_offset(settings, order, data_dir=None):
     skims.close()
 
 
-def create_skims_from_beam(settings, state, workspace, output_dir=None, overwrite=False) -> str:
+def create_skims_from_beam(
+    settings, state, workspace, output_dir=None, overwrite=False
+) -> str:
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings.activitysim.local_mutable_data_folder
@@ -1117,7 +1123,14 @@ def create_skims_from_beam(settings, state, workspace, output_dir=None, overwrit
             )
 
             # Create skims
-            _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir, workspace=workspace)
+            _distance_skims(
+                settings,
+                state.year,
+                auto_df,
+                order,
+                data_dir=output_dir,
+                workspace=workspace,
+            )
             _auto_skims(settings, auto_df, order, data_dir=output_dir)
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
@@ -1510,7 +1523,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         else:
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             skims_loc = create_skims_from_beam(
-                settings, self.state, workspace, output_dir=workspace.get_asim_mutable_data_dir()
+                settings,
+                self.state,
+                workspace,
+                output_dir=workspace.get_asim_mutable_data_dir(),
             )
 
         # Record the skims file as an OUTPUT of the preprocessor
@@ -1946,7 +1962,7 @@ def enrollment_tables(
 
 
 def _copy_data_to_mutable_location(
-        settings: PilatesConfig, folder_path, provenance_tracker: FileProvenanceTracker
+    settings: PilatesConfig, folder_path, provenance_tracker: FileProvenanceTracker
 ) -> Tuple[RecordStore, RecordStore]:
     logger.info("Copying ActivitySim source data to mutable location.")
     input_dir = folder_path
@@ -1964,18 +1980,28 @@ def _copy_data_to_mutable_location(
     if os.path.exists(zone_source_path):
         zone_fname = os.path.basename(zone_source_path)
         asim_zones_path = os.path.join(input_dir, zone_fname)
-        logger.info(f"Copying canonical zones from {zone_source_path} to {asim_zones_path}")
+        logger.info(
+            f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
+        )
         shutil.copy(zone_source_path, asim_zones_path)
 
-        input_rec = provenance_tracker.record_input_file("activitysim_preprocessor", zone_source_path,
-                                                         short_name="canonical_zones_source")
+        input_rec = provenance_tracker.record_input_file(
+            "activitysim_preprocessor",
+            zone_source_path,
+            short_name="canonical_zones_source",
+        )
         output_rec = provenance_tracker.record_output_file_with_inputs(
-            "activitysim_preprocessor", asim_zones_path, [input_rec], short_name="canonical_zones_mutable"
+            "activitysim_preprocessor",
+            asim_zones_path,
+            [input_rec],
+            short_name="canonical_zones_mutable",
         )
         input_records.add_record(input_rec)
         output_records.add_record(output_rec)
     else:
-        logger.warning(f"Canonical zone source file not found at {zone_source_path}, skipping copy.")
+        logger.warning(
+            f"Canonical zone source file not found at {zone_source_path}, skipping copy."
+        )
 
     # --- 2. Handle Clipped Geometries (from BEAM) ---
     clipped_geoms_rel_path = get_setting(settings, "activitysim.clipped_geoms_path")
@@ -1988,18 +2014,28 @@ def _copy_data_to_mutable_location(
         if os.path.exists(clipped_geoms_source_path):
             clipped_fname = os.path.basename(clipped_geoms_source_path)
             asim_clipped_path = os.path.join(input_dir, clipped_fname)
-            logger.info(f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}")
+            logger.info(
+                f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}"
+            )
             shutil.copy(clipped_geoms_source_path, asim_clipped_path)
 
-            input_rec = provenance_tracker.record_input_file("activitysim_preprocessor", clipped_geoms_source_path,
-                                                             short_name="clipped_geoms_source")
+            input_rec = provenance_tracker.record_input_file(
+                "activitysim_preprocessor",
+                clipped_geoms_source_path,
+                short_name="clipped_geoms_source",
+            )
             output_rec = provenance_tracker.record_output_file_with_inputs(
-                "activitysim_preprocessor", asim_clipped_path, [input_rec], short_name="clipped_geoms_mutable"
+                "activitysim_preprocessor",
+                asim_clipped_path,
+                [input_rec],
+                short_name="clipped_geoms_mutable",
             )
             input_records.add_record(input_rec)
             output_records.add_record(output_rec)
         else:
-            logger.warning(f"Clipped geoms file not found at {clipped_geoms_source_path}, skipping copy.")
+            logger.warning(
+                f"Clipped geoms file not found at {clipped_geoms_source_path}, skipping copy."
+            )
 
     # --- 3. Handle ActivitySim Configs ---
     configs_source_dir = os.path.join(
@@ -2050,7 +2086,7 @@ def copy_beam_geoms(
     asim_geoms_location,
     beam_shape_location,
     provenance_tracker: FileProvenanceTracker,
-        workspace
+    workspace,
 ) -> Tuple[RecordStore, RecordStore]:
     zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
@@ -2062,7 +2098,9 @@ def copy_beam_geoms(
     )
     zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
-    mapping = get_block_to_zone_mapping(settings, get_setting(settings, "run.start_year"), workspace)
+    mapping = get_block_to_zone_mapping(
+        settings, get_setting(settings, "run.start_year"), workspace
+    )
 
     if zone_id_col not in beam_geoms_file.columns:
 
@@ -2138,7 +2176,7 @@ def copy_beam_geoms(
 
 
 def _update_persons_table(
-        persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
+    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
 ):
     """Updates person attributes and assigns zones for ActivitySim processing.
 
@@ -2179,10 +2217,16 @@ def _update_persons_table(
 
     # Calculate person types more efficiently
     conditions = [
-        (age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)),  # type 1
+        (
+            age_ranges["adult"] & (persons.worker == 1) & (persons.student != 1)
+        ),  # type 1
         (age_ranges["adult"] & (persons.student == 1)),  # type 3
-        (age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)),  # type 4
-        (age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)),  # type 5
+        (
+            age_ranges["working_age"] & (persons.worker != 1) & (persons.student != 1)
+        ),  # type 4
+        (
+            age_ranges["senior"] & (persons.worker != 1) & (persons.student != 1)
+        ),  # type 5
         age_ranges["teen"],  # type 6
         age_ranges["child"],  # type 7
         age_ranges["young_child"],  # type 8
@@ -2363,7 +2407,9 @@ def _update_jobs_table(
     return num_reassigned, jobs
 
 
-def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col, workspace):
+def _update_blocks_table(
+    settings, year, blocks, households, jobs, zone_id_col, workspace
+):
     blocks["TOTEMP"] = (
         jobs[["block_id", "sector_id"]]
         .groupby("block_id")["sector_id"]
@@ -2433,14 +2479,28 @@ def _create_land_use_table(
 
     # DIAGNOSTIC LOGGING
     logger.info("=== DIAGNOSTIC INFO FOR LAND USE TABLE ===")
-    logger.info(f"zones index: name={zones.index.name}, dtype={zones.index.dtype}, len={len(zones)}")
+    logger.info(
+        f"zones index: name={zones.index.name}, dtype={zones.index.dtype}, len={len(zones)}"
+    )
     logger.info(f"zones index sample (first 10): {zones.index[:10].tolist()}")
-    logger.info(f"persons[{asim_zone_id_col}]: dtype={persons[asim_zone_id_col].dtype if asim_zone_id_col in persons.columns else 'MISSING'}, nunique={persons[asim_zone_id_col].nunique() if asim_zone_id_col in persons.columns else 'N/A'}")
-    logger.info(f"persons[{asim_zone_id_col}] sample: {persons[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in persons.columns else 'N/A'}")
-    logger.info(f"households[{asim_zone_id_col}]: dtype={households[asim_zone_id_col].dtype if asim_zone_id_col in households.columns else 'MISSING'}, nunique={households[asim_zone_id_col].nunique() if asim_zone_id_col in households.columns else 'N/A'}")
-    logger.info(f"households[{asim_zone_id_col}] sample: {households[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in households.columns else 'N/A'}")
-    logger.info(f"jobs[{asim_zone_id_col}]: dtype={jobs[asim_zone_id_col].dtype if asim_zone_id_col in jobs.columns else 'MISSING'}, nunique={jobs[asim_zone_id_col].nunique() if asim_zone_id_col in jobs.columns else 'N/A'}")
-    logger.info(f"jobs[{asim_zone_id_col}] sample: {jobs[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in jobs.columns else 'N/A'}")
+    logger.info(
+        f"persons[{asim_zone_id_col}]: dtype={persons[asim_zone_id_col].dtype if asim_zone_id_col in persons.columns else 'MISSING'}, nunique={persons[asim_zone_id_col].nunique() if asim_zone_id_col in persons.columns else 'N/A'}"
+    )
+    logger.info(
+        f"persons[{asim_zone_id_col}] sample: {persons[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in persons.columns else 'N/A'}"
+    )
+    logger.info(
+        f"households[{asim_zone_id_col}]: dtype={households[asim_zone_id_col].dtype if asim_zone_id_col in households.columns else 'MISSING'}, nunique={households[asim_zone_id_col].nunique() if asim_zone_id_col in households.columns else 'N/A'}"
+    )
+    logger.info(
+        f"households[{asim_zone_id_col}] sample: {households[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in households.columns else 'N/A'}"
+    )
+    logger.info(
+        f"jobs[{asim_zone_id_col}]: dtype={jobs[asim_zone_id_col].dtype if asim_zone_id_col in jobs.columns else 'MISSING'}, nunique={jobs[asim_zone_id_col].nunique() if asim_zone_id_col in jobs.columns else 'N/A'}"
+    )
+    logger.info(
+        f"jobs[{asim_zone_id_col}] sample: {jobs[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in jobs.columns else 'N/A'}"
+    )
     logger.info("==========================================")
 
     schools = enrollment_tables(
@@ -2536,10 +2596,18 @@ def _create_land_use_table(
 
     # --- DIAGNOSTIC: Check aggregated data before join ---
     logger.info("=== PRE-JOIN DIAGNOSTICS ===")
-    logger.info(f"persons_agg index: dtype={persons_agg.index.dtype}, len={len(persons_agg)}, sample={persons_agg.index[:5].tolist()}")
-    logger.info(f"households_agg index: dtype={households_agg.index.dtype}, len={len(households_agg)}, sample={households_agg.index[:5].tolist()}")
-    logger.info(f"jobs_agg index: dtype={jobs_agg.index.dtype}, len={len(jobs_agg)}, sample={jobs_agg.index[:5].tolist()}")
-    logger.info(f"zones index: dtype={zones.index.dtype}, len={len(zones)}, sample={zones.index[:5].tolist()}")
+    logger.info(
+        f"persons_agg index: dtype={persons_agg.index.dtype}, len={len(persons_agg)}, sample={persons_agg.index[:5].tolist()}"
+    )
+    logger.info(
+        f"households_agg index: dtype={households_agg.index.dtype}, len={len(households_agg)}, sample={households_agg.index[:5].tolist()}"
+    )
+    logger.info(
+        f"jobs_agg index: dtype={jobs_agg.index.dtype}, len={len(jobs_agg)}, sample={jobs_agg.index[:5].tolist()}"
+    )
+    logger.info(
+        f"zones index: dtype={zones.index.dtype}, len={len(zones)}, sample={zones.index[:5].tolist()}"
+    )
 
     # Check overlap
     zones_ids = set(zones.index.astype(str))
@@ -2547,9 +2615,13 @@ def _create_land_use_table(
     households_ids = set(households_agg.index.astype(str))
     jobs_ids = set(jobs_agg.index.astype(str))
 
-    logger.info(f"Zone IDs in zones but not in persons_agg: {len(zones_ids - persons_ids)}")
-    logger.info(f"Zone IDs in persons_agg but not in zones: {len(persons_ids - zones_ids)}")
-    if (persons_ids - zones_ids):
+    logger.info(
+        f"Zone IDs in zones but not in persons_agg: {len(zones_ids - persons_ids)}"
+    )
+    logger.info(
+        f"Zone IDs in persons_agg but not in zones: {len(persons_ids - zones_ids)}"
+    )
+    if persons_ids - zones_ids:
         logger.info(f"  Examples: {list(persons_ids - zones_ids)[:10]}")
     logger.info("============================")
 
@@ -2564,7 +2636,6 @@ def _create_land_use_table(
     logger.info(f"zones.TOTEMP.sum() = {zones.TOTEMP.sum()}")
     logger.info(f"Number of zones with TOTPOP > 0: {(zones.TOTPOP > 0).sum()}")
     logger.info("=============================")
-
 
     zones.loc[:, "SHPOP62P"] = (
         (zones.AGE62P / zones.TOTPOP).reindex(zones.index).fillna(0)
@@ -2800,8 +2871,6 @@ def create_asim_data_from_database(
         raise
 
 
-
-
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: WorkflowState,
@@ -2836,7 +2905,9 @@ def create_asim_data_from_h5(
     block_to_zone_map = get_block_to_zone_mapping(settings, state.year, workspace)
 
     # Load UrbanSim data
-    usim_data_path = get_merged_usim_input_datastore_path(settings, workspace.get_asim_mutable_data_dir())
+    usim_data_path = get_merged_usim_input_datastore_path(
+        settings, workspace.get_asim_mutable_data_dir()
+    )
     usim_data_in = provenance_tracker.record_input_file(
         "activitysim_preprocessor",
         usim_data_path,
@@ -2868,7 +2939,7 @@ def create_asim_data_from_h5(
         settings,
         settings.shared.geography.local_crs,
         asim_zone_id_col,
-        workspace
+        workspace,
     )
     geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
         settings, state.year, blocks, households, jobs, asim_zone_id_col, workspace

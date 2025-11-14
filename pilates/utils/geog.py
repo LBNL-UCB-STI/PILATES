@@ -108,7 +108,9 @@ def get_block_geoms(settings, workspace: Workspace, data_dir="./tmp/", year=None
         blocks_gdf = gpd.read_file(os.path.join(data_dir, file_name))
 
     else:
-        logger.info("No block geoms found at {0}".format(os.path.join(data_dir, file_name)))
+        logger.info(
+            "No block geoms found at {0}".format(os.path.join(data_dir, file_name))
+        )
         logger.info("Downloading {} geoms from Census TIGERweb API!".format(zone_type))
 
         # get block geoms from census tigerweb API
@@ -125,7 +127,6 @@ def get_block_geoms(settings, workspace: Workspace, data_dir="./tmp/", year=None
         )
 
         # # make sure geometries match with geometries in blocks table
-
 
         # save to disk
         logger.info(

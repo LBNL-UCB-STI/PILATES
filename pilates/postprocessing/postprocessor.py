@@ -197,6 +197,7 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
 
         try:
             from pilates.utils.zone_utils import load_canonical_zones
+
             taz = load_canonical_zones(settings, workspace)
             taz.to_file(os.path.join(beam_iter_output_dir, "taz_geometries.shp"))
         except Exception as e:
@@ -666,6 +667,7 @@ def _add_geometry_id_to_DataFrame(
 
 def _add_geometry_to_events(settings, events):
     from pilates.utils.zone_utils import load_canonical_zones
+
     taz = load_canonical_zones(settings)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)

@@ -15,6 +15,7 @@ This module defines lightweight record types used by the provenance subsystem:
 These classes are intentionally simple and serializable; they are used to
 assemble OpenLineage Dataset objects and to persist run metadata elsewhere.
 """
+
 import os
 import uuid
 from datetime import datetime
@@ -190,6 +191,7 @@ class FileRecord(Record):
 
         if os.path.isabs(self.file_path):
             from pilates.utils.provenance import find_project_root
+
             project_root = find_project_root()
             if project_root and self.file_path.startswith(project_root):
                 rel_path = os.path.relpath(self.file_path, project_root)
@@ -202,7 +204,7 @@ class FileRecord(Record):
                     f"FileRecord '{self.short_name}' has absolute path outside project root - "
                     f"this may be intentional for external data"
                 )
-        elif self.file_path.startswith('..'):
+        elif self.file_path.startswith(".."):
             # Paths starting with .. are relative but might go outside project root
             logger.debug(
                 f"FileRecord '{self.short_name}' uses parent directory reference: '{self.file_path}'"
@@ -356,6 +358,7 @@ class H5FileRecord(Record):
         """Log warning if file_path is absolute (should be relative to project root)."""
         if self.file_path and os.path.isabs(self.file_path):
             from pilates.utils.provenance import find_project_root
+
             project_root = find_project_root()
             if project_root and self.file_path.startswith(project_root):
                 logger.warning(
@@ -363,7 +366,6 @@ class H5FileRecord(Record):
                     f"but should be relative to project root. Consider storing as: "
                     f"'{os.path.relpath(self.file_path, project_root)}'"
                 )
-
 
     def get_absolute_path(self, base_path: str) -> str:
         """

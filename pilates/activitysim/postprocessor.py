@@ -198,7 +198,6 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-
 def create_beam_input_data(
     settings,
     state: WorkflowState,
@@ -419,7 +418,7 @@ def create_usim_input_data(
     # --- Record Output ---
     all_source_paths = asim_source_paths + [
         provenance_tracker.get_relative_path(archive_path),
-        provenance_tracker.get_relative_path(usim_output_store_path)
+        provenance_tracker.get_relative_path(usim_output_store_path),
     ]
     output_record = provenance_tracker.record_output_file(
         model_name,
@@ -427,7 +426,7 @@ def create_usim_input_data(
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
         model_run_id=model_run_hash,
-        source_file_paths=all_source_paths
+        source_file_paths=all_source_paths,
     )
 
     return input_store_path, output_record

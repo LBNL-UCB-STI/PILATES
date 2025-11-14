@@ -101,10 +101,12 @@ class ZonesConfig(BaseModel):
     """Canonical zone definition configuration."""
 
     zone_type: str = Field(
-        ..., description="The geographic resolution of zones (e.g., 'taz', 'block_group')"
+        ...,
+        description="The geographic resolution of zones (e.g., 'taz', 'block_group')",
     )
     source_file: str = Field(
-        ..., description="User-provided path to the canonical zone geometry source file."
+        ...,
+        description="User-provided path to the canonical zone geometry source file.",
     )
     canonical_id_col: str = Field(
         ..., description="Column in source_file with the canonical zone ID."
@@ -254,7 +256,8 @@ class ActivitySimConfig(BaseModel):
     local_mutable_configs_folder: str
     validation_folder: str
     clipped_geoms_path: Optional[str] = Field(
-        None, description="Path to BEAM's clipped zone geometries for constraining activity locations."
+        None,
+        description="Path to BEAM's clipped zone geometries for constraining activity locations.",
     )
     subdir: str = Field("configs", description="Config subdirectory")
     main_configs_dir: str = Field(

@@ -159,9 +159,7 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
         )
         if not forecast_year:
             veh_file_name = '"' + vehicle_file_base + '.txt"'
-            fleet_veh_file_name = (
-                '"' + vehicle_file_fleet_base + 'txt"'
-            )
+            fleet_veh_file_name = '"' + vehicle_file_fleet_base + 'txt"'
 
         if loop == 0:
             if forecast_year:

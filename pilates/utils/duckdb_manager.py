@@ -339,12 +339,8 @@ class DuckDBManager(DatabaseManager):
                         config_snapshot.get("created_timestamp"),
                         config_snapshot.get("config_content_hash"),
                         json.dumps(config_snapshot.get("git_hashes", {})),
-                        json.dumps(
-                            config_snapshot.get("config_files", {})
-                        ),
-                        json.dumps(
-                            config_snapshot.get("pilates_settings", {})
-                        ),
+                        json.dumps(config_snapshot.get("config_files", {})),
+                        json.dumps(config_snapshot.get("pilates_settings", {})),
                         config_snapshot.get("beam_config"),
                         config_snapshot.get("asim_subdir"),
                         config_snapshot.get("region"),
@@ -353,7 +349,9 @@ class DuckDBManager(DatabaseManager):
                 logger.info(f"Uploaded config snapshot {config_snapshot_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to upload config snapshot {config_snapshot.get('snapshot_id')}: {e}")
+            logger.error(
+                f"Failed to upload config snapshot {config_snapshot.get('snapshot_id')}: {e}"
+            )
             return False
 
     def upload_run_data(self, run_info: PilatesRunInfo) -> bool:

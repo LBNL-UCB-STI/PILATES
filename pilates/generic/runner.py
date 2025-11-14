@@ -52,9 +52,9 @@ class GenericRunner(ABC, Model):
         # Try to use fast local storage for cache (in order of preference)
         cache_base = None
         local_options = [
-            '/local',  # Prioritize /local (853GB available)
-            os.environ.get('TMPDIR', ''),
-            '/tmp'  # Last resort - only 7.4GB
+            "/local",  # Prioritize /local (853GB available)
+            os.environ.get("TMPDIR", ""),
+            "/tmp",  # Last resort - only 7.4GB
         ]
 
         for option in local_options:
@@ -62,16 +62,21 @@ class GenericRunner(ABC, Model):
                 # Check if there's enough space (require at least 20GB free)
                 try:
                     stat = os.statvfs(option)
-                    free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+                    free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
                     if free_gb >= 20:
                         cache_base = option
                         logger.info(
-                            f"[{self.model_name}] Using local storage for cache: {cache_base} ({free_gb:.1f}GB free)")
+                            f"[{self.model_name}] Using local storage for cache: {cache_base} ({free_gb:.1f}GB free)"
+                        )
                         break
                     else:
-                        logger.debug(f"[{self.model_name}] Skipping {option} - only {free_gb:.1f}GB free")
+                        logger.debug(
+                            f"[{self.model_name}] Skipping {option} - only {free_gb:.1f}GB free"
+                        )
                 except Exception as e:
-                    logger.debug(f"[{self.model_name}] Could not check space on {option}: {e}")
+                    logger.debug(
+                        f"[{self.model_name}] Could not check space on {option}: {e}"
+                    )
                     continue
 
         if not cache_base:
@@ -79,7 +84,8 @@ class GenericRunner(ABC, Model):
             output_base = os.path.expandvars(settings.run.output_directory)
             cache_base = output_base
             logger.warning(
-                f"[{self.model_name}] No suitable local storage found, using scratch for cache (may be slow)")
+                f"[{self.model_name}] No suitable local storage found, using scratch for cache (may be slow)"
+            )
 
         # Define cache directory paths
         apptainer_cache = os.path.join(cache_base, ".apptainer", "cache")
@@ -94,7 +100,12 @@ class GenericRunner(ABC, Model):
         os.environ["SINGULARITY_TMPDIR"] = singularity_tmp
 
         # Create directories
-        for cache_dir in [apptainer_cache, apptainer_tmp, singularity_cache, singularity_tmp]:
+        for cache_dir in [
+            apptainer_cache,
+            apptainer_tmp,
+            singularity_cache,
+            singularity_tmp,
+        ]:
             os.makedirs(cache_dir, exist_ok=True)
 
         logger.info(f"[{self.model_name}] Set Apptainer cache to: {apptainer_cache}")

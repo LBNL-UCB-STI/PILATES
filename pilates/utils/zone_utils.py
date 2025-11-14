@@ -11,7 +11,9 @@ from pilates.workspace import Workspace
 logger = logging.getLogger(__name__)
 
 
-def load_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> gpd.GeoDataFrame:
+def load_canonical_zones(
+    settings: PilatesConfig, workspace: Workspace
+) -> gpd.GeoDataFrame:
     """
     Loads the canonical zone geometries from the mutable ActivitySim data directory,
     validates them, and returns a sorted GeoDataFrame.
@@ -31,8 +33,7 @@ def load_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> gpd.G
 
     source_file_basename = os.path.basename(zone_config.source_file)
     source_file = os.path.join(
-        workspace.get_asim_mutable_data_dir(),
-        source_file_basename
+        workspace.get_asim_mutable_data_dir(), source_file_basename
     )
     id_col = zone_config.canonical_id_col
 
@@ -86,10 +87,7 @@ def get_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> pd.Dat
     zone_config = settings.shared.geography.zones
     source_file_basename = os.path.basename(zone_config.source_file)
 
-    path = os.path.join(
-        workspace.get_asim_mutable_data_dir(),
-        source_file_basename
-    )
+    path = os.path.join(workspace.get_asim_mutable_data_dir(), source_file_basename)
 
     if not os.path.exists(path):
         zones = load_canonical_zones(settings, workspace)
@@ -122,6 +120,7 @@ def get_block_to_zone_mapping(settings, year, workspace):
     # 2. Get the census block geometries
     # This function handles its own caching and downloading from TIGERweb API
     from pilates.utils.geog import get_block_geoms, get_taz_from_block_geoms
+
     blocks_gdf = get_block_geoms(settings, year=year, workspace=workspace)
 
     # 3. Perform the geometric mapping
@@ -133,6 +132,8 @@ def get_block_to_zone_mapping(settings, year, workspace):
 
     # 4. Convert the resulting Series to a dictionary
     mapping = block_to_zone_series.to_dict()
-    logger.info(f"Successfully created block to zone mapping for {len(mapping)} blocks.")
+    logger.info(
+        f"Successfully created block to zone mapping for {len(mapping)} blocks."
+    )
 
     return mapping

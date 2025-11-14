@@ -24,7 +24,6 @@ from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
 
-
 logger = logging.getLogger(__name__)
 
 TNC_CONSOLIDATION_MAP = {
@@ -2208,6 +2207,7 @@ def write_zarr_skim_as_omx(
             except Exception as e:
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
+
 def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"):
     """
     Verifies that the zone order in a skim file (Zarr or OMX) matches the
@@ -2225,8 +2225,10 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
 
     # 1. Get Canonical Order
     canonical_zones_df = get_canonical_zones(workspace)
-    canonical_order = canonical_zones_df['zone_key'].tolist()
-    logger.info(f"Successfully loaded canonical order for {len(canonical_order)} zones from canonical_zones.csv.")
+    canonical_order = canonical_zones_df["zone_key"].tolist()
+    logger.info(
+        f"Successfully loaded canonical order for {len(canonical_order)} zones from canonical_zones.csv."
+    )
 
     # 2. Get Skim File Order
     skim_order = None
@@ -2234,40 +2236,59 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
     if skim_file_path.endswith(".zarr") or skim_file_path.endswith(".zarr.zip"):
         try:
             store = xr.open_zarr(skim_file_path)
-            if 'original_zone_ids' in store.attrs:
-                skim_order = store.attrs['original_zone_ids']
-                logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr root attributes.")
-            elif 'original_zone_ids' in store['otaz'].attrs:
-                skim_order = store['otaz'].attrs['original_zone_ids']
-                logger.info(f"Extracted {len(skim_order)} zone IDs from Zarr 'otaz' attributes (legacy).")
+            if "original_zone_ids" in store.attrs:
+                skim_order = store.attrs["original_zone_ids"]
+                logger.info(
+                    f"Extracted {len(skim_order)} zone IDs from Zarr root attributes."
+                )
+            elif "original_zone_ids" in store["otaz"].attrs:
+                skim_order = store["otaz"].attrs["original_zone_ids"]
+                logger.info(
+                    f"Extracted {len(skim_order)} zone IDs from Zarr 'otaz' attributes (legacy)."
+                )
             else:
-                raise ValueError("Zarr file does not contain 'original_zone_ids' metadata in root or 'otaz' attributes.")
+                raise ValueError(
+                    "Zarr file does not contain 'original_zone_ids' metadata in root or 'otaz' attributes."
+                )
         except (ValueError, KeyError) as e:
-            logger.warning(f"Could not find 'original_zone_ids' on first attempt ({e}). Trying to consolidate metadata.")
+            logger.warning(
+                f"Could not find 'original_zone_ids' on first attempt ({e}). Trying to consolidate metadata."
+            )
             if store:
                 store.close()
             try:
                 import zarr
+
                 zarr.consolidate_metadata(skim_file_path)
                 store = xr.open_zarr(skim_file_path, consolidated=True)
-                if 'original_zone_ids' in store.attrs:
-                    skim_order = store.attrs['original_zone_ids']
-                    logger.info(f"Extracted {len(skim_order)} zone IDs after consolidating metadata.")
+                if "original_zone_ids" in store.attrs:
+                    skim_order = store.attrs["original_zone_ids"]
+                    logger.info(
+                        f"Extracted {len(skim_order)} zone IDs after consolidating metadata."
+                    )
                 else:
-                    raise ValueError("Zarr file does not contain 'original_zone_ids' metadata even after consolidation.")
+                    raise ValueError(
+                        "Zarr file does not contain 'original_zone_ids' metadata even after consolidation."
+                    )
             except Exception as consolidation_error:
-                 raise ValueError(f"Zarr file does not contain 'original_zone_ids' metadata. Consolidation attempt failed: {consolidation_error}")
+                raise ValueError(
+                    f"Zarr file does not contain 'original_zone_ids' metadata. Consolidation attempt failed: {consolidation_error}"
+                )
 
     elif skim_file_path.endswith(".omx"):
-        with omx.open_file(skim_file_path, 'r') as f:
-            if 'TAZ' in f.list_mappings():
-                mapping_items = sorted(f.mapping('TAZ').items(), key=lambda item: item[1])
+        with omx.open_file(skim_file_path, "r") as f:
+            if "TAZ" in f.list_mappings():
+                mapping_items = sorted(
+                    f.mapping("TAZ").items(), key=lambda item: item[1]
+                )
                 skim_order = [item[0] for item in mapping_items]
                 logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
             else:
                 raise ValueError("OMX file does not contain 'TAZ' mapping.")
     else:
-        logger.warning(f"Unsupported file type for zone order verification: {skim_file_path}")
+        logger.warning(
+            f"Unsupported file type for zone order verification: {skim_file_path}"
+        )
         return
 
     # 3. Compare Orders
@@ -2284,7 +2305,9 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
             raise ValueError(msg)
 
         if skim_order != canonical_order:
-            for i, (canonical_id, skim_id) in enumerate(zip(canonical_order, skim_order)):
+            for i, (canonical_id, skim_id) in enumerate(
+                zip(canonical_order, skim_order)
+            ):
                 if canonical_id != skim_id:
                     msg = (
                         f"FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order! "
@@ -2293,11 +2316,11 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
                     )
                     logger.error(msg)
                     raise ValueError(msg)
-        
+
         if store:
             expected_otaz_coords = np.arange(len(canonical_order))
             actual_otaz_coords = store.coords["otaz"].values
-            
+
             if not np.array_equal(actual_otaz_coords, expected_otaz_coords):
                 msg = (
                     f"FATAL: Zarr 'otaz' coordinates are not 0-based as expected! "

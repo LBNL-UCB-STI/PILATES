@@ -199,7 +199,9 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
         use_year_specific = False
 
         if year_template:
-            usim_datastore_year = year_template.format(region_id=region_id, year=year, start_year=year)
+            usim_datastore_year = year_template.format(
+                region_id=region_id, year=year, start_year=year
+            )
             usim_datastore_year_fpath = os.path.join(data_loc, usim_datastore_year)
 
             if os.path.exists(usim_datastore_year_fpath):
@@ -219,15 +221,17 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
                 usim_datastore_fpath = usim_datastore_year_fpath
                 use_year_specific = True
             else:
-                logger.info(f"Year-specific file not found: {usim_datastore_year_fpath}")
+                logger.info(
+                    f"Year-specific file not found: {usim_datastore_year_fpath}"
+                )
                 logger.info("Falling back to base input file")
 
         # Fall back to base input file if year-specific doesn't exist or isn't configured
         if not use_year_specific:
             table_prefix_yr = ""  # input data store tables have no year prefix
-            usim_datastore = get_setting(settings, "urbansim.input_file_template").format(
-                region_id=region_id
-            )
+            usim_datastore = get_setting(
+                settings, "urbansim.input_file_template"
+            ).format(region_id=region_id)
             usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
             store = pd.HDFStore(usim_datastore_fpath)
             if "households" not in store:

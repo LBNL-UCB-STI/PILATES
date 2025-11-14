@@ -32,7 +32,9 @@ BEAM_PYDANTIC_PATH_MAP = {
 }
 
 
-def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_run_hash):
+def prepare_beam_zone_shapefile(
+    settings, workspace, provenance_tracker, model_run_hash
+):
     """
     Creates a sorted zone shapefile for BEAM from the canonical zone definitions
     and updates the BEAM config to use it.
@@ -41,18 +43,23 @@ def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_r
     try:
         # 1. Load the authoritative, sorted canonical zone geometries
         from pilates.utils.zone_utils import load_canonical_zones
+
         canonical_zones_gdf = load_canonical_zones(settings, workspace)
 
         # 2. Define the path for the new, sorted shapefile
         region = settings.run.region
         beam_mutable_folder = workspace.get_beam_mutable_data_dir()
         output_shapefile_name = "canonical_zones_sorted.shp"
-        output_shapefile_path = os.path.join(beam_mutable_folder, region, "shape", output_shapefile_name)
+        output_shapefile_path = os.path.join(
+            beam_mutable_folder, region, "shape", output_shapefile_name
+        )
         os.makedirs(os.path.dirname(output_shapefile_path), exist_ok=True)
 
         # 3. Save the sorted GeoDataFrame as the new shapefile for BEAM
-        logger.info(f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM.")
-        canonical_zones_gdf.to_file(output_shapefile_path, driver='ESRI Shapefile')
+        logger.info(
+            f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
+        )
+        canonical_zones_gdf.to_file(output_shapefile_path, driver="ESRI Shapefile")
 
         # Record the new shapefile as an output
         provenance_tracker.record_output_file(
@@ -65,7 +72,7 @@ def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_r
 
         # 4. Update the BEAM configuration to use the new shapefile and correct ID column
         logger.info("Updating BEAM configuration to use the new sorted shapefile.")
-        
+
         # Update path to the new shapefile
         # The path in the BEAM config is relative to the BEAM input folder
         relative_shapefile_path = os.path.join("shape", output_shapefile_name)
@@ -73,7 +80,7 @@ def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_r
             settings,
             workspace.full_path,
             "beam.agentsim.taz.filePath",
-            valueOverride=f'"{relative_shapefile_path}"'  # BEAM config needs quotes for paths
+            valueOverride=f'"{relative_shapefile_path}"',  # BEAM config needs quotes for paths
         )
 
         # Update the TAZ ID column name
@@ -82,13 +89,15 @@ def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_r
             settings,
             workspace.full_path,
             "beam.agentsim.taz.tazIdFieldName",
-            valueOverride=canonical_id_col
+            valueOverride=canonical_id_col,
         )
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
 
     except Exception as e:
-        logger.error(f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True)
+        logger.error(
+            f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
+        )
         raise
 
 
@@ -746,7 +755,7 @@ def copy_plans_from_asim(
                 short_name=f"households_beam_in_{state.current_year}_{state.current_inner_iter}",
             )
             _, asim_plans_record = asim_file_paths.get("beam_plans", (None, None))
-            
+
             merged_plans_inputs = [asim_plans_record]
             if beam_plans_record:
                 merged_plans_inputs.append(beam_plans_record)

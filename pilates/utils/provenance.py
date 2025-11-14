@@ -1477,7 +1477,8 @@ class FileProvenanceTracker(ProvenanceTracker):
                     # Need to check both absolute and relative paths
                     source_found = any(
                         rec.file_path == source_path
-                        or self.get_path_relative_to_workspace_root(rec.file_path) == source_path
+                        or self.get_path_relative_to_workspace_root(rec.file_path)
+                        == source_path
                         for rec in self.run_info.file_records.values()
                     )
                     if not source_found:
