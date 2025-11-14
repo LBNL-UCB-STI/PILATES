@@ -17,7 +17,7 @@ import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple
 
 import pandas as pd
 import h5py
@@ -36,10 +36,7 @@ from pilates.utils.database_upload import create_database_manager
 from pilates.generic.records import (
     FileRecord,
     PilatesRunInfo,
-    ModelRunInfo,
-    OpenLineageEventMetadata,
 )
-from pilates.utils.config_snapshot import ConfigSnapshotManager
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -571,7 +568,7 @@ class H5ActivitySimExtractor:
         # Extract processed ActivitySim data
         processed_data = self.extract_activitysim_inputs(year, save_csv, output_dir)
 
-        logger.info(f"✅ Dual extraction complete:")
+        logger.info("✅ Dual extraction complete:")
         logger.info(f"   - Raw UrbanSim tables: {len(raw_data)}")
         logger.info(f"   - Processed ActivitySim tables: {len(processed_data)}")
 
@@ -827,7 +824,7 @@ class H5ActivitySimExtractor:
 
                 if metadata_success and data_upload_success:
                     logger.info(
-                        f"🎉 Successfully uploaded ALL data to database (dual storage)!"
+                        "🎉 Successfully uploaded ALL data to database (dual storage)!"
                     )
                     logger.info(f"Run ID: {self.run_id}")
 
@@ -1015,7 +1012,7 @@ Examples:
             logger.warning("No data tables found in H5 file")
             return 1
 
-        logger.info(f"\n📋 Extraction Summary:")
+        logger.info("\n📋 Extraction Summary:")
         logger.info(f"  Raw UrbanSim tables: {len(raw_data)}")
         logger.info(f"  Processed ActivitySim tables: {len(processed_data)}")
         logger.info(f"  Total tables extracted: {len(raw_data) + len(processed_data)}")

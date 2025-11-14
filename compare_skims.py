@@ -5,7 +5,6 @@ import logging
 
 import openmatrix as omx
 import numpy as np
-import pandas as pd
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,7 +150,7 @@ def compare_skims(path1, path2):
         logger.error(f"File not found: {path2}")
         return
 
-    logger.info(f"Comparing skim files:")
+    logger.info("Comparing skim files:")
     logger.info(f"  File 1: {path1}")
     logger.info(f"  File 2: {path2}")
     logger.info("-" * 80)

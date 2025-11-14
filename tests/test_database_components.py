@@ -11,7 +11,6 @@ import tempfile
 import unittest
 import shutil
 import pandas as pd
-import numpy as np
 from pathlib import Path
 
 # Import PILATES modules
@@ -32,7 +31,7 @@ from pilates.generic.records import PilatesRunInfo, FileRecord
 from datetime import datetime
 import uuid
 import yaml
-from pilates.config.models import PilatesConfig, load_config
+from pilates.config.models import load_config
 
 
 class TestDatabaseComponents(unittest.TestCase):
@@ -1351,7 +1350,7 @@ class TestDatabaseComponents(unittest.TestCase):
             self.assertEqual(
                 row["vehicleTypeId"],
                 expected,
-                f"Post-2015 vehicle should have format bodytype_pred_power_modelyear",
+                "Post-2015 vehicle should have format bodytype_pred_power_modelyear",
             )
         print(
             f"   ✅ Post-2015 vehicles ({len(post_2015_rows)}) have correct format: bodytype_pred_power_modelyear"
@@ -1364,7 +1363,7 @@ class TestDatabaseComponents(unittest.TestCase):
             self.assertEqual(
                 row["vehicleTypeId"],
                 expected,
-                f"Pre-2015 vehicle should have format bodytype_pred_power_2015",
+                "Pre-2015 vehicle should have format bodytype_pred_power_2015",
             )
         print(
             f"   ✅ Pre-2015 vehicles ({len(pre_2015_rows)}) have correct format: bodytype_pred_power_2015"

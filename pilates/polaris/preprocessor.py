@@ -11,7 +11,6 @@ import random
 # from collections import OrderedDict
 import logging
 from sortedcontainers import SortedDict
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 

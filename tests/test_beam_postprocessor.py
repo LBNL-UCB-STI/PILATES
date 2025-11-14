@@ -1,4 +1,3 @@
-import os
 import pytest
 import pandas as pd
 import xarray as xr
@@ -6,7 +5,7 @@ import numpy as np
 import yaml
 from unittest.mock import patch, MagicMock
 
-from pilates.beam.postprocessor import _merge_beam_skims_to_zarr, verify_skim_zone_order
+from pilates.beam.postprocessor import _merge_beam_skims_to_zarr
 from pilates.config.models import load_config
 
 # Use the same canonical order as the preprocessor test for consistency

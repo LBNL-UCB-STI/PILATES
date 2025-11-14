@@ -1,4 +1,3 @@
-import glob
 import logging
 import os
 import shutil
@@ -15,7 +14,6 @@ from pilates.utils.zarr_versioning import VersionedZarrStore
 
 try:
     import xarray as xr
-    import zarr
 except:
     print("FAILED TO LOAD XARRAY or ZARR")
 
@@ -25,7 +23,6 @@ from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
-import pandas as pd
 
 
 logger = logging.getLogger(__name__)
@@ -1205,7 +1202,7 @@ def _handle_transit_mode_availability(skims_ds, timePeriods):
 
     # Create a summary table header using logger
     logger.info(f"{'=' * 80}")
-    logger.info(f"Transit Mode Availability Analysis")
+    logger.info("Transit Mode Availability Analysis")
     logger.info(f"{'=' * 80}")
     logger.info(
         f"{'Period':<6} | {'Mode':<12} | {'ODs w/50+ Transit':<18} | {'ODs w/0 Mode Trips':<18} | {'Changed':<10} | {'% Changed':<10}"
@@ -2361,7 +2358,7 @@ def _merge_beam_skims_to_zarr(
         # Detect format from extension
 
     if current_skims_path is None or not os.path.exists(current_skims_path):
-        logger.warning(f"No current skims found. Skipping merge.")
+        logger.warning("No current skims found. Skipping merge.")
         return None, existing_zarr_manager
 
     # ---> INSERT RUNTIME VERIFICATION HERE <---
@@ -3538,9 +3535,9 @@ class BeamPostprocessor(GenericPostprocessor):
                     with xr.open_zarr(self.zarr_manager.path) as skims_ds:
                         for key in skims_ds.data_vars:
                             if (
-                                key.endswith(f"_TRIPS")
-                                or key.endswith(f"_FAILURES")
-                                or key.endswith(f"_REJECTIONPROB")
+                                key.endswith("_TRIPS")
+                                or key.endswith("_FAILURES")
+                                or key.endswith("_REJECTIONPROB")
                             ):
                                 vars_to_exclude.append(key)
 

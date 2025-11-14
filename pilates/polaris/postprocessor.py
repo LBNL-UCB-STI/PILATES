@@ -8,7 +8,6 @@ from pilates.polaris.preprocessor import Usim_Data
 from pathlib import Path
 import shutil
 import logging
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 

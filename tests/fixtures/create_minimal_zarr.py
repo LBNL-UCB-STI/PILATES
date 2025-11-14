@@ -8,7 +8,6 @@ but with minimal data (3 zones, 1 time period, 2 variables).
 
 import numpy as np
 import xarray as xr
-import zarr
 from pathlib import Path
 
 
@@ -74,7 +73,7 @@ def create_minimal_zarr():
 
     # Verify
     ds_loaded = xr.open_zarr(zarr_path)
-    print(f"\nCreated zarr with:")
+    print("\nCreated zarr with:")
     print(f"  Variables: {list(ds_loaded.data_vars)}")
     print(f"  Coordinates: {list(ds_loaded.coords)}")
     print(f"  Shape: {ds_loaded['SOV_TIME'].shape}")
@@ -83,7 +82,7 @@ def create_minimal_zarr():
     total_size = sum(f.stat().st_size for f in zarr_path.rglob("*") if f.is_file())
     print(f"  Size: {total_size / 1024:.1f} KB")
 
-    print(f"\n✅ Minimal zarr fixture created successfully!")
+    print("\n✅ Minimal zarr fixture created successfully!")
 
 
 if __name__ == "__main__":

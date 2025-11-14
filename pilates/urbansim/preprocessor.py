@@ -3,7 +3,6 @@ import os
 import shutil
 import logging
 import pandas as pd
-import h5py
 import openmatrix as omx
 import numpy as np
 
@@ -11,7 +10,6 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.zone_utils import get_block_to_zone_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +346,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
         try:
             # Generate the block-to-zone mapping for UrbanSim
             logger.info("Generating block-to-zone mapping for UrbanSim.")
-            mapping = get_block_to_zone_mapping(settings, self.state.start_year)
+            from pilates.utils.zone_utils import get_block_to_zone_mapping
+            mapping = get_block_to_zone_mapping(settings, self.state.start_year, workspace)
             
             # Save the mapping to a CSV file in the mutable data directory
             block_to_zone_mapping_fname = "block_to_zone_mapping.csv"

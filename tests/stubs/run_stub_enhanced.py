@@ -6,7 +6,6 @@ This stub uses pre-generated minimal fixtures to create outputs that match
 the expected structure of real PILATES models, enabling full provenance testing.
 """
 
-import sys
 import argparse
 import os
 import time
@@ -65,7 +64,7 @@ def create_activitysim_outputs(output_dir):
     if os.path.exists(dest_pipeline):
         shutil.rmtree(dest_pipeline)
     shutil.copytree(source_outputs, dest_pipeline)
-    print(f"   ✅ Created ActivitySim final_pipeline outputs")
+    print("   ✅ Created ActivitySim final_pipeline outputs")
 
 
 def create_beam_outputs(output_dir, region, year, iteration):
@@ -114,7 +113,7 @@ def create_atlas_outputs(output_dir, year):
         f.write("2,2\n")
         f.write("3,1\n")
 
-    print(f"   ✅ Created ATLAS vehicle files")
+    print("   ✅ Created ATLAS vehicle files")
 
 
 def main():

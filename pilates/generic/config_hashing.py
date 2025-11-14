@@ -15,7 +15,7 @@ import hashlib
 import json
 import logging
 from enum import Enum
-from typing import Dict, Any, List, Optional, Callable, Set
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

@@ -8,97 +8,10 @@ from shapely.geometry import Polygon
 from tqdm import tqdm
 import os
 
-from pilates.utils.io import read_datastore
 from pilates.utils.settings_helper import get as get_setting
+from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
-
-
-def get_taz_labels(settings, data_dir="./pilates/postprocessing/data/"):
-    region = get_setting(settings, "run.region")
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-
-    file_name = "{0}_{1}_labels.csv".format(zone_type, region)
-    taz_geoms_fpath = os.path.join(data_dir, file_name)
-
-    if os.path.exists(taz_geoms_fpath):
-        logger.info("Loading taz geoms labels from disk!")
-        gdf_labels = pd.read_csv(taz_geoms_fpath)
-    else:
-        logger.info(
-            "ERROR: there is not the taz geoms labels file on {}".format(data_dir)
-        )
-
-    return gdf_labels
-
-
-def get_taz_geoms(
-    settings,
-    taz_id_col_in="taz1454",
-    zone_id_col_out="zone_id",
-    data_dir="./pilates/postprocessing/data/",
-    zone_type=None,
-):
-    region = get_setting(settings, "run.region")
-    if zone_type is None:
-        zone_type = get_setting(settings, "shared.skims.zone_type")
-
-    file_name = "{0}_{1}.shp".format(zone_type, region)
-    taz_geoms_fpath = os.path.join(data_dir, file_name)
-
-    if os.path.exists(taz_geoms_fpath):
-        logger.info("Loading taz geoms from disk!")
-        gdf = gpd.read_file(taz_geoms_fpath)
-
-    else:
-        logger.info("Downloading {} geoms".format(zone_type))
-
-        if region == "sfbay":
-            if zone_type == "taz":
-                url = (
-                    "https://opendata.arcgis.com/datasets/"
-                    "94e6e7107f0745b5b2aabd651340b739_0.geojson"
-                )
-            elif zone_type == "block_group":
-                url = (
-                    "https://opendata.mtc.ca.gov/datasets/MTC::san-francisco-bay-region-2020-census-block-groups/explore?location=37.862018%2C-122.497001%2C9.30/"
-                    "San_Francisco_Bay_Region_2020_Census_Block_Groups.geojson"
-                )
-            else:
-                raise NotImplementedError(
-                    "Cannot use zone_type {0} in region {1}".format(zone_type, region)
-                )
-
-        elif region == "austin":
-            url = "https://beam-outputs.s3.amazonaws.com/pilates-outputs/geometries/block_groups_austin.geojson"
-        elif region == "seattle":
-            url = "https://github.com/LBNL-UCB-STI/beam-data-seattle/raw/develop/shape/block_groups_seattle_4326.geojson"
-
-        ## FIX ME: other regions taz should be here - only sfbay for now
-        print(url)
-        gdf = gpd.read_file(url)
-        gdf = gdf.set_crs("EPSG:4326", allow_override=True)
-        print(list(gdf))
-        if region == "austin":
-            from pilates.utils.zone_utils import get_block_to_zone_mapping
-            mapping = get_block_to_zone_mapping(settings, year=settings.run.start_year)
-            logger.info("Mapping block group IDs to TAZ ids")
-            gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
-        if region == "seattle":
-            logger.info("Keeping block group IDs in column {0}".format(taz_id_col_in))
-            # from pilates.utils.zone_utils import get_block_to_zone_mapping
-            # mapping = get_block_to_zone_mapping(settings, year=settings.run.start_year)
-            # logger.info("Mapping block group IDs to TAZ ids")
-            # gdf[zone_id_col_out] = gdf[taz_id_col_in].astype(str).replace(mapping)
-        elif region == "sfbay":
-            print(f"renaming {taz_id_col_in} to {zone_id_col_out}")
-            gdf.rename(columns={taz_id_col_in: zone_id_col_out}, inplace=True)
-
-        # zone_id col must be str
-        gdf[zone_id_col_out] = gdf[zone_id_col_out].astype(str)
-        gdf.to_file(taz_geoms_fpath)
-
-    return gdf
 
 
 def get_county_block_geoms(
@@ -166,7 +79,7 @@ def get_county_block_geoms(
     return gdf
 
 
-def get_block_geoms(settings, data_dir="./tmp/", year=None):
+def get_block_geoms(settings, workspace: Workspace, data_dir="./tmp/", year=None):
     region = get_setting(settings, "run.region") or "beam"
 
     # Handle both flat and nested FIPS config structures
@@ -181,20 +94,21 @@ def get_block_geoms(settings, data_dir="./tmp/", year=None):
         state_fips = FIPS["state"]
         county_codes = FIPS["counties"]
 
-    zone_type = get_setting(settings, "shared.skims.zone_type")
+    zone_type = get_setting(settings, "shared.geography.zones.zone_type")
     if zone_type == "taz":
         zone_type_v1 = "block"  # triger block geometries
     else:
         zone_type_v1 = zone_type
 
     all_block_geoms = []
-    file_name = "{0}_{1}.shp".format(zone_type, region)
+    file_name = "{0}_{1}.shp".format("block", region)
 
     if os.path.exists(os.path.join(data_dir, file_name)):
         logger.info("Loading block geoms from disk!")
         blocks_gdf = gpd.read_file(os.path.join(data_dir, file_name))
 
     else:
+        logger.info("No block geoms found at {0}".format(os.path.join(data_dir, file_name)))
         logger.info("Downloading {} geoms from Census TIGERweb API!".format(zone_type))
 
         # get block geoms from census tigerweb API
@@ -203,18 +117,15 @@ def get_block_geoms(settings, data_dir="./tmp/", year=None):
             total=len(county_codes),
             desc="Getting block geoms for {0} counties".format(len(county_codes)),
         ):
-            county_gdf = get_county_block_geoms(state_fips, county, zone_type)
+            county_gdf = get_county_block_geoms(state_fips, county, "block")
             all_block_geoms.append(county_gdf)
 
         blocks_gdf = gpd.GeoDataFrame(
             pd.concat(all_block_geoms, ignore_index=True), crs="EPSG:4326"
         )
 
-        # make sure geometries match with geometries in blocks table
-        if zone_type in ["block", "block_group"]:
-            from pilates.utils.zone_utils import get_block_to_zone_mapping
-            geoids = list(get_block_to_zone_mapping(settings, year=year).keys())
-            blocks_gdf = blocks_gdf[blocks_gdf.GEOID.isin(geoids)]
+        # # make sure geometries match with geometries in blocks table
+
 
         # save to disk
         logger.info(
@@ -273,31 +184,6 @@ def get_taz_from_block_geoms(blocks_gdf, zones_gdf, local_crs, zone_col_name):
         )
 
     return block_to_taz_results.set_index("GEOID")[zone_col_name]
-
-
-def map_block_to_taz(
-    settings,
-    region,
-    zones_gdf=None,
-    zone_id_col="zone_id",
-    reference_taz_id_col="taz1454",
-    data_dir="./tmp/",
-):
-    """
-    Returns:
-        A series named 'zone_id' with 'GEOID' as index name
-    """
-    region = get_setting(settings, "run.region")
-    local_crs = get_setting(settings, "shared.geography.local_crs")[region]
-
-    if zones_gdf is None:
-        zones_gdf = get_taz_geoms(settings, reference_taz_id_col, zone_id_col)
-    blocks_gdf = get_block_geoms(settings, data_dir)
-    blocks_gdf.crs = "EPSG:4326"
-    blocks_to_taz = get_taz_from_block_geoms(
-        blocks_gdf, zones_gdf, local_crs, zone_id_col
-    )
-    return blocks_to_taz.astype(str)
 
 
 def get_zone_from_points(df, zones_gdf, local_crs):

@@ -3,13 +3,8 @@ import os
 import pandas as pd
 import numpy as np
 import geopandas as gpd
-import h5py
 import glob
-from zipfile import ZipFile
 import shutil
-import os
-from pilates.utils.geog import get_taz_geoms
-from pilates.utils.geog import get_taz_labels
 from pilates.utils.io import parse_args_and_settings
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
@@ -19,6 +14,8 @@ import logging
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 import warnings
 from shapely.errors import ShapelyDeprecationWarning
+
+from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +42,7 @@ dtypes = {
 }
 
 
-def copy_outputs_to_mep(settings, year, iter):
+def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
     asim_output_data_dir = settings.activitysim.local_output_folder
     mep_output_data_dir = os.path.join(
         settings.postprocessing.mep_output_folder, str(year)
@@ -106,7 +103,7 @@ def copy_outputs_to_mep(settings, year, iter):
         copy_with_compression_asim_file_to_mep("final_persons.csv", "persons.csv.gz")
         copy_with_compression_asim_file_to_mep("final_land_use.csv", "land_use.csv.gz")
 
-    def copy_beam_files_to_mep():
+    def copy_beam_files_to_mep(workspace: Workspace):
         shutil.copy(
             os.path.join(beam_iter_output_dir, "network.csv.gz"),
             os.path.join(mep_output_data_dir, "network.csv.gz"),
@@ -198,21 +195,18 @@ def copy_outputs_to_mep(settings, year, iter):
                 )
             )
 
-        if settings.run.region == "austin":
-            taz_id_col_in = "GEOID"
-        else:
-            taz_id_col_in = "taz1454"
         try:
-            taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in)
+            from pilates.utils.zone_utils import load_canonical_zones
+            taz = load_canonical_zones(settings, workspace)
             taz.to_file(os.path.join(beam_iter_output_dir, "taz_geometries.shp"))
-        except:
-            logger.error("Could not write taz geometries")
+        except Exception as e:
+            logger.error(f"Could not write taz geometries: {e}")
 
         # Also add skims, ridehail and parking info
 
     copy_urbansim_outputs_to_mep()
     copy_asim_files_to_mep()
-    copy_beam_files_to_mep()
+    copy_beam_files_to_mep(workspace)
 
 
 def _load_events_file(settings, year, replanning_iteration_number, beam_iteration=0):
@@ -671,8 +665,8 @@ def _add_geometry_id_to_DataFrame(
 
 
 def _add_geometry_to_events(settings, events):
-    taz_id_col_in = "GEOID"
-    taz = get_taz_geoms(settings, taz_id_col_in=taz_id_col_in, zone_type="TAZ")
+    from pilates.utils.zone_utils import load_canonical_zones
+    taz = load_canonical_zones(settings)
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=ShapelyDeprecationWarning)
         processed_list = Parallel(n_jobs=cpu_count() - 1)(
@@ -1161,4 +1155,4 @@ if __name__ == "__main__":
             yrs[year] = iter
     for year, iter in yrs.items():
         process_event_file(settings, year, iter)
-        copy_outputs_to_mep(settings, year, iter)
+        copy_outputs_to_mep(settings, year, iter, None)

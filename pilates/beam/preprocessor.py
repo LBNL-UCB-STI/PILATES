@@ -6,11 +6,9 @@ from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
-import geopandas as gpd
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, Record, FileRecord
-from pilates.utils.zone_utils import get_canonical_zones
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from workflow_state import WorkflowState
@@ -22,7 +20,8 @@ beam_param_map = {
     "beam_sample": "beam.agentsim.agentSampleSizeAsFractionOfPopulation",
     "beam_replanning_portion": "beam.agentsim.agents.plans.merge.fraction",
     "max_plans_memory": "beam.replanning.maxAgentPlanMemorySize",
-    "skim_zone_geoid_col": "beam.agentsim.taz.tazIdFieldName",
+    "beam.agentsim.taz.filePath": "beam.agentsim.taz.filePath",
+    "beam.agentsim.taz.tazIdFieldName": "beam.agentsim.taz.tazIdFieldName",
 }
 
 BEAM_PYDANTIC_PATH_MAP = {
@@ -33,74 +32,63 @@ BEAM_PYDANTIC_PATH_MAP = {
 }
 
 
-def sort_beam_shapefile_by_canonical_order(settings, workspace, provenance_tracker, model_run_hash):
+def prepare_beam_zone_shapefile(settings, workspace, provenance_tracker, model_run_hash):
     """
-    Sorts the BEAM zone shapefile to match the canonical order defined in
-    the canonical_zones.csv file, ensuring consistency between BEAM and ActivitySim.
+    Creates a sorted zone shapefile for BEAM from the canonical zone definitions
+    and updates the BEAM config to use it.
     """
-    logger.info("--- Sorting BEAM Shapefile by Canonical Zone Order ---")
+    logger.info("--- Preparing BEAM Zone Shapefile ---")
     try:
-        # 1. Get Canonical Order from the canonical_zones.csv file
-        canonical_zones_df = get_canonical_zones(workspace)
-        pilates_canonical_order = canonical_zones_df['zone_key'].tolist()
-        logger.info(f"Loaded canonical order for {len(pilates_canonical_order)} zones from canonical_zones.csv.")
+        # 1. Load the authoritative, sorted canonical zone geometries
+        from pilates.utils.zone_utils import load_canonical_zones
+        canonical_zones_gdf = load_canonical_zones(settings, workspace)
 
-        # 2. Load BEAM Shapefile
+        # 2. Define the path for the new, sorted shapefile
         region = settings.run.region
-        # Use the mutable data folder as the shapefile will be modified in place
         beam_mutable_folder = workspace.get_beam_mutable_data_dir()
-        shapefile_relative_path = settings.beam.skims_shapefile
-        shapefile_path = os.path.join(beam_mutable_folder, region, shapefile_relative_path)
+        output_shapefile_name = "canonical_zones_sorted.shp"
+        output_shapefile_path = os.path.join(beam_mutable_folder, region, "shape", output_shapefile_name)
+        os.makedirs(os.path.dirname(output_shapefile_path), exist_ok=True)
 
-        if not os.path.exists(shapefile_path):
-            logger.error(f"BEAM shapefile not found at '{shapefile_path}'. Skipping sorting.")
-            return
+        # 3. Save the sorted GeoDataFrame as the new shapefile for BEAM
+        logger.info(f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM.")
+        canonical_zones_gdf.to_file(output_shapefile_path, driver='ESRI Shapefile')
 
-        # Record the original shapefile as an input
-        input_shapefile_record = provenance_tracker.record_input_file(
+        # Record the new shapefile as an output
+        provenance_tracker.record_output_file(
             "beam_preprocessor",
-            shapefile_path,
-            short_name="beam_zone_shapefile",
-            description="Original BEAM zone shapefile, to be sorted.",
-            model_run_id=model_run_hash,
-        )
-
-        logger.info(f"Loading BEAM shapefile from: {shapefile_path}")
-        shapefile_gdf = gpd.read_file(shapefile_path)
-
-        # 3. Re-sort the GeoDataFrame
-        geoid_col = settings.beam.skim_zone_geoid_col
-        if geoid_col not in shapefile_gdf.columns:
-            logger.error(f"GEOID column '{geoid_col}' not found in shapefile. Skipping sorting.")
-            return
-
-        # Check if sorting is necessary
-        current_order = shapefile_gdf[geoid_col].astype(str).tolist()
-        if current_order == pilates_canonical_order:
-            logger.info("Shapefile is already sorted correctly. No changes needed.")
-            return
-
-        logger.info("Shapefile order does not match canonical order. Re-sorting...")
-        shapefile_gdf[geoid_col] = shapefile_gdf[geoid_col].astype(str)
-        shapefile_gdf_sorted = shapefile_gdf.set_index(geoid_col).reindex(pilates_canonical_order).reset_index()
-
-        # 4. Overwrite the shapefile
-        logger.info(f"Overwriting shapefile at {shapefile_path} with sorted version.")
-        shapefile_gdf_sorted.to_file(shapefile_path, driver='ESRI Shapefile')
-
-        # Record the new, sorted shapefile as an output
-        provenance_tracker.record_output_file_with_inputs(
-            "beam_preprocessor",
-            shapefile_path,  # Same path, as it's overwritten
-            input_records=[input_shapefile_record],
+            output_shapefile_path,
             short_name="beam_zone_shapefile_sorted",
-            description="BEAM zone shapefile sorted by canonical order.",
+            description="BEAM zone shapefile created from sorted canonical zones.",
             model_run_id=model_run_hash,
         )
-        logger.info("--- Shapefile Sorting Complete ---")
+
+        # 4. Update the BEAM configuration to use the new shapefile and correct ID column
+        logger.info("Updating BEAM configuration to use the new sorted shapefile.")
+        
+        # Update path to the new shapefile
+        # The path in the BEAM config is relative to the BEAM input folder
+        relative_shapefile_path = os.path.join("shape", output_shapefile_name)
+        update_beam_config(
+            settings,
+            workspace.full_path,
+            "beam.agentsim.taz.filePath",
+            valueOverride=f'"{relative_shapefile_path}"'  # BEAM config needs quotes for paths
+        )
+
+        # Update the TAZ ID column name
+        canonical_id_col = settings.shared.geography.zones.canonical_id_col
+        update_beam_config(
+            settings,
+            workspace.full_path,
+            "beam.agentsim.taz.tazIdFieldName",
+            valueOverride=canonical_id_col
+        )
+
+        logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
 
     except Exception as e:
-        logger.error(f"An error occurred during shapefile sorting: {e}", exc_info=True)
+        logger.error(f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True)
         raise
 
 
@@ -996,8 +984,8 @@ class BeamPreprocessor(GenericPreprocessor):
         else:
             update_beam_config(settings, workspace.full_path, "max_plans_memory")
 
-        # Sort the shapefile to ensure consistent zone ordering
-        sort_beam_shapefile_by_canonical_order(
+        # Prepare the shapefile to ensure consistent zone ordering
+        prepare_beam_zone_shapefile(
             settings, workspace, self.provenance_tracker, model_run_hash
         )
 

@@ -9,7 +9,6 @@ of actual PILATES model outputs, allowing fast integration tests.
 import os
 import pandas as pd
 import numpy as np
-import h5py
 from pathlib import Path
 
 # Get fixtures directory

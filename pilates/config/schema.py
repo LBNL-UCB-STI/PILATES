@@ -8,7 +8,6 @@ hashing for provenance and caching.
 
 from typing import Dict
 from pilates.generic.config_hashing import (
-    HashScope,
     FieldAnnotation,
     ModelDependencyGraph,
     annotate_fields,

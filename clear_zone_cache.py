@@ -67,9 +67,9 @@ def clear_zone_cache(h5_path: str):
                 print(f"  ❌ CORRUPTED (expected 12+ digit GEOID, got '{sample_id}')")
                 print(f"  Deleting {key}...")
                 del store[key]
-                print(f"  ✓ Deleted")
+                print("  ✓ Deleted")
             else:
-                print(f"  ✓ Appears valid")
+                print("  ✓ Appears valid")
 
         store.close()
         print("\n✓ Done")

@@ -11,7 +11,7 @@ try:
 except ImportError:
     print("Warning: Unable to import Docker Module")
 from abc import ABC
-from typing import Dict, Optional, List, Tuple
+from typing import Optional, Tuple
 
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.utils.provenance import FileProvenanceTracker
@@ -370,7 +370,7 @@ class GenericRunner(ABC, Model):
                     return result.returncode == 0
                 except FileNotFoundError:
                     logger.error(
-                        f"Singularity command not found. Is Singularity installed and in your PATH?"
+                        "Singularity command not found. Is Singularity installed and in your PATH?"
                     )
                     return False
                 except Exception as e:

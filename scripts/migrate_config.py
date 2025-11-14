@@ -13,7 +13,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import yaml
 
 # Add pilates to path

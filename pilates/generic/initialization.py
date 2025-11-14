@@ -6,7 +6,6 @@ from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.zone_utils import generate_canonical_zones_file
 
 import os
 from pilates.utils.settings_helper import get as get_setting
@@ -75,7 +74,6 @@ class Initialization(Model):
             if model_name == "urbansim" or (
                 model_name == "activitysim" and have_not_copied_usim_data
             ):
-                from pilates.urbansim import preprocessor as usim_pre
 
                 output_dir = workspace.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
@@ -117,7 +115,6 @@ class Initialization(Model):
 
             # ActivitySim config copy
             if model_name == "activitysim":
-                from pilates.activitysim import preprocessor as asim_pre
 
                 activitysim_preprocessor = model_factory.get_preprocessor(
                     model_name, self.state, self.provenance_tracker
@@ -141,24 +138,8 @@ class Initialization(Model):
 
         # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 
-        # Generate the canonical zones file, which is the single source of truth for zone ordering
-        logger.info("--- Generating Canonical Zones File ---")
-        canonical_zones_path = os.path.join(workspace.full_path, 'canonical_zones.csv')
-        generate_canonical_zones_file(settings, get_setting(settings, "run.start_year"), canonical_zones_path)
-        logger.info("--- Canonical Zones File Generated ---")
-
         # Record the combined initialization provenance as a single job.
         if self.provenance_tracker is not None:
-            # Record the canonical zones file as an output of initialization
-            canonical_zones_record = self.provenance_tracker.record_output_file(
-                "initialization",
-                canonical_zones_path,
-                description="Canonical zone definition file",
-                short_name="canonical_zones",
-            )
-            if canonical_zones_record:
-                initialization_records_out.add_record(canonical_zones_record)
-
             init_run_hash = self.provenance_tracker.start_model_run(
                 "initialization",
                 year=get_setting(settings, "run.start_year"),

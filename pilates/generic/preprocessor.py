@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional
+from typing import Tuple, Optional
 
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore

@@ -20,7 +20,7 @@ import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, List, Union
+from typing import Dict, Optional, List
 
 import xarray as xr
 import zarr
@@ -254,7 +254,7 @@ class VersionedZarrStore:
                 file_path=str(self.manifest_path),
                 year=year,
                 short_name=f"zarr_manifest_{year}_{iteration}",
-                description=f"Zarr version manifest after initialization",
+                description="Zarr version manifest after initialization",
             )
 
         return snapshot_id

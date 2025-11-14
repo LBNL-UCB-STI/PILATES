@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import yaml
 
 from pilates.beam.preprocessor import sort_beam_shapefile_by_canonical_order

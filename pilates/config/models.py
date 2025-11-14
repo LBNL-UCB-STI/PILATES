@@ -94,16 +94,31 @@ class GeographyConfig(BaseModel):
     local_crs: str = Field(
         ..., description="Local coordinate reference system (e.g., EPSG:32048)"
     )
+    zones: "ZonesConfig" = Field(..., description="Canonical zone definitions")
+
+
+class ZonesConfig(BaseModel):
+    """Canonical zone definition configuration."""
+
+    zone_type: str = Field(
+        ..., description="The geographic resolution of zones (e.g., 'taz', 'block_group')"
+    )
+    source_file: str = Field(
+        ..., description="User-provided path to the canonical zone geometry source file."
+    )
+    canonical_id_col: str = Field(
+        ..., description="Column in source_file with the canonical zone ID."
+    )
+    activitysim_index_col: str = Field(
+        "TAZ", description="Column name for ActivitySim's 0-based internal index."
+    )
 
 
 class SkimsConfig(BaseModel):
     """Skim configuration affecting ActivitySim and BEAM."""
 
-    zone_type: str = Field(..., description="Zone type: taz, block_group, or block")
     fname: str = Field(..., description="Skim file name")
     origin_fname: Optional[str] = Field(None, description="Origin skim file name")
-    geoms_fname: str = Field(..., description="Geometries file name")
-    geoms_index_col: str = Field(..., description="Geometry index column")
     hwy_paths: List[str] = Field(default_factory=list, description="Highway path types")
     periods: List[str] = Field(default_factory=list, description="Time periods")
     transit_paths: Optional[Dict[str, List[str]]] = Field(
@@ -238,6 +253,9 @@ class ActivitySimConfig(BaseModel):
     local_configs_folder: str
     local_mutable_configs_folder: str
     validation_folder: str
+    clipped_geoms_path: Optional[str] = Field(
+        None, description="Path to BEAM's clipped zone geometries for constraining activity locations."
+    )
     subdir: str = Field("configs", description="Config subdirectory")
     main_configs_dir: str = Field(
         "configs_extended", description="Main configs directory"

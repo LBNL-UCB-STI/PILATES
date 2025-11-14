@@ -4,7 +4,6 @@ Debug script to identify the land_use table join issue.
 This script will help diagnose why demographic data isn't being joined correctly.
 """
 
-import pandas as pd
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +45,7 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
             logger.info(f"      Sample TAZ values: {sorted(df[asim_zone_id_col].unique())[:10]}")
 
     # 3. Simulate the aggregation to see what index the aggregated data will have
-    logger.info(f"\n3. Simulating aggregations:")
+    logger.info("\n3. Simulating aggregations:")
 
     if asim_zone_id_col in persons.columns:
         persons_test = persons.groupby(asim_zone_id_col).size()
@@ -73,7 +72,7 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
         logger.error(f"   jobs does NOT have '{asim_zone_id_col}' column!")
 
     # 4. Check for join compatibility
-    logger.info(f"\n4. Join compatibility check:")
+    logger.info("\n4. Join compatibility check:")
     if asim_zone_id_col in persons.columns and asim_zone_id_col in households.columns:
         zones_ids = set(zones.index.astype(str))
         persons_ids = set(persons[asim_zone_id_col].astype(str).unique())
@@ -91,7 +90,7 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
             logger.info(f"      Examples: {list(data_not_in_zones)[:10]}")
 
         # Check dtype compatibility
-        logger.info(f"\n5. Data type compatibility:")
+        logger.info("\n5. Data type compatibility:")
         logger.info(f"   zones.index dtype: {zones.index.dtype}")
         if asim_zone_id_col in persons.columns:
             logger.info(f"   persons[TAZ] dtype: {persons[asim_zone_id_col].dtype}")

@@ -5,8 +5,6 @@ Tests the VersionedZarrStore class for snapshot creation,
 restoration, and cross-version analysis.
 """
 
-import json
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
-import zarr
 
 from pilates.utils.zarr_versioning import VersionedZarrStore
 

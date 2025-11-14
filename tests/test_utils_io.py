@@ -1,16 +1,9 @@
 import pytest
-import os
-import pandas as pd
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from pilates.utils.io import (
     compute_model_enabled_flags,
     parse_args_and_settings,
-    datastore_path,
-    read_datastore,
-    get_merged_usim_input_datastore_path,
-    locate_asim_file,
-    locate_beam_file,
 )
 
 # Mock the settings_helper.get and config.models.load_config for all tests

@@ -157,7 +157,7 @@ Examples:
                 logger.info(f"✓ Successfully exported to {args.output}")
                 logger.info(f"\nYou can now share {args.output} with your team!")
             else:
-                logger.error(f"✗ Failed to export dictionary")
+                logger.error("✗ Failed to export dictionary")
                 sys.exit(1)
 
     except Exception as e:

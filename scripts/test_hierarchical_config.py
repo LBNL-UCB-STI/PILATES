@@ -48,7 +48,7 @@ def test_phase1_hierarchical_config():
     print(f"Loading config from: {config_path}")
 
     config = load_config(config_path)
-    print(f"✓ Config validated successfully!")
+    print("✓ Config validated successfully!")
     print(f"  Region: {config.run.region}")
     print(f"  Years: {config.run.start_year}-{config.run.end_year}")
     print(f"  Enabled models: {', '.join(config.get_enabled_models())}")
@@ -65,7 +65,7 @@ def test_phase1_hierarchical_config():
     snapshot_manager = ConfigSnapshotManager(workspace_path)
     snapshot = snapshot_manager.create_config_snapshot(config_dict)
 
-    print(f"✓ Created config snapshot")
+    print("✓ Created config snapshot")
     print(f"  Snapshot ID: {snapshot['snapshot_id']}")
     print(f"  Content hash: {snapshot['config_content_hash'][:16]}...")
 

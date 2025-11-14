@@ -18,11 +18,9 @@ import duckdb
 
 from pilates.generic.records import (
     PilatesRunInfo,
-    OpenLineageEventMetadata,
     FileRecord,
     H5FileRecord,
     H5TableRecord,
-    ModelRunInfo,
 )
 from pilates.utils.database import (
     DatabaseManager,
@@ -103,7 +101,7 @@ class DuckDBManager(DatabaseManager):
             if dir_name:
                 os.makedirs(dir_name, exist_ok=True)
             self.connection = duckdb.connect(self.database_path)
-            print(f"[DEBUG] _get_connection: duckdb.connect successful.")
+            print("[DEBUG] _get_connection: duckdb.connect successful.")
             logger.info(f"Connected to DuckDB database at {self.database_path}")
         return self.connection
 

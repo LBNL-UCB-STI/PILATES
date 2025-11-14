@@ -2,7 +2,6 @@ import logging
 import os
 from datetime import datetime
 
-import psutil
 import sys
 from typing import Tuple, List, Optional
 

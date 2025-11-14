@@ -7,7 +7,6 @@ from pilates.generic.records import RecordStore
 from pilates.urbansim import preprocessor as usim_pre
 from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
-from pilates.utils.beam import get_beam_source_dir
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 

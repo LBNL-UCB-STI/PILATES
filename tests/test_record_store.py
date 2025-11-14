@@ -1,5 +1,5 @@
 import pytest
-from pilates.generic.records import Record, RecordStore, FileRecord, RepoRecord
+from pilates.generic.records import RecordStore, FileRecord, RepoRecord
 
 
 def make_file_record(uid: str, short_name: str, path: str) -> FileRecord:

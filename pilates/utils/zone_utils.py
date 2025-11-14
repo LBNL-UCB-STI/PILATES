@@ -2,269 +2,137 @@ import logging
 import os
 import pandas as pd
 import geopandas as gpd
-from shapely import wkt
-from pandas.api.types import is_string_dtype
 
-from pilates.utils.io import read_datastore
-from pilates.utils.settings_helper import get as get_setting
+from pilates.config import PilatesConfig
+from pilates.workspace import Workspace
+
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
 logger = logging.getLogger(__name__)
 
 
-def generate_canonical_zones_file(settings, year, output_path):
+def load_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> gpd.GeoDataFrame:
     """
-    Generates the canonical_zones.csv file from the authoritative datastore.
-    This file becomes the single source of truth for zone ordering and mapping.
+    Loads the canonical zone geometries from the mutable ActivitySim data directory,
+    validates them, and returns a sorted GeoDataFrame.
 
-    The output file will have two columns:
-    - zone_key: The unique, stable identifier for the zone (e.g., GEOID or TAZ ID).
-    - asim_id: A 1-based sequential integer used for matrix indexing.
+    This function is the new single source of truth for zone definitions.
 
     Args:
         settings (PilatesConfig): The simulation configuration.
-        year (int): The year to read from the datastore.
-        output_path (str): The path to write the canonical_zones.csv file.
-    """
-    logger.info(f"--- Generating Canonical Zones File at {output_path} ---")
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-    
-    df = None
-    
-    if os.path.exists(output_path):
-        logger.info("Canonical zones file already exists. Skipping generation.")
-        return output_path
+        workspace (Workspace): The workspace object.
 
-    # Use read_zone_geoms to get the authoritative, sorted list of zones
-    # This function handles downloading geoms if needed and sorts them consistently
-    zones_gdf = read_zone_geoms(
-        settings, 
-        year, 
-        asim_zone_id_col="TAZ", # ActivitySim's expected TAZ column name
-        default_zone_id_col=get_setting(settings, "shared.skims.geoms_index_col")
+    Returns:
+        gpd.GeoDataFrame: A GeoDataFrame of zone geometries, indexed and sorted
+                          by the canonical zone ID.
+    """
+    logger.info("--- Loading Canonical Zone Geometries ---")
+    zone_config = settings.shared.geography.zones
+
+    source_file_basename = os.path.basename(zone_config.source_file)
+    source_file = os.path.join(
+        workspace.get_asim_mutable_data_dir(),
+        source_file_basename
     )
-    
-    # The index of zones_gdf is the sorted zone_id (TAZ ID)
-    canonical_zone_keys = zones_gdf.index.unique().tolist()
+    id_col = zone_config.canonical_id_col
 
-    # Create the DataFrame for canonical_zones.csv
-    df = pd.DataFrame({'zone_key': canonical_zone_keys})
-    df['asim_id'] = range(1, len(df) + 1) # Assign sequential 1-based asim_id
+    if not os.path.exists(source_file):
+        raise FileNotFoundError(
+            f"Canonical zone source file not found: {source_file}. It should have been copied by the ActivitySim preprocessor."
+        )
 
-    if df is not None:
-        # Final processing and save
-        # CRITICAL: Ensure zone_key stays as string to preserve GEOIDs with leading zeros
-        df['zone_key'] = df['zone_key'].astype(str)
-        df['asim_id'] = df['asim_id'].astype(int)
-        # The zones_gdf is already sorted, so we just need to ensure the DataFrame is consistent
-        df = df.sort_values('asim_id').reset_index(drop=True) # Sort by asim_id to be explicit
+    logger.info(f"Reading canonical zones from '{source_file}'")
+    gdf = gpd.read_file(source_file)
 
-        # Save with explicit dtype to preserve string format
-        df.to_csv(output_path, index=False)
-        logger.info(f"Successfully generated canonical zones file with {len(df)} zones.")
-        return output_path
-    else:
-        # This else branch should ideally not be reached with the new logic
-        raise ValueError(f"Failed to generate canonical zones for zone_type: {zone_type}")
+    # Validate that the canonical ID column exists
+    if id_col not in gdf.columns:
+        raise KeyError(
+            f"Canonical ID column '{id_col}' not found in source file "
+            f"'{source_file}'. Available columns: {gdf.columns.tolist()}"
+        )
+
+    # Validate that the canonical IDs are unique
+    if not gdf[id_col].is_unique:
+        raise ValueError(f"Canonical ID column '{id_col}' contains duplicate values.")
+
+    # Set the index to the canonical ID
+    gdf = gdf.set_index(id_col)
+
+    # Rename the index to the ActivitySim expected index name
+    asim_index_col = zone_config.activitysim_index_col
+    if gdf.index.name != asim_index_col:
+        gdf.index.name = asim_index_col
+
+    # Sort the GeoDataFrame by the index (the canonical ID)
+    # This is critical for ensuring consistent order for all downstream models
+    gdf = gdf.sort_index()
+    gdf.index = gdf.index.astype(str)
+
+    logger.info(f"Successfully loaded and sorted {len(gdf)} canonical zones.")
+    return gdf
 
 
-def get_canonical_zones(workspace):
+def get_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> pd.DataFrame:
     """
-    Reads the canonical_zones.csv file from the workspace root.
+    Reads the canonical zone definitions from the mutable ActivitySim data directory.
 
     Args:
-        workspace (Workspace): The current run's workspace.
+        settings (PilatesConfig): The simulation configuration.
+        workspace (Workspace): The workspace object.
 
     Returns:
         pd.DataFrame: DataFrame with 'zone_key' and 'asim_id' columns.
     """
-    path = os.path.join(workspace.full_path, 'canonical_zones.csv')
+    zone_config = settings.shared.geography.zones
+    source_file_basename = os.path.basename(zone_config.source_file)
+
+    path = os.path.join(
+        workspace.get_asim_mutable_data_dir(),
+        source_file_basename
+    )
+
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            "canonical_zones.csv not found. It should be generated by the initialization step."
-        )
-    # CRITICAL: Force zone_key to be read as string to preserve GEOIDs with leading zeros
-    return pd.read_csv(path, dtype={'zone_key': str, 'asim_id': int})
-
-
-def get_block_to_zone_mapping(settings, year):
-    """
-    Returns a mapping from block GEOID to the TAZ zone ID it belongs to.
-    This is used by ActivitySim to assign households/persons to zones.
-    The authoritative source is the 'blocks' table in the datastore.
-    """
-    logger.info(f"--- Getting Block to Zone Mapping for year {year} ---")
-
-    store, table_prefix_yr = read_datastore(settings, year)
-    blocks_key = os.path.join(table_prefix_yr, "blocks")
-    if blocks_key not in store:
-        blocks_key = "blocks"
-
-    blocks = store.get(blocks_key)
-    store.close()
-
-    if blocks is None:
-        raise KeyError(f"Could not find '{blocks_key}' table in datastore.")
-
-    # The column in the blocks table that contains the TAZ ID
-    # This is typically 'zone_id' for block_group regions or 'taz_zone_id' for TAZ regions.
-    # It is configured via 'shared.skims.geoms_index_col' in settings.
-    
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-    
-    # Determine the correct column name for TAZ ID based on zone_type
-    taz_id_column_name = None
-    if zone_type == "taz":
-        taz_id_column_name = 'taz_zone_id' # Standard for TAZ regions
-    elif zone_type == "block_group":
-        taz_id_column_name = 'zone_id' # Standard for Seattle block_group regions
-    
-    # Allow override from settings if explicitly provided and valid
-    configured_geoms_index_col = get_setting(settings, "shared.skims.geoms_index_col")
-    if configured_geoms_index_col and configured_geoms_index_col in blocks.columns:
-        # If geoms_index_col is set and exists in blocks, and it's not 'GEOID' (which is block_id)
-        # then use it as the TAZ ID column. This handles cases where it might be 'TAZ' or 'taz1454'.
-        if configured_geoms_index_col != 'GEOID' and configured_geoms_index_col != 'block_group_id':
-            taz_id_column_name = configured_geoms_index_col
-    
-    if not taz_id_column_name or taz_id_column_name not in blocks.columns:
-        raise ValueError(
-            f"Cannot determine TAZ ID column name for zone_type '{zone_type}'. "
-            f"Attempted to use '{taz_id_column_name}' but it's not in 'blocks' table columns: {blocks.columns.tolist()}. "
-            f"Please ensure 'shared.skims.geoms_index_col' in settings points to the column containing TAZ IDs in the blocks table, "
-            f"or that the default fallback for '{zone_type}' is correct."
-        )
-
-    # The index of the blocks table is the block GEOID (e.g., 'block_id')
-    # We want to map this index (block GEOID) to the TAZ ID column.
-    mapping_df = blocks[[taz_id_column_name]]
-    mapping = mapping_df[taz_id_column_name].to_dict()
-    logger.info(f"Successfully created block to zone mapping for {len(mapping)} blocks.")
-
-    return mapping
-
-
-def zone_id_to_taz(zones, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"):
-    if zones.index.name != asim_zone_id_col:
-        if asim_zone_id_col in zones.columns:
-            logger.info("Setting column {0} to index".format(asim_zone_id_col))
-            zones.set_index(asim_zone_id_col, inplace=True)
-        elif zones.index.name == default_zone_id_col:
-            logger.info(
-                "Renaming index from {0} to {1}".format(
-                    default_zone_id_col, asim_zone_id_col
-                )
-            )
-            zones.index.name = asim_zone_id_col
-        elif asim_zone_id_col not in zones.columns:
-            zones.rename(columns={default_zone_id_col: asim_zone_id_col}, inplace=True)
-            zones.set_index(asim_zone_id_col, inplace=True)
-            logger.info(
-                "Setting column {0} to index and renaming it {1}".format(
-                    default_zone_id_col, asim_zone_id_col
-                )
-            )
-        else:
-            logger.error("Not sure what column in the zones table is the zone ID!")
+        zones = load_canonical_zones(settings, workspace)
     else:
-        logger.info("Zone index is already named {0}".format(asim_zone_id_col))
+        zones = gpd.read_file(path)
     return zones
 
 
-def read_zone_geoms(
-    settings, year, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"
-):
+def get_block_to_zone_mapping(settings, year, workspace):
     """
-    Returns a GeoPandas dataframe with the zones geometries.
+    Generates a mapping from census block GEOID to the canonical zone ID.
+
+    This function performs a geometric mapping by finding the zone with the
+    largest area of intersection for each block.
+
+    Args:
+        settings (PilatesConfig): The simulation configuration.
+        year (int): The simulation year (used by get_block_geoms).
+        workspace (Workspace): The workspace object.
+
+    Returns:
+        dict: A dictionary mapping block GEOID to canonical zone ID.
     """
-    store, table_prefix_year = read_datastore(settings, year, True)
-    zone_type = settings.shared.skims.zone_type
-    zone_key = "/{0}_zone_geoms".format(zone_type)
+    logger.info("--- Generating Block to Zone Mapping via Geometric Intersection ---")
 
-    # Check if zone geometries are already in the H5 datastore
-    # BUT: We need to validate they have correct format (not corrupted by int conversion bug)
-    zones_from_cache = None
-    if zone_key in store.keys():
-        logger.info("Loading {0} zone geometries from .h5 datastore!".format(zone_type))
-        zones_cached = store[zone_key]
+    # 1. Load the authoritative, sorted canonical zone geometries
+    canonical_zones_gdf = load_canonical_zones(settings, workspace)
+    zone_id_col = canonical_zones_gdf.index.name
 
-        if "geometry" in zones_cached.columns:
-            # Check if the cached zones have valid zone IDs
-            # If index or GEOID column looks like sequential integers (1, 2, 3)
-            # instead of proper GEOIDs, the cache is corrupted
-            if zones_cached.index.name and zones_cached.index.name != 'index':
-                sample_id = str(zones_cached.index[0]) if len(zones_cached) > 0 else ""
-            elif 'GEOID' in zones_cached.columns:
-                sample_id = str(zones_cached['GEOID'].iloc[0]) if len(zones_cached) > 0 else ""
-            else:
-                sample_id = ""
+    # 2. Get the census block geometries
+    # This function handles its own caching and downloading from TIGERweb API
+    from pilates.utils.geog import get_block_geoms, get_taz_from_block_geoms
+    blocks_gdf = get_block_geoms(settings, year=year, workspace=workspace)
 
-            # If zone_type is block_group or block, we expect 12-15 digit GEOIDs
-            # If we see short IDs like "1", "2", etc., the cache is corrupted
-            is_census_geography = zone_type in ['block', 'block_group', 'tract']
-            cache_looks_valid = len(sample_id) >= 12 if is_census_geography else True
+    # 3. Perform the geometric mapping
+    # This function finds the zone with max intersection area for each block
+    local_crs = settings.shared.geography.local_crs
+    block_to_zone_series = get_taz_from_block_geoms(
+        blocks_gdf, canonical_zones_gdf, local_crs, zone_id_col
+    )
 
-            if cache_looks_valid:
-                logger.info("  Cache appears valid, using cached geometries")
-                zones_cached.loc[:, "geometry"] = zones_cached.loc[:, "geometry"].apply(wkt.loads)
-                zones_from_cache = gpd.GeoDataFrame(zones_cached, geometry="geometry", crs="EPSG:4326")
-            else:
-                logger.warning(f"  Cached zone_geoms appear corrupted (sample_id='{sample_id}' for {zone_type})")
-                logger.warning("  Will re-download zone geometries and update cache")
-                # Delete the corrupted cache
-                del store[zone_key]
-        else:
-            raise KeyError(
-                "Table 'zone_geoms' exists in the .h5 datastore but "
-                "no geometry column was found!"
-            )
+    # 4. Convert the resulting Series to a dictionary
+    mapping = block_to_zone_series.to_dict()
+    logger.info(f"Successfully created block to zone mapping for {len(mapping)} blocks.")
 
-    if zones_from_cache is None:
-        logger.info("Downloading zone geometries on the fly!")
-        region = settings.run.region
-        if zone_type == "taz":
-            from pilates.utils.geog import get_taz_geoms
-            zones = get_taz_geoms(settings, zone_id_col_out=default_zone_id_col)
-            zones.set_index(default_zone_id_col, inplace=True)
-        else:
-            mapping = get_block_to_zone_mapping(settings, year)
-            from pilates.utils.geog import get_taz_geoms
-            zones = get_taz_geoms(settings, taz_id_col_in="geoid10", zone_id_col_out=default_zone_id_col)
-            # zones['GEOID'] = zones['GEOID'].astype(str)
-            assert is_string_dtype(zones["GEOID"]), "GEOID dtype should be str"
-            # zones.loc[:, default_zone_id_col] = zones.loc[:, "GEOID"].replace(mapping)
-            zones[default_zone_id_col] = zones[default_zone_id_col].astype(str)
-            zones.set_index(default_zone_id_col, inplace=True)
-            # assert zones.index.inferred_type == "string", "zone_id dtype should be str"
-
-        # IMPORTANT: Sort zones BEFORE saving to H5 to ensure consistent ordering
-        # For GEOIDs (12+ digits), preserve string format; for simple IDs, sort numerically
-        sample_id = str(zones.index[0]) if len(zones) > 0 else ""
-        if len(sample_id) >= 12:
-            # GEOIDs - preserve string format and sort lexicographically
-            zones.index = zones.index.astype(str)
-            zones = zones.sort_index()
-        else:
-            # Simple numeric IDs - sort numerically then convert back to string
-            zones.index = zones.index.astype(int)
-            zones = zones.sort_index()
-            zones.index = zones.index.astype(str)
-
-        # save zone geoms in .h5 datastore so we don't
-        # have to do this again
-        out_zones = pd.DataFrame(zones.copy())
-        out_zones.loc[:, "geometry"] = out_zones["geometry"].apply(lambda x: x.wkt if x is not None else None)
-
-        logger.info("Storing zone geometries to .h5 datastore!")
-        store[zone_key] = out_zones
-    else:
-        # Use cached zones
-        zones = zones_from_cache
-
-    store.close()
-
-    # Zones are already sorted (either from cache or sorted before saving)
-    # Just ensure index is string type for consistency
-    zones.index = zones.index.astype(str)
-
-    return zone_id_to_taz(zones, asim_zone_id_col, default_zone_id_col)
+    return mapping

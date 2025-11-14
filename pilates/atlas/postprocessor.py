@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Optional
 import logging
 import os
 
@@ -179,7 +179,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 "atlas_postprocessor",
                 h5_container_record=h5_container_input_record,
                 table_name=table_name,
-                description=f"Source households table before update",
+                description="Source households table before update",
                 short_name="households_table_before_update",
                 model_run_id=model_run_hash,
             )
@@ -198,7 +198,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 h5_container_record=h5_container_input_record,  # The container path is the same
                 table_name=table_name,
                 input_records=[source_table_record, atlas_hh_input_record],
-                description=f"Updated households table after ATLAS run",
+                description="Updated households table after ATLAS run",
                 short_name="households_table_after_update",
                 model_run_id=model_run_hash,
             )
@@ -223,7 +223,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             atlas_veh_input_record = self.provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 atlas_veh_file,
-                description=f"ATLAS vehicles CSV before vehicleTypeId addition",
+                description="ATLAS vehicles CSV before vehicleTypeId addition",
                 short_name="atlas_vehicles_input",
                 model_run_id=model_run_hash,
             )
@@ -235,7 +235,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                         atlas_veh2_file,
                         input_records=[atlas_veh_input_record],
                         year=output_year,
-                        description=f"ATLAS vehicles2 CSV with vehicleTypeId",
+                        description="ATLAS vehicles2 CSV with vehicleTypeId",
                         short_name="atlas_vehicles2_output",
                         model_run_id=model_run_hash,
                     )

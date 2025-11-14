@@ -2,7 +2,6 @@ import argparse
 import logging
 import os
 import pandas as pd
-import yaml
 
 from pilates.utils.settings_helper import get as get_setting
 from pilates.config.models import load_config
@@ -121,7 +120,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
 
     atlas_beamac = get_setting(settings, "atlas.beamac", 0)
     region = get_setting(settings, "run.region")
-    skims_zone_type = get_setting(settings, "shared.skims.zone_type")
+    skims_zone_type = get_setting(settings, "shared.geography.zones.zone_type")
 
     if (atlas_beamac > 0) and ((region != "sfbay") or (skims_zone_type != "taz")):
         raise ValueError(
@@ -132,7 +131,7 @@ def parse_args_and_settings(settings_file="settings.yaml"):
 
     logger.info(f"Loading config with Pydantic validation: {settings_file}")
     pydantic_config = load_config(settings_file)
-    logger.info(f"✓ Config validated successfully!")
+    logger.info("✓ Config validated successfully!")
     logger.info(f"  Region: {pydantic_config.run.region}")
     logger.info(
         f"  Years: {pydantic_config.run.start_year}-{pydantic_config.run.end_year}"
@@ -221,7 +220,7 @@ def read_datastore(settings, year=None, warm_start=False, mutable_data_dir=None)
                 use_year_specific = True
             else:
                 logger.info(f"Year-specific file not found: {usim_datastore_year_fpath}")
-                logger.info(f"Falling back to base input file")
+                logger.info("Falling back to base input file")
 
         # Fall back to base input file if year-specific doesn't exist or isn't configured
         if not use_year_specific:

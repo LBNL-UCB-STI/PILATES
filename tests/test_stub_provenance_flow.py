@@ -37,11 +37,10 @@ import os
 import tempfile
 import shutil
 import uuid
-import pytest
 import json
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 # Import PILATES modules
 from pilates.generic.model_factory import ModelFactory
@@ -88,7 +87,7 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
         return ["test_output"] if "test_output" in files else []
 
     shutil.copytree(tmpdir, artifacts_dir, ignore=ignore_test_output)
-    print(f"   ✅ Copied test artifacts")
+    print("   ✅ Copied test artifacts")
 
     # Find and copy database
     db_files = []
@@ -203,13 +202,13 @@ def preserve_test_artifacts(tmpdir: str, test_name: str, db_manager=None):
         f.write("```\n")
 
     print(f"   ✅ README: {readme_path}")
-    print(f"\n✨ Test output preserved!")
+    print("\n✨ Test output preserved!")
     print(f"   📂 Location: {os.path.abspath(output_dir)}")
     print(f"   📄 README: {readme_path}")
 
     # Print convenient commands
     if db_files and os.path.exists(db_dest):
-        print(f"\n   Quick access commands:")
+        print("\n   Quick access commands:")
         print(
             f"   • View docs:  open {os.path.join(output_dir, 'documentation/schema.html')}"
         )
@@ -435,7 +434,7 @@ class TestStubProvenanceFlow:
             print("\n📋 Test Setup Complete")
             print(f"   Run ID: {run_id}")
             print(f"   Temp dir: {tmpdir}")
-            print(f"   Models: UrbanSim → ATLAS → ActivitySim → BEAM")
+            print("   Models: UrbanSim → ATLAS → ActivitySim → BEAM")
 
             # ============================================================
             # UrbanSim: Preprocessor → Runner → Postprocessor
@@ -650,7 +649,7 @@ class TestStubProvenanceFlow:
             usim_h5_input_record = provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 usim_output_h5,
-                description=f"UrbanSim H5 before ATLAS vehicle update",
+                description="UrbanSim H5 before ATLAS vehicle update",
                 short_name="usim_h5_before_atlas",
                 model_run_id=atlas_post_hash,
                 state=state,
@@ -660,7 +659,7 @@ class TestStubProvenanceFlow:
             vehicles_input_record = provenance_tracker.record_input_file(
                 "atlas_postprocessor",
                 vehicles_file,
-                description=f"ATLAS vehicles before vehicleTypeId",
+                description="ATLAS vehicles before vehicleTypeId",
                 short_name="atlas_vehicles_input",
                 model_run_id=atlas_post_hash,
                 state=state,
@@ -683,7 +682,7 @@ class TestStubProvenanceFlow:
                 "atlas_postprocessor",
                 vehicles2_file,
                 year=state.current_year,
-                description=f"ATLAS vehicles2 CSV with vehicleTypeId",
+                description="ATLAS vehicles2 CSV with vehicleTypeId",
                 short_name="atlas_vehicles2_output",
                 model_run_id=atlas_post_hash,
                 state=state,
@@ -697,7 +696,7 @@ class TestStubProvenanceFlow:
                 "atlas_postprocessor",
                 usim_output_h5,
                 year=state.current_year,
-                description=f"UrbanSim H5 after ATLAS vehicle update",
+                description="UrbanSim H5 after ATLAS vehicle update",
                 short_name="usim_h5_updated",
                 model_run_id=atlas_post_hash,
                 state=state,
@@ -1238,7 +1237,7 @@ class TestStubProvenanceFlow:
                 assert (
                     "chunk_manifest" in snapshot_info["full_skims"]
                 ), "Should have chunk manifest"
-                print(f"   ✅ Snapshot info retrieval working")
+                print("   ✅ Snapshot info retrieval working")
 
                 # Verify snapshots for run
                 run_snapshots = zarr_manager.get_snapshots_for_run(run_id)
@@ -1280,10 +1279,10 @@ class TestStubProvenanceFlow:
                 print("  ✓ Schema versioning enabled")
             if fixture_zarr.exists() and zarr_snapshot_id:
                 print("\nZarr Versioning:")
-                print(f"  ✓ Initialization snapshot created")
-                print(f"  ✓ BEAM iteration snapshot created")
-                print(f"  ✓ Snapshot lineage tracking")
-                print(f"  ✓ Manifest persistence")
+                print("  ✓ Initialization snapshot created")
+                print("  ✓ BEAM iteration snapshot created")
+                print("  ✓ Snapshot lineage tracking")
+                print("  ✓ Manifest persistence")
             print("=" * 60)
 
         finally:
@@ -1348,7 +1347,7 @@ class TestStubProvenanceFlow:
             print("\n📋 Test Setup Complete")
             print(f"   Run ID: {run_id}")
             print(f"   Temp dir: {tmpdir}")
-            print(f"   Using enhanced stubs: Yes")
+            print("   Using enhanced stubs: Yes")
 
             # ============================================================
             # ActivitySim: Preprocessor → Runner → Postprocessor
@@ -1849,7 +1848,7 @@ class TestStubProvenanceFlow:
                     # Should have some statistics
                     assert len(report["statistics"]) > 0, "Should have statistics"
 
-                    print(f"   ✅ Validation report generated")
+                    print("   ✅ Validation report generated")
                     print(f"      - Errors: {len(report['errors'])}")
                     print(f"      - Warnings: {len(report['warnings'])}")
                     print(f"      - Statistics: {len(report['statistics'])}")
@@ -1872,7 +1871,7 @@ class TestStubProvenanceFlow:
                     assert version_info is not None, "Should have schema version record"
                     assert version_info[0] >= 1, "Should have version >= 1"
 
-                    print(f"   ✅ Schema version tracking enabled")
+                    print("   ✅ Schema version tracking enabled")
                     print(f"      - Current version: {version_info[0]}")
                     print(f"      - PILATES version: {version_info[2]}")
 
@@ -1930,7 +1929,7 @@ class TestStubProvenanceFlow:
                 init_snapshot = manifest["snapshots"][zarr_snapshot_id]
                 assert init_snapshot["snapshot_type"] == "initialization"
                 assert init_snapshot["iteration"] == -1
-                print(f"   ✅ Initialization snapshot verified")
+                print("   ✅ Initialization snapshot verified")
 
                 # Verify BEAM snapshot
                 beam_snapshots = [
@@ -1939,12 +1938,12 @@ class TestStubProvenanceFlow:
                     if manifest["snapshots"][s].get("snapshot_type") == "merged"
                 ]
                 assert len(beam_snapshots) >= 1
-                print(f"   ✅ BEAM snapshot verified")
+                print("   ✅ BEAM snapshot verified")
 
                 # Verify lineage
                 lineage = zarr_manager.get_snapshot_lineage(beam_snapshots[0])
                 assert len(lineage) == 2
-                print(f"   ✅ Lineage tracking working")
+                print("   ✅ Lineage tracking working")
 
                 print("   ✅ All zarr versioning features validated!")
 

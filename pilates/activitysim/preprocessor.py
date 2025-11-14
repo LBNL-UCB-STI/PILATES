@@ -20,8 +20,8 @@ from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
-from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones, read_zone_geoms
-from pilates.utils.io import get_merged_usim_input_datastore_path
+from pilates.utils.zone_utils import get_block_to_zone_mapping, get_canonical_zones, load_canonical_zones
+from pilates.utils.io import get_merged_usim_input_datastore_path, read_datastore
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
@@ -90,7 +90,7 @@ def zone_order(settings, workspace):
     Numpy Array. One dimension array of zone keys.
 
     """
-    canonical_zones_df = get_canonical_zones(workspace)
+    canonical_zones_df = get_canonical_zones(settings, workspace)
     order = canonical_zones_df['zone_key'].values
     return order
 
@@ -183,7 +183,7 @@ def _load_raw_beam_skims(settings, convertFromCsv=True, blank=False):
     --------
     - pandas DataFrame.
     """
-    zone_type = settings.shared.skims.zone_type
+    zone_type = settings.shared.geography.zones.zone_type
     skims_fname = settings.shared.skims.fname
     path_to_beam_skims = os.path.join(settings.beam.local_output_folder, skims_fname)
 
@@ -529,7 +529,7 @@ def impute_distances(zones, origin=None, destination=None):
         return orig.distance(dest).replace({0: 100}).values * (0.621371 / 1000)
 
 
-def _distance_skims(settings, year, input_skims, order, data_dir):
+def _distance_skims(settings, year, input_skims, order, data_dir, workspace):
     """
     Generates distance matrices for drive, walk and bike modes.
     Parameters:
@@ -577,15 +577,13 @@ def _distance_skims(settings, year, input_skims, order, data_dir):
     missing = np.isnan(mx_dist)
     if missing.all():
         logger.info("Imputing all missing distance skims.")
-        zones = read_zone_geoms(
-            settings, year, asim_zone_id_col=settings.shared.skims.geoms_index_col
-        )
+        zones = load_canonical_zones(settings, workspace)
         mx_dist = impute_distances(zones)
         output_skims["DIST"] = mx_dist
     elif missing.any():
         orig, dest = np.where(missing == True)
         logger.info("Imputing {} missing distance skims.".format(len(orig)))
-        zones = read_zone_geoms(settings, year)
+        zones = load_canonical_zones(settings, workspace)
         imputed_dist = impute_distances(zones, orig, dest)
         mx_dist[orig, dest] = imputed_dist
         output_skims["DIST"] = mx_dist
@@ -1119,7 +1117,7 @@ def create_skims_from_beam(settings, state, workspace, output_dir=None, overwrit
             )
 
             # Create skims
-            _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir)
+            _distance_skims(settings, state.year, auto_df, order, data_dir=output_dir, workspace=workspace)
             _auto_skims(settings, auto_df, order, data_dir=output_dir)
             _transit_skims(settings, transit_df, order, data_dir=output_dir)
             _ridehail_skims(settings, ridehail_df, order, data_dir=output_dir)
@@ -1215,9 +1213,7 @@ def plot_skims(
 def skim_validations(settings, year, order, workspace, data_dir=None):
     logger.info("Generating skims validation plots.")
     skims = read_skims(settings, mode="r", data_dir=data_dir)
-    zone = read_zone_geoms(
-        settings, year, asim_zone_id_col="TAZ", default_zone_id_col="zone_id"
-    )
+    zone = load_canonical_zones(settings, workspace)
 
     # Skims matrices
     num_zones = len(order)
@@ -1417,9 +1413,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         output_dir: str,
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
-        from pilates.activitysim import preprocessor as asim_pre
 
-        return asim_pre.copy_data_to_mutable_location(
+        return _copy_data_to_mutable_location(
             settings, output_dir, self.provenance_tracker
         )
 
@@ -1449,7 +1444,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
         if not os.path.exists(path_to_beam_skims_in_current_run_workspace):
             logger.info(
-                f"[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
+                "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
             )
             beam_production_path = os.path.abspath(
                 os.path.join(
@@ -1914,7 +1909,7 @@ def enrollment_tables(
     county_codes = FIPS["counties"]
     local_crs = settings.shared.geography.local_crs
 
-    zone_type = settings.shared.skims.zone_type
+    zone_type = settings.shared.geography.zones.zone_type
     path_to_schools_data = "pilates/utils/data/{0}/{1}_{2}.csv".format(
         region, zone_type, enrollment_type
     )
@@ -1950,37 +1945,63 @@ def enrollment_tables(
     return enrollment
 
 
-def copy_data_to_mutable_location(
-    settings: PilatesConfig, folder_path, provenance_tracker: FileProvenanceTracker
+def _copy_data_to_mutable_location(
+        settings: PilatesConfig, folder_path, provenance_tracker: FileProvenanceTracker
 ) -> Tuple[RecordStore, RecordStore]:
-    logger.info(settings)
+    logger.info("Copying ActivitySim source data to mutable location.")
     input_dir = folder_path
     os.makedirs(input_dir, exist_ok=True)
     region = get_setting(settings, "run.region")
-    beam_input_dir = get_setting(settings, "beam.local_input_folder")
-    beam_geoms_fname = get_setting(settings, "shared.skims.geoms_fname")
-    beam_router_directory = get_setting(settings, "beam.router_directory")
-    asim_geoms_location = os.path.join(input_dir, beam_geoms_fname)
+    input_records = RecordStore()
+    output_records = RecordStore()
+    project_root = find_project_root()
 
-    beam_geoms_location = os.path.join(
-        beam_input_dir, region, beam_router_directory, beam_geoms_fname
-    )
-    if "beam_skims_shapefile" in settings:
-        beam_shape_location = os.path.join(
-            beam_input_dir, region, get_setting(settings, "beam.skims_shapefile")
+    # --- 1. Handle Canonical Zone Geometries ---
+    zone_source_path = settings.shared.geography.zones.source_file
+    if not os.path.isabs(zone_source_path):
+        zone_source_path = os.path.join(project_root, zone_source_path)
+
+    if os.path.exists(zone_source_path):
+        zone_fname = os.path.basename(zone_source_path)
+        asim_zones_path = os.path.join(input_dir, zone_fname)
+        logger.info(f"Copying canonical zones from {zone_source_path} to {asim_zones_path}")
+        shutil.copy(zone_source_path, asim_zones_path)
+
+        input_rec = provenance_tracker.record_input_file("activitysim_preprocessor", zone_source_path,
+                                                         short_name="canonical_zones_source")
+        output_rec = provenance_tracker.record_output_file_with_inputs(
+            "activitysim_preprocessor", asim_zones_path, [input_rec], short_name="canonical_zones_mutable"
         )
+        input_records.add_record(input_rec)
+        output_records.add_record(output_rec)
     else:
-        logger.warning(
-            "Not updating zone_id in beam shapefile, make sure it is correct"
-        )
-        beam_shape_location = None
+        logger.warning(f"Canonical zone source file not found at {zone_source_path}, skipping copy.")
 
-    logger.info(
-        "Copying beam zone geoms from {0} to {1}".format(
-            beam_geoms_location, asim_geoms_location
-        )
-    )
+    # --- 2. Handle Clipped Geometries (from BEAM) ---
+    clipped_geoms_rel_path = get_setting(settings, "activitysim.clipped_geoms_path")
+    if clipped_geoms_rel_path:
+        # This path is relative to the BEAM router directory
+        beam_prod_dir = os.path.join(project_root, settings.beam.local_input_folder)
+        router_dir = os.path.join(beam_prod_dir, region, settings.beam.router_directory)
+        clipped_geoms_source_path = os.path.join(router_dir, clipped_geoms_rel_path)
 
+        if os.path.exists(clipped_geoms_source_path):
+            clipped_fname = os.path.basename(clipped_geoms_source_path)
+            asim_clipped_path = os.path.join(input_dir, clipped_fname)
+            logger.info(f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}")
+            shutil.copy(clipped_geoms_source_path, asim_clipped_path)
+
+            input_rec = provenance_tracker.record_input_file("activitysim_preprocessor", clipped_geoms_source_path,
+                                                             short_name="clipped_geoms_source")
+            output_rec = provenance_tracker.record_output_file_with_inputs(
+                "activitysim_preprocessor", asim_clipped_path, [input_rec], short_name="clipped_geoms_mutable"
+            )
+            input_records.add_record(input_rec)
+            output_records.add_record(output_rec)
+        else:
+            logger.warning(f"Clipped geoms file not found at {clipped_geoms_source_path}, skipping copy.")
+
+    # --- 3. Handle ActivitySim Configs ---
     configs_source_dir = os.path.join(
         get_setting(settings, "activitysim.local_configs_folder"),
         get_setting(settings, "run.region"),
@@ -1998,36 +2019,29 @@ def copy_data_to_mutable_location(
             configs_source_dir, configs_dest_dir
         )
     )
-    shutil.copytree(
-        configs_source_dir,
-        configs_dest_dir,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(".git", ".git*"),
-    )
+    if os.path.exists(configs_dest_dir):
+        shutil.rmtree(configs_dest_dir)
+    shutil.copytree(configs_source_dir, configs_dest_dir)
+
     git_hash = provenance_tracker.get_git_hash(configs_source_dir)
-    repo_in = provenance_tracker.record_repo_input(
-        model="activitysim_preprocessor",
-        repo_path=configs_source_dir,
-        short_name="asim_configs_reference",
-        description="Reference ActivitySim Config Repo",
-        git_hash=git_hash,
+    input_records.add_record(
+        provenance_tracker.record_repo_input(
+            "activitysim_preprocessor",
+            repo_path=configs_source_dir,
+            short_name="asim_configs",
+            description="ActivitySim configs repo",
+            git_hash=git_hash,
+        )
     )
-    repo_out = provenance_tracker.record_repo_input(
-        model="activitysim_preprocessor",
-        repo_path=configs_dest_dir,
-        short_name="asim_configs",
-        description="ActivitySim Config Repo",
+    output_records.add_record(
+        provenance_tracker.record_repo_input(
+            "activitysim_preprocessor",
+            repo_path=configs_dest_dir,
+            short_name="asim_configs",
+            description="ActivitySim configs repo",
+        )
     )
-
-    geoms_store_in, geoms_store_out = copy_beam_geoms(
-        settings,
-        beam_geoms_location,
-        asim_geoms_location,
-        beam_shape_location,
-        provenance_tracker,
-    )
-
-    return geoms_store_in.add_record(repo_in), geoms_store_out.add_record(repo_out)
+    return input_records, output_records
 
 
 def copy_beam_geoms(
@@ -2036,6 +2050,7 @@ def copy_beam_geoms(
     asim_geoms_location,
     beam_shape_location,
     provenance_tracker: FileProvenanceTracker,
+        workspace
 ) -> Tuple[RecordStore, RecordStore]:
     zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
@@ -2045,9 +2060,9 @@ def copy_beam_geoms(
         short_name="beam_geoms_reference",
         description="BEAM geometry file",
     )
-    zone_type = get_setting(settings, "shared.skims.zone_type").lower()
+    zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
-    mapping = get_block_to_zone_mapping(settings, get_setting(settings, "run.start_year"))
+    mapping = get_block_to_zone_mapping(settings, get_setting(settings, "run.start_year"), workspace)
 
     if zone_id_col not in beam_geoms_file.columns:
 
@@ -2301,7 +2316,7 @@ def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
 
 
 def _update_jobs_table(
-    jobs, blocks, state_fips, county_codes, local_crs, asim_zone_id_col="TAZ"
+    jobs, blocks, settings, local_crs, asim_zone_id_col="TAZ", workspace=None
 ):
     # assign zones
     jobs[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(jobs["block_id"]).values
@@ -2321,7 +2336,7 @@ def _update_jobs_table(
     if num_reassigned > 0:
 
         logger.info("Reassigning jobs out of blocks with no land area!")
-        blocks_gdf = get_block_geoms(state_fips, county_codes)
+        blocks_gdf = get_block_geoms(settings, workspace)
         blocks_gdf.set_index("GEOID", inplace=True)
         blocks_gdf["square_meters_land"] = blocks["square_meters_land"].reindex(
             blocks_gdf.index
@@ -2348,7 +2363,7 @@ def _update_jobs_table(
     return num_reassigned, jobs
 
 
-def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
+def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col, workspace):
     blocks["TOTEMP"] = (
         jobs[["block_id", "sector_id"]]
         .groupby("block_id")["sector_id"]
@@ -2369,14 +2384,14 @@ def _update_blocks_table(settings, year, blocks, households, jobs, zone_id_col):
 
     # update blocks (should only have to be run if asim is loading
     # raw urbansim data that has yet to be touched by pilates)
-    geoid_to_zone_mapping_updated = False
+    geoid_to_zone_mapping_updated = True
 
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-    zone_id_col = "{}_{}".format(zone_type, zone_id_col)
+    zone_type = get_setting(settings, "shared.geography.zones.zone_type")
+    zone_id_col = "{}_zone_id".format(zone_type)
 
     if zone_id_col not in blocks.columns:
 
-        mapping = get_block_to_zone_mapping(settings, year)
+        mapping = get_block_to_zone_mapping(settings, year, workspace)
 
         if zone_type == "block":
             logger.info("Mapping block IDs")
@@ -2414,10 +2429,10 @@ def _create_land_use_table(
     asim_zone_id_col="TAZ",
 ):
     logger.info("Creating land use table.")
-    zone_type = get_setting(settings, "shared.skims.zone_type")
+    zone_type = get_setting(settings, "shared.geography.zones.zone_type")
 
     # DIAGNOSTIC LOGGING
-    logger.info(f"=== DIAGNOSTIC INFO FOR LAND USE TABLE ===")
+    logger.info("=== DIAGNOSTIC INFO FOR LAND USE TABLE ===")
     logger.info(f"zones index: name={zones.index.name}, dtype={zones.index.dtype}, len={len(zones)}")
     logger.info(f"zones index sample (first 10): {zones.index[:10].tolist()}")
     logger.info(f"persons[{asim_zone_id_col}]: dtype={persons[asim_zone_id_col].dtype if asim_zone_id_col in persons.columns else 'MISSING'}, nunique={persons[asim_zone_id_col].nunique() if asim_zone_id_col in persons.columns else 'N/A'}")
@@ -2426,7 +2441,7 @@ def _create_land_use_table(
     logger.info(f"households[{asim_zone_id_col}] sample: {households[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in households.columns else 'N/A'}")
     logger.info(f"jobs[{asim_zone_id_col}]: dtype={jobs[asim_zone_id_col].dtype if asim_zone_id_col in jobs.columns else 'MISSING'}, nunique={jobs[asim_zone_id_col].nunique() if asim_zone_id_col in jobs.columns else 'N/A'}")
     logger.info(f"jobs[{asim_zone_id_col}] sample: {jobs[asim_zone_id_col].unique()[:10].tolist() if asim_zone_id_col in jobs.columns else 'N/A'}")
-    logger.info(f"==========================================")
+    logger.info("==========================================")
 
     schools = enrollment_tables(
         settings, zones, enrollment_type="schools", asim_zone_id_col=asim_zone_id_col
@@ -2540,7 +2555,7 @@ def _create_land_use_table(
 
     # --- Join all aggregated data to the zones table ---
     logger.info("Joining aggregated data to zones.")
-    zones = zones.join([persons_agg, households_agg, jobs_agg]).fillna(0)
+    zones = zones.drop(columns=['geometry']).join([persons_agg, households_agg, jobs_agg]).fillna(0)
 
     # --- DIAGNOSTIC: Check result after join ---
     logger.info("=== POST-JOIN DIAGNOSTICS ===")
@@ -2658,7 +2673,7 @@ def create_asim_data_from_database(
     year = db_config.year  # Year to query for
     use_processed = db_config.use_processed_data
 
-    logger.info(f"📊 Database query parameters:")
+    logger.info("📊 Database query parameters:")
     # logger.info(f"   Config hash: {config_hash or 'any'}")
     config_hash = None
     logger.info(f"   Year: {year}")
@@ -2698,7 +2713,7 @@ def create_asim_data_from_database(
                             f"⚠️  Raw data found but reprocessing not yet implemented for {table_name}"
                         )
                         logger.warning(
-                            f"   Consider using use_processed_data: true in activitysim_database config"
+                            "   Consider using use_processed_data: true in activitysim_database config"
                         )
                         data_df = None
 
@@ -2731,15 +2746,6 @@ def create_asim_data_from_database(
 
                 else:
                     logger.error(f"❌ No {table_name} data found in database")
-
-                    # Create minimal placeholder to avoid breaking ActivitySim
-                    output_csv_path = os.path.join(output_dir, f"{table_name}.csv")
-                    placeholder_df = _create_minimal_placeholder(table_name)
-                    placeholder_df.to_csv(output_csv_path, index=True)
-
-                    logger.warning(
-                        f"⚠️  Created minimal placeholder for {table_name} - ActivitySim may have issues"
-                    )
 
             # Process optional tables
             for table_name in optional_tables:
@@ -2794,84 +2800,6 @@ def create_asim_data_from_database(
         raise
 
 
-def process_raw_h5_files(
-    raw_blocks,
-    raw_persons,
-    raw_households,
-    raw_jobs,
-    settings,
-    year,
-    asim_zone_id_col="TAZ",
-):
-    region = get_setting(settings, "run.region")
-    # -------------------------------------------------------------------------
-    # Retrieve the FIPS configuration. Older flat configs store a direct
-    # "state" and "counties" entry, while newer hierarchical configs nest these
-    # under the region name (e.g. "sfbay": {"state": "...", "counties": [...] }).
-    # This logic supports both formats to avoid KeyError during test execution.
-    # -------------------------------------------------------------------------
-    FIPS = get_setting(settings, "shared.geography.FIPS")
-    if isinstance(FIPS, dict) and "state" not in FIPS:
-        # Region‑nested structure: drill down using the current region.
-        region_fips = FIPS.get(region, {})
-        state_fips = region_fips["state"]
-        county_codes = region_fips["counties"]
-    else:
-        # Flat structure.
-        state_fips = FIPS["state"]
-        county_codes = FIPS["counties"]
-    local_crs = get_setting(settings, "shared.geography.local_crs")
-    zone_type = get_setting(settings, "shared.skims.zone_type")
-
-    # update blocks
-    blocks_to_taz_mapping_updated, raw_blocks = _update_blocks_table(
-        settings, year, raw_blocks, raw_households, raw_jobs, "zone_id"
-    )
-    input_zone_id_col = "{0}_zone_id".format(zone_type)
-
-    # Only rename if requested
-    if asim_zone_id_col != input_zone_id_col:
-        raw_blocks.rename(
-            columns={input_zone_id_col: asim_zone_id_col}, inplace=True
-        )
-
-    raw_blocks = raw_blocks.loc[:, ~raw_blocks.columns.duplicated()].copy()
-
-    # update households
-    raw_households, unassigned_households = _update_households_table(
-        raw_households, raw_blocks, asim_zone_id_col
-    )
-
-    # update persons
-    raw_persons = _update_persons_table(
-        raw_persons, raw_households, unassigned_households, raw_blocks, asim_zone_id_col
-    )
-
-    raw_households.loc[:, "persons"] = (
-        raw_persons.groupby("household_id").size().reindex(raw_households.index)
-    )
-    raw_households.loc[:, "workers"] = (
-        raw_persons.loc[raw_persons.worker > 0]
-        .groupby("household_id")
-        .size()
-        .reindex(raw_households.index)
-        .fillna(0)
-    )
-
-    # update jobs
-
-    num_reassigned, raw_jobs = _update_jobs_table(
-        raw_jobs, raw_blocks, state_fips, county_codes, local_crs, asim_zone_id_col
-    )
-
-    return (
-        raw_blocks,
-        raw_persons,
-        raw_households,
-        raw_jobs,
-        num_reassigned,
-        blocks_to_taz_mapping_updated,
-    )
 
 
 def create_asim_data_from_h5(
@@ -2879,232 +2807,94 @@ def create_asim_data_from_h5(
     state: WorkflowState,
     workspace: "Workspace",
     provenance_tracker: "FileProvenanceTracker",
-    warm_start=False,
     model_run_hash: str = None,
 ) -> List[FileRecord]:
-    # warm start: year = start_year
-    # asim_no_usim: year = start_year
-    # normal: year = forecast_year
-
-    output_dir = workspace.get_asim_mutable_data_dir()
-
-    asim_zone_id_col = "TAZ"
-
-    # TODO: Generalize this or add it to settings.yaml
-    input_zone_id_col = settings.shared.skims.geoms_index_col
-
-    # TODO: only call _get_zones_geoms if blocks or colleges or schools
-    # don't already have a zone ID (e.g. TAZ). If they all do then we don't
-    # need zone geoms and we can simply instantiate the zones table from
-    # the unique zone ids in the blocks/persons/households tables.
-    zones = read_zone_geoms(
-        settings,
-        state.forecast_year,
-        asim_zone_id_col=asim_zone_id_col,
-        default_zone_id_col=input_zone_id_col,
-    )
-
-    # Determine the correct HDF5 file path (UrbanSim's merged input H5)
-    usim_h5_file_path = get_merged_usim_input_datastore_path(
-        settings, mutable_data_dir=workspace.get_usim_mutable_data_dir()
-    )
-
-    # Record the H5 datastore as an input to this preprocessor run
-    h5_input_record = provenance_tracker.record_input_file(
-        "activitysim_preprocessor",
-        usim_h5_file_path,
-        short_name="urbansim_h5",
-        model_run_id=model_run_hash,
-        description="UrbanSim H5 data store",
-    )
-
-    # Open the HDF5 store
-    store = pd.HDFStore(usim_h5_file_path, mode="a")
-
-    if "households" in store:
-        # For the merged input H5, tables are at the root, so no year prefix
-        table_prefix_yr = ""
-    elif "{0}/households".format(get_setting(settings, "run.start_year")) in store:
-        table_prefix_yr = "{0}/".format(get_setting(settings, "run.start_year"))
-    else:
-        raise ValueError(
-            "Check the formatting of the table names in the urbansim data store, current structure is "
-            f"not recognized: ${store.keys()}"
-        )
-
-    logger.info(
-        "Loading UrbanSim data from .h5, with year {0} and warmstart {1}".format(
-            state.forecast_year, warm_start
-        )
-    )
-    logger.info(
-        "Reading households table from {0} in table {1}".format(
-            store._path, os.path.join(table_prefix_yr, "households")
-        )
-    )
-    households = store[os.path.join(table_prefix_yr, "households")]
-    persons = store[os.path.join(table_prefix_yr, "persons")]
-    try:
-        blocks = store[os.path.join(table_prefix_yr, "blocks")]
-    except AttributeError:
-        blocks = store[os.path.join(str(int(table_prefix_yr) - 1), "blocks")]
-    jobs = store[os.path.join(table_prefix_yr, "jobs")]
-
-    # Save original columns before processing
-    blocks_cols_original = blocks.columns.tolist()
-
-    zone_type = settings.shared.skims.zone_type
-    input_zone_id_col = "{0}_zone_id".format(zone_type)
-    asim_zone_id_col = "TAZ"
-
-    blocks, persons, households, jobs, num_reassigned, blocks_to_taz_mapping_updated = (
-        process_raw_h5_files(
-            blocks, persons, households, jobs, settings, state.forecast_year,
-            asim_zone_id_col=input_zone_id_col  # Don't rename yet!
-        )
-    )
-
-    # Save blocks to H5 with the zone-type-specific column name (BEFORE rename)
-    if blocks_to_taz_mapping_updated:
-        blocks_cols = blocks.columns.tolist()
-        logger.info(f"Storing blocks table with {zone_type} zone IDs to disk in .h5 datastore!")
-        logger.debug(f"Blocks DataFrame columns: {blocks_cols}")
-        logger.debug(f"input_zone_id_col: {input_zone_id_col}")
-        store[os.path.join(table_prefix_yr, "blocks")] = blocks[blocks_cols]
-
-    if num_reassigned > 0:
-        jobs_cols = jobs.columns
-        # update data store with new block_id's to avoid triggering
-        # this process again in the future
-        logger.info(
-            "Storing jobs table with updated block IDs to disk " "in .h5 datastore!"
-        )
-        store[os.path.join(str(table_prefix_yr), "jobs")] = jobs[jobs_cols]
-
-    store.close()
-
-    # NOW rename for ActivitySim usage (after saving to H5)
-    if input_zone_id_col in blocks.columns and input_zone_id_col != asim_zone_id_col:
-        blocks.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
-
-    # Also need to rename in households, persons, and jobs since they reference blocks
-    if input_zone_id_col in households.columns:
-        households.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
-    if input_zone_id_col in persons.columns:
-        persons.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
-    if input_zone_id_col in jobs.columns:
-        jobs.rename(columns={input_zone_id_col: asim_zone_id_col}, inplace=True)
-
-    # create land use table
-    land_use = _create_land_use_table(
-        settings,
-        zones,
-        households,
-        persons,
-        jobs,
-        blocks,
-    )
-
-    households.to_csv(os.path.join(output_dir, "households.csv"))
-    logger.info("Saved households data to households.csv")
-    households_record = provenance_tracker.record_output_file_with_inputs(
-        "activitysim_preprocessor",
-        os.path.join(output_dir, "households.csv"),
-        input_records=[h5_input_record],
-        short_name="households_asim_in",
-        description="activitysim households input based on UrbanSim .h5",
-        model_run_id=model_run_hash,
-    )
-    persons.to_csv(os.path.join(output_dir, "persons.csv"))
-    logger.info("Saved persons data to persons.csv")
-    persons_record = provenance_tracker.record_output_file_with_inputs(
-        "activitysim_preprocessor",
-        os.path.join(output_dir, "persons.csv"),
-        input_records=[h5_input_record],
-        short_name="persons_asim_in",
-        description="activitysim persons input based on UrbanSim .h5",
-        model_run_id=model_run_hash,
-    )
-    land_use.to_csv(os.path.join(output_dir, "land_use.csv"))
-    logger.info("Saved land use data to land_use.csv")
-    land_use_record = provenance_tracker.record_output_file_with_inputs(
-        "activitysim_preprocessor",
-        os.path.join(output_dir, "land_use.csv"),
-        input_records=[h5_input_record],
-        short_name="land_use_asim_in",
-        description="activitysim land use input based on UrbanSim .h5",
-        model_run_id=model_run_hash,
-    )
-
-    output_records = []
-    if households_record:
-        output_records.append(households_record)
-    if persons_record:
-        output_records.append(persons_record)
-    if land_use_record:
-        output_records.append(land_use_record)
-
-    return output_records
-
-
-def _create_minimal_placeholder(table_name: str) -> pd.DataFrame:
     """
-    Create minimal placeholder data for ActivitySim tables when database query fails.
+    Create ActivitySim input data from UrbanSim H5 outputs.
 
     Args:
-        table_name: Name of the ActivitySim table
+        settings: PILATES settings dictionary
+        state: Workflow state
+        workspace: Workspace instance
+        provenance_tracker: For tracking provenance
+        model_run_hash: Current model run hash
 
     Returns:
-        DataFrame with minimal viable data structure
+        List of FileRecord objects for the created CSV files
     """
-    if table_name == "households":
-        return pd.DataFrame(
-            {
-                "household_id": [1],
-                "TAZ": ["1"],
-                "persons": [1],
-                "income": [50000],
-                "cars": [1],
-                "HHT": [1],
-                "workers": [1],
-            }
-        ).set_index("household_id")
+    logger.info("Creating ActivitySim input data from UrbanSim H5")
 
-    elif table_name == "persons":
-        return pd.DataFrame(
-            {
-                "person_id": [1],
-                "household_id": [1],
-                "TAZ": ["1"],
-                "age": [35],
-                "worker": [1],
-                "student": [0],
-                "ptype": [1],
-                "pemploy": [1],
-                "pstudent": [3],
-                "member_id": [1],
-                "workplace_taz": [-1],
-                "school_taz": [-1],
-                "home_x": [0.0],
-                "home_y": [0.0],
-            }
-        ).set_index("person_id")
+    output_dir = workspace.get_asim_mutable_data_dir()
+    os.makedirs(output_dir, exist_ok=True)
+    output_records = []
 
-    elif table_name == "land_use":
-        return pd.DataFrame(
-            {
-                "TAZ": ["1"],
-                "TOTPOP": [100],
-                "TOTHH": [50],
-                "TOTEMP": [75],
-                "TOTACRE": [10.0],
-                "area_type": [3],
-                "employment_density": [7.5],
-                "pop_density": [10.0],
-                "hh_density": [5.0],
-            }
-        ).set_index("TAZ")
+    # Load canonical zones using the workspace-aware function
+    zones = load_canonical_zones(settings, workspace)
+    asim_zone_id_col = "TAZ"
 
-    else:
-        # Generic placeholder
-        return pd.DataFrame({"placeholder": [1]})
+    # Get block to zone mapping
+    block_to_zone_map = get_block_to_zone_mapping(settings, state.year, workspace)
+
+    # Load UrbanSim data
+    usim_data_path = get_merged_usim_input_datastore_path(settings, workspace.get_asim_mutable_data_dir())
+    usim_data_in = provenance_tracker.record_input_file(
+        "activitysim_preprocessor",
+        usim_data_path,
+        short_name="usim_data",
+        description="UrbanSim H5 data",
+        model_run_id=model_run_hash,
+    )
+
+    # Read tables from UrbanSim H5
+    store, prefix = read_datastore(settings, state.start_year)
+    households = store[prefix + "/households"]
+    persons = store[prefix + "/persons"]
+    jobs = store[prefix + "/jobs"]
+    blocks = store[prefix + "/blocks"]
+
+    # Add zone id to blocks table
+    blocks[asim_zone_id_col] = blocks.index.map(block_to_zone_map)
+
+    # Update tables
+    households, unassigned_households = _update_households_table(
+        households, blocks, asim_zone_id_col
+    )
+    persons = _update_persons_table(
+        persons, households, unassigned_households, blocks, asim_zone_id_col
+    )
+    num_reassigned_jobs, jobs = _update_jobs_table(
+        jobs,
+        blocks,
+        settings,
+        settings.shared.geography.local_crs,
+        asim_zone_id_col,
+        workspace
+    )
+    geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
+        settings, state.year, blocks, households, jobs, asim_zone_id_col, workspace
+    )
+
+    # Create land use table
+    land_use = _create_land_use_table(
+        settings, zones, households, persons, jobs, blocks, asim_zone_id_col
+    )
+
+    # Write to CSV and record provenance
+    for df, name in [
+        (households, "households"),
+        (persons, "persons"),
+        (land_use, "land_use"),
+    ]:
+        output_csv_path = os.path.join(output_dir, f"{name}.csv")
+        df.to_csv(output_csv_path, index=True)
+        output_records.append(
+            provenance_tracker.record_output_file(
+                "activitysim_preprocessor",
+                output_csv_path,
+                short_name=f"{name}_asim_in",
+                description=f"ActivitySim {name} input from UrbanSim H5",
+                model_run_id=model_run_hash,
+            )
+        )
+
+    return output_records

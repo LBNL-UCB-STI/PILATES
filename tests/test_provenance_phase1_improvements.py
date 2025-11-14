@@ -8,13 +8,9 @@ Tests the three improvements added in Phase 1:
 3. validate_provenance_chain() method
 """
 
-import os
-import tempfile
 import pytest
-from pathlib import Path
 
 from pilates.utils.provenance import FileProvenanceTracker
-from workflow_state import WorkflowState
 
 
 class TestPhase1Improvements:
@@ -262,7 +258,7 @@ class TestPhase1Improvements:
             "has no source_file_paths" in warning for warning in issues["warnings"]
         ), "Should warn about output without source_file_paths"
 
-        print(f"   ✅ Detected missing source_file_paths")
+        print("   ✅ Detected missing source_file_paths")
         matching_warnings = [w for w in issues["warnings"] if "source_file_paths" in w]
         print(f"   📋 Warning: {matching_warnings[0]}")
 
@@ -298,7 +294,7 @@ class TestPhase1Improvements:
             "is not in file_records" in error for error in issues["errors"]
         ), "Should error on broken source_file_paths reference"
 
-        print(f"   ✅ Detected broken source reference")
+        print("   ✅ Detected broken source reference")
         print(f"   📋 Error: {issues['errors'][0]}")
 
     def test_validate_provenance_chain_detects_orphaned_files(self, tmp_path):
@@ -333,7 +329,7 @@ class TestPhase1Improvements:
             for warning in issues["warnings"]
         ), "Should warn about orphaned file"
 
-        print(f"   ✅ Detected orphaned file")
+        print("   ✅ Detected orphaned file")
         matching_warnings = [w for w in issues["warnings"] if "orphan" in w.lower()]
         print(f"   📋 Warning: {matching_warnings[0]}")
 

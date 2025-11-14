@@ -40,7 +40,7 @@ def verify_zone_consistency(config_path="settings.yaml"):
         print(f"First 5 canonical GEOIDs: {pilates_canonical_order[:5]}")
     except Exception as e:
         print("Error: Could not generate canonical zone order from geoid_to_zone_map.")
-        print(f"This likely means the HDF5 datastore is missing or inaccessible.")
+        print("This likely means the HDF5 datastore is missing or inaccessible.")
         print(f"Details: {e}")
         return
 
@@ -71,7 +71,7 @@ def verify_zone_consistency(config_path="settings.yaml"):
         print(f"First 5 shapefile GEOIDs: {beam_shapefile_order[:5]}")
 
     except Exception as e:
-        print(f"Error: Could not load or parse BEAM shapefile.")
+        print("Error: Could not load or parse BEAM shapefile.")
         print(f"Details: {e}")
         return
 
@@ -79,7 +79,7 @@ def verify_zone_consistency(config_path="settings.yaml"):
     print("\n--- Comparison Results ---")
     
     if len(pilates_canonical_order) != len(beam_shapefile_order):
-        print(f"FAIL: Mismatch in number of zones!")
+        print("FAIL: Mismatch in number of zones!")
         print(f"  - Pilates Canonical Order: {len(pilates_canonical_order)} zones")
         print(f"  - BEAM Shapefile Order: {len(beam_shapefile_order)} zones")
     else:

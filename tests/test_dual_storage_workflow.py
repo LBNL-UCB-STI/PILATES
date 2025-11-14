@@ -17,7 +17,7 @@ import shutil
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict
 
 # Import PILATES modules
 import sys
@@ -29,11 +29,8 @@ from pilates.utils.database_upload import create_database_manager
 from pilates.activitysim.preprocessor import (
     create_asim_data_from_h5,
     create_asim_data_from_database,
-    _clean_activitysim_data_for_csv,
 )
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.workspace import Workspace
 from pilates.config.models import PilatesConfig, load_config
 
 
@@ -506,7 +503,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
             if differences:
                 print(f"     ⚠️  Column differences: {differences}")
             else:
-                print(f"     ✅ All common columns match perfectly")
+                print("     ✅ All common columns match perfectly")
 
             # Overall assessment
             perfect_match = len(differences) == 0
@@ -531,7 +528,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
             if result.get("status") == "perfect_match"
         ]
 
-        print(f"\n📈 Comparison Summary:")
+        print("\n📈 Comparison Summary:")
         print(f"   Perfect matches: {len(perfect_tables)}/{len(comparison_results)}")
         print(f"   Tables with perfect matches: {perfect_tables}")
 

@@ -7,14 +7,10 @@ Tests the two improvements added in Phase 2:
 6. ProvenanceQuery API
 """
 
-import os
-import tempfile
 import pytest
-from pathlib import Path
 
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.provenance_queries import ProvenanceQuery
-from workflow_state import WorkflowState
 
 
 class TestPhase2Improvements:

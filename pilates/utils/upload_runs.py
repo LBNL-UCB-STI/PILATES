@@ -11,7 +11,6 @@ import glob
 import logging
 import os
 import sys
-import yaml
 from pathlib import Path
 
 # Add the project root to the Python path

@@ -1,5 +1,4 @@
 import logging
-import multiprocessing
 import os
 from typing import Tuple, Optional
 
@@ -10,7 +9,6 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 

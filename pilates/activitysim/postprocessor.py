@@ -1,6 +1,4 @@
-import gzip
 import logging
-import shutil
 
 import pandas as pd
 import zipfile
@@ -9,11 +7,10 @@ from typing import Tuple, Optional
 
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
-from pilates.utils.io import read_datastore, locate_asim_file
+from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 

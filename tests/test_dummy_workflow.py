@@ -87,12 +87,10 @@ from typing import Tuple
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.runner import GenericRunner
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.model import Model
 from pilates.generic.records import (
     H5FileRecord,
     H5TableRecord,
     FileRecord,
-    ModelRunInfo,
     RecordStore,
 )
 from pilates.utils.provenance import OpenLineageTracker
@@ -1109,7 +1107,7 @@ class TestDummyWorkflow:
         ).fetchone()[0]
         assert (
             file_record_count > 0
-        ), f"No file records found in database (expected records from CSV and H5 files)"
+        ), "No file records found in database (expected records from CSV and H5 files)"
 
         # Check that we have runs table entry
         run_count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]

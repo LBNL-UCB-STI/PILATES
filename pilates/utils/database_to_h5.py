@@ -14,7 +14,7 @@ import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, Optional
 
 import h5py
 import pandas as pd
