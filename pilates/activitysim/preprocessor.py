@@ -2493,7 +2493,7 @@ def _create_land_use_table(
             ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
         ]
         .sum()
-    )
+    ).fillna(0)
     persons_agg["TOTPOP"] = persons.groupby(asim_zone_id_col).size()
 
     # --- Consolidated Households Aggregation ---
@@ -2509,7 +2509,7 @@ def _create_land_use_table(
             ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
         ]
         .sum()
-    )
+    ).fillna(0)
     households_agg["TOTHH"] = households.groupby(asim_zone_id_col).size()
     households_agg.rename(columns={"workers": "EMPRES"}, inplace=True)
 
@@ -2527,7 +2527,7 @@ def _create_land_use_table(
             ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
         ]
         .sum()
-    )
+    ).fillna(0)
     jobs_agg["TOTEMP"] = jobs.groupby(asim_zone_id_col).size()
 
     # Calculate OTHEMPN from the aggregated sums
@@ -2555,7 +2555,7 @@ def _create_land_use_table(
 
     # --- Join all aggregated data to the zones table ---
     logger.info("Joining aggregated data to zones.")
-    zones = zones.drop(columns=['geometry']).join([persons_agg, households_agg, jobs_agg]).fillna(0)
+    zones = zones.join([persons_agg, households_agg, jobs_agg])
 
     # --- DIAGNOSTIC: Check result after join ---
     logger.info("=== POST-JOIN DIAGNOSTICS ===")
