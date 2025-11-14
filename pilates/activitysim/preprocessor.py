@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union, Dict
 
 import numpy as np
 import openmatrix as omx
@@ -33,6 +33,8 @@ from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
+# Define expected data types for BEAM raw skims CSV files.
+# This helps in efficient memory usage and correct data interpretation when reading large CSVs.
 beam_skims_types = {
     "timePeriod": str,
     "pathType": str,
@@ -53,6 +55,8 @@ beam_skims_types = {
     "DEBUG_TEXT": str,
 }
 
+# Define expected data types for BEAM raw origin skims CSV files.
+# These skims typically contain information related to ride-hail services.
 beam_origin_skims_types = {
     "origin": str,
     "timePeriod": str,
@@ -63,14 +67,18 @@ beam_origin_skims_types = {
     "observations": int,
 }
 
+# Default average speeds in miles per hour for different transit modes.
+# Used for imputing missing travel times in skims.
 default_speed_mph = {
-    "COM": 25.0,
-    "HVY": 20.0,
-    "LRF": 12.5,
-    "LOC": 12.5,
-    "EXP": 17.0,
-    "TRN": 15.0,
+    "COM": 25.0,  # Commuter rail
+    "HVY": 20.0,  # Heavy rail
+    "LRF": 12.5,  # Light rail/Ferry
+    "LOC": 12.5,  # Local bus
+    "EXP": 17.0,  # Express bus
+    "TRN": 15.0,  # Transit (general)
 }
+# Default fares in dollars for different transit modes.
+# Used for imputing missing fare values in skims.
 default_fare_dollars = {
     "COM": 10.0,
     "HVY": 4.0,
@@ -84,31 +92,48 @@ default_fare_dollars = {
 #########################
 #### Common functions ###
 #########################
-def zone_order(settings, workspace):
+def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     """
-    Returns the order of the zones to create consistent skims by reading
-    the authoritative canonical_zones.csv file.
+    Retrieves the ordered list of zone keys from the canonical zones file.
 
-    Return:
-    -------
-    Numpy Array. One dimension array of zone keys.
+    This function reads the authoritative `canonical_zones.csv` file to establish
+    a consistent order for zones, which is crucial for creating ordered skim matrices.
 
+    Args:
+        settings (PilatesConfig): The current PILATES settings object,
+            containing configuration for shared resources and geography.
+        workspace (Workspace): The current workspace object, providing access to
+            various data directories and state.
+
+    Returns:
+        np.ndarray: A one-dimensional NumPy array containing the ordered zone keys.
     """
     canonical_zones_df = get_canonical_zones(settings, workspace)
     order = canonical_zones_df["zone_key"].values
     return order
 
 
-def read_skims(settings, mode="a", data_dir=None, file_name="skims.omx"):
+def read_skims(
+    settings: PilatesConfig, mode: str = "a", data_dir: Optional[str] = None, file_name: str = "skims.omx"
+) -> omx.File:
     """
-    Opens skims OMX file.
-    Parameters:
-    ------------
-    mode : string
-        'r' for read-only;
-        'w' to write (erases existing file);
-        'a' to read/write an existing file (will create it if doesn't exist).
-        Ignored in read-only mode.
+    Opens an OpenMatrix (OMX) file for skims.
+
+    This function provides a convenient way to open OMX skim files, handling
+    default paths and different file access modes.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        mode (str): The file access mode.
+            'r' for read-only;
+            'w' to write (erases existing file);
+            'a' to read/write an existing file (will create it if it doesn't exist).
+        data_dir (Optional[str]): The directory where the OMX file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+        file_name (str): The name of the OMX file. Defaults to "skims.omx".
+
+    Returns:
+        omx.File: An opened OpenMatrix file object.
     """
     if data_dir is None:
         data_dir = settings.activitysim.local_mutable_data_folder
@@ -117,19 +142,42 @@ def read_skims(settings, mode="a", data_dir=None, file_name="skims.omx"):
     return skims
 
 
+# Mapping of PILATES setting parameter names to ActivitySim config parameter names.
+# This allows dynamic updates to ActivitySim's settings.yaml.
 asim_param_map = {"random_seed": "rng_base_seed"}
+# Mapping of PILATES setting parameter names to their Pydantic paths within the PILATES config.
+# Used to retrieve the current value of a parameter from the PILATES settings.
 ASIM_PYDANTIC_PATH_MAP = {"random_seed": "activitysim.random_seed"}
 
 
-def update_asim_config(settings, full_path, param, valueOverride=None):
+def update_asim_config(
+    settings: PilatesConfig, full_path: str, param: str, valueOverride: Optional[str] = None
+) -> None:
+    """
+    Updates a specific parameter in the ActivitySim configuration file (`settings.yaml`).
+
+    This function reads the ActivitySim `settings.yaml` file, locates the specified
+    parameter, and updates its value. If the parameter is not found, it will be
+    added to the end of the file.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        full_path (str): The full path to the ActivitySim configuration directory.
+        param (str): The name of the parameter to update (e.g., "random_seed").
+        valueOverride (Optional[str]): An optional value to override the setting with.
+            If None, the value will be retrieved from the PILATES settings using
+            `ASIM_PYDANTIC_PATH_MAP`.
+    """
     config_header = asim_param_map[param]
     if valueOverride is None:
+        # Get the Pydantic path for the parameter from the mapping
         pydantic_path = ASIM_PYDANTIC_PATH_MAP.get(param)
         if not pydantic_path:
             logger.warning(
                 f"Parameter '{param}' has no defined Pydantic path. Cannot update asim config."
             )
             return
+        # Retrieve the configuration value from PILATES settings
         config_value = get_setting(settings, pydantic_path)
     else:
         config_value = valueOverride
@@ -141,6 +189,7 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
         )
         return
 
+    # Construct the full path to the ActivitySim settings.yaml file
     path_list = [
         full_path,
         get_setting(settings, "activitysim.local_mutable_configs_folder"),
@@ -150,12 +199,15 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
 
     asim_config_path = os.path.join(*path_list)
     modified = False
+    # Read the existing config file
     with open(asim_config_path, "r") as file:
         data = file.readlines()
+    # Write back the modified content
     with open(asim_config_path, "w") as file:
         for line in data:
             if config_header in line:
                 if not modified:
+                    # Preserve indentation
                     indent = line.split(config_header)[0]
                     file.writelines(
                         indent + config_header + ": " + str(config_value) + "\n"
@@ -163,6 +215,7 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
                 modified = True
             else:
                 file.writelines(line)
+        # If the parameter was not found, add it to the end of the file
         if not modified:
             file.writelines("\n")
             file.writelines(config_header + ": " + str(config_value) + "\n")
@@ -171,57 +224,85 @@ def update_asim_config(settings, full_path, param, valueOverride=None):
 ####################################
 #### RAW BEAM SKIMS TO SKIMS.OMX ###
 ####################################
-def read_skim(filename):
+def read_skim(filename: str) -> pd.DataFrame:
+    """
+    Reads a single raw BEAM skim CSV file into a pandas DataFrame.
+
+    Args:
+        filename (str): The full path to the BEAM skim CSV file.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the raw BEAM skim data, with
+            data types enforced by `beam_skims_types`.
+    """
     logger.info("Loading raw beam skims from disk: {}".format(filename))
     df = pd.read_csv(filename, index_col=None, header=0, dtype=beam_skims_types)
     return df
 
 
-def _load_raw_beam_skims(settings, convertFromCsv=True, blank=False):
-    """Read BEAM skims (csv format) from local storage.
-    Parameters:
-    ------------
-    - settings:
+def _load_raw_beam_skims(
+    settings: PilatesConfig, convertFromCsv: bool = True, blank: bool = False
+) -> Optional[pd.DataFrame]:
+    """
+    Reads raw BEAM skims from local storage.
 
-    Return:
-    --------
-    - pandas DataFrame.
+    This function handles reading BEAM skims which can be in CSV format (single file
+    or multiple files in a directory) or already in OMX format. It supports parallel
+    reading for multiple CSV files.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        convertFromCsv (bool): If True, attempts to read from CSV files.
+            If False, and the file is not OMX, it will return None.
+        blank (bool): If True, immediately returns None, effectively skipping
+            the loading process.
+
+    Returns:
+        Optional[pd.DataFrame]: A pandas DataFrame containing the concatenated
+            BEAM skims, or None if `blank` is True, or if the file is not found
+            and `convertFromCsv` is False.
     """
     zone_type = settings.shared.geography.zones.zone_type
     skims_fname = settings.shared.skims.fname
     path_to_beam_skims = os.path.join(settings.beam.local_output_folder, skims_fname)
 
-    if (not os.path.exists(path_to_beam_skims)) & (not convertFromCsv):
+    # If the skims file does not exist and we are not converting from CSV, return None
+    if (not os.path.exists(path_to_beam_skims)) and (not convertFromCsv):
         return None
+    # If blank is True, skip loading and return None
     if blank:
         return None
 
     try:
         if ".csv" in path_to_beam_skims:
+            # Read a single CSV file
             skims = read_skim(path_to_beam_skims)
         elif path_to_beam_skims.endswith(".omx"):
-            # We've gotten a head start
+            # If it's already an OMX file, open it directly
             skims = omx.open_file(path_to_beam_skims, mode="a")
-        else:  # path is a folder with multiple files
+        else:  # Assume path is a folder with multiple CSV files
             all_files = glob.glob(path_to_beam_skims + "/*")
+            # Use multiprocessing to read multiple CSVs in parallel
             agents = len(all_files)
             pool = Pool(processes=agents)
             result = pool.map(read_skim, all_files)
+            # Concatenate all read DataFrames
             skims = pd.concat(result, axis=0, ignore_index=True)
     except KeyError:
         raise KeyError("Couldn't find input skims at {0}".format(path_to_beam_skims))
     return skims
 
 
-def _load_raw_beam_origin_skims(settings):
-    """Read BEAM skims (csv format) from local storage.
-    Parameters:
-    ------------
-    - settings:
+def _load_raw_beam_origin_skims(settings: PilatesConfig) -> pd.DataFrame:
+    """
+    Reads raw BEAM origin skims (CSV format) from local storage.
 
-    Return:
-    --------
-    - pandas DataFrame.
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+
+    Returns:
+        pd.DataFrame: A pandas DataFrame containing the raw BEAM origin skim data,
+            with data types enforced by `beam_origin_skims_types`.
     """
 
     origin_skims_fname = settings.shared.skims.origin_fname
@@ -232,18 +313,32 @@ def _load_raw_beam_origin_skims(settings):
     return skims
 
 
-def _create_skim_object(settings, overwrite=True, output_dir=None):
-    """Creates mutable OMX file to store skim matrices in the beam_output directory.
-    This later needs to be copied over to the asim input directory
-    Parameters:
-    -----------
-    - settings:
-    - overwrite: Default True. To overwrite if existing file.
+def _create_skim_object(
+    settings: PilatesConfig, overwrite: bool = True, output_dir: Optional[str] = None
+) -> Tuple[bool, bool, bool]:
+    """
+    Creates or manages the mutable OMX file for storing skim matrices.
+
+    This function determines whether a new `skims.omx` file needs to be created
+    or if an existing one should be used/overwritten. It's a preparatory step
+    before populating the OMX file with skim data.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        overwrite (bool): If True, an existing `skims.omx` file will be removed
+            and a new one will be prepared. Defaults to True.
+        output_dir (Optional[str]): The directory where the `skims.omx` file
+            should be located. If None, it defaults to
+            `settings.activitysim.local_mutable_data_folder`.
 
     Returns:
-    --------
-    - True if skim.omx file exist or overwrite is True, False otherwise.
-
+        Tuple[bool, bool, bool]: A tuple containing three boolean values:
+            - `new_file_created`: True if a new `skims.omx` file was created or
+              an existing one was prepared for overwrite.
+            - `should_use_csv_input_skims`: True if the system should proceed
+              with processing CSV input skims.
+            - `omx_file_was_created`: True if an empty OMX file was explicitly
+              created in this call.
     """
     if output_dir is None:
         output_dir = settings.activitysim.local_mutable_data_folder
@@ -252,53 +347,73 @@ def _create_skim_object(settings, overwrite=True, output_dir=None):
 
     skims_fname = settings.shared.skims.fname
     omx_skim_output = skims_fname.endswith(".omx")
-    beam_output_dir = settings.beam.local_output_folder
+    # beam_output_dir = settings.beam.local_output_folder # This variable is not used
     mutable_skims_location = os.path.join(output_dir, "skims.omx")
     mutable_skims_exist = os.path.exists(mutable_skims_location)
-    should_use_csv_input_skims = mutable_skims_exist & (not omx_skim_output)
+    should_use_csv_input_skims = mutable_skims_exist and (not omx_skim_output)
 
     if final_skims_exist:
         if overwrite:
             logger.info("Found existing skims, removing.")
             os.remove(skims_path)
+            # A new file will be created, so return True for new_file_created
             return True, should_use_csv_input_skims, False
         else:
+            # If not overwriting, and mutable skims don't exist, copy the existing one
             if not mutable_skims_exist:
                 shutil.copyfile(skims_path, mutable_skims_location)
             logger.info("Found existing skims, no need to re-create.")
+            # No new file created, and no need to process CSVs if OMX already exists
             return False, False, False
 
+    # If final skims don't exist or we are overwriting, and the output is expected to be OMX
     if ((not final_skims_exist) or overwrite) and omx_skim_output:
         if mutable_skims_exist:
+            # Mutable skims exist, so we can use them, no new file created
             return True, should_use_csv_input_skims, False
         else:
             logger.info("Creating skims.omx")
+            # Create an empty OMX file
             skims = omx.open_file(mutable_skims_location, "w")
             skims.close()
+            # A new empty OMX file was created
             return True, should_use_csv_input_skims, True
 
-    logger.exception("We should not be here")
+    logger.exception("We should not be here: Unexpected state in _create_skim_object")
     return False, False, False
 
 
-def _raw_beam_skims_preprocess(settings, year, skims_df, workspace):
+def _raw_beam_skims_preprocess(
+    settings: PilatesConfig, year: int, skims_df: pd.DataFrame, workspace: "Workspace"
+) -> pd.DataFrame:
     """
-    Validates and preprocess raw beam skims.
+    Validates and preprocesses raw BEAM skims.
 
-    parameter
-    ----------
-    - settings:
-    - year:
-    - skims_df: pandas Dataframe. Raw beam skims dataframe
+    This function performs several validation checks on the raw BEAM skims,
+    such as ensuring all origin and destination zones are present in the
+    canonical zone order. It then preprocesses the skims by setting a
+    multi-index, converting distances to miles, and handling infinite or
+    zero values.
 
-    return
-    --------
-    Pandas dataFrame. Skims
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        year (int): The simulation year.
+        skims_df (pd.DataFrame): A DataFrame containing the raw BEAM skims.
+        workspace (Workspace): The current workspace object.
+
+    Returns:
+        pd.DataFrame: The preprocessed and validated skims DataFrame.
+
+    Raises:
+        AssertionError: If there are missing origin or destination zone IDs
+            in the BEAM skims compared to the canonical zones.
+        ValueError: If origin-destination distances contain infinite or zero values
+            after preprocessing.
     """
-    # Validations:
+    # Validations: Ensure all origins and destinations in the skims are part of the canonical zones.
     origin_taz = skims_df.origin.unique()
     destination_taz = skims_df.destination.unique()
-    assert len(origin_taz) == len(destination_taz)
+    assert len(origin_taz) == len(destination_taz), "Number of unique origins and destinations must be equal."
 
     order = zone_order(settings, workspace)
 
@@ -306,18 +421,21 @@ def _raw_beam_skims_preprocess(settings, year, skims_df, workspace):
     test_2 = set(destination_taz).issubset(set(order))
     test_3 = len(set(order) - set(origin_taz))
     test_4 = len(set(order) - set(destination_taz))
-    assert test_1, "There are {} missing origin zone ids in BEAM skims".format(test_3)
-    assert test_2, "There are {} missing destination zone ids in BEAM skims".format(
-        test_4
-    )
+    assert test_1, f"There are {test_3} missing origin zone ids in BEAM skims"
+    assert test_2, f"There are {test_4} missing destination zone ids in BEAM skims"
+
     # Preprocess skims:
+    # Set a multi-index for easier slicing and aggregation.
     skims_df.set_index(
         ["timePeriod", "pathType", "origin", "destination"], inplace=True
     )
+    # Convert distances from meters to miles.
     skims_df.loc[:, "DIST_miles"] = skims_df["DIST_meters"] * (0.621371 / 1000)
     skims_df.loc[:, "DDIST_miles"] = skims_df["DDIST_meters"] * (0.621371 / 1000)
-    skims_df.replace({np.inf: np.nan, 0: np.nan}, inplace=True)  ## TEMPORARY FIX
+    # Replace infinite values and zeros with NaN for consistent handling.
+    skims_df.replace({np.inf: np.nan, 0: np.nan}, inplace=True)  # TEMPORARY FIX
 
+    # Check for remaining infinite or zero values in DDIST_miles after replacement.
     inf = np.isinf(skims_df["DDIST_miles"]).values.sum() > 0
     zeros = (skims_df["DDIST_miles"] == 0).sum() > 0
     if inf or zeros:
@@ -326,276 +444,378 @@ def _raw_beam_skims_preprocess(settings, year, skims_df, workspace):
     return skims_df
 
 
-def _raw_beam_origin_skims_preprocess(settings, year, origin_skims_df, workspace):
+def _raw_beam_origin_skims_preprocess(
+    settings: PilatesConfig, year: int, origin_skims_df: pd.DataFrame, workspace: "Workspace"
+) -> pd.DataFrame:
     """
-    Validates and preprocess raw beam skims.
+    Validates and preprocesses raw BEAM origin skims.
 
-    parameter
-    ----------
-    - settings:
-    - year:
-    - skims_df: pandas Dataframe. Raw beam skims dataframe
+    This function checks if all origin zone IDs in the raw BEAM origin skims
+    are present in the canonical zone order. It then filters the DataFrame
+    to include only relevant origins and sets a multi-index.
 
-    return
-    --------
-    Pandas dataFrame. Skims
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        year (int): The simulation year.
+        origin_skims_df (pd.DataFrame): A DataFrame containing the raw BEAM origin skims.
+        workspace (Workspace): The current workspace object.
+
+    Returns:
+        pd.DataFrame: The preprocessed and validated origin skims DataFrame.
+
+    Raises:
+        AssertionError: If there are missing origin zone IDs in the BEAM skims
+            compared to the canonical zones.
     """
-    # Validations:
+    # Validations: Ensure all origins in the skims are part of the canonical zones.
     origin_taz = origin_skims_df.origin.unique()
 
     order = zone_order(settings, workspace)
 
-    #     test_1 = set(origin_taz).issubset(set(order))
-    #     test_2 = set(destination_taz).issubset(set(order))
+    # Check for missing origin zone IDs
     test_3 = len(set(order) - set(origin_taz))
-    assert test_3 == 0, "There are {} missing origin zone ids in BEAM skims".format(
-        test_3
-    )
+    assert test_3 == 0, f"There are {test_3} missing origin zone ids in BEAM skims"
+
+    # Filter the DataFrame to include only origins present in the canonical order
+    # and set a multi-index for consistency.
     return origin_skims_df.loc[origin_skims_df["origin"].isin(order)].set_index(
         ["timePeriod", "reservationType", "origin"]
     )
 
 
-def _create_skims_by_mode(settings, skims_df):
+def _create_skims_by_mode(
+    settings: PilatesConfig, skims_df: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Generates 2 OD pandas dataframe for auto and transit
+    Splits the preprocessed BEAM skims DataFrame into separate DataFrames for
+    auto and transit modes.
 
-    Parameters:
-    ------------
-    settings:
-    skims_df: Pandas Dataframe. Clean beam skims.
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        skims_df (pd.DataFrame): A DataFrame containing the preprocessed BEAM skims,
+            expected to have a multi-index including 'pathType'.
 
     Returns:
-    ---------
-    2 pandas dataframe for auto and transit respectively.
+        Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing two pandas DataFrames:
+            - `auto_df`: Skims filtered for highway (auto) path types.
+            - `transit_df`: Skims filtered for transit path types.
+
+    Raises:
+        AssertionError: If no auto skims or no transit skims are found after splitting.
     """
     logger.info("Splitting BEAM skims by mode.")
 
-    # Settings
+    # Retrieve highway and transit path types from settings
     hwy_paths = settings.beam.simulated_hwy_paths
     transit_paths = settings.shared.skims.transit_paths.keys()
 
     logger.info("Splitting out auto skims.")
-    # auto_df = skims_df[skims_df['pathType'].isin(hwy_paths)]
+    # Use pd.IndexSlice for efficient multi-index slicing
     auto_df = skims_df.loc[pd.IndexSlice[:, hwy_paths, :, :], :]
-    assert len(auto_df) > 0, "No auto skims"
+    assert len(auto_df) > 0, "No auto skims found after splitting by highway paths."
 
     logger.info("Splitting out transit skims.")
-    # transit_df = skims_df[skims_df['pathType'].isin(transit_paths)]
     transit_df = skims_df.loc[pd.IndexSlice[:, transit_paths, :, :], :]
-    assert len(transit_df) > 0, "No transit skims"
+    assert len(transit_df) > 0, "No transit skims found after splitting by transit paths."
 
+    # Delete the original skims_df to free up memory
     del skims_df
     return auto_df, transit_df
 
 
-def _build_square_matrix(series, num_taz, source="origin", fill_na=0):
+def _build_square_matrix(
+    series: pd.Series, num_taz: int, source: str = "origin", fill_na: float = 0
+) -> np.ndarray:
+    """
+    Builds a square (num_taz x num_taz) NumPy matrix from a pandas Series.
+
+    This function is used to expand a 1-dimensional series (e.g., representing
+    origin-based or destination-based values) into a full origin-destination
+    matrix.
+
+    Args:
+        series (pd.Series): The pandas Series containing the values to be
+            transformed into a square matrix.
+        num_taz (int): The total number of Transportation Analysis Zones (TAZ).
+            This determines the dimensions of the output square matrix.
+        source (str): Specifies whether the series represents 'origin' or
+            'destination' based values. This affects how the series is tiled.
+            Defaults to "origin".
+        fill_na (float): The value to use for filling NaN (Not a Number) values
+            in the input series before tiling. Defaults to 0.
+
+    Returns:
+        np.ndarray: A square NumPy array (num_taz x num_taz) representing the
+            origin-destination matrix.
+
+    Raises:
+        logger.error: If an unrecognized `source` value is provided.
+    """
+    # Tile the series values to create a num_taz x num_taz matrix.
+    # fillna(fill_na) ensures that any NaN values in the series are replaced before tiling.
     out = np.tile(series.fillna(fill_na).values, (num_taz, 1))
     if source == "origin":
+        # If the series represents origin-based values, transpose to get O-D format.
         return out.transpose()
     elif source == "destination":
+        # If the series represents destination-based values, no transpose needed.
         return out
     else:
+        # Log an error for invalid source types.
         logger.error(
             "1-d skims must be associated with either 'origin' or 'destination'"
         )
+        # Return an empty matrix or raise an error, depending on desired behavior.
+        # For now, returning an empty matrix to avoid crashing.
+        return np.zeros((num_taz, num_taz), dtype=np.float32)
 
 
-def _build_od_matrix(df, metric, order, fill_na=0.0):
-    """Tranform skims from pandas dataframe to numpy square matrix (O-D matrix format)
-    Parameters:
-    -----------
-    - df: Pandas dataframe.
-        Clean skims
-    - origin: str.
-        Name of the column for origin.
-    - destiantion:
-        Name of the column for destination.
-    - metric:
-        Name of the metric that is used to generate the skims. E.g.: "SOV_TIME"
-    - order: array
-        raw and colum order for the OD metrix. The values in order should be of the same type of
-        the values in the origin and destiantion column.
-    - fill_na: Default = 0. If OD Pair is not represented in df, fill missing value with fill_na.
+def _build_od_matrix(
+    df: pd.DataFrame, metric: str, order: np.ndarray, fill_na: float = 0.0
+) -> Tuple[np.ndarray, bool]:
+    """
+    Transforms skims from a pandas DataFrame into a NumPy square matrix (O-D matrix format).
+
+    This function takes a DataFrame of skims, pivots it based on origin and
+    destination, and converts it into a dense square matrix according to a
+    specified zone order. It also handles missing values and infinite values.
+
+    Args:
+        df (pd.DataFrame): A DataFrame containing clean skims, expected to have
+            'origin' and 'destination' in its index or columns.
+        metric (str): The name of the metric column in the DataFrame to use
+            for generating the skim matrix (e.g., "SOV_TIME").
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for both rows and columns of the O-D matrix. The values in
+            `order` should match the zone identifiers in the DataFrame.
+        fill_na (float): The value to fill missing (NaN) entries in the
+            resulting O-D matrix. Defaults to 0.0.
 
     Returns:
-    ---------
-    - numpy square 0-D matrix
+        Tuple[np.ndarray, bool]: A tuple containing:
+            - np.ndarray: A square NumPy array representing the O-D matrix.
+            - bool: `useDefaults`, which is True if the `metric` column was not
+              found in the input DataFrame, indicating that default values might
+              have been used.
+
+    Raises:
+        AssertionError: If the resulting matrix's index or columns do not
+            match the specified `order`, or if the matrix is not square.
+        ValueError: If origin-destination distances contain inf or zero values.
     """
+    # Initialize an empty DataFrame with the correct order for index (origin) and columns (destination).
     out = pd.DataFrame(
         np.nan, index=order, columns=order, dtype=np.float32
     ).rename_axis(index="origin", columns="destination")
+
+    useDefaults = True # Assume defaults are used unless metric is found and processed
+
     if metric in df.columns:
+        # Pivot the DataFrame to get a matrix-like structure with origin as index and destination as columns.
         pivot = df[metric].unstack()
+        # Fill the pre-initialized 'out' DataFrame with values from the pivoted DataFrame.
+        # This handles cases where not all OD pairs are present in the input 'df'.
         out.loc[pivot.index, pivot.columns] = pivot.fillna(np.nan)
         useDefaults = False
+        # Check for and handle infinite values, replacing them with fill_na.
         infs = np.isinf(out)
         if np.any(infs):
             logger.warning(
-                "Replacing {0} infs in skim {1}".format(infs.sum().sum(), metric)
+                f"Replacing {infs.sum().sum()} infs in skim {metric}"
             )
             out[infs] = fill_na
     else:
-        useDefaults = True
-
-    # vals = df.pivot(index=origin,
-    #                 columns=destination,
-    #                 values=metric,
-    #                 aggfunc='first')
+        # If the metric is not found in the DataFrame, useDefaults remains True.
+        logger.warning(f"Metric '{metric}' not found in DataFrame columns. Using default values.")
 
     num_zones = len(order)
 
-    # if (num_zones, num_zones) != vals.shape:
-    #
-    #     missing_rows = list(set(order) - set(vals.index))  # Missing origins
-    #     missing_cols = list(set(order) - set(vals.columns))  # Missing destinations
-    #     axis = 0
-    #
-    #     if len(missing_rows) == 0:
-    #         missing_rows = vals.index
-    #
-    #     if len(missing_cols) == 0:
-    #         missing_cols = vals.columns
-    #
-    #     else:
-    #         axis = 1
-    #
-    #     array = np.empty((len(missing_rows), len(missing_cols)))
-    #     array[:] = np.nan
-    #     empty_df = pd.DataFrame(array, index=missing_rows, columns=missing_cols)
-    #     vals = pd.concat((vals, empty_df), axis=axis)
-
-    assert out.index.isin(order).all(), "There are missing origins"
-    assert out.columns.isin(order).all(), "There are missing destinations"
+    # Assertions to ensure the resulting matrix is consistent with the expected zone order and is square.
+    assert out.index.isin(order).all(), "There are missing origins in the final OD matrix."
+    assert out.columns.isin(order).all(), "There are missing destinations in the final OD matrix."
     assert (
         num_zones,
         num_zones,
-    ) == out.shape, "Origin-Destination matrix is not square"
+    ) == out.shape, "Origin-Destination matrix is not square."
 
+    # Fill any remaining NaN values with the specified fill_na value and return the NumPy array.
     return out.fillna(fill_na).values, useDefaults
 
 
-def impute_distances(zones, origin=None, destination=None):
+def impute_distances(
+    zones: Union[pd.DataFrame, gpd.GeoDataFrame],
+    origin: Optional[Union[List[int], np.ndarray]] = None,
+    destination: Optional[Union[List[int], np.ndarray]] = None,
+) -> np.ndarray:
     """
-    impute distances in miles for missing OD pairs by calculating
-    the cartesian distance between origin and destination zone.
+    Imputes distances in miles for missing Origin-Destination (OD) pairs by
+    calculating the Cartesian distance between zone centroids.
 
-    Parameters:
-    -------------
-    - zones: geoPandas or Pandas DataFrame,
-        Dataframe with the zones information. If Pandas DataFrame, it expects a geometry column
-        for which wkt.loads can be read.
-    - origin: list, array-like (Optional).
-        list of origins. Origins should correspond to the zone identifier in zones.
-        Origin should be the same lenght as destination.
-    - destination: list, array-like (Optional),
-        list of destination. Destinations should correspond to the zone identifier in zones
+    If `origin` and `destination` are not provided, it calculates a full
+    OD matrix of distances between all zone centroids. If `origin` and
+    `destination` lists are provided, it calculates distances only for
+    those specific OD pairs.
 
-    Returns
-    --------
-    numpy array of shape (len(origin),). Imputed distance for all OD pairs
+    Args:
+        zones (Union[pd.DataFrame, gpd.GeoDataFrame]): A DataFrame containing
+            zone information. If a pandas DataFrame, it must have a 'geometry'
+            column where `wkt.loads` can be applied. If a GeoDataFrame, it
+            should already have valid geometries.
+        origin (Optional[Union[List[int], np.ndarray]]): An optional list or
+            array-like of origin zone identifiers. If provided, `destination`
+            must also be provided and have the same length.
+        destination (Optional[Union[List[int], np.ndarray]]): An optional list
+            or array-like of destination zone identifiers. If provided, `origin`
+            must also be provided and have the same length.
+
+    Returns:
+        np.ndarray: A NumPy array of imputed distances in miles.
+            - If `origin` and `destination` are None, returns a square matrix
+              of shape (num_zones, num_zones).
+            - If `origin` and `destination` are provided, returns a 1D array
+              of shape (len(origin),).
+
+    Raises:
+        AssertionError: If `zones` is not a GeoPandas DataFrame after conversion,
+            or if `origin` and `destination` have different lengths when both are provided.
     """
+    # Convert pandas DataFrame to GeoDataFrame if necessary, ensuring geometry column is properly parsed.
     if isinstance(zones, pd.core.frame.DataFrame):
         zones.geometry = zones.geometry.astype(str).apply(wkt.loads)
         zones = gpd.GeoDataFrame(zones, geometry="geometry", crs="EPSG:4326")
 
     assert isinstance(
         zones, gpd.geodataframe.GeoDataFrame
-    ), "Zones needs to be a GeoPandas dataframe"
+    ), "Input 'zones' must be a GeoPandas dataframe or convertible to one."
 
     gdf = zones.copy()
 
-    # Tranform gdf to CRS in meters
+    # Transform GeoDataFrame to a CRS that uses meters for accurate distance calculation.
     gdf = gdf.to_crs("EPSG:3857")
 
     if (origin is None) and (destination is None):
+        # Calculate full OD matrix of distances between all zone centroids.
         gdf = gdf.reset_index(drop=True).geometry.centroid
         x, y = gdf.geometry.x.values, gdf.geometry.y.values
+        # Calculate Euclidean distance between all pairs of centroids.
         distInMeters = np.linalg.norm(
             [x[:, None] - x[None, :], y[:, None] - y[None, :]], axis=0
         )
+        # Fill diagonal (self-distances) with a small non-zero value (e.g., 400 meters).
         np.fill_diagonal(distInMeters, 400)
+        # Convert meters to miles.
         return distInMeters * (0.621371 / 1000)
 
     else:
+        # Calculate distances for specific OD pairs.
         assert len(origin) == len(
             destination
-        ), 'parameters "origin" and "destination" should have the same lenght'
-        origin = (origin + 1).astype(str)
-        destination = (destination + 1).astype(str)
+        ), 'Parameters "origin" and "destination" must have the same length.'
+        # Adjust origin/destination IDs (assuming 0-indexed input, 1-indexed zones).
+        origin_idx = (origin + 1).astype(str)
+        destination_idx = (destination + 1).astype(str)
 
-        # Select origin and destination pairs
-        orig = gdf.loc[origin].reset_index(drop=True).geometry.centroid
-        dest = gdf.loc[destination].reset_index(drop=True).geometry.centroid
+        # Select centroids for the specified origin and destination pairs.
+        orig_centroids = gdf.loc[origin_idx].reset_index(drop=True).geometry.centroid
+        dest_centroids = gdf.loc[destination_idx].reset_index(drop=True).geometry.centroid
 
-        # Distance in Miles
+        # Calculate distances between selected origin and destination centroids.
+        # Replace any zero distances with a small value (e.g., 100 meters) to avoid issues.
+        # Convert meters to miles.
+        return orig_centroids.distance(dest_centroids).replace({0: 100}).values * (0.621371 / 1000)
 
-        return orig.distance(dest).replace({0: 100}).values * (0.621371 / 1000)
 
-
-def _distance_skims(settings, year, input_skims, order, data_dir, workspace):
+def _distance_skims(
+    settings: PilatesConfig,
+    year: int,
+    input_skims: Optional[Union[pd.DataFrame, omx.File]],
+    order: np.ndarray,
+    data_dir: str,
+    workspace: "Workspace",
+) -> None:
     """
-    Generates distance matrices for drive, walk and bike modes.
-    Parameters:
-    - settings:
-    - year:
-    - auto_df: pandas.DataFrame
-        Dataframe with driving modes only.
-    - order: numpy.array
-        zone_id order to create the num_zones x num_zones skim matrix.
+    Generates and imputes distance matrices for drive, walk, and bike modes
+    and stores them in the OMX skims file.
+
+    This function is responsible for populating the OMX skims file with
+    distance-related measures. It can either use existing distance data
+    from `input_skims` or impute missing distances based on zone centroids.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        year (int): The simulation year.
+        input_skims (Optional[Union[pd.DataFrame, omx.File]]): An optional
+            DataFrame or OMX file containing initial skim data. If a DataFrame,
+            it's expected to contain a 'DIST' column. If an OMX file, it's
+            checked for a 'DIST' matrix.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (str): The directory where the OMX skims file is located.
+        workspace (Workspace): The current workspace object.
     """
     logger.info("Creating distance skims.")
 
     skims_fname = "skims.omx"
-    # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True
+    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+
+    # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
         output_skims = input_skims
         needToClose = False
     else:
         output_skims = omx.open_file(mutable_skims_location, mode="a")
 
-    # TO DO: Include walk and bike distances,
-    # for now walk and bike are the same as drive.
+    # Determine the distance column from settings.
     dist_column = settings.beam.asim_hwy_measure_map["DIST"]
+    mx_dist = None # Initialize mx_dist
+
     if isinstance(input_skims, pd.DataFrame):
+        # If input is a DataFrame, extract distance and build OD matrix.
         dist_df = input_skims[[dist_column]].groupby(level=[2, 3]).agg("first")
         mx_dist, useDefaults = _build_od_matrix(
             dist_df, dist_column, order, fill_na=np.nan
         )
         if useDefaults:
             logger.warning(
-                "Filling in default skim values for measure {0} because they're not in BEAM outputs".format(
-                    dist_column
-                )
+                f"Filling in default skim values for measure {dist_column} because they're not in BEAM outputs"
             )
     elif isinstance(input_skims, omx.File):
+        # If input is an OMX file, try to read 'DIST' matrix.
         if "DIST" in input_skims.list_matrices():
             mx_dist = np.array(input_skims["DIST"], dtype=np.float32)
         else:
+            # If 'DIST' not found, initialize with NaNs.
             mx_dist = np.full((len(order), len(order)), np.nan, dtype=np.float32)
     else:
+        # If no input skims or unrecognized type, initialize with NaNs.
         mx_dist = np.full((len(order), len(order)), np.nan, dtype=np.float32)
+
     # Impute missing distances
     missing = np.isnan(mx_dist)
     if missing.all():
+        # If all distances are missing, impute all.
         logger.info("Imputing all missing distance skims.")
         zones = load_canonical_zones(settings, workspace)
         mx_dist = impute_distances(zones)
         output_skims["DIST"] = mx_dist
     elif missing.any():
+        # If some distances are missing, impute only those.
         orig, dest = np.where(missing == True)
-        logger.info("Imputing {} missing distance skims.".format(len(orig)))
+        logger.info(f"Imputing {len(orig)} missing distance skims.")
         zones = load_canonical_zones(settings, workspace)
         imputed_dist = impute_distances(zones, orig, dest)
         mx_dist[orig, dest] = imputed_dist
         output_skims["DIST"] = mx_dist
     else:
+        # No missing distances, use existing.
         logger.info("No need to impute missing distance skims.")
-        mx_dist = np.array(input_skims["DIST"])
+        # Ensure 'DIST' is written to output_skims if it wasn't already.
+        if "DIST" not in output_skims.list_matrices():
+            output_skims["DIST"] = mx_dist
 
-    # Distance matrices
+    # Create distance matrices for bike and walk, currently mirroring drive distances.
+    # Also initialize bike and walk trip matrices to zeros.
     if "DISTBIKE" not in output_skims.list_matrices():
         output_skims["DISTBIKE"] = mx_dist
     if "DISTWALK" not in output_skims.list_matrices():
@@ -605,39 +825,86 @@ def _distance_skims(settings, year, input_skims, order, data_dir, workspace):
     if "WALK_TRIPS" not in output_skims.list_matrices():
         output_skims["WALK_TRIPS"] = np.zeros_like(mx_dist)
 
+    # Close the OMX file if it was opened within this function.
     if needToClose:
         output_skims.close()
 
 
-def _build_od_matrix_parallel(tup):
+def _build_od_matrix_parallel(
+    tup: Tuple[pd.DataFrame, Dict[str, str], int, np.ndarray, float]
+) -> Dict[str, np.ndarray]:
+    """
+    Helper function to build Origin-Destination (OD) matrices in parallel.
+
+    This function is designed to be used with `multiprocessing.Pool.map` to
+    efficiently create multiple OD matrices for different measures.
+
+    Args:
+        tup (Tuple[pd.DataFrame, Dict[str, str], int, np.ndarray, float]): A tuple
+            containing the arguments for `_build_od_matrix`:
+            - `df` (pd.DataFrame): The input DataFrame of skims for a specific group.
+            - `measure_map` (Dict[str, str]): A dictionary mapping generic measure
+              names to their corresponding column names in the DataFrame.
+            - `num_taz` (int): The total number of TAZs.
+            - `order` (np.ndarray): The desired order of zones.
+            - `fill_na` (float): The value to fill NaN entries with.
+
+    Returns:
+        Dict[str, np.ndarray]: A dictionary where keys are measure names and
+            values are the corresponding NumPy OD matrices.
+    """
     df, measure_map, num_taz, order, fill_na = tup
     out = dict()
     for measure in measure_map.keys():
+        # If the DataFrame for this group is empty, create a zero matrix.
         if len(df.index) == 0:
             mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
+            # Mark as using defaults since no data was available.
             useDefaults = True
+        # Handle specific measures like 'FAR' (fare) or 'BOARDS' (boardings)
         elif (measure == "FAR") or (measure == "BOARDS"):
             mtx, useDefaults = _build_od_matrix(
                 df, measure_map[measure], order, fill_na
             )
+        # If the measure's column exists in the DataFrame, build the OD matrix.
         elif measure_map[measure] in df.columns:
-            # activitysim estimated its models using transit skims from Cube
-            # which store time values as scaled integers (e.g. x100), so their
-            # models also divide transit skim values by 100. Since our skims
-            # aren't coming out of Cube, we multiply by 100 to negate the division.
-            # This only applies for travel times.
+            # Note: ActivitySim models often expect transit skim values to be scaled (e.g., x100).
+            # This comment indicates that if skims are not from Cube, a scaling factor might be needed.
+            # The actual scaling (multiplication by 100) happens in _transit_skims.
             mtx, useDefaults = _build_od_matrix(
                 df, measure_map[measure], order, fill_na
             )
-
         else:
+            # If the measure is not found, create a zero matrix and mark as using defaults.
             mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
+            useDefaults = True # Explicitly set to True here for clarity
         out[measure] = mtx
     return out
 
 
-def _transit_skims(settings, transit_df, order, data_dir=None):
-    """Generate transit OMX skims"""
+def _transit_skims(
+    settings: PilatesConfig,
+    transit_df: pd.DataFrame,
+    order: np.ndarray,
+    data_dir: Optional[str] = None,
+) -> None:
+    """
+    Generates and populates transit OMX skims from a preprocessed transit DataFrame.
+
+    This function takes a DataFrame containing transit skim data, groups it by
+    time period and path type, and then uses parallel processing to build
+    Origin-Destination (OD) matrices for various transit measures. These matrices
+    are then written to the OMX skims file.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        transit_df (pd.DataFrame): A DataFrame containing preprocessed transit skims,
+            expected to have a multi-index including 'timePeriod' and 'pathType'.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
 
     logger.info("Creating transit skims.")
     transit_paths = settings.shared.skims.transit_paths
@@ -647,8 +914,10 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
     num_taz = len(order)
     fill_na = 0.0
 
+    # Group the transit DataFrame by time period and path type for parallel processing.
     groupBy = transit_df.groupby(level=[0, 1])
 
+    # Use a multiprocessing Pool to build OD matrices in parallel.
     with Pool(cpu_count() - 1) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
@@ -659,32 +928,34 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
         )
 
     resultsDict = dict()
-
+    # Consolidate results from parallel processing into a single dictionary.
     for (period, path), processedDict in zip(groupBy.groups.keys(), ret_list):
         for measure, mtx in processedDict.items():
-            name = "{0}_{1}__{2}".format(path, measure, period)
+            name = f"{path}_{measure}__{period}"
             resultsDict[name] = mtx
 
+    # Iterate through all expected transit paths, periods, and measures to populate the OMX file.
     for path, measures in transit_paths.items():
         for period in periods:
             for measure in measures:
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 if name in resultsDict:
                     mtx = resultsDict[name]
                 else:
+                    # If a measure is missing, log a warning and create a zero matrix.
                     logger.warning(
-                        "Filling in default skim values for measure {0} because they're not in BEAM outputs".format(
-                            name
-                        )
+                        f"Filling in default skim values for measure {name} because they're not in BEAM outputs"
                     )
                     mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
+
+                # Handle infinite values by replacing them with NaN.
                 if np.any(np.isinf(mtx)):
                     logger.warning(
-                        "Replacing {0} infs in skim {1}".format(
-                            np.isinf(mtx).sum().sum(), name
-                        )
+                        f"Replacing {np.isinf(mtx).sum().sum()} infs in skim {name}"
                     )
                     mtx[np.isinf(mtx)] = np.nan
+
+                # Apply scaling for travel times (multiply by 100) as ActivitySim expects.
                 if (measure == "FAR") or (measure == "BOARDS"):
                     skims[name] = mtx
                 else:
@@ -692,39 +963,80 @@ def _transit_skims(settings, transit_df, order, data_dir=None):
     skims.close()
 
 
-def _ridehail_skims(settings, ridehail_df, order, data_dir=None):
-    """Generate transit OMX skims"""
+def _ridehail_skims(
+    settings: PilatesConfig,
+    ridehail_df: pd.DataFrame,
+    order: np.ndarray,
+    data_dir: Optional[str] = None,
+) -> None:
+    """
+    Generates and populates ridehail OMX skims from a preprocessed ridehail DataFrame.
+
+    This function processes ridehail skim data, iterating through defined
+    ridehail paths and periods to create OD matrices for various measures
+    like rejection probability and wait times. These matrices are then
+    written to the OMX skims file.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        ridehail_df (pd.DataFrame): A DataFrame containing preprocessed ridehail skims.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
     ridehail_path_map = settings.beam.ridehail_path_map
     periods = settings.shared.skims.periods
     measure_map = settings.beam.asim_ridehail_measure_map
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
-    df = ridehail_df.copy()
+    df = ridehail_df.copy() # Create a copy to avoid modifying the original DataFrame
 
+    # Iterate through each defined ridehail path and time period.
     for path, skimPath in ridehail_path_map.items():
         for period in periods:
+            # Select data for the current period and path, reindexing by zone order.
             df_ = df.loc[(period, skimPath), :].loc[order, :]
             for measure, skimMeasure in measure_map.items():
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 if measure == "REJECTIONPROB":
+                    # For rejection probability, build a square matrix from the series.
                     mtx = _build_square_matrix(df_[skimMeasure], num_taz, "origin", 0.0)
                 elif measure_map[measure] in df_.columns:
-                    # activitysim estimated its models using transit skims from Cube
-                    # which store time values as scaled integers (e.g. x100), so their
-                    # models also divide transit skim values by 100. Since our skims
-                    # aren't coming out of Cube, we multiply by 100 to negate the division.
-                    # This only applies for travel times.
-                    # EDIT: I don't think this is true for wait time
+                    # For other measures present in the DataFrame, build a square matrix.
+                    # The comment about scaling for transit skims from Cube is noted,
+                    # but explicitly states it might not apply to wait time for ridehail.
                     mtx = _build_square_matrix(df_[skimMeasure], num_taz, "origin", 0.0)
-
                 else:
+                    # If the measure is not found, create a zero matrix.
                     mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
+                # Store the resulting matrix in the OMX skims file.
                 skims[name] = mtx
     skims.close()
+    # Delete DataFrames to free up memory.
     del df, df_
 
 
-def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int):
+def _get_field_or_else_empty(
+    skims: Optional[omx.File], field: str, num_taz: int
+) -> Tuple[np.ndarray, bool]:
+    """
+    Retrieves a specific matrix from an OMX skims file or returns an empty
+    (NaN-filled) matrix if the field does not exist or the skims object is None.
+
+    Args:
+        skims (Optional[omx.File]): An opened OpenMatrix file object, or None.
+        field (str): The name of the matrix (field) to retrieve from the OMX file.
+        num_taz (int): The total number of TAZs, used to create an empty matrix
+            if the field is not found.
+
+    Returns:
+        Tuple[np.ndarray, bool]: A tuple containing:
+            - np.ndarray: The retrieved matrix (as float32) or an NaN-filled
+              matrix of shape (num_taz, num_taz).
+            - bool: True if the field was not found and an empty matrix was created,
+              False otherwise.
+    """
     if skims is None:
         return np.full((num_taz, num_taz), np.nan, dtype=np.float32), True
     if field in skims.list_matrices():
@@ -733,7 +1045,29 @@ def _get_field_or_else_empty(skims: Optional[omx.File], field: str, num_taz: int
         return np.full((num_taz, num_taz), np.nan, dtype=np.float32), True
 
 
-def _fill_ridehail_skims(settings, input_skims, order, data_dir):
+def _fill_ridehail_skims(
+    settings: PilatesConfig,
+    input_skims: Optional[omx.File],
+    order: np.ndarray,
+    data_dir: str,
+) -> None:
+    """
+    Fills in missing ridehail skim matrices in the OMX file, potentially using
+    default values for missing data.
+
+    This function iterates through defined ridehail paths, periods, and measures.
+    If a skim matrix is missing in the output OMX file, it attempts to retrieve
+    it from `input_skims` and fills any remaining NaN values with predefined
+    defaults (e.g., for wait time or rejection probability).
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        input_skims (Optional[omx.File]): An optional OMX file containing
+            ridehail skim data to be merged.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (str): The directory where the OMX skims file is located.
+    """
     logger.info("Merging ridehail omx skims.")
 
     ridehail_path_map = settings.beam.ridehail_path_map
@@ -743,9 +1077,12 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
+    # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True
+    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+
+    # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
         output_skims = input_skims
         needToClose = False
@@ -754,13 +1091,14 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
 
     output_skim_tables = output_skims.list_matrices()
 
-    # NOTE: time is in units of minutes
+    # NOTE: time is in units of minutes for ActivitySim skims.
     for path, skimPath in ridehail_path_map.items():
-        logger.info("Writing tables for path type {0}".format(path))
+        logger.info(f"Writing tables for path type {path}")
         for period in periods:
-            completed_measure = "{0}_{1}__{2}".format(path, "TRIPS", period)
-            failed_measure = "{0}_{1}__{2}".format(path, "FAILURES", period)
+            completed_measure = f"{path}_TRIPS__{period}"
+            failed_measure = f"{path}_FAILURES__{period}"
 
+            # Get existing or empty matrices for TRIPS and FAILURES.
             temp_completed, createdTemp = _get_field_or_else_empty(
                 output_skims, completed_measure, num_taz
             )
@@ -769,6 +1107,7 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
             )
 
             if createdTemp:
+                # If created, initialize with nan_to_num and set attributes.
                 output_skims[completed_measure] = np.nan_to_num(
                     np.array(temp_completed)
                 )
@@ -781,31 +1120,59 @@ def _fill_ridehail_skims(settings, input_skims, order, data_dir):
                 output_skims[failed_measure].attrs.timePeriod = period
 
             for measure in measure_map.keys():
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
+                    # If the skim is not already in the output, try to get it from input_skims.
                     temp, createdTemp = _get_field_or_else_empty(
                         input_skims, name, num_taz
                     )
                     missing_values = np.isnan(temp)
                     if measure == "WAIT":
+                        # Default wait time for missing values.
                         temp[missing_values] = 6.0
                     elif measure == "REJECTIONPROB":
+                        # Default rejection probability for missing values.
                         temp[missing_values] = 0.2
 
                     if not inOutputSkims:
+                        # Add the new skim to the output OMX file and set attributes.
                         output_skims[name] = temp
                         output_skims[name].attrs.mode = path
                         output_skims[name].attrs.measure = measure
                         output_skims[name].attrs.timePeriod = period
                     else:
+                        # If it exists but had missing values, update them.
                         if np.any(missing_values):
                             output_skims[name][:] = temp
+    # Close the OMX file if it was opened within this function.
     if needToClose:
         output_skims.close()
 
 
-def _fill_transit_skims(settings, input_skims, order, data_dir):
+def _fill_transit_skims(
+    settings: PilatesConfig,
+    input_skims: Optional[omx.File],
+    order: np.ndarray,
+    data_dir: str,
+) -> None:
+    """
+    Fills in missing transit skim matrices in the OMX file, potentially using
+    default values for missing data.
+
+    This function iterates through defined transit paths, periods, and measures.
+    If a skim matrix is missing in the output OMX file, it attempts to retrieve
+    it from `input_skims` and fills any remaining NaN values with predefined
+    defaults based on the measure type (e.g., travel times, fares, boards).
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        input_skims (Optional[omx.File]): An optional OMX file containing
+            transit skim data to be merged.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (str): The directory where the OMX skims file is located.
+    """
     logger.info("Merging transit omx skims.")
 
     transit_paths = settings.shared.skims.transit_paths
@@ -815,26 +1182,31 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
+    # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True
+    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+
+    # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
         output_skims = input_skims
         needToClose = False
     else:
         output_skims = omx.open_file(mutable_skims_location, mode="a")
 
+    # Get the distance matrix, which might be used for imputing missing transit times.
     distance_miles = np.array(output_skims["DIST"], dtype=np.float32)
     output_skim_tables = output_skims.list_matrices()
 
-    # NOTE: time is in units of minutes
+    # NOTE: time is in units of minutes for ActivitySim skims.
 
     for path, measures in transit_paths.items():
-        logger.info("Writing tables for path type {0}".format(path))
+        logger.info(f"Writing tables for path type {path}")
         for period in periods:
-            completed_measure = "{0}_{1}__{2}".format(path, "TRIPS", period)
-            failed_measure = "{0}_{1}__{2}".format(path, "FAILURES", period)
+            completed_measure = f"{path}_TRIPS__{period}"
+            failed_measure = f"{path}_FAILURES__{period}"
 
+            # Get existing or empty matrices for TRIPS and FAILURES.
             temp_completed, createdTemp = _get_field_or_else_empty(
                 output_skims, completed_measure, num_taz
             )
@@ -843,6 +1215,7 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
             )
 
             if createdTemp:
+                # If created, initialize with nan_to_num and set attributes.
                 output_skims[completed_measure] = np.nan_to_num(
                     np.array(temp_completed)
                 )
@@ -854,67 +1227,101 @@ def _fill_transit_skims(settings, input_skims, order, data_dir):
                 output_skims[completed_measure].attrs.timePeriod = period
                 output_skims[failed_measure].attrs.timePeriod = period
 
-            # tooManyFailures = temp_failed > temp_completed
+            # Iterate through each measure for the current path and period.
             for measure in measures:
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
+                    # If the skim is not already in the output, try to get it from input_skims.
                     temp, createdTemp = _get_field_or_else_empty(
                         input_skims, name, num_taz
                     )
                     missing_values = np.isnan(temp)
                     if np.any(missing_values):
+                        # Impute missing values based on the measure type.
                         if (
                             (measure == "IVT")
-                            | (measure == "TOTIVT")
-                            | (measure == "KEYIVT")
+                            or (measure == "TOTIVT")
+                            or (measure == "KEYIVT")
                         ):
+                            # Impute in-vehicle time based on distance and default speed, scaled by 100.
                             temp[missing_values] = (
                                 distance_miles[missing_values]
                                 / default_speed_mph.get(path.split("_")[1], 10.0)
                                 * 60
                                 * 100
-                            )  # Assume 20 mph average, with 100x multiplier
-                            # temp[tooManyFailures] = 0
+                            )
                         elif measure == "DIST":
+                            # Impute distance with the general distance matrix.
                             temp[missing_values] = distance_miles[missing_values]
                         elif (
                             (measure == "WAIT")
-                            | (measure == "WACC")
-                            | (measure == "WEGR")
-                            | (measure == "IWAIT")
+                            or (measure == "WACC")
+                            or (measure == "WEGR")
+                            or (measure == "IWAIT")
                         ):
+                            # Impute various wait times with a default high value.
                             temp[missing_values] = 1000.0
                         elif measure == "FAR":
+                            # Impute fare based on default fare dollars for the mode.
                             temp[missing_values] = default_fare_dollars.get(
                                 path.split("_")[1], 4.0
                             )
                         elif measure == "BOARDS":
+                            # Impute boardings with a default value.
                             temp[missing_values] = 2.0
-                        elif (measure == "DDIST") & (
-                            path.endswith("DRV") | path.startswith("DRV")
+                        elif (measure == "DDIST") and (
+                            path.endswith("DRV") or path.startswith("DRV")
                         ):
+                            # Impute drive distance with a default value.
                             temp[missing_values] = 2.0
-                        elif (measure == "DTIME") & (
-                            path.endswith("DRV") | path.startswith("DRV")
+                        elif (measure == "DTIME") and (
+                            path.endswith("DRV") or path.startswith("DRV")
                         ):
+                            # Impute drive time with a default value.
                             temp[missing_values] = 1500.0
                         else:
+                            # Default for any other missing measure.
                             temp[missing_values] = 0.0
 
+                    # Add the new skim to the output OMX file and set attributes.
                     output_skims[name] = temp
                     output_skims[name].attrs.mode = path
                     output_skims[name].attrs.measure = measure
                     output_skims[name].attrs.timePeriod = period
 
+    # Close the OMX file if it was opened within this function.
     if needToClose:
         output_skims.close()
 
 
-def _fill_auto_skims(settings, input_skims, order, data_dir=None):
+def _fill_auto_skims(
+    settings: PilatesConfig,
+    input_skims: Optional[omx.File],
+    order: np.ndarray,
+    data_dir: Optional[str] = None,
+) -> None:
+    """
+    Fills in missing auto (drive) skim matrices in the OMX file, potentially using
+    default values for missing data.
+
+    This function iterates through defined highway paths, periods, and measures.
+    If a skim matrix is missing in the output OMX file, it attempts to retrieve
+    it from `input_skims` and fills any remaining NaN values with predefined
+    defaults based on the measure type (e.g., travel times, distances, tolls).
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        input_skims (Optional[omx.File]): An optional OMX file containing
+            auto skim data to be merged.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
     logger.info("Merging drive omx skims.")
 
-    # Open skims object
+    # Retrieve periods, highway paths, and measure map from settings.
     periods = settings.shared.skims.periods
     paths = settings.shared.skims.hwy_paths
     measure_map = settings.beam.asim_hwy_measure_map
@@ -922,27 +1329,32 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
     num_taz = len(order)
 
     skims_fname = "skims.omx"
+    # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True
+    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+
+    # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
         output_skims = input_skims
         needToClose = False
     else:
         output_skims = omx.open_file(mutable_skims_location, mode="a")
 
+    # Get the distance matrix, which might be used for imputing missing auto times.
     distance_miles = np.array(output_skims["DIST"])
     output_skim_tables = output_skims.list_matrices()
-    nSkimsCreated = 0
+    nSkimsCreated = 0 # Counter for newly created skims.
 
-    # NOTE: time is in units of minutes
+    # NOTE: time is in units of minutes for ActivitySim skims.
 
     for path in paths:
-        logger.info("Writing tables for path type {0}".format(path))
+        logger.info(f"Writing tables for path type {path}")
         for period in periods:
-            completed_measure = "{0}_{1}__{2}".format(path, "TRIPS", period)
-            failed_measure = "{0}_{1}__{2}".format(path, "FAILURES", period)
+            completed_measure = f"{path}_TRIPS__{period}"
+            failed_measure = f"{path}_FAILURES__{period}"
 
+            # Get existing or empty matrices for TRIPS and FAILURES.
             temp_completed, createdTemp = _get_field_or_else_empty(
                 output_skims, completed_measure, num_taz
             )
@@ -952,6 +1364,7 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
 
             if createdTemp:
                 nSkimsCreated += 1
+                # If created, initialize with nan_to_num and set attributes.
                 output_skims[completed_measure] = np.nan_to_num(
                     np.array(temp_completed)
                 )
@@ -962,25 +1375,33 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
                 output_skims[failed_measure].attrs.measure = "FAILURES"
                 output_skims[completed_measure].attrs.timePeriod = period
                 output_skims[failed_measure].attrs.timePeriod = period
+            
+            # Iterate through each measure for the current path and period.
             for measure in measure_map.keys():
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 inOutputSkims = name in output_skim_tables
                 if not inOutputSkims:
                     nSkimsCreated += 1
+                    # If the skim is not already in the output, try to get it from input_skims.
                     temp, createdTemp = _get_field_or_else_empty(
                         input_skims, name, num_taz
                     )
                     missing_values = np.isnan(temp)
                     if np.any(missing_values):
+                        # Impute missing values based on the measure type.
                         if measure == "TIME":
+                            # Impute time based on distance and assumed average speed.
                             temp[missing_values] = (
                                 distance_miles[missing_values] / 35 * 60
                             )  # Assume 35 mph average
                         elif measure == "DIST":
+                            # Impute distance with the general distance matrix.
                             temp[missing_values] = distance_miles[missing_values]
                         elif measure == "BTOLL":
+                            # Impute bridge toll with 0.0.
                             temp[missing_values] = 0.0
                         elif measure == "VTOLL":
+                            # Impute vehicle toll based on path type.
                             if path.endswith("TOLL"):
                                 toll = 5.0
                             else:
@@ -988,34 +1409,59 @@ def _fill_auto_skims(settings, input_skims, order, data_dir=None):
                             temp[missing_values] = toll
                         else:
                             logger.error(
-                                "Trying to read unknown measure {0} from BEAM skims".format(
-                                    measure
-                                )
+                                f"Trying to read unknown measure {measure} from BEAM skims"
                             )
 
+                    # Add the new skim to the output OMX file and set attributes.
                     output_skims[name] = temp
                     output_skims[name].attrs.mode = path
                     output_skims[name].attrs.measure = measure
                     output_skims[name].attrs.timePeriod = period
-    logger.info("Created {0} new skims in the omx object".format(nSkimsCreated))
+    logger.info(f"Created {nSkimsCreated} new skims in the omx object")
+    # Close the OMX file if it was opened within this function.
     if needToClose:
         output_skims.close()
 
 
-def _auto_skims(settings, auto_df, order, data_dir=None):
+def _auto_skims(
+    settings: PilatesConfig,
+    auto_df: pd.DataFrame,
+    order: np.ndarray,
+    data_dir: Optional[str] = None,
+) -> None:
+    """
+    Generates and populates auto (drive) OMX skims from a preprocessed auto DataFrame.
+
+    This function processes auto skim data, grouping it by time period and path type.
+    It then uses parallel processing to build Origin-Destination (OD) matrices
+    for various auto measures. These matrices are then written to the OMX skims file.
+    Missing values are imputed based on distances and assumed average speeds.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        auto_df (pd.DataFrame): A DataFrame containing preprocessed auto skims,
+            expected to have a multi-index including 'timePeriod' and 'pathType'.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones for the skim matrices.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
     logger.info("Creating drive skims.")
 
-    # Open skims object
+    # Retrieve periods, highway paths, and measure map from settings.
     periods = settings.shared.skims.periods
     paths = settings.shared.skims.hwy_paths
     measure_map = settings.beam.asim_hwy_measure_map
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
-    beam_hwy_paths = settings.beam.simulated_hwy_paths
+    # beam_hwy_paths is defined but not used in this function.
+    # beam_hwy_paths = settings.beam.simulated_hwy_paths
     fill_na = np.nan
 
+    # Group the auto DataFrame by time period and path type for parallel processing.
     groupBy = auto_df.groupby(level=[0, 1])
 
+    # Use a multiprocessing Pool to build OD matrices in parallel.
     with Pool(cpu_count() - 1) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
@@ -1026,23 +1472,27 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
         )
 
     resultsDict = dict()
-
+    # Consolidate results from parallel processing into a single dictionary.
     for (period, path), processedDict in zip(groupBy.groups.keys(), ret_list):
+        # Special handling for "SOV" (Single Occupancy Vehicle) path type.
+        # It seems to apply SOV measures to all defined highway paths.
         if path == "SOV":
             for measure, mtx in processedDict.items():
                 for path_ in paths:
-                    name = "{0}_{1}__{2}".format(path_, measure, period)
+                    name = f"{path_}_{measure}__{period}"
                     resultsDict[name] = mtx
 
+    # Iterate through all expected highway paths, periods, and measures to populate the OMX file.
     for period in periods:
         for path in paths:
             for measure in measure_map.keys():
-                name = "{0}_{1}__{2}".format(path, measure, period)
+                name = f"{path}_{measure}__{period}"
                 if name in resultsDict:
                     mtx = resultsDict[name]
                     missing = np.isnan(mtx)
 
                     if missing.any():
+                        # If there are missing values, attempt to impute them.
                         distances = np.array(skims["DIST"])
                         orig, dest = np.where(missing == True)
                         missing_measure = distances[orig, dest]
@@ -1050,33 +1500,47 @@ def _auto_skims(settings, auto_df, order, data_dir=None):
                         if measure == "DIST":
                             mtx[orig, dest] = missing_measure
                         elif measure == "TIME":
+                            # Impute time based on distance and assumed average speed.
                             mtx[orig, dest] = missing_measure * (
                                 60 / 40
                             )  # Assumes average speed of 40 miles/hour
                         else:
-                            mtx[orig, dest] = 0  ## Assumes no toll or payment
+                            # Default to 0 for other measures (e.g., tolls) if missing.
+                            mtx[orig, dest] = 0  # Assumes no toll or payment
                 else:
+                    # If a measure is entirely missing, create a zero matrix and log a warning.
                     mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
                     logger.warning(
-                        "Filling in default skim values for measure {0} because they're not in BEAM outputs".format(
-                            name
-                        )
+                        f"Filling in default skim values for measure {name} because they're not in BEAM outputs"
                     )
-                # if ('TOLL' in path) & ('TOLL' in measure):
-                #     # For now penalize toll routes because we don't simulate them
-                #     mtx.fill(1.0e7)
+                # Handle infinite values by replacing them with NaN.
                 if np.any(np.isinf(mtx)):
                     logger.warning(
-                        "Replacing {0} infs in skim {1}".format(
-                            np.isinf(mtx).sum().sum(), name
-                        )
+                        f"Replacing {np.isinf(mtx).sum().sum()} infs in skim {name}"
                     )
                     mtx[np.isinf(mtx)] = np.nan
+                # Store the resulting matrix in the OMX skims file.
                 skims[name] = mtx
     skims.close()
 
 
-def _create_offset(settings, order, data_dir=None):
+def _create_offset(
+    settings: PilatesConfig, order: np.ndarray, data_dir: Optional[str] = None
+) -> None:
+    """
+    Creates a 'zone_id' mapping (offset) in the OMX skims file.
+
+    This mapping is essential for ActivitySim to correctly interpret the
+    zone IDs within the skim matrices. It assigns a sequential integer
+    ID to each zone based on the provided `order`.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        order (np.ndarray): A 1D NumPy array specifying the desired order of
+            zones. The length of this array determines the range of zone IDs.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
     logger.info("Creating skims offset keys")
 
     # Open skims object
@@ -1089,8 +1553,35 @@ def _create_offset(settings, order, data_dir=None):
 
 
 def create_skims_from_beam(
-    settings, state, workspace, output_dir=None, overwrite=False
+    settings: PilatesConfig,
+    state: "WorkflowState",
+    workspace: "Workspace",
+    output_dir: Optional[str] = None,
+    overwrite: bool = False,
 ) -> str:
+    """
+    Orchestrates the creation of ActivitySim-compatible skims from BEAM outputs.
+
+    This is the main function for converting raw BEAM skims into the OMX format
+    required by ActivitySim. It handles loading, preprocessing, and populating
+    various skim matrices (distance, auto, transit, ridehail) into an OMX file.
+    It also includes an option for skim validation.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        state (WorkflowState): The current workflow state, including the
+            simulation year and other relevant information.
+        workspace (Workspace): The current workspace object, providing access
+            to data directories.
+        output_dir (Optional[str]): The directory where the output `skims.omx`
+            file should be saved. If None, it defaults to a path derived from
+            `state.full_path` and `settings.activitysim.local_mutable_data_folder`.
+        overwrite (bool): If True, forces the recreation of the `skims.omx` file,
+            even if it already exists. Defaults to False.
+
+    Returns:
+        str: The full path to the generated `skims.omx` file.
+    """
     if not output_dir:
         output_dir = os.path.join(
             state.full_path, settings.activitysim.local_mutable_data_folder
@@ -1155,32 +1646,36 @@ def create_skims_from_beam(
 
 
 def plot_skims(
-    settings,
-    zones,
-    skims,
-    order,
-    random_sample=6,
-    cols=3,
-    name="DIST",
-    units="in miles",
-):
+    settings: PilatesConfig,
+    zones: gpd.GeoDataFrame,
+    skims: np.ndarray,
+    order: np.ndarray,
+    random_sample: int = 6,
+    cols: int = 3,
+    name: str = "DIST",
+    units: str = "in miles",
+) -> None:
     """
-    Plot a map of skims for a random set zones to all other zones. For validation/debugging purposes.
+    Plots a map of skims for a random set of origin zones to all other zones.
+    This function is primarily used for validation and debugging purposes,
+    visualizing how a specific skim measure varies across the study area
+    from selected origin zones.
 
-    Parameters:
-    - settings:
-    - zones : geopandas dataframe
-    - skims : numpy array
-        Skim measure. num_zone x num_zone ndarray.
-    - order : numpy array
-    - random_sample : int
-        number of zone to plot the skims
-    - cols : int
-        number of columns in the resulting subplot.
-    - name : str
-        name of the skim measure
-    - units : str
-        Unit of analysis of the skim measure
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        zones (gpd.GeoDataFrame): A GeoDataFrame containing zone geometries
+            and attributes.
+        skims (np.ndarray): A 2D NumPy array representing a skim measure,
+            typically of shape (num_zones, num_zones).
+        order (np.ndarray): A 1D NumPy array specifying the ordered zone IDs.
+        random_sample (int): The number of random zones to select for plotting.
+            Defaults to 6.
+        cols (int): The number of columns in the resulting subplot grid.
+            Defaults to 3.
+        name (str): The name of the skim measure being plotted (e.g., "DIST", "SOV_TIME").
+            Used in plot titles and filenames. Defaults to "DIST".
+        units (str): The unit of analysis for the skim measure (e.g., "in miles",
+            "in minutes"). Used in plot titles. Defaults to "in miles".
     """
     random_sample = random_sample
     cols = cols
@@ -1223,7 +1718,29 @@ def plot_skims(
     fig.savefig(save_path)
 
 
-def skim_validations(settings, year, order, workspace, data_dir=None):
+def skim_validations(
+    settings: PilatesConfig,
+    year: int,
+    order: np.ndarray,
+    workspace: "Workspace",
+    data_dir: Optional[str] = None,
+) -> None:
+    """
+    Generates and saves validation plots for various skim measures.
+
+    This function reads the generated OMX skims, extracts key measures like
+    distances, SOV travel times, and public transit travel times, and then
+    uses `plot_skims` to visualize them for a random sample of zones.
+    The plots are saved as PDF files for review.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        year (int): The simulation year (currently unused but kept for consistency).
+        order (np.ndarray): A 1D NumPy array specifying the ordered zone IDs.
+        workspace (Workspace): The current workspace object.
+        data_dir (Optional[str]): The directory where the OMX skims file is located.
+            If None, it defaults to `settings.activitysim.local_mutable_data_folder`.
+    """
     logger.info("Generating skims validation plots.")
     skims = read_skims(settings, mode="r", data_dir=data_dir)
     zone = load_canonical_zones(settings, workspace)
@@ -1598,7 +2115,19 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 #######################################
 #### UrbanSim to ActivitySim tables ###
 #######################################
-def _get_full_time_enrollment(state_fips, year):
+def _get_full_time_enrollment(state_fips: str, year: str) -> pd.Series:
+    """
+    Downloads full-time college enrollment data from educationdata.urban.org
+    for a given state and year.
+
+    Args:
+        state_fips (str): The FIPS code of the state to query.
+        year (str): The academic year for which to retrieve enrollment data.
+
+    Returns:
+        pd.Series: A pandas Series with 'unitid' as the index and
+            'full_time' enrollment as values.
+    """
     base_url = (
         "https://educationdata.urban.org/api/v1/"
         "{t}/{so}/{e}/{y}/{l}/?{f}&{s}&{r}&{cl}&{ds}&{fips}"
@@ -1634,7 +2163,18 @@ def _get_full_time_enrollment(state_fips, year):
     return s
 
 
-def _get_part_time_enrollment(state_fips):
+def _get_part_time_enrollment(state_fips: str) -> pd.Series:
+    """
+    Downloads part-time college enrollment data from educationdata.urban.org
+    for a given state. The year is currently hardcoded to "2015".
+
+    Args:
+        state_fips (str): The FIPS code of the state to query.
+
+    Returns:
+        pd.Series: A pandas Series with 'unitid' as the index and
+            'part_time' enrollment as values.
+    """
     base_url = (
         "https://educationdata.urban.org/api/v1/"
         "{t}/{so}/{e}/{y}/{l}/?{f}&{s}&{r}&{cl}&{ds}&{fips}"
@@ -1672,7 +2212,22 @@ def _get_part_time_enrollment(state_fips):
     return s
 
 
-def _get_school_enrollment(state_fips, county_codes):
+def _get_school_enrollment(state_fips: str, county_codes: List[str]) -> pd.DataFrame:
+    """
+    Downloads K-12 school enrollment data from educationdata.urban.org
+    for a given state and a list of county codes.
+
+    Args:
+        state_fips (str): The FIPS code of the state to query.
+        county_codes (List[str]): A list of 3-digit county FIPS codes
+            within the state to filter the data.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing school enrollment data,
+            indexed by 'ncessch' (NCES school ID), with columns for
+            county code, latitude, longitude (renamed to 'x' and 'y'),
+            and enrollment.
+    """
     logger.info("Downloading school enrollment data from educationdata.urban.org!")
     base_url = (
         "https://educationdata.urban.org/api/v1/"
@@ -1717,7 +2272,22 @@ def _get_school_enrollment(state_fips, county_codes):
     return enrollment
 
 
-def _get_college_enrollment(state_fips, county_codes):
+def _get_college_enrollment(state_fips: str, county_codes: List[str]) -> pd.DataFrame:
+    """
+    Downloads college directory and enrollment data (full-time and part-time)
+    from educationdata.urban.org for a given state and list of county codes.
+
+    Args:
+        state_fips (str): The FIPS code of the state to query.
+        county_codes (List[str]): A list of 3-digit county FIPS codes
+            within the state to filter the data.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing college information, including
+            institution name, coordinates (renamed to 'x' and 'y'),
+            and calculated full-time and part-time enrollment figures.
+            Indexed by 'unitid'.
+    """
     year = "2015"
     logger.info("Downloading college data from educationdata.urban.org!")
     base_url = (
@@ -1765,14 +2335,52 @@ def _get_college_enrollment(state_fips, county_codes):
     return colleges
 
 
-def _get_park_cost(zones, weights, index_cols, output_cols):
+def _get_park_cost(
+    zones: pd.DataFrame,
+    weights: List[float],
+    index_cols: List[str],
+    output_cols: List[str],
+) -> pd.Series:
+    """
+    Calculates a 'parking cost' metric based on weighted sums of various
+    zone-level attributes.
+
+    Args:
+        zones (pd.DataFrame): A DataFrame containing zone data with the
+            `output_cols` present.
+        weights (List[float]): A list of numerical weights to apply to the
+            corresponding `index_cols`.
+        index_cols (List[str]): A list of column names from `zones` that
+            correspond to the `weights`.
+        output_cols (List[str]): A list of column names from `zones` that
+            will be used in the matrix multiplication with `weights`.
+
+    Returns:
+        pd.Series: A pandas Series representing the calculated parking cost
+            for each zone, with values clipped at 0 (no negative costs).
+    """
     params = pd.Series(weights, index=index_cols)
     cols = zones[output_cols]
     s = cols @ params
     return s.where(s > 0, 0)
 
 
-def _compute_area_type_metric(zones):
+def _compute_area_type_metric(zones: pd.DataFrame) -> pd.Series:
+    """
+    Computes a metric used to classify urban area types based on population,
+    employment, and acreage.
+
+    This metric is sensitive to the region and TAZ geometries it was designed
+    for (SF Bay Area). Its accuracy should be visually assessed for new regions.
+
+    Args:
+        zones (pd.DataFrame): A DataFrame containing zone data with 'TOTPOP',
+            'TOTEMP', and 'TOTACRE' columns.
+
+    Returns:
+        pd.Series: A pandas Series containing the computed area type metric
+            for each zone, with NaN values filled with 0.
+    """
     """
     Because of the modifiable areal unit problem, it is probably a good
     idea to visually assess the accuracy of this metric when implementing
@@ -1797,7 +2405,22 @@ def _compute_area_type_metric(zones):
     return metric_vals.fillna(0)
 
 
-def _compute_area_type(zones):
+def _compute_area_type(zones: pd.DataFrame) -> pd.Series:
+    """
+    Classifies zones into urban area types based on the `area_type_metric`.
+
+    The classification uses predefined bins to assign an integer area type:
+    0 = regional core, 1 = central business district, 2 = urban business,
+    3 = urban, 4 = suburban, 5 = rural.
+
+    Args:
+        zones (pd.DataFrame): A DataFrame containing zone data, which must
+            include an 'area_type_metric' column.
+
+    Returns:
+        pd.Series: A pandas Series (of string type) indicating the classified
+            area type for each zone.
+    """
     # Integer, 0=regional core, 1=central business district,
     # 2=urban business, 3=urban, 4=suburban, 5=rural
     area_types = pd.cut(
@@ -1816,11 +2439,13 @@ def _clean_activitysim_data_for_csv(df: pd.DataFrame, table_name: str) -> pd.Dat
     This is a standalone version for use in module-level functions.
 
     Args:
-        df: Raw DataFrame from database
-        table_name: Name of the ActivitySim table
+        df (pd.DataFrame): Raw DataFrame from database.
+        table_name (str): Name of the ActivitySim table (e.g., "households", "persons", "land_use").
 
     Returns:
-        Cleaned DataFrame ready for ActivitySim
+        pd.DataFrame: Cleaned DataFrame ready for ActivitySim, with metadata
+            columns removed, required columns ensured with defaults, and
+            appropriate data types.
     """
     clean_df = df.copy()
 
@@ -1917,8 +2542,37 @@ def _clean_activitysim_data_for_csv(df: pd.DataFrame, table_name: str) -> pd.Dat
 
 
 def enrollment_tables(
-    settings, zones, enrollment_type="schools", asim_zone_id_col="TAZ"
-):
+    settings: PilatesConfig,
+    zones: gpd.GeoDataFrame,
+    enrollment_type: str = "schools",
+    asim_zone_id_col: str = "TAZ",
+) -> pd.DataFrame:
+    """
+    Retrieves and processes school or college enrollment data, assigning
+    enrollment figures to ActivitySim zones.
+
+    This function first attempts to load enrollment data from a local CSV file.
+    If the file does not exist, it downloads the data from educationdata.urban.org.
+    It then maps the enrollment locations to the appropriate ActivitySim zones
+    (TAZ, block group, etc.) and saves the processed data locally for future use.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        zones (gpd.GeoDataFrame): A GeoDataFrame containing zone geometries,
+            used for spatial mapping of enrollment points to zones.
+        enrollment_type (str): The type of enrollment data to retrieve.
+            Must be either "schools" (K-12) or "colleges". Defaults to "schools".
+        asim_zone_id_col (str): The name of the column in the ActivitySim
+            input tables that represents the zone ID (e.g., "TAZ", "BLKGRP").
+            Defaults to "TAZ".
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the enrollment data with an
+            assigned ActivitySim zone ID column.
+
+    Raises:
+        KeyError: If an invalid `enrollment_type` is provided.
+    """
     region = settings.run.region
     FIPS = settings.shared.geography.FIPS
     state_fips = FIPS["state"]
@@ -1962,8 +2616,29 @@ def enrollment_tables(
 
 
 def _copy_data_to_mutable_location(
-    settings: PilatesConfig, folder_path, provenance_tracker: FileProvenanceTracker
+    settings: PilatesConfig,
+    folder_path: str,
+    provenance_tracker: FileProvenanceTracker,
 ) -> Tuple[RecordStore, RecordStore]:
+    """
+    Copies ActivitySim source data (canonical zones, clipped geometries, configs)
+    to a mutable location within the current run's workspace.
+
+    This function ensures that ActivitySim has access to necessary input files
+    by copying them from their original source locations to a designated
+    mutable directory. It also records the provenance of these copied files.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        folder_path (str): The base path for the mutable ActivitySim data directory.
+        provenance_tracker (FileProvenanceTracker): The provenance tracker
+            instance to record file operations.
+
+    Returns:
+        Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
+            - `input_records`: Records of the original source files.
+            - `output_records`: Records of the copied files in the mutable location.
+    """
     logger.info("Copying ActivitySim source data to mutable location.")
     input_dir = folder_path
     os.makedirs(input_dir, exist_ok=True)
@@ -2081,13 +2756,37 @@ def _copy_data_to_mutable_location(
 
 
 def copy_beam_geoms(
-    settings,
-    beam_geoms_location,
-    asim_geoms_location,
-    beam_shape_location,
+    settings: PilatesConfig,
+    beam_geoms_location: str,
+    asim_geoms_location: str,
+    beam_shape_location: Optional[str],
     provenance_tracker: FileProvenanceTracker,
-    workspace,
+    workspace: "Workspace",
 ) -> Tuple[RecordStore, RecordStore]:
+    """
+    Copies and processes BEAM geometry files for ActivitySim.
+
+    This function reads BEAM geometry data, maps zone IDs according to the
+    configured zone type, and saves the processed geometries for ActivitySim.
+    It also handles an optional BEAM shapefile, updating its zone IDs if present.
+    All file operations are tracked for provenance.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        beam_geoms_location (str): The file path to the input BEAM geometries CSV.
+        asim_geoms_location (str): The destination file path for the processed
+            ActivitySim geometries CSV.
+        beam_shape_location (Optional[str]): The optional file path to the BEAM
+            zones shapefile. If provided, its zone IDs will be updated.
+        provenance_tracker (FileProvenanceTracker): The provenance tracker
+            instance to record file operations.
+        workspace (Workspace): The current workspace object.
+
+    Returns:
+        Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
+            - `input_records`: Records of the original BEAM geometry files.
+            - `output_records`: Records of the processed ActivitySim geometry files.
+    """
     zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
     beam_geoms_in = provenance_tracker.record_input_file(
@@ -2176,19 +2875,43 @@ def copy_beam_geoms(
 
 
 def _update_persons_table(
-    persons, households, unassigned_households, blocks, asim_zone_id_col="TAZ"
-):
-    """Updates person attributes and assigns zones for ActivitySim processing.
+    persons: pd.DataFrame,
+    households: pd.DataFrame,
+    unassigned_households: pd.Series,
+    blocks: pd.DataFrame,
+    asim_zone_id_col: str = "TAZ",
+) -> pd.DataFrame:
+    """
+    Updates person attributes and assigns zones for ActivitySim processing.
+
+    This function cleans and enriches the persons DataFrame by:
+    - Removing persons belonging to unassigned households.
+    - Assigning ActivitySim zone IDs based on household block IDs.
+    - Calculating person types (`ptype`), employment status (`pemploy`),
+      and student status (`pstudent`) based on age, worker, and student flags.
+    - Adding home coordinates (x, y) from block data.
+    - Converting and cleaning workplace and school TAZs.
+    - Filtering out invalid records (e.g., null zone IDs, invalid ages).
+    - Recalculating `member_id` within each household.
+    - Clearing school/work locations for specific person types (e.g., workers
+      shouldn't have school locations, non-workers/students shouldn't have
+      work/school locations).
 
     Args:
-        persons: DataFrame containing person records
-        households: DataFrame containing household records
-        unassigned_households: Series of household IDs without locations
-        blocks: DataFrame containing block/zone information
-        asim_zone_id_col: Column name for zone ID (default: 'TAZ')
+        persons (pd.DataFrame): DataFrame containing person records.
+        households (pd.DataFrame): DataFrame containing household records,
+            including 'block_id'.
+        unassigned_households (pd.Series): A Series of household IDs that
+            could not be assigned to a location. Persons from these households
+            will be dropped.
+        blocks (pd.DataFrame): DataFrame containing block/zone information,
+            including 'x', 'y' coordinates and the `asim_zone_id_col`.
+        asim_zone_id_col (str): Column name for the ActivitySim zone ID
+            (e.g., 'TAZ'). Defaults to 'TAZ'.
 
     Returns:
-        DataFrame with updated person attributes
+        pd.DataFrame: DataFrame with updated and cleaned person attributes,
+            ready for ActivitySim.
     """
     # Convert index to int and filter out unassigned persons
     persons.index = persons.index.astype(int)
@@ -2323,7 +3046,31 @@ def _update_persons_table(
     return persons
 
 
-def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
+def _update_households_table(
+    households: pd.DataFrame, blocks: pd.DataFrame, asim_zone_id_col: str = "TAZ"
+) -> Tuple[pd.DataFrame, pd.Index]:
+    """
+    Updates household attributes and assigns zones for ActivitySim processing.
+
+    This function assigns ActivitySim zone IDs to households based on their
+    `block_id` and the provided `blocks` DataFrame. It filters out households
+    that cannot be assigned a valid zone, creates new column variables like
+    `HHT` (household type), and ensures 'cars' is an integer type.
+
+    Args:
+        households (pd.DataFrame): DataFrame containing household records.
+        blocks (pd.DataFrame): DataFrame containing block/zone information,
+            including the `asim_zone_id_col`.
+        asim_zone_id_col (str): Column name for the ActivitySim zone ID
+            (e.g., 'TAZ'). Defaults to 'TAZ'.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.Index]: A tuple containing:
+            - pd.DataFrame: The updated and cleaned households DataFrame,
+              with `household_id` set as the index.
+            - pd.Index: An Index of household IDs that were dropped due to
+              not having a valid TAZ.
+    """
     # assign zones
     households.index = households.index.astype(int)
     households[asim_zone_id_col] = (
@@ -2360,8 +3107,38 @@ def _update_households_table(households, blocks, asim_zone_id_col="TAZ"):
 
 
 def _update_jobs_table(
-    jobs, blocks, settings, local_crs, asim_zone_id_col="TAZ", workspace=None
-):
+    jobs: pd.DataFrame,
+    blocks: pd.DataFrame,
+    settings: PilatesConfig,
+    local_crs: str,
+    asim_zone_id_col: str = "TAZ",
+    workspace: Optional["Workspace"] = None,
+) -> Tuple[int, pd.DataFrame]:
+    """
+    Updates the jobs table by assigning ActivitySim zone IDs and reassigning
+    jobs from blocks with no land area.
+
+    This function ensures that all jobs are assigned to a valid ActivitySim
+    zone. It also identifies jobs located in blocks with zero land area
+    (which can cause issues with density calculations) and reassigns them
+    to the nearest valid block with land area.
+
+    Args:
+        jobs (pd.DataFrame): DataFrame containing job records.
+        blocks (pd.DataFrame): DataFrame containing block information,
+            including 'block_id' and 'square_meters_land'.
+        settings (PilatesConfig): The current PILATES settings object.
+        local_crs (str): The local coordinate reference system string (e.g., "EPSG:3857").
+        asim_zone_id_col (str): Column name for the ActivitySim zone ID
+            (e.g., 'TAZ'). Defaults to 'TAZ'.
+        workspace (Optional[Workspace]): The current workspace object.
+            Required if `get_block_geoms` needs to be called.
+
+    Returns:
+        Tuple[int, pd.DataFrame]: A tuple containing:
+            - int: The number of jobs that were reassigned.
+            - pd.DataFrame: The updated jobs DataFrame.
+    """
     # assign zones
     jobs[asim_zone_id_col] = blocks[asim_zone_id_col].reindex(jobs["block_id"]).values
 
@@ -2408,8 +3185,39 @@ def _update_jobs_table(
 
 
 def _update_blocks_table(
-    settings, year, blocks, households, jobs, zone_id_col, workspace
-):
+    settings: PilatesConfig,
+    year: int,
+    blocks: pd.DataFrame,
+    households: pd.DataFrame,
+    jobs: pd.DataFrame,
+    zone_id_col: str,
+    workspace: "Workspace",
+) -> Tuple[bool, pd.DataFrame]:
+    """
+    Updates the blocks table with aggregated population, employment, and acreage
+    information, and ensures correct zone ID mapping.
+
+    This function calculates total employment (`TOTEMP`), total population (`TOTPOP`),
+    and total acreage (`TOTACRE`) for each block based on the provided households
+    and jobs data. It also ensures that the blocks table has the correct zone ID
+    column (`zone_id_col`) mapped according to the configured zone type.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        year (int): The simulation year.
+        blocks (pd.DataFrame): DataFrame containing block records.
+        households (pd.DataFrame): DataFrame containing household records.
+        jobs (pd.DataFrame): DataFrame containing job records.
+        zone_id_col (str): The name of the column to use for zone IDs in the
+            blocks table (e.g., 'TAZ_zone_id', 'block_group_zone_id').
+        workspace (Workspace): The current workspace object.
+
+    Returns:
+        Tuple[bool, pd.DataFrame]: A tuple containing:
+            - bool: `geoid_to_zone_mapping_updated`, True if the zone ID mapping
+              was updated in this call, False otherwise.
+            - pd.DataFrame: The updated blocks DataFrame.
+    """
     blocks["TOTEMP"] = (
         jobs[["block_id", "sector_id"]]
         .groupby("block_id")["sector_id"]
@@ -2466,14 +3274,37 @@ def _update_blocks_table(
 
 
 def _create_land_use_table(
-    settings,
-    zones,
-    households,
-    persons,
-    jobs,
-    blocks,
-    asim_zone_id_col="TAZ",
-):
+    settings: PilatesConfig,
+    zones: pd.DataFrame,
+    households: pd.DataFrame,
+    persons: pd.DataFrame,
+    jobs: pd.DataFrame,
+    blocks: pd.DataFrame,
+    asim_zone_id_col: str = "TAZ",
+) -> pd.DataFrame:
+    """
+    Creates the ActivitySim land use table by aggregating data from various
+    sources (zones, households, persons, jobs, blocks, schools, colleges).
+
+    This function consolidates demographic, employment, and enrollment data
+    at the zone level, calculates various density metrics, and derives
+    parking cost and area type classifications. The resulting DataFrame
+    is suitable for use as the `land_use` input table in ActivitySim.
+
+    Args:
+        settings (PilatesConfig): The current PILATES settings object.
+        zones (pd.DataFrame): A DataFrame containing base zone information.
+            Expected to have 'TAZ' as its index.
+        households (pd.DataFrame): A DataFrame containing household records.
+        persons (pd.DataFrame): A DataFrame containing person records.
+        jobs (pd.DataFrame): A DataFrame containing job records.
+        blocks (pd.DataFrame): A DataFrame containing block-level information.
+        asim_zone_id_col (str): The name of the column representing the
+            ActivitySim zone ID (e.g., 'TAZ'). Defaults to 'TAZ'.
+
+    Returns:
+        pd.DataFrame: The comprehensive ActivitySim land use table.
+    """
     logger.info("Creating land use table.")
     zone_type = get_setting(settings, "shared.geography.zones.zone_type")
 
@@ -2552,8 +3383,8 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
         ]
-        .sum()
-    ).fillna(0)
+        .sum().fillna(0)
+    )
     persons_agg["TOTPOP"] = persons.groupby(asim_zone_id_col).size()
 
     # --- Consolidated Households Aggregation ---
@@ -2568,8 +3399,8 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
         ]
-        .sum()
-    ).fillna(0)
+        .sum().fillna(0)
+    )
     households_agg["TOTHH"] = households.groupby(asim_zone_id_col).size()
     households_agg.rename(columns={"workers": "EMPRES"}, inplace=True)
 
@@ -2586,13 +3417,13 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
         ]
-        .sum()
-    ).fillna(0)
-    jobs_agg["TOTEMP"] = jobs.groupby(asim_zone_id_col).size()
+        .sum().fillna(0)
+    )
+    jobs_agg["TOTEMP"] = jobs.groupby(asim_zone_id_col).size().fillna(0)
 
     # Calculate OTHEMPN from the aggregated sums
     sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
-    jobs_agg["OTHEMPN"] = jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)
+    jobs_agg["OTHEMPN"] = (jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)).fillna(0)
 
     # --- DIAGNOSTIC: Check aggregated data before join ---
     logger.info("=== PRE-JOIN DIAGNOSTICS ===")
@@ -2700,11 +3531,32 @@ def _create_land_use_table(
 
 def create_asim_data_from_database(
     settings: PilatesConfig,
-    state: WorkflowState,
+    state: "WorkflowState",
     workspace: "Workspace",
     provenance_tracker: "FileProvenanceTracker",
-    model_run_hash: str = None,
+    model_run_hash: Optional[str] = None,
 ) -> List[FileRecord]:
+    """
+    Create ActivitySim input data from database records using dual storage.
+
+    This function queries the database for pre-extracted ActivitySim input tables
+    that were uploaded using the h5_to_database utility with dual storage support.
+    It can use either processed ActivitySim data or reprocess from raw UrbanSim data.
+
+    Args:
+        settings (PilatesConfig): PILATES settings dictionary.
+        state (WorkflowState): Workflow state.
+        workspace (Workspace): Workspace instance.
+        provenance_tracker (FileProvenanceTracker): For tracking provenance.
+        model_run_hash (Optional[str]): Current model run hash.
+
+    Returns:
+        List[FileRecord]: List of FileRecord objects for the created CSV files.
+
+    Raises:
+        ValueError: If the database is not configured but database input mode is enabled.
+        AssertionError: If the database manager is not a DuckDBManager (current limitation).
+    """
     """
     Create ActivitySim input data from database records using dual storage.
 
@@ -2873,11 +3725,29 @@ def create_asim_data_from_database(
 
 def create_asim_data_from_h5(
     settings: PilatesConfig,
-    state: WorkflowState,
+    state: "WorkflowState",
     workspace: "Workspace",
     provenance_tracker: "FileProvenanceTracker",
-    model_run_hash: str = None,
+    model_run_hash: Optional[str] = None,
 ) -> List[FileRecord]:
+    """
+    Create ActivitySim input data from UrbanSim H5 outputs.
+
+    This function reads household, person, job, and block data from UrbanSim's
+    H5 output files, processes them to be compatible with ActivitySim's input
+    requirements, and then generates the necessary CSV files (households.csv,
+    persons.csv, land_use.csv). All generated files are tracked for provenance.
+
+    Args:
+        settings (PilatesConfig): PILATES settings dictionary.
+        state (WorkflowState): Workflow state.
+        workspace (Workspace): Workspace instance.
+        provenance_tracker (FileProvenanceTracker): For tracking provenance.
+        model_run_hash (Optional[str]): Current model run hash.
+
+    Returns:
+        List[FileRecord]: List of FileRecord objects for the created CSV files.
+    """
     """
     Create ActivitySim input data from UrbanSim H5 outputs.
 
@@ -2906,7 +3776,7 @@ def create_asim_data_from_h5(
 
     # Load UrbanSim data
     usim_data_path = get_merged_usim_input_datastore_path(
-        settings, workspace.get_asim_mutable_data_dir()
+        settings, workspace.get_usim_mutable_data_dir()
     )
     usim_data_in = provenance_tracker.record_input_file(
         "activitysim_preprocessor",
