@@ -3526,6 +3526,12 @@ def _create_land_use_table(
     logger.info(zones.head())
     logger.info(zones.dtypes)
 
+    for col in zones.columns:
+        try:
+            zones[col] = zones[col].fillna(0.0)
+        except Exception as e:
+            logger.info(f"Generated exception when trying to fillna in zones: {e}")
+
     return zones
 
 
