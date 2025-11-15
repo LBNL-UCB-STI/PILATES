@@ -80,7 +80,7 @@ def prepare_beam_zone_shapefile(
             settings,
             workspace.full_path,
             "beam.agentsim.taz.filePath",
-            valueOverride=f'"{relative_shapefile_path}"',  # BEAM config needs quotes for paths
+            valueOverride='${beam.inputDirectory}'+'f"{relative_shapefile_path}"',  # BEAM config needs quotes for paths
         )
 
         # Update the TAZ ID column name
