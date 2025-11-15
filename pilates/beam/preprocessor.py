@@ -49,7 +49,7 @@ def prepare_beam_zone_shapefile(
         # 2. Define the path for the new, sorted shapefile
         region = settings.run.region
         beam_mutable_folder = workspace.get_beam_mutable_data_dir()
-        output_shapefile_name = "canonical_zones_sorted.shp"
+        output_shapefile_name = "canonical_zones_sorted.geojson"
         output_shapefile_path = os.path.join(
             beam_mutable_folder, region, "shape", output_shapefile_name
         )
@@ -59,7 +59,7 @@ def prepare_beam_zone_shapefile(
         logger.info(
             f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
         )
-        canonical_zones_gdf.to_file(output_shapefile_path, driver="ESRI Shapefile")
+        canonical_zones_gdf.to_file(output_shapefile_path, driver='GeoJSON')
 
         # Record the new shapefile as an output
         provenance_tracker.record_output_file(
