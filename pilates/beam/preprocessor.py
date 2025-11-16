@@ -84,12 +84,12 @@ def prepare_beam_zone_shapefile(
         )
 
         # Update the TAZ ID column name
-        canonical_id_col = settings.shared.geography.zones.canonical_id_col
+        activitysim_id_column = settings.shared.geography.zones.activitysim_index_col ## This gets renamed!
         update_beam_config(
             settings,
             workspace.full_path,
             "beam.agentsim.taz.tazIdFieldName",
-            valueOverride=canonical_id_col,
+            valueOverride=activitysim_id_column,
         )
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
