@@ -22,10 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.database_upload import create_database_manager
-from pilates.activitysim.preprocessor import (
-    _clean_activitysim_data_for_csv,
-    _create_minimal_placeholder,
-)
+
 from pilates.atlas.postprocessor import atlas_add_vehileTypeId
 from pilates.generic.records import PilatesRunInfo, FileRecord
 from datetime import datetime

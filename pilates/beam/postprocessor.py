@@ -8,7 +8,7 @@ import numpy as np
 import openmatrix as omx
 
 from pilates.config import PilatesConfig
-from pilates.utils.zone_utils import get_canonical_zones
+from pilates.utils.zone_utils import load_canonical_zones
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
 
@@ -2211,7 +2211,7 @@ def write_zarr_skim_as_omx(
 def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"):
     """
     Verifies that the zone order in a skim file (Zarr or OMX) matches the
-    canonical order from the canonical_zones.csv file.
+    canonical order from the canonical_zones file.
 
     Args:
         settings: The PilatesConfig object.
@@ -2224,10 +2224,10 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
     logger.info(f"--- Verifying zone order for skim file: {skim_file_path} ---")
 
     # 1. Get Canonical Order
-    canonical_zones_df = get_canonical_zones(workspace)
-    canonical_order = canonical_zones_df["zone_key"].tolist()
+    canonical_zones_df = load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.tolist()
     logger.info(
-        f"Successfully loaded canonical order for {len(canonical_order)} zones from canonical_zones.csv."
+        f"Successfully loaded canonical order for {len(canonical_order)} zones."
     )
 
     # 2. Get Skim File Order

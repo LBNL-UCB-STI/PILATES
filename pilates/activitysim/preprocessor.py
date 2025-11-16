@@ -21,15 +21,14 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
-    get_block_to_zone_mapping,
-    get_canonical_zones,
     load_canonical_zones,
 )
-from pilates.utils.io import get_merged_usim_input_datastore_path, read_datastore
+from pilates.utils.io import read_datastore
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
+from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +95,9 @@ def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     """
     Retrieves the ordered list of zone keys from the canonical zones file.
 
-    This function reads the authoritative `canonical_zones.csv` file to establish
-    a consistent order for zones, which is crucial for creating ordered skim matrices.
+    This function reads the authoritative zone definition file to establish
+    a consistent, sorted order for zones, which is crucial for creating
+    ordered skim matrices.
 
     Args:
         settings (PilatesConfig): The current PILATES settings object,
@@ -108,8 +108,10 @@ def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     Returns:
         np.ndarray: A one-dimensional NumPy array containing the ordered zone keys.
     """
-    canonical_zones_df = get_canonical_zones(settings, workspace)
-    order = canonical_zones_df["zone_key"].values
+    # Use load_canonical_zones to ensure a sorted, authoritative order.
+    canonical_zones_df = load_canonical_zones(settings, workspace)
+    # The index of the returned GeoDataFrame contains the sorted canonical zone IDs.
+    order = canonical_zones_df.index.values
     return order
 
 
@@ -262,7 +264,6 @@ def _load_raw_beam_skims(
             BEAM skims, or None if `blank` is True, or if the file is not found
             and `convertFromCsv` is False.
     """
-    zone_type = settings.shared.geography.zones.zone_type
     skims_fname = settings.shared.skims.fname
     path_to_beam_skims = os.path.join(settings.beam.local_output_folder, skims_fname)
 
@@ -801,7 +802,7 @@ def _distance_skims(
         output_skims["DIST"] = mx_dist
     elif missing.any():
         # If some distances are missing, impute only those.
-        orig, dest = np.where(missing == True)
+        orig, dest = np.where(missing)
         logger.info(f"Imputing {len(orig)} missing distance skims.")
         zones = load_canonical_zones(settings, workspace)
         imputed_dist = impute_distances(zones, orig, dest)
@@ -860,7 +861,6 @@ def _build_od_matrix_parallel(
         if len(df.index) == 0:
             mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
             # Mark as using defaults since no data was available.
-            useDefaults = True
         # Handle specific measures like 'FAR' (fare) or 'BOARDS' (boardings)
         elif (measure == "FAR") or (measure == "BOARDS"):
             mtx, useDefaults = _build_od_matrix(
@@ -877,7 +877,6 @@ def _build_od_matrix_parallel(
         else:
             # If the measure is not found, create a zero matrix and mark as using defaults.
             mtx = np.zeros((num_taz, num_taz), dtype=np.float32)
-            useDefaults = True # Explicitly set to True here for clarity
         out[measure] = mtx
     return out
 
@@ -909,7 +908,6 @@ def _transit_skims(
     logger.info("Creating transit skims.")
     transit_paths = settings.shared.skims.transit_paths
     periods = settings.shared.skims.periods
-    measure_map = settings.beam.asim_transit_measure_map
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
     fill_na = 0.0
@@ -922,7 +920,7 @@ def _transit_skims(
         ret_list = p.map(
             _build_od_matrix_parallel,
             [
-                (group.loc[name], measure_map, num_taz, order, fill_na)
+                (group.loc[name], settings.beam.asim_transit_measure_map, num_taz, order, fill_na)
                 for name, group in groupBy
             ],
         )
@@ -1177,7 +1175,6 @@ def _fill_transit_skims(
 
     transit_paths = settings.shared.skims.transit_paths
     periods = settings.shared.skims.periods
-    measure_map = settings.beam.asim_transit_measure_map
 
     num_taz = len(order)
 
@@ -1494,7 +1491,7 @@ def _auto_skims(
                     if missing.any():
                         # If there are missing values, attempt to impute them.
                         distances = np.array(skims["DIST"])
-                        orig, dest = np.where(missing == True)
+                        orig, dest = np.where(missing)
                         missing_measure = distances[orig, dest]
 
                         if measure == "DIST":
@@ -1926,7 +1923,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 try:
                     # Try to convert to numeric
                     clean_df[col] = pd.to_numeric(clean_df[col], errors="ignore")
-                except:
+                except Exception:
                     pass
 
         # Replace any NaN values with appropriate defaults
@@ -2529,7 +2526,7 @@ def _clean_activitysim_data_for_csv(df: pd.DataFrame, table_name: str) -> pd.Dat
             try:
                 # Try to convert to numeric
                 clean_df[col] = pd.to_numeric(clean_df[col], errors="ignore")
-            except:
+            except Exception:
                 pass
 
     # Replace any NaN values with appropriate defaults
@@ -2797,6 +2794,7 @@ def copy_beam_geoms(
     )
     zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
+    from pilates.utils.zone_utils import get_block_to_zone_mapping
     mapping = get_block_to_zone_mapping(
         settings, get_setting(settings, "run.start_year"), workspace
     )
@@ -3244,7 +3242,7 @@ def _update_blocks_table(
     zone_id_col = "{}_zone_id".format(zone_type)
 
     if zone_id_col not in blocks.columns:
-
+        from pilates.utils.zone_utils import get_block_to_zone_mapping
         mapping = get_block_to_zone_mapping(settings, year, workspace)
 
         if zone_type == "block":
@@ -3358,15 +3356,15 @@ def _create_land_use_table(
             ]
         try:
             zones.loc[:, "COUNTY"] = zones["COUNTY"].astype(str)
-        except:
+        except Exception:
             print("Skipping COUNTY")
         try:
             zones.loc[:, "TRACT"] = zones["TRACT"].astype(str)
-        except:
+        except Exception:
             print("Skipping TRACT")
         try:
             zones.loc[:, "BLKGRP"] = zones["BLKGRP"].astype(str)
-        except:
+        except Exception:
             print("Skipping BLKGRP")
 
     # --- Consolidated Persons Aggregation ---
@@ -3443,8 +3441,8 @@ def _create_land_use_table(
     # Check overlap
     zones_ids = set(zones.index.astype(str))
     persons_ids = set(persons_agg.index.astype(str))
-    households_ids = set(households_agg.index.astype(str))
-    jobs_ids = set(jobs_agg.index.astype(str))
+    # households_ids = set(households_agg.index.astype(str)) # Used only for diagnostic logging
+    # jobs_ids = set(jobs_agg.index.astype(str)) # Used only for diagnostic logging
 
     logger.info(
         f"Zone IDs in zones but not in persons_agg: {len(zones_ids - persons_ids)}"
@@ -3612,10 +3610,8 @@ def create_asim_data_from_database(
 
     try:
         with db_manager:
-            assert (
-                isinstance(db_manager, DuckDBManager),
-                "This doesn't work with databases beyond duckdb yet",
-            )
+            assert isinstance(db_manager, DuckDBManager), \
+                "This doesn't work with databases beyond duckdb yet"
             # Create ActivitySim input CSV files from database
             tables_created = 0
 
@@ -3778,19 +3774,20 @@ def create_asim_data_from_h5(
     asim_zone_id_col = "TAZ"
 
     # Get block to zone mapping
+    from pilates.utils.zone_utils import get_block_to_zone_mapping
     block_to_zone_map = get_block_to_zone_mapping(settings, state.year, workspace)
 
     # Load UrbanSim data
-    usim_data_path = get_merged_usim_input_datastore_path(
-        settings, workspace.get_usim_mutable_data_dir()
-    )
-    usim_data_in = provenance_tracker.record_input_file(
-        "activitysim_preprocessor",
-        usim_data_path,
-        short_name="usim_data",
-        description="UrbanSim H5 data",
-        model_run_id=model_run_hash,
-    )
+    # usim_data_path = get_merged_usim_input_datastore_path( # This variable is not used after assignment.
+    #     settings, workspace.get_usim_mutable_data_dir()
+    # )
+    # usim_data_in = provenance_tracker.record_input_file( # This variable is not used after assignment.
+    #     "activitysim_preprocessor",
+    #     usim_data_path,
+    #     short_name="usim_data",
+    #     description="UrbanSim H5 data",
+    #     model_run_id=model_run_hash,
+    # )
 
     # Read tables from UrbanSim H5
     store, prefix = read_datastore(settings, state.start_year)

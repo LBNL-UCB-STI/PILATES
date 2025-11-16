@@ -7,7 +7,7 @@ from shapely.geometry import Polygon
 from unittest.mock import MagicMock
 import yaml
 
-from pilates.beam.preprocessor import sort_beam_shapefile_by_canonical_order
+from pilates.beam.preprocessor import prepare_beam_zone_shapefile
 from pilates.config.models import load_config
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -145,7 +145,7 @@ class TestBeamPreprocessor:
 
         # Act
         # Call the function that performs the sorting
-        sort_beam_shapefile_by_canonical_order(
+        prepare_beam_zone_shapefile(
             mock_settings, mock_workspace, provenance_tracker, model_run_hash
         )
 

@@ -4,7 +4,6 @@ import pandas as pd
 import geopandas as gpd
 
 from pilates.config import PilatesConfig
-from pilates.workspace import Workspace
 
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_canonical_zones(
-    settings: PilatesConfig, workspace: Workspace
+    settings: PilatesConfig, workspace: "Workspace"
 ) -> gpd.GeoDataFrame:
     """
     Loads the canonical zone geometries from the mutable ActivitySim data directory,
@@ -73,27 +72,26 @@ def load_canonical_zones(
     return gdf
 
 
-def get_canonical_zones(settings: PilatesConfig, workspace: Workspace) -> pd.DataFrame:
+def get_canonical_zones(
+    settings: PilatesConfig, workspace: "Workspace"
+) -> pd.DataFrame:
     """
-    Reads the canonical zone definitions from the mutable ActivitySim data directory.
+    DEPRECATED: Use load_canonical_zones instead.
+
+    This function now delegates to `load_canonical_zones` to ensure a
+    sorted, canonical GeoDataFrame is always returned.
 
     Args:
         settings (PilatesConfig): The simulation configuration.
         workspace (Workspace): The workspace object.
 
     Returns:
-        pd.DataFrame: DataFrame with 'zone_key' and 'asim_id' columns.
+        pd.DataFrame: A sorted GeoDataFrame of canonical zones.
     """
-    zone_config = settings.shared.geography.zones
-    source_file_basename = os.path.basename(zone_config.source_file)
-
-    path = os.path.join(workspace.get_asim_mutable_data_dir(), source_file_basename)
-
-    if not os.path.exists(path):
-        zones = load_canonical_zones(settings, workspace)
-    else:
-        zones = gpd.read_file(path)
-    return zones
+    logger.warning(
+        "`get_canonical_zones` is deprecated and will be removed. Use `load_canonical_zones`."
+    )
+    return load_canonical_zones(settings, workspace)
 
 
 def get_block_to_zone_mapping(settings, year, workspace):

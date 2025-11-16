@@ -9,7 +9,6 @@ from tqdm import tqdm
 import os
 
 from pilates.utils.settings_helper import get as get_setting
-from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ def get_county_block_geoms(
     return gdf
 
 
-def get_block_geoms(settings, workspace: Workspace, data_dir="./tmp/", year=None):
+def get_block_geoms(settings, workspace: "Workspace", data_dir="./tmp/", year=None):
     region = get_setting(settings, "run.region") or "beam"
 
     # Handle both flat and nested FIPS config structures
