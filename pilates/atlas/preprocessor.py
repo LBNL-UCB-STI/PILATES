@@ -413,6 +413,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 measure_list,
                 settings,
                 self.state.forecast_year,
+                workspace,
             )
             logger.info("[AtlasPreprocessor] Accessibility calculation complete.")
 
@@ -440,35 +441,50 @@ class AtlasPreprocessor(GenericPreprocessor):
         return RecordStore(recordList=output_records)
 
 
-def compute_accessibility(path_list, measure_list, settings, year, threshold=500):
+def compute_accessibility(
+    path_list, measure_list, settings, year, workspace, threshold=500
+):
     # set where to put atlas csv inputs (processed from urbansim outputs)
-    atlas_input_path = settings.atlas.host_input_folder + "/year{}".format(year)
+    atlas_input_path = os.path.join(
+        workspace.get_atlas_mutable_input_dir(), f"year{year}"
+    )
+    os.makedirs(atlas_input_path, exist_ok=True)
+
+    # --- Get Canonical Zone Information ---
+    from pilates.utils.zone_utils import (
+        load_canonical_zones,
+        get_block_to_zone_mapping,
+    )
+
+    canonical_zones_df = load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.values
 
     # for each OD, compute minimum time taken by public transit
     # inf means no public transit available; unit = minute
-    ODmatrix = _get_time_ODmatrix(settings, path_list, measure_list, threshold)
+    ODmatrix_df = _get_time_ODmatrix(
+        settings, path_list, measure_list, threshold, workspace, canonical_order
+    )
 
     # assign values = 1 if time taken by public transit <= 30min; 0 if not
-    ODmatrix = ODmatrix <= 30
+    ODmatrix = ODmatrix_df <= 30
 
     # read and format geoid_to_zoneid mapping list
-    mapping = pd.read_csv(
-        "pilates/utils/data/{}/beam/geoid_to_zone.csv".format(settings.run.region)
-    )
-    mapping.index = mapping["GEOID"]
-    mapping = mapping["zone_id"].to_dict()
+    mapping = get_block_to_zone_mapping(settings, year, workspace)
 
     # read OD matrix size (i.e., range of zone_id)
     zone_count = ODmatrix.shape[0]
 
     # read in jobs data (keep low_memory=False to solve dtypeerror)
     jobs = pd.read_csv(
-        "{}/year{}/jobs.csv".format(settings.atlas.host_input_folder, year),
+        "{}/jobs.csv".format(atlas_input_path),
         low_memory=False,
     )
 
     # map jobs geoid to zone id in OD matrix
-    jobs["zone_id"] = jobs["block_id"].map(mapping)
+    jobs["zone_id"] = jobs["block_id"].astype(str).map(mapping)
+
+    # Drop jobs that couldn't be mapped to a zone
+    jobs.dropna(subset=["zone_id"], inplace=True)
 
     # count number of jobs for each block_id
     jobs_vector = (
@@ -481,13 +497,12 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
     jobs_vector = jobs_vector.groupby("zone_id").agg({"access_sum": "mean"})
 
     # make sure every zone id has a row in jobs_vector
-    jobs_vector = jobs_vector.reindex(list(range(1, zone_count + 1)), fill_value=0)
+    jobs_vector = jobs_vector.reindex(canonical_order, fill_value=0)
 
     # multiply OD matrix (o*d) with jobs vector (d*1)
     # to get number of jobs accessible by public transit within 30min
     accessibility = np.matmul(ODmatrix, jobs_vector)
     accessibility.index.name = "zone_id"
-    accessibility.index = accessibility.index + 1
 
     # # calculate taz-level zscore
     # accessibility['access_zscore'] = (accessibility['access_sum'] - accessibility['access_sum'].mean())/accessibility['access_sum'].std()
@@ -525,11 +540,13 @@ def compute_accessibility(path_list, measure_list, settings, year, threshold=500
     )
 
 
-def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
+def _get_time_ODmatrix(
+    settings, path_list, measure_list, threshold, workspace, canonical_order
+):
     # open skims file
     import openmatrix as omx
 
-    skims_dir = settings.activitysim.local_mutable_data_folder
+    skims_dir = workspace.get_asim_mutable_data_dir()
     skims = omx.open_file(os.path.join(skims_dir, "skims.omx"), mode="r")
 
     # find the path with minimum time for each o-d
@@ -562,4 +579,5 @@ def _get_time_ODmatrix(settings, path_list, measure_list, threshold):
         # divide by 100 to get minute values before returning
     ODmatrix = ODmatrix / 100
 
-    return ODmatrix
+    skims.close()
+    return pd.DataFrame(ODmatrix, index=canonical_order, columns=canonical_order)

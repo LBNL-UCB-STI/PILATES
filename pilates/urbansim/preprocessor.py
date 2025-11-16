@@ -34,36 +34,35 @@ skim_dtypes = {
 }
 
 
-def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
+def _load_raw_skims(
+    settings, asim_data_dir, usim_data_dir, skim_format, workspace
+):
+    """
+    Load raw skims and format for UrbanSim, ensuring canonical zone order.
+    """
+    from pilates.utils.zone_utils import load_canonical_zones
+
+    # Get the authoritative, sorted list of zone IDs
+    canonical_zones_df = load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.values
+
     skims_fname = settings.shared.skims.fname
 
     try:
         if skim_format == "beam":
             if skims_fname.endswith("csv"):
                 raise NotImplementedError("DEMOS requires skims in omx format, not csv")
-                # path_to_skims = os.path.join(
-                #     settings.beam.local_output_folder, skims_fname
-                # )
-                # # load skims from disk or url
-                # skims = pd.read_csv(path_to_skims, dtype=skim_dtypes)
-                # skims = skims.loc[
-                #     (skims["pathType"] == "SOV") & (skims["timePeriod"] == "AM")
-                # ]
-                # skims = skims[
-                #     ["origin", "destination", "TOTIVT_IVT_minutes", "DIST_meters"]
-                # ]
-                # skims = skims.rename(
-                #     columns={
-                #         "origin": "from_zone_id",
-                #         "destination": "to_zone_id",
-                #         "TOTIVT_IVT_minutes": "SOV_AM_IVT_mins",
-                #     }
-                # )
+
             elif skims_fname.endswith("omx"):
                 skims_fname = "skims.omx"
                 mutable_skims_location = os.path.join(asim_data_dir, skims_fname)
+                # This copy seems redundant if the file is already in the right place,
+                # but preserving original logic for now.
+                region_id = settings.urbansim.region_mappings["region_to_region_id"][
+                    settings.run.region
+                ]
                 input_skims_location = "pilates/urbansim/data/skims_mpo_{0}.omx".format(
-                    settings.urbansim.region_id
+                    region_id
                 )
                 logger.info(
                     "Copying skims from {0} to {1} for urbansim".format(
@@ -71,18 +70,22 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                     )
                 )
                 shutil.copyfile(mutable_skims_location, input_skims_location)
-                skims = omx.open_file(mutable_skims_location, "r")
-                zone_ids = skims.mapping("zone_id").keys()
-                index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
-                columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
-                travel_time_mins = np.array(skims["SOV_TIME__AM"])
-                out = (
-                    pd.DataFrame(travel_time_mins, index=index, columns=columns)
-                    .stack()
-                    .rename("SOV_AM_IVT_mins")
-                )
-                skims.close()
-                return out.to_frame()
+
+                with omx.open_file(mutable_skims_location, "r") as skims:
+                    # Use the canonical order for the DataFrame index and columns
+                    index = pd.Index(canonical_order, name="from_zone_id", dtype=str)
+                    columns = pd.Index(canonical_order, name="to_zone_id", dtype=str)
+                    
+                    # The skim matrix data is assumed to be in the canonical order
+                    # as enforced by the ActivitySim preprocessor.
+                    travel_time_mins = np.array(skims["SOV_TIME__AM"])
+                    out = (
+                        pd.DataFrame(travel_time_mins, index=index, columns=columns)
+                        .stack()
+                        .rename("SOV_AM_IVT_mins")
+                    )
+                    return out.to_frame()
+
             elif skims_fname.endswith("zarr"):
                 beam_output_dir = settings.beam.local_output_folder
                 skims_fname = settings.shared.skims.fname
@@ -99,52 +102,34 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format):
                     )
                 )
 
-                # Copy zarr directory (it's a directory, not a single file)
                 if os.path.exists(input_skims_location):
                     shutil.rmtree(input_skims_location)
                 shutil.copytree(mutable_skims_location, input_skims_location)
 
                 import xarray as xr
 
-                ds = xr.open_zarr(mutable_skims_location)
+                with xr.open_zarr(mutable_skims_location) as ds:
+                    # Use the canonical order for the DataFrame index and columns
+                    index = pd.Index(canonical_order, name="from_zone_id", dtype=str)
+                    columns = pd.Index(canonical_order, name="to_zone_id", dtype=str)
 
-                # Get zone IDs
-                zone_ids = ds.coords["otaz"].values
-                zone_ids = [str(z) for z in zone_ids]
+                    # Get AM time period data
+                    am_idx = list(ds.coords["time_period"].values).index("AM")
+                    travel_time_data = ds["SOV_TIME"].isel(time_period=am_idx).values
 
-                # Get AM time period data
-                am_idx = list(ds.coords["time_period"].values).index("AM")
-                travel_time_data = ds["SOV_TIME"].isel(time_period=am_idx).values
-
-                # Create DataFrame
-                index = pd.Index(zone_ids, name="from_zone_id", dtype=str)
-                columns = pd.Index(zone_ids, name="to_zone_id", dtype=str)
-                travel_time_mins = np.array(travel_time_data)
-                out = (
-                    pd.DataFrame(travel_time_mins, index=index, columns=columns)
-                    .stack()
-                    .rename("SOV_AM_IVT_mins")
-                )
-
-                return out.to_frame()
+                    travel_time_mins = np.array(travel_time_data)
+                    out = (
+                        pd.DataFrame(travel_time_mins, index=index, columns=columns)
+                        .stack()
+                        .rename("SOV_AM_IVT_mins")
+                    )
+                    return out.to_frame()
             else:
                 raise NotImplementedError(
                     "Invalid skim format {0}".format(skims_fname.split(".")[-1])
                 )
         elif skim_format == "polaris":
             raise NotImplementedError("DEMOS requires skims in omx format, not polaris")
-            # path_to_skims = os.path.join(
-            #     settings["polaris_local_data_folder"], skims_fname
-            # )
-            # f = h5py.File(path_to_skims, "r")
-            # ivtt_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["ivtt"]))
-            # cost_8_9 = pd.DataFrame(list(f["auto_skims"]["t4"]["cost"]))
-            # f.close()
-            # ivtt_8_9 = pd.DataFrame(ivtt_8_9.stack(), columns=["auto_ivtt_8_9_am"])
-            # cost_8_9 = pd.DataFrame(cost_8_9.stack(), columns=["auto_cost_8_9_am"])
-            # skims = ivtt_8_9.join(cost_8_9)
-            # skims.index.names = ["from_zone_id", "to_zone_id"]
-            # skims = skims.reset_index()
 
     except KeyError:
         raise KeyError("Couldn't find input skims named {0}".format(skims_fname))

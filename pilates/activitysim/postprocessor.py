@@ -343,7 +343,7 @@ def create_usim_input_data(
 
     # load last iter UrbanSim output data
     usim_output_store, table_prefix_year = read_datastore(
-        settings, forecast_year, mutable_data_dir=workspace.full_path
+        settings, forecast_year, mutable_data_dir=workspace.get_usim_mutable_data_dir()
     )
 
     logger.info("Merging results back into UrbanSim format and storing as .h5!")

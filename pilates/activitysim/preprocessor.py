@@ -28,7 +28,6 @@ from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
-from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -3790,7 +3789,11 @@ def create_asim_data_from_h5(
     # )
 
     # Read tables from UrbanSim H5
-    store, prefix = read_datastore(settings, state.start_year)
+    store, prefix = read_datastore(
+        settings,
+        state.start_year,
+        mutable_data_dir=workspace.get_usim_mutable_data_dir(),
+    )
     households = store[prefix + "/households"]
     persons = store[prefix + "/persons"]
     jobs = store[prefix + "/jobs"]
