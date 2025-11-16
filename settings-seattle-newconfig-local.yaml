@@ -40,7 +40,7 @@ shared:
     zones:
       zone_type: "block_group"
       source_file: "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson"
-      canonical_id_col: "OBJECTID"
+      canonical_id_col: "TAZ"
       activitysim_index_col: "TAZ"
   skims:
     fname: as-base-skims-seattle-bg.omx
