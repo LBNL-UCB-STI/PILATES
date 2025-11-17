@@ -2606,6 +2606,7 @@ def enrollment_tables(
         enrollment[asim_zone_id_col] = enrollment[asim_zone_id_col].astype(str)
         del enrollment_df
         logger.info("Saving {} enrollment data to disk!".format(enrollment_type))
+        os.makedirs(os.path.dirname(path_to_schools_data), exist_ok=True) # Create directory if it doesn't exist
         enrollment.to_csv(path_to_schools_data)
 
     return enrollment

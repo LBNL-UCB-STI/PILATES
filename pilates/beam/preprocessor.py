@@ -94,6 +94,8 @@ def prepare_beam_zone_shapefile(
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
 
+        return output_shapefile_path
+
     except Exception as e:
         logger.error(
             f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
