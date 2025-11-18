@@ -968,7 +968,7 @@ class BeamPreprocessor(GenericPreprocessor):
         # If this is a replanning iteration, we need to get the outputs from the previous BEAM run
         if self.state.current_inner_iter > 0:
             previous_beam_records = (
-                self.provenance_tracker.run_info.get_model_run_output_records(
+                self.provenance_tracker.run_info.get_latest_model_run_output_records(
                     "beam",
                     year=self.state.current_year,
                     iteration=self.state.current_inner_iter - 1,
