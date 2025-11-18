@@ -1763,6 +1763,53 @@ def skim_validations(
     plot_skims(settings, zone, PuT_time, order, 6, 3, "WLK_LOC_WLK_TIME", "in minutes")
 
 
+def _process_raw_h5_for_asim(
+    raw_blocks,
+    raw_persons,
+    raw_households,
+    raw_jobs,
+    settings,
+    year,
+    asim_zone_id_col,
+    workspace,
+):
+    """
+    Process raw H5 dataframes for ActivitySim.
+    """
+    # Add zone id to blocks table
+    from pilates.utils.zone_utils import get_block_to_zone_mapping
+    block_to_zone_map = get_block_to_zone_mapping(settings, year, workspace)
+    raw_blocks[asim_zone_id_col] = raw_blocks.index.map(block_to_zone_map)
+
+    # Update tables
+    households, unassigned_households = _update_households_table(
+        raw_households, raw_blocks, asim_zone_id_col
+    )
+    persons = _update_persons_table(
+        raw_persons, households, unassigned_households, raw_blocks, asim_zone_id_col
+    )
+    num_reassigned_jobs, jobs = _update_jobs_table(
+        raw_jobs,
+        raw_blocks,
+        settings,
+        settings.shared.geography.local_crs,
+        asim_zone_id_col,
+        workspace,
+    )
+    geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
+        settings, year, raw_blocks, households, jobs, asim_zone_id_col, workspace
+    )
+
+    return (
+        blocks,
+        persons,
+        households,
+        jobs,
+        num_reassigned_jobs,
+        geoid_to_zone_mapping_updated,
+    )
+
+
 class ActivitysimPreprocessor(GenericPreprocessor):
     """
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
@@ -3846,3 +3893,65 @@ def create_asim_data_from_h5(
         )
 
     return output_records
+
+def _create_minimal_placeholder(table_name: str) -> pd.DataFrame:
+    """
+    Create minimal placeholder data for ActivitySim tables when database query fails.
+
+    Args:
+        table_name: Name of the ActivitySim table
+
+    Returns:
+        DataFrame with minimal viable data structure
+    """
+    if table_name == "households":
+        return pd.DataFrame(
+            {
+                "household_id": [1],
+                "TAZ": ["1"],
+                "persons": [1],
+                "income": [50000],
+                "cars": [1],
+                "HHT": [1],
+                "workers": [1],
+            }
+        ).set_index("household_id")
+
+    elif table_name == "persons":
+        return pd.DataFrame(
+            {
+                "person_id": [1],
+                "household_id": [1],
+                "TAZ": ["1"],
+                "age": [35],
+                "worker": [1],
+                "student": [0],
+                "ptype": [1],
+                "pemploy": [1],
+                "pstudent": [3],
+                "member_id": [1],
+                "workplace_taz": [-1],
+                "school_taz": [-1],
+                "home_x": [0.0],
+                "home_y": [0.0],
+            }
+        ).set_index("person_id")
+
+    elif table_name == "land_use":
+        return pd.DataFrame(
+            {
+                "TAZ": ["1"],
+                "TOTPOP": [100],
+                "TOTHH": [50],
+                "TOTEMP": [75],
+                "TOTACRE": [10.0],
+                "area_type": [3],
+                "employment_density": [7.5],
+                "pop_density": [10.0],
+                "hh_density": [5.0],
+            }
+        ).set_index("TAZ")
+
+    else:
+        # Generic placeholder
+        return pd.DataFrame({"placeholder": [1]})

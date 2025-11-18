@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from pilates.generic.initialization import Initialization
 from pilates.generic.records import RecordStore, Record
 from unittest.mock import patch
+import json
 
 # ----------------------------------------------------------------------
 # Dummy objects to replace real model components
@@ -97,9 +98,29 @@ def test_initialization_runs_beam_and_urbansim(mock_generate_canonical_zones_fil
         shared=SimpleNamespace(
             skims=SimpleNamespace(
                 zone_type="block_group"
+            ),
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file="/tmp/canonical_zones.geojson",
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key"
+                )
             )
         )
     )
+
+    # Create a dummy canonical_zones.geojson in the mocked mutable directory
+    canonical_zones_path = os.path.join(workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson")
+    dummy_geojson_content = {
+        "type": "FeatureCollection",
+        "features": []
+    }
+    with open(canonical_zones_path, "w") as f:
+        json.dump(dummy_geojson_content, f)
+
+    # Update settings to point to this dummy file
+    settings.shared.geography.zones.source_file = canonical_zones_path
 
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
@@ -152,9 +173,29 @@ def test_initialization_handles_missing_models_gracefully(mock_generate_canonica
         shared=SimpleNamespace(
             skims=SimpleNamespace(
                 zone_type="block_group"
+            ),
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file="/tmp/canonical_zones.geojson",
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key"
+                )
             )
         )
     )
+
+    # Create a dummy canonical_zones.geojson in the mocked mutable directory
+    canonical_zones_path = os.path.join(workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson")
+    dummy_geojson_content = {
+        "type": "FeatureCollection",
+        "features": []
+    }
+    with open(canonical_zones_path, "w") as f:
+        json.dump(dummy_geojson_content, f)
+
+    # Update settings to point to this dummy file
+    settings.shared.geography.zones.source_file = canonical_zones_path
 
     # Should complete without exception
     init.run(settings, workspace)

@@ -6,6 +6,7 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 from unittest.mock import MagicMock
 import yaml
+import json
 
 from pilates.beam.preprocessor import prepare_beam_zone_shapefile
 from pilates.config.models import load_config
@@ -29,14 +30,23 @@ def mock_workspace(tmp_path):
 
     workspace.get_beam_mutable_data_dir.return_value = beam_mutable_dir
     workspace.get_usim_mutable_data_dir.return_value = usim_mutable_dir
+    workspace.get_asim_mutable_data_dir.return_value = tmp_path
     
-    # Create a dummy canonical_zones.csv
-    canonical_zones_df = pd.DataFrame({
-        'zone_key': CANONICAL_GEOID_ORDER,
-        'asim_id': range(1, len(CANONICAL_GEOID_ORDER) + 1)
-    })
-    canonical_zones_path = tmp_path / "canonical_zones.csv"
-    canonical_zones_df.to_csv(canonical_zones_path, index=False)
+    # Create a dummy canonical_zones.geojson
+    geojson_path = tmp_path / "canonical_zones.geojson"
+    geojson_content = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"zone_key": geoid},
+                "geometry": {"type": "Point", "coordinates": [0, 0]},
+            }
+            for idx, geoid in enumerate(CANONICAL_GEOID_ORDER)
+        ],
+    }
+    with open(geojson_path, "w") as f:
+        json.dump(geojson_content, f)
 
     return workspace
 
@@ -96,13 +106,22 @@ def mock_settings(tmp_path, mock_h5_datastore, mock_beam_shapefile):
             "models": {"travel": "beam"}
         },
         "shared": {
-            "geography": {"FIPS": {"seattle": {}}, "local_crs": "EPSG:32048"},
+            "geography": {
+                "FIPS": {"seattle": {}},
+                "local_crs": "EPSG:32048",
+                "zones": {
+                    "source_file": str(tmp_path / "canonical_zones.geojson"),
+                    "activitysim_index_col": "TAZ",
+                    "zone_type": "block_group", # Added for Pydantic validation
+                    "canonical_id_col": "zone_key" # Added for Pydantic validation
+                }
+            },
             "skims": {"zone_type": "block_group", "fname": "", "geoms_fname": "", "geoms_index_col": ""},
             "database": {"enabled": False, "type": "duckdb", "path": ""}
         },
         "infrastructure": {"container_manager": "docker", "docker_images": {}, "docker_config": {}},
         "beam": {
-            "config": "",
+            "config": "beam.conf",
             "local_input_folder": "pilates/beam/production", # Not used by test, but required by model
             "local_mutable_data_folder": "beam/input",
             "skims_shapefile": "shape/test_zones.shp",

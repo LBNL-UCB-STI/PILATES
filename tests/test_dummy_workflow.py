@@ -91,7 +91,7 @@ from pilates.generic.records import (
     H5FileRecord,
     H5TableRecord,
     FileRecord,
-    RecordStore,
+    RecordStore, ModelRunInfo,
 )
 from pilates.utils.provenance import OpenLineageTracker
 from pilates.utils.duckdb_manager import DuckDBManager
@@ -452,7 +452,7 @@ class DummyModelARunner(GenericRunner):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
-    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
+    def _run(self, store: RecordStore, workspace: Workspace) -> Tuple[RecordStore, ModelRunInfo]:
         output_dir = workspace.output_dir
         # Extract paths from the RecordStore
         csv_record = get_record_by_short_name(store, "data.csv")
@@ -538,7 +538,7 @@ class DummyModelARunner(GenericRunner):
                     output_h5_table_record,
                 ]
             ),
-            None,
+            ModelRunInfo(model=self.model_name, year=year),
         )
 
 
@@ -722,7 +722,7 @@ class DummyModelBRunner(GenericRunner):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
-    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
+    def _run(self, store: RecordStore, workspace: Workspace) -> Tuple[RecordStore, ModelRunInfo]:
         output_dir = workspace.output_dir
         csv_record = get_record_by_short_name(
             store, f"model_a_final_output_{self.state.current_year}.csv"
@@ -810,7 +810,7 @@ class DummyModelBRunner(GenericRunner):
                     output_h5_table_record,
                 ]
             ),
-            None,
+            ModelRunInfo(model=self.model_name, year=year),
         )
 
 

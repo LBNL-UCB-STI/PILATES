@@ -2,13 +2,13 @@ import logging
 import os
 import shutil
 import time
-from typing import Optional
+from typing import Optional, List
 
 import numpy as np
 import openmatrix as omx
 
 from pilates.config import PilatesConfig
-from pilates.utils.zone_utils import load_canonical_zones
+import pilates.utils.zone_utils as zone_utils
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
 
@@ -157,46 +157,26 @@ def copy_skims_for_unobserved_modes(mapping, skims_ds):
     """
     logger.info("Copying skims for unobserved modes...")
     for fromMode, toModes in mapping.items():
-        # Find all skim variables starting with the source mode
-        # Exclude TRIPS and FAILURES as these represent observed demand, not skim values
-        # Exclude measures that might have mode-specific meanings or are handled separately
-        # e.g., "TOLL" skims should not be copied onto non-toll modes, but the mapping is SOV -> SOVTOLL etc.
-        # The original code copied *all* relevant skim keys. Let's refine this.
-        # A better approach is to specify which measures should be copied.
-        # However, sticking to the original behavior of copying most things except TRIPS/FAILURES
-        # and assuming the measures list in settings covers what's needed.
-        # Let's copy based on the existence of the target key format in the dataset.
+        # Quick fix for config issue where a string is provided instead of a list
+        if isinstance(toModes, str):
+            toModes = [toModes]
 
-        # Get all variable names in the dataset
         all_vars = list(skims_ds.data_vars)
 
         for var_name in all_vars:
-            # Check if the variable name starts with the source mode path
-            # and is not TRIPS, FAILURES, or TNC specific (handled elsewhere)
             if var_name.startswith(fromMode + "_") and not any(
                 m in var_name for m in ["_TRIPS", "_FAILURES"]
             ):
-                # Check if this measure should be copied (avoid copying e.g. SOV_TOLL to HOV)
-                if (
-                    "TOLL" in var_name.split("_")[0]
-                ):  # Check if the mode itself contains TOLL
-                    continue  # Don't use TOLL skims as sources to copy FROM
+                if "TOLL" in var_name.split("_")[0]:
+                    continue
 
-                # Extract the measure name (assuming format SOV_MEASURE or SOVTOLL_MEASURE)
-                measure_parts = var_name.split("_", 1)
-                if len(measure_parts) < 2:
-                    continue  # Skip if not in expected format
+                # Correctly extract measure name for complex mode names
+                measure_name = var_name[len(fromMode) + 1 :]
 
-                measure_name = measure_parts[1]  # e.g., "TOTIVT"
-
-                # For each target mode, construct the expected target variable name
                 for toMode in toModes:
                     target_var_name = f"{toMode}_{measure_name}"
 
-                    # Check if the target variable exists in the dataset
                     if target_var_name in all_vars:
-                        # Perform the copy using .data
-                        # Check shape compatibility - they should be the same (zones, zones, periods)
                         if skims_ds[var_name].shape == skims_ds[target_var_name].shape:
                             skims_ds[target_var_name].data[:] = skims_ds[var_name].data[
                                 :
@@ -2208,7 +2188,7 @@ def write_zarr_skim_as_omx(
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
 
-def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"):
+def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace") -> List[str]:
     """
     Verifies that the zone order in a skim file (Zarr or OMX) matches the
     canonical order from the canonical_zones file.
@@ -2224,7 +2204,7 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
     logger.info(f"--- Verifying zone order for skim file: {skim_file_path} ---")
 
     # 1. Get Canonical Order
-    canonical_zones_df = load_canonical_zones(settings, workspace)
+    canonical_zones_df = zone_utils.load_canonical_zones(settings, workspace)
     canonical_order = canonical_zones_df.index.tolist()
     logger.info(
         f"Successfully loaded canonical order for {len(canonical_order)} zones."
@@ -2289,7 +2269,7 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
         logger.warning(
             f"Unsupported file type for zone order verification: {skim_file_path}"
         )
-        return
+        return canonical_order
 
     # 3. Compare Orders
     try:
@@ -2336,6 +2316,8 @@ def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace"
 
     logger.info("--- Zone order verification successful. ---")
 
+    return canonical_order
+
 
 def _merge_beam_skims_to_zarr(
     all_skims_path,
@@ -2365,6 +2347,11 @@ def _merge_beam_skims_to_zarr(
     """
     logger.info(f"Starting merge of current BEAM skims into Zarr at {all_skims_path}")
 
+    # Load canonical order for coordinate validation and correction
+    canonical_zones_df = zone_utils.load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.tolist()
+    logger.info(f"DEBUG: Loaded canonical order for {len(canonical_order)} zones.")
+
     # Determine input format and find skims
     partialSkims = None
     partial_skims_ds = None
@@ -2384,12 +2371,14 @@ def _merge_beam_skims_to_zarr(
         logger.warning("No current skims found. Skipping merge.")
         return None, existing_zarr_manager
 
-    # ---> INSERT RUNTIME VERIFICATION HERE <---
-    verify_skim_zone_order(settings, current_skims_path, workspace)
+    canonical_order = verify_skim_zone_order(settings, current_skims_path, workspace)
 
     if current_skims_path.endswith(".zarr"):
         input_format = "zarr"
         partial_skims_ds = xr.open_zarr(current_skims_path)
+        logger.info(
+            f"DEBUG: Partial (BEAM) skims otaz coords: {partial_skims_ds.coords['otaz'].values[:5]}...{partial_skims_ds.coords['otaz'].values[-5:]}"
+        )
     else:
         input_format = "omx"
         partialSkims = omx.open_file(current_skims_path, mode="r")
@@ -2398,6 +2387,9 @@ def _merge_beam_skims_to_zarr(
     try:
         skims_ds = xr.open_zarr(all_skims_path)
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
+        logger.info(
+            f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
+        )
 
         # Store original zone IDs if needed
         if "original_zone_ids" not in skims_ds.attrs:
@@ -2408,12 +2400,15 @@ def _merge_beam_skims_to_zarr(
                 ]
             else:
                 # Get from settings
-                original_zone_ids = zone_order(
-                    settings, get_setting(settings, "run.start_year", 2015)
+                canonical_zones_df = zone_utils.load_canonical_zones(
+                    settings, workspace
                 )
-                skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
+                original_zone_ids = canonical_zones_df.index.tolist()
+                skims_ds.attrs["original_zone_ids"] = original_zone_ids
     except Exception as e:
         logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
+        if partial_skims_ds:
+            partial_skims_ds.close()
         return None, None  # Indicate failure
 
     timePeriods = get_setting(settings, "shared.skims.periods")
@@ -2454,8 +2449,11 @@ def _merge_beam_skims_to_zarr(
                     completed_failed_dict_all,
                 )
             logger.info(f"Processed TNC modes: {tnc_modes_processed}")
+            logger.info(
+                f"DEBUG: skims_ds otaz coords after TNC logic: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
+            )
         except Exception as e:
-            logger.error(f"Failed to process TNC logic: {e}")
+            logger.error(f"Failed to process TNC logic: {e}", exc_info=True)
     else:
         logger.warning(
             "No new OMX skims found. Reconstructing TNC/RH trip counts from existing Zarr data for post-processing."
@@ -2678,6 +2676,16 @@ def _merge_beam_skims_to_zarr(
     # Use mode='w' to overwrite with the updated data, consolidated=True for performance
     # Ensure zarr_version=2 for compatibility
     try:
+        # Defensively ensure coordinates are correct before saving, to counteract any
+        # potential corruption or misalignment that may have occurred during the merge.
+        expected_coords = np.arange(len(canonical_order))
+        if not np.array_equal(skims_ds.coords["otaz"].values, expected_coords):
+            logger.warning("Correcting 'otaz' coordinates to be 0-based before final save.")
+            skims_ds = skims_ds.assign_coords(otaz=expected_coords)
+        if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
+            logger.warning("Correcting 'dtaz' coordinates to be 0-based before final save.")
+            skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
+
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
         # Add the 'preprocessed' attribute now that we've verified coordinates are 0-based
         if "preprocessed" not in skims_ds["otaz"].attrs:
@@ -2769,7 +2777,7 @@ def _process_all_tnc_logic_zarr(
     Process TNC/RH logic for Zarr format partial skims.
     Either consolidates TNC providers into RH modes or transfers them directly.
     """
-    consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
     tnc_modes_processed = set()
 
     if consolidate_tnc_fleets:
@@ -2979,7 +2987,7 @@ def _process_all_tnc_logic(
     set
         A set of Zarr variable names that were created/updated by this function (TNC provider or RH consolidated).
     """
-    consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
     processed_vars = set()
     tnc_modes_to_postprocess = set()
     completed_failed_dict_for_postprocess = (

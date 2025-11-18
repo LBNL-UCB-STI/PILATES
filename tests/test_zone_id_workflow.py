@@ -224,6 +224,17 @@ class TestZoneIdWorkflow:
         })
         mock_get_school_enrollment.return_value = dummy_enrollment_data
 
+        # Configure the mock to return a dummy GeoDataFrame for block geoms
+        dummy_block_geoms = gpd.GeoDataFrame({
+            'GEOID': ['1', '2', '3'],
+            'geometry': [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+                Polygon([(0, 1), (1, 1), (1, 2), (0, 2)]),
+            ]
+        }, crs="EPSG:4326")
+        mock_download_geoms.return_value = dummy_block_geoms
+
         # This test follows the data flow of zone IDs, ensuring they are
         # correctly sorted and aligned at each stage of the process.
 

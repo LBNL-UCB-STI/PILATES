@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.database_upload import create_database_manager
+from pilates.utils.provenance import FileProvenanceTracker
+from workflow_state import WorkflowState
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor, _create_minimal_placeholder
 
 from pilates.atlas.postprocessor import atlas_add_vehileTypeId
 from pilates.generic.records import PilatesRunInfo, FileRecord
@@ -711,6 +714,18 @@ class TestDatabaseComponents(unittest.TestCase):
         """Test data cleaning functions for ActivitySim compatibility."""
         print("\n🧹 Testing data cleaning functions...")
 
+        # Create dummy WorkflowState and FileProvenanceTracker for ActivitysimPreprocessor
+        dummy_state = WorkflowState.from_settings(self.settings)
+        dummy_provenance_tracker = FileProvenanceTracker(
+            run_id="dummy_run_id",
+            output_path=self.temp_dir,
+        )
+        preprocessor = ActivitysimPreprocessor(
+            model_name="activitysim",
+            state=dummy_state,
+            provenance_tracker=dummy_provenance_tracker,
+        )
+
         # Test households cleaning
         raw_households_df = pd.DataFrame(
             {
@@ -724,7 +739,7 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_df = _clean_activitysim_data_for_csv(raw_households_df, "households")
+        cleaned_df = preprocessor._clean_activitysim_data(raw_households_df, "households")
 
         # Check metadata columns were removed
         self.assertNotIn("id", cleaned_df.columns)
@@ -749,7 +764,7 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_persons = _clean_activitysim_data_for_csv(raw_persons_df, "persons")
+        cleaned_persons = preprocessor._clean_activitysim_data(raw_persons_df, "persons")
         self.assertEqual(cleaned_persons.index.name, "person_id")
         print("   ✅ Persons cleaning successful")
 
@@ -762,7 +777,7 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_landuse = _clean_activitysim_data_for_csv(raw_landuse_df, "land_use")
+        cleaned_landuse = preprocessor._clean_activitysim_data(raw_landuse_df, "land_use")
         self.assertEqual(cleaned_landuse.index.name, "TAZ")
         print("   ✅ Land use cleaning successful")
 

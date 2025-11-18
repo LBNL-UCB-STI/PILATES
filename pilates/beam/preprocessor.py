@@ -59,6 +59,8 @@ def prepare_beam_zone_shapefile(
         logger.info(
             f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
         )
+        canonical_zones_gdf = canonical_zones_gdf.reset_index()
+        canonical_zones_gdf = canonical_zones_gdf.sort_values(by=settings.beam.skim_zone_geoid_col)
         canonical_zones_gdf.to_file(output_shapefile_path, driver='GeoJSON')
 
         # Record the new shapefile as an output

@@ -27,12 +27,11 @@ import h5py
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from pilates.utils.database_upload import create_database_manager
 from pilates.activitysim.preprocessor import (
-    read_zone_geoms,
-    process_raw_h5_files,
+    _process_raw_h5_for_asim,
     _create_land_use_table,
 )
-from pilates.utils.database_upload import create_database_manager
 from pilates.generic.records import (
     FileRecord,
     PilatesRunInfo,
@@ -86,6 +85,7 @@ class H5ActivitySimExtractor:
         self,
         h5_path: str,
         settings: Dict[str, Any],
+        workspace: "Workspace",
         run_id: Optional[str] = None,
         parallel_uploads: bool = True,
         max_workers: int = 1,
@@ -96,12 +96,14 @@ class H5ActivitySimExtractor:
         Args:
             h5_path: Path to UrbanSim H5 file
             settings: PILATES settings for database configuration
+            workspace: The current workspace object
             run_id: Optional run ID, will generate if not provided
             parallel_uploads: Whether to enable parallel table uploads
             max_workers: Maximum number of parallel upload workers
         """
         self.h5_path = os.path.abspath(h5_path)
         self.settings = settings
+        self.workspace = workspace
         self.run_id = run_id or f"h5-extract-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         self.parallel_uploads = parallel_uploads
         self.max_workers = max_workers
@@ -423,7 +425,7 @@ class H5ActivitySimExtractor:
             processed_jobs,
             num_reassigned,
             blocks_to_taz_mapping_updated,
-        ) = process_raw_h5_files(
+        ) = _process_raw_h5_for_asim(
             raw_blocks,
             raw_persons,
             raw_households,
@@ -431,6 +433,7 @@ class H5ActivitySimExtractor:
             self.settings,
             year,
             asim_zone_id_col,
+            self.workspace,
         )
 
         extracted_data = {
@@ -508,13 +511,13 @@ class H5ActivitySimExtractor:
             )
 
             (
-                raw_blocks,
-                raw_persons,
-                raw_households,
-                raw_jobs,
+                processed_blocks,
+                processed_persons,
+                processed_households,
+                processed_jobs,
                 num_reassigned,
                 blocks_to_taz_mapping_updated,
-            ) = process_raw_h5_files(
+            ) = _process_raw_h5_for_asim(
                 raw_blocks,
                 raw_persons,
                 raw_households,
@@ -522,14 +525,15 @@ class H5ActivitySimExtractor:
                 self.settings,
                 year,
                 asim_zone_id_col,
+                self.workspace,
             )
             land_use_df = _create_land_use_table(
                 self.settings,
                 zones,
-                raw_households,
-                raw_persons,
-                raw_jobs,
-                raw_blocks,
+                processed_households,
+                processed_persons,
+                processed_jobs,
+                processed_blocks,
             )
             return land_use_df
 
@@ -972,9 +976,12 @@ Examples:
 
     try:
         # Create extractor
+        from pilates.workspace import Workspace
+        workspace = Workspace(settings)
         extractor = H5ActivitySimExtractor(
             args.h5_file,
             settings,
+            workspace,
             args.run_id,
             parallel_uploads=args.parallel_uploads,
             max_workers=args.max_workers,

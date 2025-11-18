@@ -102,6 +102,9 @@ def get_block_geoms(settings, workspace: "Workspace", data_dir="./tmp/", year=No
     all_block_geoms = []
     file_name = "{0}_{1}.shp".format("block", region)
 
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
     if os.path.exists(os.path.join(data_dir, file_name)):
         logger.info("Loading block geoms from disk!")
         blocks_gdf = gpd.read_file(os.path.join(data_dir, file_name))
