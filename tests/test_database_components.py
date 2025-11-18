@@ -16,6 +16,8 @@ from pathlib import Path
 # Import PILATES modules
 import sys
 
+from duckdb.duckdb import ConstraintException
+
 from pilates.utils.database import DatabaseManager
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1204,7 +1206,7 @@ class TestDatabaseComponents(unittest.TestCase):
             print(
                 "   🔒 Testing FK constraint (should fail for non-existent household)..."
             )
-            with self.assertRaises(Exception) as context:
+            with self.assertRaises(ConstraintException) as context:
                 conn.execute(
                     """
                     INSERT INTO atlas_vehicles2_output (
@@ -1424,6 +1426,194 @@ class TestDatabaseComponents(unittest.TestCase):
 
         print("   ✅ Test passed: atlas_add_vehileTypeId logic verified")
 
+    def test_transaction_atomicity(self):
+        """Test that failed multi-step operations roll back completely."""
+        print("\n⚛️  Testing transaction atomicity (rollback)...")
+
+        db_manager = create_database_manager(self.settings.shared.database)
+
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+
+            # 1. Verify clean state
+            count_before = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            self.assertEqual(count_before, 0)
+
+            # 2. Create a function that simulates a crash halfway through a transaction
+            # We manually control the transaction here to mimic the manager's internal logic
+            try:
+                conn.begin()
+
+                # Step A: Insert a valid Run (This should succeed temporarily)
+                conn.execute(
+                    "INSERT INTO runs (run_id, created_at, models_used) VALUES (?, ?, ?)",
+                    ["valid_run", datetime.now().isoformat(), ["test"]]
+                )
+
+                # Step B: Insert a valid File Record linking to it
+                conn.execute(
+                    "INSERT INTO file_records (unique_id, record_type, run_id, short_name, exists) VALUES (?, ?, ?, ?, ?)",
+                    ["valid_file", "file", "valid_run", "test", True]
+                )
+
+                # Step C: Force a failure (Constraint Violation)
+                # Try to insert a file record with a DUPLICATE unique_id but different run_id
+                # This causes a Primary Key violation
+                conn.execute(
+                    "INSERT INTO file_records (unique_id, record_type, run_id, short_name, exists) VALUES (?, ?, ?, ?, ?)",
+                    ["valid_file", "file", "some_other_run", "duplicate", True]
+                )
+
+                conn.commit()
+            except Exception as e:
+                print(f"   ⚠️  Caught expected error: {e}")
+                conn.rollback()
+
+            # 3. Verify Rollback
+            # If atomicity works, "valid_run" and "valid_file" should NOT exist,
+            # even though they were inserted before the error occurred.
+            count_after = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            self.assertEqual(count_after, 0, "Database should be empty after rollback")
+
+            file_count = conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0]
+            self.assertEqual(file_count, 0, "Partial file records should be rolled back")
+
+            print("   ✅ Atomicity confirmed: Partial data was rolled back")
+
+    def test_array_type_handling(self):
+        """Test round-tripping of Array/List types (crucial for runs table)."""
+        print("\n⛓️  Testing array type handling...")
+
+        db_manager = create_database_manager(self.settings.shared.database)
+
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+
+            run_id = "array_test_run"
+            models_list = ["urbansim", "activitysim", "beam"]
+
+            # Insert
+            conn.execute(
+                "INSERT INTO runs (run_id, created_at, models_used) VALUES (?, ?, ?)",
+                [run_id, datetime.now().isoformat(), models_list]
+            )
+
+            # Retrieve
+            result = conn.execute(
+                "SELECT models_used FROM runs WHERE run_id = ?", [run_id]
+            ).fetchone()
+
+            retrieved_list = result[0]
+
+            # Verify it comes back as a python list, not a string representation
+            self.assertIsInstance(retrieved_list, list, "Should return a Python list")
+            self.assertEqual(retrieved_list, models_list, "List content should match exactly")
+            self.assertEqual(len(retrieved_list), 3)
+
+            print(f"   ✅ Array round-trip successful: {retrieved_list}")
+
+            # Verify we can query INTO the array (DuckDB list functions)
+            # Find runs where 'activitysim' is in the list
+            contains_asim = conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE list_contains(models_used, 'activitysim')"
+            ).fetchone()[0]
+            self.assertEqual(contains_asim, 1, "Should support list_contains queries")
+            print("   ✅ DuckDB list_contains query successful")
+
+    def test_direct_file_upload_logic(self):
+        """
+        Test the high-performance direct file upload logic from selective_uploader.py.
+        This verifies the SQL generation, renaming logic, and Parquet reading.
+        """
+        print("\n🚀 Testing direct Parquet/CSV upload logic...")
+
+        # Import the function dynamically since it's in a script
+        from pilates.database.selective_uploader import build_smart_select
+
+        db_manager = create_database_manager(self.settings.shared.database)
+
+        with db_manager:
+            db_manager.initialize_database()
+            conn = db_manager._get_connection()
+
+            # 1. Create a dummy Parquet file
+            # We specifically use 'year' and 'sector_id' to test the renaming logic
+            test_df = pd.DataFrame({
+                "year": [2010, 2011],
+                "sector_id": [10, 20],  # Ints, should be cast to string by logic
+                "value": [100, 200]
+            })
+            parquet_path = os.path.join(self.temp_dir, "test_direct_upload.parquet")
+            test_df.to_parquet(parquet_path)
+
+            # 2. Setup Mock Metadata
+            run_info = {"run_id": "direct_upload_run"}
+            record = {
+                "unique_id": "rec_123",
+                "schema": [{"name": "zone_id", "type": "int"}]  # Hint to trigger sorting check
+            }
+            conn.execute("DROP TABLE IF EXISTS atlas_jobs_csv")
+            # Create target table (simulating 'atlas_jobs_csv' to trigger sector_id logic)
+            # We need a table that matches the expected output schema
+            conn.execute("""
+                            CREATE TABLE atlas_jobs_csv (
+                                run_id VARCHAR, file_record_id VARCHAR, 
+                                year INTEGER, iteration INTEGER, sub_iteration INTEGER,
+                                sector_id VARCHAR, 
+                                value INTEGER,
+                                data_year INTEGER, -- FIX: Added this column because logic renames input 'year' to 'data_year'
+                                id BIGINT
+                            )
+                        """)
+
+            # 3. Run the Logic
+            # We simulate uploading 'atlas_jobs_csv' to trigger the special casing
+            select_sql, sort_keys = build_smart_select(
+                conn,
+                parquet_path,
+                "atlas_jobs_csv",
+                record,
+                run_info,
+                year=2020,
+                iteration=5
+            )
+
+            print(f"   📝 Generated SQL: {select_sql.strip()}")
+
+            # 4. Execute the Generated SQL
+            # This confirms the SQL syntax is valid DuckDB syntax
+            conn.execute(f"""
+                            INSERT INTO atlas_jobs_csv (
+                                -- Order must match SELECT * output:
+                                -- File cols first (year->data_year, sector_id, value), then Metadata
+                                data_year, sector_id, value, 
+                                run_id, file_record_id, year, iteration, sub_iteration
+                            )
+                            SELECT * FROM ({select_sql})
+                        """)
+
+            # 5. Verify Results
+            result = conn.execute("SELECT * FROM atlas_jobs_csv").fetchall()
+            columns = [d[0] for d in conn.description]
+            df_res = pd.DataFrame(result, columns=columns)
+
+            # Check 1: Metadata Injection
+            self.assertEqual(df_res.iloc[0]['run_id'], "direct_upload_run")
+            self.assertEqual(df_res.iloc[0]['year'], 2020)  # The metadata year
+            self.assertEqual(df_res.iloc[0]['iteration'], 5)
+
+            # Check 2: Casting Logic (sector_id should be string '10', not int 10)
+            self.assertEqual(df_res.iloc[0]['sector_id'], '10')
+            self.assertIsInstance(df_res.iloc[0]['sector_id'], str)
+            print("   ✅ Casting logic (Int -> String) worked")
+
+            # Check 3: Sort Keys
+            self.assertIn("run_id", sort_keys)
+            print("   ✅ Sort keys identified correctly")
+
+            print("   ✅ Direct upload logic verified successfully")
 
 if __name__ == "__main__":
     print("🧪 Starting PILATES Database Components Tests")

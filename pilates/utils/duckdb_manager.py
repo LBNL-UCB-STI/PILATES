@@ -48,7 +48,7 @@ def _convert_numpy_types(obj):
     elif isinstance(obj, np.integer):
         return int(obj)
     elif isinstance(obj, np.floating):
-        return float(obj)
+        return None if np.isnan(obj) else float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     else:
@@ -112,6 +112,13 @@ class DuckDBManager(DatabaseManager):
         try:
             conn = self._get_connection()
 
+            # 1. Load Extensions first
+            # spatial is needed for some geometry operations if used
+            try:
+                conn.execute("INSTALL spatial; LOAD spatial;")
+            except Exception:
+                logger.warning("Could not load DuckDB spatial extension. Geometry columns may fail.")
+
             # Get the directory where this script is located to build absolute paths to schema files
             utils_dir = os.path.dirname(os.path.abspath(__file__))
             pilates_dir = os.path.dirname(utils_dir)
@@ -126,6 +133,7 @@ class DuckDBManager(DatabaseManager):
                 full_path = os.path.join(schema_dir, sql_file)
                 _execute_sql_from_file(conn, full_path)
 
+            conn.commit()
             logger.info("DuckDB database initialized successfully from SQL files.")
             return True
 
@@ -2761,50 +2769,101 @@ class DuckDBManager(DatabaseManager):
             logger.error(f"Failed to export HTML dictionary: {e}")
             return False
 
-    def store_generic_table(self, table_name: str, df: pd.DataFrame) -> bool:
+    def store_generic_table(
+            self,
+            table_name: str,
+            df: pd.DataFrame,
+            sort_by: List[str] = None
+    ) -> bool:
         """
         Stores a pandas DataFrame into a specified table in DuckDB.
 
-        This method is schema-aware and relies on DuckDB's ability to map
-        DataFrame column names to table column names.
+        OPTIMIZATION: This method sorts the data during insertion.
+        In DuckDB, physical sort order dictates query performance for filters.
 
         Args:
             table_name: The name of the target table in the database.
             df: The pandas DataFrame containing the data to upload.
+            sort_by: Optional list of columns to sort by. If None, auto-detects
+                     hierarchical keys (run_id, year, zone/geo identifiers).
 
         Returns:
             True if the upload was successful, False otherwise.
         """
         try:
             conn = self._get_connection()
-
-            # Get column names from the DataFrame
             insert_cols = df.columns.tolist()
 
-            # Register the DataFrame as a temporary table
-            temp_table_name = f"{table_name}_temp_data"
+            # 1. Clean Columns: Ensure DataFrame columns match SQL identifier rules
+            # (User's schema generator lowers case, so we might need to map here
+            # if DF has CamelCase)
+            df.columns = [c.lower() for c in df.columns]
+            insert_cols = df.columns.tolist()
+
+            # 2. Register Temp View (Zero-Copy)
+            temp_table_name = f"{table_name}_temp_{uuid.uuid4().hex[:8]}"
             conn.register(temp_table_name, df)
 
-            # Use INSERT INTO ... SELECT ... to insert data
-            conn.execute(
-                f"""
+            # 3. Determine Sort Order (The "Cluster" Key)
+            if sort_by:
+                sort_clause = f"ORDER BY {', '.join(sort_by)}"
+            else:
+                # Auto-detect standard ABM hierarchy
+                # Priority: Run -> Time -> Space -> Agent
+                candidates = []
+                # We always want to cluster by run and year first
+                if 'run_id' in insert_cols: candidates.append('run_id')
+                if 'year' in insert_cols: candidates.append('year')
+                if 'iteration' in insert_cols: candidates.append('iteration')
+
+                # Spatial clustering (pick the most granular one available)
+                if 'block_id' in insert_cols:
+                    candidates.append('block_id')
+                elif 'zone_id' in insert_cols:
+                    candidates.append('zone_id')
+                elif 'taz' in insert_cols:
+                    candidates.append('taz')
+                elif 'origin' in insert_cols:
+                    candidates.append('origin')
+
+                # We usually STOP at spatial clustering for the physical sort,
+                # because Agent IDs (household_id) are often random/hashed
+                # and don't provide good range-skipping.
+
+                if candidates:
+                    sort_clause = f"ORDER BY {', '.join(candidates)}"
+                else:
+                    sort_clause = ""
+
+            # 4. Insert with Sort
+            # The ORDER BY here forces DuckDB to write the file in that order
+            query = f"""
                 INSERT INTO {table_name} ({', '.join(insert_cols)})
-                SELECT {', '.join(insert_cols)} FROM {temp_table_name}
-                """
-            )
+                SELECT {', '.join(insert_cols)} 
+                FROM {temp_table_name}
+                {sort_clause}
+            """
 
-            # Unregister the temporary table
+            logger.debug(f"Executing insert for {table_name} with: {sort_clause}")
+            conn.execute(query)
+
+            # Cleanup
             conn.unregister(temp_table_name)
-
             return True
+
         except Exception as e:
             logger.error(f"Failed to insert data into table {table_name}: {e}")
-            # The transaction should be automatically rolled back by DuckDB on error.
             return False
 
     def close(self):
-        """Close DuckDB connection."""
+        """Close DuckDB connection with explicit checkpoint."""
         if self.connection:
+            try:
+                # Force merge of WAL to main DB file
+                self.connection.execute("CHECKPOINT;")
+            except Exception as e:
+                logger.warning(f"Checkpoint on close failed: {e}")
+
             self.connection.close()
             self.connection = None
             logger.info("DuckDB connection closed")

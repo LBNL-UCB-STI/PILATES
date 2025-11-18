@@ -39,7 +39,14 @@ The ActivitySim preprocessor is responsible for creating the `land_use.csv` and 
     6.  **Calculate Metrics:** Various density metrics, parking costs, and area types are calculated and added to the table.
     7.  **Output:** The resulting comprehensive DataFrame, now representing the `land_use` table with data aligned to the canonical zone order, is written to `land_use.csv`.
 
--   **Skim Creation:** The preprocessor calls the `create_skims_from_beam` function, which in turn uses the `zone_order` helper function. This function also calls `load_canonical_zones` to get the exact same sorted list of zone IDs. This list is used to construct the final skim matrices, ensuring they are created with the correct canonical ordering from the start.
+-   **Skim Creation and Caching:** The ActivitySim runner (`pilates.activitysim.runner.ActivitysimRunner`) manages the creation and caching of `skims.zarr` files.
+    1.  **Initial Zarr Creation (Compilation Run):** During ActivitySim's compilation run, it loads initial skims (typically from OMX files) and caches them to `skims.zarr`. At this stage, the `sharrow` library (used by ActivitySim) often creates these Zarr files with **1-based coordinates** for `otaz` and `dtaz`.
+    2.  **Immediate Correction and Flagging:** To ensure consistency and compatibility with ActivitySim's "fast path" for preprocessed skims, PILATES immediately corrects this initial `skims.zarr` file. After the compilation run successfully creates the `skims.zarr` cache, the `ActivitysimRunner` calls `pilates.utils.zone_utils.ensure_0_based_and_flag_zarr_skims`. This utility function:
+        *   Opens the `skims.zarr` file.
+        *   If it detects 1-based coordinates, it re-indexes them to 0-based.
+        *   Adds the `preprocessed: "zero-based-contiguous"` attribute to the `otaz` and `dtaz` coordinates.
+        *   Saves the corrected, 0-based, and flagged `skims.zarr` file back to disk.
+    3.  **Consistent Skims for All Runs:** This ensures that all subsequent ActivitySim runs (including the first "real" run and those after BEAM postprocessing) receive a `skims.zarr` file that is consistently 0-based and correctly flagged, allowing ActivitySim to use its most efficient processing path.
 
 ### Step 4: Preparing Inputs for BEAM
 
@@ -54,17 +61,19 @@ The BEAM preprocessor (`pilates.beam.preprocessor.prepare_beam_zone_shapefile`) 
 The BEAM model, running in its own container, now uses the canonically sorted zone shapefile.
 
 -   **BEAM's `ActivitySimZarrWriter`:** When BEAM generates skims in the Zarr format, the `ActivitySimZarrWriter` receives the list of zone IDs in the same sorted order as the input shapefile.
--   **Zarr Coordinate Indexing (CRITICAL):** It is **critical** that the `otaz` (origin TAZ) and `dtaz` (destination TAZ) coordinate arrays within the generated Zarr file are **0-based contiguous integers** (i.e., `[0, 1, 2, ..., N-1]`, where N is the total number of zones). This ensures compatibility with ActivitySim's expectations and the PILATES postprocessor's validation. The `ActivitySimZarrWriter` must be configured to produce these 0-based coordinates, even if the original canonical zone IDs are 1-based.
+-   **Zarr Coordinate Indexing (CRITICAL):** It is **critical** that the `otaz` (origin TAZ) and `dtaz` (destination TAZ) coordinate arrays within the generated Zarr file are **0-based contiguous integers** (i.e., `[0, 1, 2, ..., N-1]`, where N is the total number of zones). This ensures compatibility with ActivitySim's expectations and the PILATES postprocessor's validation. The `ActivitySimZarrWriter` **must be configured to produce these 0-based coordinates**, even if the original canonical zone IDs are 1-based. (Note: A recent fix to the `ActivitySimZarrWriter` ensures this is now the case.)
 -   **Metadata:** It writes this list of original, sorted zone IDs as a metadata attribute (`original_zone_ids`) in the root of the Zarr file. This embeds the "ground truth" ordering directly into the skim artifact.
 
-### Step 6: Verification in the BEAM Postprocessor
+### Step 6: Verification and Harmonization in the BEAM Postprocessor
 
-After the BEAM run is complete, the BEAM postprocessor performs a critical verification step before merging the new skims.
+After the BEAM run is complete, the BEAM postprocessor (`pilates.beam.postprocessor._merge_beam_skims_to_zarr`) performs a critical harmonization and verification process before merging the new skims.
+
+-   **Harmonization of Main Skims Cache:** The process now *begins* by calling `pilates.utils.zone_utils.ensure_0_based_and_flag_zarr_skims` on the main `skims.zarr` cache (`all_skims_path`). This ensures that the existing cache is consistently 0-based and correctly flagged with the `preprocessed` attribute *before* any merging occurs. This addresses the historical issue where ActivitySim's initial cache could be 1-based.
 
 -   **`verify_skim_zone_order`:** This function is called automatically during the `_merge_beam_skims_to_zarr` process.
 -   **Action:** It performs two key checks:
     1.  It compares the `original_zone_ids` attribute from the new BEAM Zarr skims against the canonical order loaded via `load_canonical_zones`.
-    2.  **It verifies that the `otaz` and `dtaz` coordinate arrays within the Zarr file are 0-based contiguous integers.** This is a crucial check to ensure that the skims are correctly indexed for downstream models like ActivitySim.
+    2.  **It verifies that the `otaz` and `dtaz` coordinate arrays within the BEAM Zarr file are 0-based contiguous integers.** This is a crucial check to ensure that the skims are correctly indexed for downstream models like ActivitySim.
 -   **Safeguard:** If any of these checks fail (e.g., orders do not match, or `otaz`/`dtaz` are not 0-based), it raises a `ValueError` and stops the simulation, preventing misaligned or incorrectly indexed data from being used.
 
 ### Step 7: Preparing Inputs for UrbanSim
@@ -90,7 +99,8 @@ The ATLAS preprocessor, when calculating accessibility measures, now fully align
 
 -   **Single Source of Truth:** The zone geometry file defined in `settings.yaml` is the master record. All zone-related logic starts here.
 -   **Authoritative Function:** Always use `pilates.utils.zone_utils.load_canonical_zones` to get the list of zones. This guarantees you have a validated and canonically sorted list. The older `get_canonical_zones` is deprecated.
--   **Data Alignment:** The system is designed to produce aligned `land_use` and `skim` artifacts from the start for all models. Runtime re-indexing in ActivitySim should not be necessary.
--   **Zarr Coordinate Indexing:** When generating Zarr skims (e.g., in BEAM's `ActivitySimZarrWriter`), the `otaz` and `dtaz` coordinate arrays **must be 0-based contiguous integers**. This is crucial for compatibility and is explicitly validated by the PILATES postprocessor.
+-   **New Utility for Zarr Skim Harmonization:** Use `pilates.utils.zone_utils.ensure_0_based_and_flag_zarr_skims` to ensure any `skims.zarr` file is 0-based and correctly flagged with the `preprocessed` attribute. This function is now called automatically by the `ActivitysimRunner` after compilation and by the BEAM postprocessor before merging.
+-   **Data Alignment:** The system is designed to produce aligned `land_use` and `skim` artifacts from the start for all models. Runtime re-indexing in ActivitySim should not be necessary, as PILATES now ensures skims are 0-based and flagged.
+-   **Zarr Coordinate Indexing:** While BEAM's `ActivitySimZarrWriter` is configured to produce 0-based coordinates, ActivitySim's initial `skims.zarr` cache (created from OMX) can be 1-based. PILATES now automatically corrects these files to be 0-based and adds the `preprocessed` flag to ensure compatibility and efficient processing by ActivitySim.
 -   **Verification is Key:** The `verify_skim_zone_order` check in the BEAM postprocessor acts as a critical safeguard to catch any unexpected changes or bugs in BEAM's output ordering, including incorrect Zarr coordinate indexing.
 -   **Consistency:** The canonical ID column from the source file is consistently used (and renamed to `activitysim_index_col`, e.g., "TAZ") across all models to refer to a zone.

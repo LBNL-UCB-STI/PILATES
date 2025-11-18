@@ -30,9 +30,8 @@ from openlineage.client.transport.http import HttpTransport, HttpConfig
 from openlineage.client.transport.file import FileTransport, FileConfig
 from openlineage.client.transport.composite import CompositeTransport, CompositeConfig
 
-import pyarrow.parquet as pq
-
 from pilates.config import PilatesConfig
+from pilates.utils.schema_inference import get_schema_from_file
 
 set_producer("https://github.com/LBNL-UCB-STI/PILATES")
 
@@ -629,79 +628,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
         return repo_record
 
-    def _get_schema_from_h5(self, file_path: str) -> List[Dict[str, str]]:
-        """
-        Extracts a flattened schema from an HDF5 file using pandas.HDFStore
-        to correctly identify tables and column names.
-        """
-        flat_schema = []
-        try:
-            with pd.HDFStore(file_path, mode="r") as store:
-                for table_name in store.keys():
-                    df_sample = store.select(table_name, stop=1)
-                    for col_name, col_type in df_sample.dtypes.items():
-                        flat_schema.append(
-                            {
-                                "name": f"{table_name}:{col_name}".replace("/", ""),
-                                "type": str(col_type),
-                            }
-                        )
-        except Exception as e:
-            logger.warning(
-                f"Could not read HDF5 schema from {file_path} using pandas: {e}"
-            )
-        return flat_schema
-
-    def _get_sparse_schema_for_wide_csv(self, file_path: str) -> List[Dict[str, str]]:
-        """Reads a wide CSV, converts to long format, and returns the sparse schema."""
-        try:
-            df = pd.read_csv(file_path, index_col=0)
-            df_long = df.stack().reset_index()
-            df_long.columns = ["taz", "tract", "proportion"]
-            df_long = df_long[df_long["proportion"] > 0]
-
-            schema_info = []
-            for col_name, col_type in df_long.dtypes.items():
-                schema_info.append({"name": col_name, "type": str(col_type)})
-            return schema_info
-        except Exception as e:
-            logger.warning(f"Could not generate sparse schema for {file_path}: {e}")
-            return []
-
-    def _get_schema_from_file(self, file_path: str) -> List[Dict[str, str]]:
-        """
-        Infers the schema from a .csv or .parquet file.
-
-        Args:
-            file_path (str): The path to the file.
-
-        Returns:
-            A list of dictionaries, where each dictionary represents a field
-            in the schema (e.g., [{'name': 'col1', 'type': 'int64'}]).
-        """
-        if "taz_to_tract" in os.path.basename(file_path):
-            logger.info(f"Generating sparse schema for wide file: {file_path}")
-            return self._get_sparse_schema_for_wide_csv(file_path)
-
-        schema_info = []
-        try:
-            if file_path.endswith(".csv") | file_path.endswith(".csv.gz"):
-                # For CSV, read the header and infer types with pandas
-                df = pd.read_csv(file_path, nrows=10)  # Read a small sample
-                for col_name, col_type in df.dtypes.items():
-                    schema_info.append({"name": col_name, "type": str(col_type)})
-            elif file_path.endswith(".parquet"):
-                # For Parquet, read the schema directly from metadata
-                parquet_file = pq.ParquetFile(file_path)
-                for field in parquet_file.schema:
-                    schema_info.append(
-                        {"name": field.name, "type": str(field.physical_type)}
-                    )
-            elif file_path.endswith((".h5", ".hdf5")):
-                return self._get_schema_from_h5(file_path)
-        except Exception as e:
-            logger.warning(f"Could not automatically infer schema for {file_path}: {e}")
-        return schema_info
 
     def _create_h5_table_records(
         self,
@@ -818,7 +744,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 return self.run_info.file_records[file_hash]
 
             metadata = self._load_metadata(path_to_use)
-            schema = self._get_schema_from_file(path_to_use)
+            schema = get_schema_from_file(path_to_use)
 
             file_record = FileRecord(
                 unique_id=file_hash,
