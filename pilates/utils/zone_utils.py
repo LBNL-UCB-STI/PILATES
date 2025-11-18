@@ -2,6 +2,9 @@ import logging
 import os
 import pandas as pd
 import geopandas as gpd
+import numpy as np
+import xarray as xr
+import shutil
 
 from pilates.config import PilatesConfig
 
@@ -135,3 +138,67 @@ def get_block_to_zone_mapping(settings, year, workspace):
     )
 
     return mapping
+
+
+def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
+    """
+    Ensures a Zarr skim file is 0-based indexed and has the 'preprocessed' flag.
+    If the file is found to be 1-based, it re-indexes it to 0-based and
+    adds the 'preprocessed' flag, then overwrites the original file.
+
+    Parameters:
+    -----------
+    skim_path : str
+        Path to the Zarr skim store.
+    settings : PilatesConfig
+        The full settings object, needed for loading canonical zones.
+    workspace : Workspace
+        The workspace object, needed for loading canonical zones.
+    """
+    if not os.path.exists(skim_path):
+        logger.warning(f"Skim path not found, cannot ensure 0-based and flag: {skim_path}")
+        return
+
+    logger.info(f"Ensuring 0-based indexing and 'preprocessed' flag for {skim_path}")
+    try:
+        with xr.open_zarr(skim_path) as skims_ds:
+            needs_correction = False
+            if len(skims_ds.coords["otaz"]) > 0 and skims_ds.coords["otaz"].values[0] == 1:
+                logger.warning("Skims appear to be 1-based. Re-indexing to 0-based.")
+                canonical_zones_df = load_canonical_zones(settings, workspace)
+                new_coords = np.arange(len(canonical_zones_df))
+                skims_ds = skims_ds.assign_coords(otaz=new_coords, dtaz=new_coords)
+                logger.info(f"Corrected skims otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}")
+                needs_correction = True
+            else:
+                logger.info("Skims already appear to be 0-based.")
+
+            # Ensure 'preprocessed' flag is present
+            if "preprocessed" not in skims_ds["otaz"].attrs:
+                logger.info("Adding 'preprocessed' flag.")
+                skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
+                skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
+                needs_correction = True
+            else:
+                logger.info("'preprocessed' flag already present.")
+
+            if needs_correction:
+                # Overwrite the Zarr store with the corrected version
+                # Use a temporary path for atomic write
+                temp_path = f"{skim_path}_temp_corrected"
+                if os.path.exists(temp_path):
+                    shutil.rmtree(temp_path) # Clean up previous temp if any
+
+                skims_ds.to_zarr(temp_path, mode='w', consolidated=True)
+                
+                # Atomically replace the original
+                if os.path.exists(skim_path):
+                    shutil.rmtree(skim_path)
+                os.rename(temp_path, skim_path)
+                logger.info(f"Successfully corrected and flagged Zarr skims at {skim_path}")
+            else:
+                logger.info(f"No correction needed for Zarr skims at {skim_path}")
+
+    except Exception as e:
+        logger.error(f"Failed to ensure 0-based and flag Zarr skims: {e}", exc_info=True)
+        raise # Re-raise to ensure pipeline fails if this critical step fails

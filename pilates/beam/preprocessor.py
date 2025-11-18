@@ -969,9 +969,7 @@ class BeamPreprocessor(GenericPreprocessor):
         if self.state.current_inner_iter > 0:
             previous_beam_records = (
                 self.provenance_tracker.run_info.get_latest_model_run_output_records(
-                    "beam",
-                    year=self.state.current_year,
-                    iteration=self.state.current_inner_iter - 1,
+                    "beam"
                 )
             )
             for record in previous_beam_records:

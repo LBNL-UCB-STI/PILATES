@@ -11,6 +11,7 @@ from pilates.config import PilatesConfig
 import pilates.utils.zone_utils as zone_utils
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zarr_versioning import VersionedZarrStore
+from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 try:
     import xarray as xr
@@ -2383,6 +2384,13 @@ def _merge_beam_skims_to_zarr(
         input_format = "omx"
         partialSkims = omx.open_file(current_skims_path, mode="r")
 
+    # Ensure the main skims.zarr is 0-based and flagged before opening for merge
+    try:
+        ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
+    except Exception as e:
+        logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
+        return None, None # Indicate failure
+
     # Open the Zarr dataset in append mode to modify it in place
     try:
         skims_ds = xr.open_zarr(all_skims_path)
@@ -2390,6 +2398,8 @@ def _merge_beam_skims_to_zarr(
         logger.info(
             f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
         )
+
+
 
         # Store original zone IDs if needed
         if "original_zone_ids" not in skims_ds.attrs:
@@ -2687,11 +2697,7 @@ def _merge_beam_skims_to_zarr(
             skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
 
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
-        # Add the 'preprocessed' attribute now that we've verified coordinates are 0-based
-        if "preprocessed" not in skims_ds["otaz"].attrs:
-            skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
-        if "preprocessed" not in skims_ds["dtaz"].attrs:
-            skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
+
 
         skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
         logger.info("Completed writing zarr skims successfully.")
