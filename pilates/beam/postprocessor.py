@@ -2702,6 +2702,15 @@ def _merge_beam_skims_to_zarr(
         logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
         merge_successful = False  # Indicate failure
 
+        # Independent verification of the written Zarr file
+    try:
+        with xr.open_zarr(all_skims_path) as verified_ds:
+            logger.info(
+                    f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
+                )
+    except Exception as e:
+        logger.error(f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}")
+
     # Close the datasets
     if partialSkims:
         partialSkims.close()
