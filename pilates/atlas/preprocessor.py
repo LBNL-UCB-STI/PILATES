@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import logging
 import os
 import shutil
 import glob
-from typing import Tuple, Optional
+from typing import Tuple, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
+    from pilates.workspace import Workspace
 
 import numpy as np
 import pandas as pd

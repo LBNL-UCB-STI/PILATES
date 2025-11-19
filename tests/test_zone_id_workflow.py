@@ -4,7 +4,6 @@ import pytest
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-import zarr
 from shapely.geometry import Polygon
 from unittest.mock import patch
 import xarray as xr

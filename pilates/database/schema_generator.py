@@ -3,7 +3,7 @@ import os
 import re
 import argparse
 import logging
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Any
 
 # Configure logging
 logging.basicConfig(

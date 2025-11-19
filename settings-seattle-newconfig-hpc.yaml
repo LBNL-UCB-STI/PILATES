@@ -16,7 +16,7 @@ run:
   vehicle_ownership_freq: 1
   supply_demand_iters: 6
   output_directory: /global/scratch/users/$USER/pilates-output
-  output_run_name: new-asim-fast-validate-ids
+  output_run_name: new-asim-fast-cleaner-schema
   models:
     land_use: null
     travel: beam
@@ -223,7 +223,7 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.5
+    activitysim: docker://zaneedell/activitysim:0.2.6
     beam: docker://zaneedell/beam:1.1.beta
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1

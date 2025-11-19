@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 import logging
 import os
 import shutil
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
+
 
 import pandas as pd
 
@@ -53,6 +59,8 @@ def _prepare_beam_zone_shapefile(workspace: "Workspace", settings: PilatesConfig
         # Reset index so the ID becomes a column
         canonical_zones_gdf = canonical_zones_gdf.reset_index()
 
+        if settings.beam is None:
+            raise ValueError("Beam settings are not configured")
         sort_col = settings.beam.skim_zone_geoid_col
         if sort_col in canonical_zones_gdf.columns:
             # If the specific beam config column exists, verify sort order
@@ -206,9 +214,10 @@ class BeamPreprocessor(GenericPreprocessor):
         # Collect necessary records from the previous (ActivitySim) step
         asim_post_records = previous_records.all_records()
         for record in asim_post_records:
-            short_name = record.short_name.rsplit("_", 2)[0]
-            if short_name in self.required_input_data:
-                input_records.add_record(record)
+            if record.short_name:
+                short_name = record.short_name.rsplit("_", 2)[0]
+                if short_name in self.required_input_data:
+                    input_records.add_record(record)
 
         # For replanning iterations, get outputs from the previous BEAM run
         previous_beam_records = []

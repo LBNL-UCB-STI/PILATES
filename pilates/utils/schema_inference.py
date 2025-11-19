@@ -32,8 +32,10 @@ def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dic
         clean_series = series.dropna()
         if not clean_series.empty:
             # specific numpy casting to ensure JSON serializable
-            stats["min"] = clean_series.min().item()
-            stats["max"] = clean_series.max().item()
+            min_val = clean_series.min()
+            max_val = clean_series.max()
+            stats["min"] = min_val.item() if hasattr(min_val, 'item') else min_val
+            stats["max"] = max_val.item() if hasattr(max_val, 'item') else max_val
 
             # Check if it's a disguised integer (float column with no decimals)
             # This helps decide if we can use INTEGER instead of DOUBLE

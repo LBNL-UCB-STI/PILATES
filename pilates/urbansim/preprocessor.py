@@ -1,4 +1,6 @@
-from typing import Tuple, Optional
+from __future__ import annotations
+
+from typing import Tuple, Optional, TYPE_CHECKING
 import os
 import shutil
 import logging
@@ -10,6 +12,10 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
+    from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 

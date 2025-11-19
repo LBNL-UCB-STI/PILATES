@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 
 import geopandas as gpd
@@ -7,6 +9,10 @@ import requests
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 from pilates.utils.settings_helper import get as get_setting
 

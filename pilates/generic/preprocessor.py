@@ -1,11 +1,17 @@
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from typing import Tuple, Optional, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
+    from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
