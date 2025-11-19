@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import yaml
 import json
 
-from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
 from pilates.config.models import load_config
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -176,21 +175,12 @@ def mock_settings(tmp_path, mock_h5_datastore, mock_beam_shapefile):
     return load_config(config_path)
 
 
-import os
 import pytest
-import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Polygon
-from unittest.mock import MagicMock
-import yaml
-import json
 from types import SimpleNamespace  # Import SimpleNamespace for mocking WorkflowState
 
 from pilates.beam.preprocessor import (
-    _prepare_beam_zone_shapefile,
     BeamPreprocessor,
 )  # Import BeamPreprocessor
-from pilates.config.models import load_config
 
 # Define a canonical order for GEOIDs that our test will enforce
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]

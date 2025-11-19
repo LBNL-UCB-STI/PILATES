@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from pilates.generic.initialization import Initialization
 from pilates.generic.records import RecordStore, Record
-from unittest.mock import patch
 import json
 
 # ----------------------------------------------------------------------
