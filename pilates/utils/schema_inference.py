@@ -90,22 +90,38 @@ def _get_schema_from_h5(file_path: str, sample_rows: int = 1000) -> List[Dict[st
                         flat_schema.append(col_stats)
                 except Exception as e:
                     # Fallback for tables that might be weird formats (fixed, etc)
-                    logger.warning(f"Could not sample H5 table {table_name}: {e}")
+                    logger.warning(f"Could not sample H5 table '{table_name}' with pandas.select, trying direct pytables read: {e}")
 
-                    # FIX: Use get_node (Public API) instead of get_storer (Internal API)
-                    node = store.get_node(table_name)
+                    try:
+                        node = store.get_node(table_name)
 
-                    # specific logic to extract column names from the PyTables node
-                    cols = []
-                    if hasattr(node, "colnames"):
-                        # Standard PyTables 'Table' format
-                        cols = node.colnames
-                    elif hasattr(node, "description") and hasattr(node.description, "_v_names"):
-                        # Alternative path for some PyTables versions
-                        cols = node.description._v_names
+                        # Check if it's a PyTables Table object which can be sampled
+                        if hasattr(node, 'read') and hasattr(node, 'colnames') and len(node.colnames) > 0:
+                            # Read a sample of rows directly from the PyTables node.
+                            # This is efficient and works for 'fixed' format tables.
+                            sample_data = node.read(stop=sample_rows)
+                            df_sample = pd.DataFrame(sample_data)
 
-                    for n in cols:
-                        flat_schema.append({"name": f"{table_name}:{n}", "type": "unknown"})
+                            # Now that we have a sample DataFrame, analyze it
+                            for col_name in df_sample.columns:
+                                col_stats = analyze_series_stats(df_sample[col_name])
+                                col_stats["name"] = f"{table_name}:{col_name}".replace("/", "")
+                                col_stats["h5_table"] = table_name
+                                flat_schema.append(col_stats)
+                        else:
+                            # If it's not a readable table, just get columns as a last resort
+                            logger.warning(f"Node '{table_name}' is not a readable PyTables Table, extracting column names only.")
+                            cols = []
+                            if hasattr(node, "colnames"):
+                                cols = node.colnames
+                            elif hasattr(node, "description") and hasattr(node.description, "_v_names"):
+                                cols = node.description._v_names
+
+                            for n in cols:
+                                flat_schema.append({"name": f"{table_name}:{n}", "type": "unknown", "h5_table": table_name})
+
+                    except Exception as e_fallback:
+                        logger.warning(f"Fallback schema inference for H5 table '{table_name}' failed: {e_fallback}")
 
     except Exception as e:
         logger.warning(f"Could not read HDF5 schema from {file_path}: {e}")

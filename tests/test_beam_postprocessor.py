@@ -192,8 +192,9 @@ class TestBeamPostprocessor:
     """Tests for the BEAM Postprocessor's skim merging logic."""
 
     @patch('pilates.utils.zone_utils.load_canonical_zones')
+    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
     def test_merge_beam_skims_to_zarr_valid(
-        self, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_valid, tmp_path, canonical_zones_geojson
+        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_valid, tmp_path, canonical_zones_geojson
     ):
         """
         Test the basic merge functionality with valid BEAM skims:
@@ -205,6 +206,7 @@ class TestBeamPostprocessor:
             {'zone_key': CANONICAL_GEOID_ORDER},
             index=CANONICAL_GEOID_ORDER
         )
+        mock_verify_skim_zone_order.return_value = CANONICAL_GEOID_ORDER # Mock its return value
         mock_workspace = MagicMock() # Create a mock workspace
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
 
@@ -219,6 +221,7 @@ class TestBeamPostprocessor:
 
         # Assert
         mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace) # Assert with workspace
+        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_valid, mock_workspace)
 
 
         updated_ds = xr.open_zarr(initial_main_zarr)

@@ -368,7 +368,7 @@ class BeamPreprocessor(GenericPreprocessor):
         # FIX: Pass workspace.full_path explicitly
         self._update_beam_config(
             "beam.agentsim.taz.filePath",
-            value_override='${{beam.inputDirectory}}' + f'/{relative_shapefile_path}',
+            value_override='${beam.inputDirectory}' + f'/{relative_shapefile_path}',
             base_path=workspace.full_path
         )
         self._update_beam_config(

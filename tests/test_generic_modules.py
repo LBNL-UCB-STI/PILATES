@@ -14,7 +14,8 @@ def test_model_factory_returns_correct_classes():
     runner = mf.get_runner("activitysim", None, None)
     assert runner.__class__.__name__ == "ActivitysimRunner"
 
-    pre = mf.get_preprocessor("beam", None, None)
+    mock_state = SimpleNamespace(full_settings=SimpleNamespace())
+    pre = mf.get_preprocessor("beam", mock_state, None)
     assert pre.__class__.__name__ == "BeamPreprocessor"
 
     post = mf.get_postprocessor("urbansim", None, None)

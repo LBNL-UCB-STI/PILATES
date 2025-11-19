@@ -72,7 +72,6 @@ class DummyWorkspace:
 # ----------------------------------------------------------------------
 
 
-@patch('pilates.generic.initialization.generate_canonical_zones_file')
 def test_initialization_runs_beam_and_urbansim(mock_generate_canonical_zones_file, monkeypatch):
     """
     Verify that Initialization.run correctly aggregates provenance records
@@ -147,7 +146,7 @@ def test_initialization_runs_beam_and_urbansim(mock_generate_canonical_zones_fil
             assert isinstance(rec, Record)
 
 
-@patch('pilates.generic.initialization.generate_canonical_zones_file')
+@patch('pilates.utils.zone_utils.generate_canonical_zones_file')
 def test_initialization_handles_missing_models_gracefully(mock_generate_canonical_zones_file, monkeypatch):
     """
     If a model key is missing from settings, Initialization should simply skip it
