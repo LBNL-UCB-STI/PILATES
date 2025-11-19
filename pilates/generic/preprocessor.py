@@ -2,6 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 
+from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
@@ -28,7 +29,7 @@ class GenericPreprocessor(ABC, Model):
     @abstractmethod
     def copy_data_to_mutable_location(
         self,
-        settings: dict,
+        settings: PilatesConfig,
         output_dir: str,
     ) -> Tuple[RecordStore, RecordStore]:
         """

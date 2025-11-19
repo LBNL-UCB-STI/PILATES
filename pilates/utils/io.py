@@ -5,7 +5,7 @@ import pandas as pd
 from typing import Any, Dict, Optional, Tuple
 
 from pilates.utils.settings_helper import get as get_setting
-from pilates.config.models import load_config
+from pilates.config.models import load_config, PilatesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
     }
 
 
-def parse_args_and_settings(settings_file: str = "settings.yaml") -> Any:
+def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConfig:
     """
     Parses command-line arguments and loads the PILATES settings configuration.
 
@@ -107,7 +107,7 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> Any:
             Defaults to "settings.yaml".
 
     Returns:
-        Any: The loaded and configured PILATES settings object (Pydantic model).
+        settings (PilatesConfig): The loaded and configured PILATES settings object (Pydantic model).
 
     Raises:
         ValueError: If conflicting settings are detected (e.g., land use models

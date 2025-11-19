@@ -262,13 +262,13 @@ class BeamPreprocessor(GenericPreprocessor):
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
 
-    def copy_data_to_mutable_location(self, output_dir: str) -> Tuple[RecordStore, RecordStore]:
+    def copy_data_to_mutable_location(self, settings: PilatesConfig, output_dir: str) -> Tuple[RecordStore, RecordStore]:
         """
         Copy BEAM input files for the current region from the production directory
         to the run's mutable input directory.
         """
         input_records, output_records = [], []
-        region = self.settings.run.region
+        region = settings.run.region
         beam_production_path = self._find_beam_production_path(region)
 
         if not beam_production_path:
@@ -313,9 +313,9 @@ class BeamPreprocessor(GenericPreprocessor):
                 )
             )
 
-        if hasattr(self.settings.beam, "skims_shapefile"):
+        if hasattr(settings.beam, "skims_shapefile"):
             logger.info(
-                f"[BEAM Preprocessor] Updating beam config to use zone id of {self.settings.beam.skim_zone_geoid_col}")
+                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}")
 
             # FIX: Calculate base path from output_dir if state.workspace is not guaranteed
             # Original code used triple split logic; here we approximate assuming output_dir is in the workspace
@@ -331,7 +331,7 @@ class BeamPreprocessor(GenericPreprocessor):
 
             self._update_beam_config(
                 "skim_zone_geoid_col",
-                value_override=self.settings.beam.skim_zone_geoid_col,
+                value_override=settings.beam.skim_zone_geoid_col,
                 base_path=base_path
             )
 
