@@ -1133,11 +1133,11 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
         logger.info(
             f"For {path} previously had {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips"
         )
-        prev_completed[any_observed] = np.ceil(
-            0.5 * prev_completed[any_observed] + completed[any_observed]
+        prev_completed = np.ceil(
+            0.5 * prev_completed + completed
         ).astype(int)
-        prev_failed[any_observed] = np.ceil(
-            0.5 * prev_failed[any_observed] + failed[any_observed]
+        prev_failed = np.ceil(
+            0.5 * prev_failed + failed
         ).astype(int)
         allSkims[key_completed].data[
             :
