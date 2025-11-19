@@ -92,30 +92,27 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
                 vehicle_ownership="dummy_vehicle",
                 land_use="urbansim",
             ),
-            start_year=2020
+            start_year=2020,
         ),
         shared=SimpleNamespace(
-            skims=SimpleNamespace(
-                zone_type="block_group"
-            ),
+            skims=SimpleNamespace(zone_type="block_group"),
             geography=SimpleNamespace(
                 zones=SimpleNamespace(
                     source_file="/tmp/canonical_zones.geojson",
                     activitysim_index_col="TAZ",
                     zone_type="block_group",
-                    canonical_id_col="zone_key"
+                    canonical_id_col="zone_key",
                 )
-            )
-        )
+            ),
+        ),
     )
 
     # Create a dummy canonical_zones.geojson in the mocked mutable directory
-    canonical_zones_path = os.path.join(workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson")
+    canonical_zones_path = os.path.join(
+        workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
+    )
     os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
-    dummy_geojson_content = {
-        "type": "FeatureCollection",
-        "features": []
-    }
+    dummy_geojson_content = {"type": "FeatureCollection", "features": []}
     with open(canonical_zones_path, "w") as f:
         json.dump(dummy_geojson_content, f)
 
@@ -139,6 +136,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
         for rec in workspace.output_data[model_key].all_records():
             assert isinstance(rec, Record)
 
+
 def test_initialization_handles_missing_models_gracefully(monkeypatch):
     """
     If a model key is missing from settings, Initialization should simply skip it
@@ -159,30 +157,27 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
                 activity_demand=None,
                 vehicle_ownership=None,
             ),
-            start_year=2020
+            start_year=2020,
         ),
         shared=SimpleNamespace(
-            skims=SimpleNamespace(
-                zone_type="block_group"
-            ),
+            skims=SimpleNamespace(zone_type="block_group"),
             geography=SimpleNamespace(
                 zones=SimpleNamespace(
                     source_file="/tmp/canonical_zones.geojson",
                     activitysim_index_col="TAZ",
                     zone_type="block_group",
-                    canonical_id_col="zone_key"
+                    canonical_id_col="zone_key",
                 )
-            )
-        )
+            ),
+        ),
     )
 
     # Create a dummy canonical_zones.geojson in the mocked mutable directory
-    canonical_zones_path = os.path.join(workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson")
+    canonical_zones_path = os.path.join(
+        workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
+    )
     os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
-    dummy_geojson_content = {
-        "type": "FeatureCollection",
-        "features": []
-    }
+    dummy_geojson_content = {"type": "FeatureCollection", "features": []}
     with open(canonical_zones_path, "w") as f:
         json.dump(dummy_geojson_content, f)
 

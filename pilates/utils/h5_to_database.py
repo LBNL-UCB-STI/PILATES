@@ -977,6 +977,7 @@ Examples:
     try:
         # Create extractor
         from pilates.workspace import Workspace
+
         workspace = Workspace(settings)
         extractor = H5ActivitySimExtractor(
             args.h5_file,

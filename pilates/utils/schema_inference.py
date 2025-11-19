@@ -9,7 +9,10 @@ import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
-def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dict[str, Any]:
+
+def analyze_series_stats(
+    series: pd.Series, distinct_threshold: int = 63
+) -> Dict[str, Any]:
     """
     Analyzes a pandas Series to extract metadata for SQL optimization.
 
@@ -24,7 +27,7 @@ def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dic
         "name": str(series.name),
         "type": str(series.dtype),
         "count": int(series.count()),  # Non-null count
-        "nullable": bool(series.isnull().any())
+        "nullable": bool(series.isnull().any()),
     }
 
     # 1. Handle Numeric Data (Integers and Floats)
@@ -35,8 +38,8 @@ def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dic
             # specific numpy casting to ensure JSON serializable
             min_val = clean_series.min()
             max_val = clean_series.max()
-            stats["min"] = min_val.item() if hasattr(min_val, 'item') else min_val
-            stats["max"] = max_val.item() if hasattr(max_val, 'item') else max_val
+            stats["min"] = min_val.item() if hasattr(min_val, "item") else min_val
+            stats["max"] = max_val.item() if hasattr(max_val, "item") else max_val
 
             # Check if it's a disguised integer (float column with no decimals)
             # This helps decide if we can use INTEGER instead of DOUBLE
@@ -46,8 +49,11 @@ def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dic
 
     # 2. Handle Categorical / String Data (Potential ENUMs)
     # We check object types, string types, or categorical types
-    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series) or isinstance(series.dtype,
-                                                                                                  pd.CategoricalDtype):
+    if (
+        pd.api.types.is_object_dtype(series)
+        or pd.api.types.is_string_dtype(series)
+        or isinstance(series.dtype, pd.CategoricalDtype)
+    ):
         try:
             # Calculate cardinality (number of unique values)
             unique_count = series.nunique()
@@ -69,7 +75,10 @@ def analyze_series_stats(series: pd.Series, distinct_threshold: int = 63) -> Dic
 
     return stats
 
-def _get_schema_from_h5(file_path: str, sample_rows: int = 1000) -> List[Dict[str, str]]:
+
+def _get_schema_from_h5(
+    file_path: str, sample_rows: int = 1000
+) -> List[Dict[str, str]]:
     """
     Extracts a flattened schema from an HDF5 file using pandas.HDFStore
     to correctly identify tables and column names.
@@ -91,13 +100,19 @@ def _get_schema_from_h5(file_path: str, sample_rows: int = 1000) -> List[Dict[st
                         flat_schema.append(col_stats)
                 except Exception as e:
                     # Fallback for tables that might be weird formats (fixed, etc)
-                    logger.warning(f"Could not sample H5 table '{table_name}' with pandas.select, trying direct pytables read: {e}")
+                    logger.warning(
+                        f"Could not sample H5 table '{table_name}' with pandas.select, trying direct pytables read: {e}"
+                    )
 
                     try:
                         node = store.get_node(table_name)
 
                         # Check if it's a PyTables Table object which can be sampled
-                        if hasattr(node, 'read') and hasattr(node, 'colnames') and len(node.colnames) > 0:
+                        if (
+                            hasattr(node, "read")
+                            and hasattr(node, "colnames")
+                            and len(node.colnames) > 0
+                        ):
                             # Read a sample of rows directly from the PyTables node.
                             # This is efficient and works for 'fixed' format tables.
                             sample_data = node.read(stop=sample_rows)
@@ -106,23 +121,37 @@ def _get_schema_from_h5(file_path: str, sample_rows: int = 1000) -> List[Dict[st
                             # Now that we have a sample DataFrame, analyze it
                             for col_name in df_sample.columns:
                                 col_stats = analyze_series_stats(df_sample[col_name])
-                                col_stats["name"] = f"{table_name}:{col_name}".replace("/", "")
+                                col_stats["name"] = f"{table_name}:{col_name}".replace(
+                                    "/", ""
+                                )
                                 col_stats["h5_table"] = table_name
                                 flat_schema.append(col_stats)
                         else:
                             # If it's not a readable table, just get columns as a last resort
-                            logger.warning(f"Node '{table_name}' is not a readable PyTables Table, extracting column names only.")
+                            logger.warning(
+                                f"Node '{table_name}' is not a readable PyTables Table, extracting column names only."
+                            )
                             cols = []
                             if hasattr(node, "colnames"):
                                 cols = node.colnames
-                            elif hasattr(node, "description") and hasattr(node.description, "_v_names"):
+                            elif hasattr(node, "description") and hasattr(
+                                node.description, "_v_names"
+                            ):
                                 cols = node.description._v_names
 
                             for n in cols:
-                                flat_schema.append({"name": f"{table_name}:{n}", "type": "unknown", "h5_table": table_name})
+                                flat_schema.append(
+                                    {
+                                        "name": f"{table_name}:{n}",
+                                        "type": "unknown",
+                                        "h5_table": table_name,
+                                    }
+                                )
 
                     except Exception as e_fallback:
-                        logger.warning(f"Fallback schema inference for H5 table '{table_name}' failed: {e_fallback}")
+                        logger.warning(
+                            f"Fallback schema inference for H5 table '{table_name}' failed: {e_fallback}"
+                        )
 
     except Exception as e:
         logger.warning(f"Could not read HDF5 schema from {file_path}: {e}")
@@ -196,7 +225,9 @@ def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
                 "type": type_str,
                 "nullable": field.nullable,
                 "is_enum": is_enum,
-                "enum_values": sorted([str(v) for v in enum_values]) if is_enum else None
+                "enum_values": (
+                    sorted([str(v) for v in enum_values]) if is_enum else None
+                ),
             }
 
             # --- Existing Min/Max Logic (Keep as is) ---
@@ -219,8 +250,8 @@ def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
             if has_stats:
                 if isinstance(min_val, (bytes, bytearray)):
                     try:
-                        col_stats["min"] = min_val.decode('utf-8')
-                        col_stats["max"] = max_val.decode('utf-8')
+                        col_stats["min"] = min_val.decode("utf-8")
+                        col_stats["max"] = max_val.decode("utf-8")
                     except:
                         pass
                 else:
@@ -235,7 +266,9 @@ def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
     return schema_info
 
 
-def get_schema_from_file(file_path: str, sample_rows: int = 1000) -> List[Dict[str, str]]:
+def get_schema_from_file(
+    file_path: str, sample_rows: int = 1000
+) -> List[Dict[str, str]]:
     """
     Infers the schema from a .csv or .parquet file.
 

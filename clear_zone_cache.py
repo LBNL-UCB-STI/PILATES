@@ -28,10 +28,10 @@ def clear_zone_cache(h5_path: str):
 
     try:
         # Open in append mode to allow modifications
-        store = pd.HDFStore(h5_path, mode='a')
+        store = pd.HDFStore(h5_path, mode="a")
 
         # Find all zone_geoms keys
-        zone_keys = [k for k in store.keys() if 'zone_geoms' in k]
+        zone_keys = [k for k in store.keys() if "zone_geoms" in k]
 
         if not zone_keys:
             print("No zone_geoms tables found in H5 file")
@@ -47,10 +47,10 @@ def clear_zone_cache(h5_path: str):
             zones = store[key]
 
             # Get sample ID
-            if zones.index.name and zones.index.name != 'index':
+            if zones.index.name and zones.index.name != "index":
                 sample_id = str(zones.index[0]) if len(zones) > 0 else ""
-            elif 'GEOID' in zones.columns:
-                sample_id = str(zones['GEOID'].iloc[0]) if len(zones) > 0 else ""
+            elif "GEOID" in zones.columns:
+                sample_id = str(zones["GEOID"].iloc[0]) if len(zones) > 0 else ""
             else:
                 sample_id = ""
 
@@ -59,8 +59,8 @@ def clear_zone_cache(h5_path: str):
             print(f"  Shape: {zones.shape}")
 
             # Determine if corrupted (short ID when we expect GEOID)
-            zone_type = key.replace('/','').replace('_zone_geoms', '')
-            is_census = zone_type in ['block', 'block_group', 'tract']
+            zone_type = key.replace("/", "").replace("_zone_geoms", "")
+            is_census = zone_type in ["block", "block_group", "tract"]
             is_corrupted = is_census and len(sample_id) < 12
 
             if is_corrupted:
@@ -78,6 +78,7 @@ def clear_zone_cache(h5_path: str):
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

@@ -26,7 +26,10 @@ from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.database_upload import create_database_manager
 from pilates.utils.provenance import FileProvenanceTracker
 from workflow_state import WorkflowState
-from pilates.activitysim.preprocessor import ActivitysimPreprocessor, _create_minimal_placeholder
+from pilates.activitysim.preprocessor import (
+    ActivitysimPreprocessor,
+    _create_minimal_placeholder,
+)
 
 from pilates.atlas.postprocessor import atlas_add_vehileTypeId
 from pilates.generic.records import PilatesRunInfo, FileRecord
@@ -169,6 +172,7 @@ class TestDatabaseComponents(unittest.TestCase):
     def test_config_snapshot_insert(self):
         """Test that inserting into config_snapshots works without a config_hash column."""
         import json
+
         db_manager = create_database_manager(self.settings.shared.database)
         with db_manager:
             db_manager.initialize_database()
@@ -196,8 +200,12 @@ class TestDatabaseComponents(unittest.TestCase):
                 ],
             )
             # Verify insertion
-            result = conn.execute("SELECT * FROM config_snapshots WHERE snapshot_id = ?", [snapshot_id]).fetchone()
-            self.assertIsNotNone(result, "Config snapshot should be inserted successfully")
+            result = conn.execute(
+                "SELECT * FROM config_snapshots WHERE snapshot_id = ?", [snapshot_id]
+            ).fetchone()
+            self.assertIsNotNone(
+                result, "Config snapshot should be inserted successfully"
+            )
 
     def test_data_storage_and_retrieval(self):
         """Test actual data insertion operations that would catch SQL constraint issues."""
@@ -741,7 +749,9 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_df = preprocessor._clean_activitysim_data(raw_households_df, "households")
+        cleaned_df = preprocessor._clean_activitysim_data(
+            raw_households_df, "households"
+        )
 
         # Check metadata columns were removed
         self.assertNotIn("id", cleaned_df.columns)
@@ -766,7 +776,9 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_persons = preprocessor._clean_activitysim_data(raw_persons_df, "persons")
+        cleaned_persons = preprocessor._clean_activitysim_data(
+            raw_persons_df, "persons"
+        )
         self.assertEqual(cleaned_persons.index.name, "person_id")
         print("   ✅ Persons cleaning successful")
 
@@ -779,7 +791,9 @@ class TestDatabaseComponents(unittest.TestCase):
             }
         )
 
-        cleaned_landuse = preprocessor._clean_activitysim_data(raw_landuse_df, "land_use")
+        cleaned_landuse = preprocessor._clean_activitysim_data(
+            raw_landuse_df, "land_use"
+        )
         self.assertEqual(cleaned_landuse.index.name, "TAZ")
         print("   ✅ Land use cleaning successful")
 
@@ -1448,13 +1462,13 @@ class TestDatabaseComponents(unittest.TestCase):
                 # Step A: Insert a valid Run (This should succeed temporarily)
                 conn.execute(
                     "INSERT INTO runs (run_id, created_at, models_used) VALUES (?, ?, ?)",
-                    ["valid_run", datetime.now().isoformat(), ["test"]]
+                    ["valid_run", datetime.now().isoformat(), ["test"]],
                 )
 
                 # Step B: Insert a valid File Record linking to it
                 conn.execute(
                     "INSERT INTO file_records (unique_id, record_type, run_id, short_name, exists) VALUES (?, ?, ?, ?, ?)",
-                    ["valid_file", "file", "valid_run", "test", True]
+                    ["valid_file", "file", "valid_run", "test", True],
                 )
 
                 # Step C: Force a failure (Constraint Violation)
@@ -1462,7 +1476,7 @@ class TestDatabaseComponents(unittest.TestCase):
                 # This causes a Primary Key violation
                 conn.execute(
                     "INSERT INTO file_records (unique_id, record_type, run_id, short_name, exists) VALUES (?, ?, ?, ?, ?)",
-                    ["valid_file", "file", "some_other_run", "duplicate", True]
+                    ["valid_file", "file", "some_other_run", "duplicate", True],
                 )
 
                 conn.commit()
@@ -1477,7 +1491,9 @@ class TestDatabaseComponents(unittest.TestCase):
             self.assertEqual(count_after, 0, "Database should be empty after rollback")
 
             file_count = conn.execute("SELECT COUNT(*) FROM file_records").fetchone()[0]
-            self.assertEqual(file_count, 0, "Partial file records should be rolled back")
+            self.assertEqual(
+                file_count, 0, "Partial file records should be rolled back"
+            )
 
             print("   ✅ Atomicity confirmed: Partial data was rolled back")
 
@@ -1497,7 +1513,7 @@ class TestDatabaseComponents(unittest.TestCase):
             # Insert
             conn.execute(
                 "INSERT INTO runs (run_id, created_at, models_used) VALUES (?, ?, ?)",
-                [run_id, datetime.now().isoformat(), models_list]
+                [run_id, datetime.now().isoformat(), models_list],
             )
 
             # Retrieve
@@ -1509,7 +1525,9 @@ class TestDatabaseComponents(unittest.TestCase):
 
             # Verify it comes back as a python list, not a string representation
             self.assertIsInstance(retrieved_list, list, "Should return a Python list")
-            self.assertEqual(retrieved_list, models_list, "List content should match exactly")
+            self.assertEqual(
+                retrieved_list, models_list, "List content should match exactly"
+            )
             self.assertEqual(len(retrieved_list), 3)
 
             print(f"   ✅ Array round-trip successful: {retrieved_list}")
@@ -1540,11 +1558,13 @@ class TestDatabaseComponents(unittest.TestCase):
 
             # 1. Create a dummy Parquet file
             # We specifically use 'year' and 'sector_id' to test the renaming logic
-            test_df = pd.DataFrame({
-                "year": [2010, 2011],
-                "sector_id": [10, 20],  # Ints, should be cast to string by logic
-                "value": [100, 200]
-            })
+            test_df = pd.DataFrame(
+                {
+                    "year": [2010, 2011],
+                    "sector_id": [10, 20],  # Ints, should be cast to string by logic
+                    "value": [100, 200],
+                }
+            )
             parquet_path = os.path.join(self.temp_dir, "test_direct_upload.parquet")
             test_df.to_parquet(parquet_path)
 
@@ -1552,12 +1572,15 @@ class TestDatabaseComponents(unittest.TestCase):
             run_info = {"run_id": "direct_upload_run"}
             record = {
                 "unique_id": "rec_123",
-                "schema": [{"name": "zone_id", "type": "int"}]  # Hint to trigger sorting check
+                "schema": [
+                    {"name": "zone_id", "type": "int"}
+                ],  # Hint to trigger sorting check
             }
             conn.execute("DROP TABLE IF EXISTS atlas_jobs_csv")
             # Create target table (simulating 'atlas_jobs_csv' to trigger sector_id logic)
             # We need a table that matches the expected output schema
-            conn.execute("""
+            conn.execute(
+                """
                             CREATE TABLE atlas_jobs_csv (
                                 run_id VARCHAR, file_record_id VARCHAR, 
                                 year INTEGER, iteration INTEGER, sub_iteration INTEGER,
@@ -1566,7 +1589,8 @@ class TestDatabaseComponents(unittest.TestCase):
                                 data_year INTEGER, -- FIX: Added this column because logic renames input 'year' to 'data_year'
                                 id BIGINT
                             )
-                        """)
+                        """
+            )
 
             # 3. Run the Logic
             # We simulate uploading 'atlas_jobs_csv' to trigger the special casing
@@ -1577,14 +1601,15 @@ class TestDatabaseComponents(unittest.TestCase):
                 record,
                 run_info,
                 year=2020,
-                iteration=5
+                iteration=5,
             )
 
             print(f"   📝 Generated SQL: {select_sql.strip()}")
 
             # 4. Execute the Generated SQL
             # This confirms the SQL syntax is valid DuckDB syntax
-            conn.execute(f"""
+            conn.execute(
+                f"""
                             INSERT INTO atlas_jobs_csv (
                                 -- Order must match SELECT * output:
                                 -- File cols first (year->data_year, sector_id, value), then Metadata
@@ -1592,7 +1617,8 @@ class TestDatabaseComponents(unittest.TestCase):
                                 run_id, file_record_id, year, iteration, sub_iteration
                             )
                             SELECT * FROM ({select_sql})
-                        """)
+                        """
+            )
 
             # 5. Verify Results
             result = conn.execute("SELECT * FROM atlas_jobs_csv").fetchall()
@@ -1600,13 +1626,13 @@ class TestDatabaseComponents(unittest.TestCase):
             df_res = pd.DataFrame(result, columns=columns)
 
             # Check 1: Metadata Injection
-            self.assertEqual(df_res.iloc[0]['run_id'], "direct_upload_run")
-            self.assertEqual(df_res.iloc[0]['year'], 2020)  # The metadata year
-            self.assertEqual(df_res.iloc[0]['iteration'], 5)
+            self.assertEqual(df_res.iloc[0]["run_id"], "direct_upload_run")
+            self.assertEqual(df_res.iloc[0]["year"], 2020)  # The metadata year
+            self.assertEqual(df_res.iloc[0]["iteration"], 5)
 
             # Check 2: Casting Logic (sector_id should be string '10', not int 10)
-            self.assertEqual(df_res.iloc[0]['sector_id'], '10')
-            self.assertIsInstance(df_res.iloc[0]['sector_id'], str)
+            self.assertEqual(df_res.iloc[0]["sector_id"], "10")
+            self.assertIsInstance(df_res.iloc[0]["sector_id"], str)
             print("   ✅ Casting logic (Int -> String) worked")
 
             # Check 3: Sort Keys
@@ -1614,6 +1640,7 @@ class TestDatabaseComponents(unittest.TestCase):
             print("   ✅ Sort keys identified correctly")
 
             print("   ✅ Direct upload logic verified successfully")
+
 
 if __name__ == "__main__":
     print("🧪 Starting PILATES Database Components Tests")

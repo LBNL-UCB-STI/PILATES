@@ -9,6 +9,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"):
     """
     Debug helper to identify join mismatches in _create_land_use_table.
@@ -41,8 +42,12 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
         if has_col:
             logger.info(f"      TAZ dtype: {df[asim_zone_id_col].dtype}")
             logger.info(f"      Unique TAZ values: {df[asim_zone_id_col].nunique()}")
-            logger.info(f"      First 5 TAZ values: {df[asim_zone_id_col].head().tolist()}")
-            logger.info(f"      Sample TAZ values: {sorted(df[asim_zone_id_col].unique())[:10]}")
+            logger.info(
+                f"      First 5 TAZ values: {df[asim_zone_id_col].head().tolist()}"
+            )
+            logger.info(
+                f"      Sample TAZ values: {sorted(df[asim_zone_id_col].unique())[:10]}"
+            )
 
     # 3. Simulate the aggregation to see what index the aggregated data will have
     logger.info("\n3. Simulating aggregations:")
@@ -50,7 +55,9 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
     if asim_zone_id_col in persons.columns:
         persons_test = persons.groupby(asim_zone_id_col).size()
         logger.info(f"   persons_agg index dtype: {persons_test.index.dtype}")
-        logger.info(f"   persons_agg index values (first 5): {persons_test.index[:5].tolist()}")
+        logger.info(
+            f"   persons_agg index values (first 5): {persons_test.index[:5].tolist()}"
+        )
         logger.info(f"   persons_agg has {len(persons_test)} unique zones")
     else:
         logger.error(f"   persons does NOT have '{asim_zone_id_col}' column!")
@@ -58,7 +65,9 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
     if asim_zone_id_col in households.columns:
         households_test = households.groupby(asim_zone_id_col).size()
         logger.info(f"   households_agg index dtype: {households_test.index.dtype}")
-        logger.info(f"   households_agg index values (first 5): {households_test.index[:5].tolist()}")
+        logger.info(
+            f"   households_agg index values (first 5): {households_test.index[:5].tolist()}"
+        )
         logger.info(f"   households_agg has {len(households_test)} unique zones")
     else:
         logger.error(f"   households does NOT have '{asim_zone_id_col}' column!")
@@ -66,7 +75,9 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
     if asim_zone_id_col in jobs.columns:
         jobs_test = jobs.groupby(asim_zone_id_col).size()
         logger.info(f"   jobs_agg index dtype: {jobs_test.index.dtype}")
-        logger.info(f"   jobs_agg index values (first 5): {jobs_test.index[:5].tolist()}")
+        logger.info(
+            f"   jobs_agg index values (first 5): {jobs_test.index[:5].tolist()}"
+        )
         logger.info(f"   jobs_agg has {len(jobs_test)} unique zones")
     else:
         logger.error(f"   jobs does NOT have '{asim_zone_id_col}' column!")
@@ -95,7 +106,9 @@ def debug_land_use_join(zones, persons, households, jobs, asim_zone_id_col="TAZ"
         if asim_zone_id_col in persons.columns:
             logger.info(f"   persons[TAZ] dtype: {persons[asim_zone_id_col].dtype}")
         if asim_zone_id_col in households.columns:
-            logger.info(f"   households[TAZ] dtype: {households[asim_zone_id_col].dtype}")
+            logger.info(
+                f"   households[TAZ] dtype: {households[asim_zone_id_col].dtype}"
+            )
         if asim_zone_id_col in jobs.columns:
             logger.info(f"   jobs[TAZ] dtype: {jobs[asim_zone_id_col].dtype}")
 

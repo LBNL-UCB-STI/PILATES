@@ -4,7 +4,6 @@ from pilates.generic.model_factory import ModelFactory
 from pilates.generic.runner import GenericRunner
 
 
-
 # ----------------------------------------------------------------------
 # ModelFactory tests
 # ----------------------------------------------------------------------
@@ -34,8 +33,7 @@ def test_model_factory_unknown_model_raises():
 def test_get_model_and_image_success():
     settings = SimpleNamespace(
         infrastructure=SimpleNamespace(
-            container_manager="docker",
-            docker_images={"urbansim": "my_image"}
+            container_manager="docker", docker_images={"urbansim": "my_image"}
         ),
         run=SimpleNamespace(
             models=SimpleNamespace(
@@ -44,7 +42,7 @@ def test_get_model_and_image_success():
                 activity_demand=None,
                 vehicle_ownership=None,
             )
-        )
+        ),
     )
     model, image = GenericRunner.get_model_and_image(settings, "land_use_model")
     assert model == "urbansim"
@@ -54,12 +52,14 @@ def test_get_model_and_image_success():
 def test_get_model_and_image_missing_manager():
     settings = SimpleNamespace(
         infrastructure=SimpleNamespace(container_manager=None),
-        run=SimpleNamespace(models=SimpleNamespace(
-            land_use="urbansim",
-            travel=None,
-            activity_demand=None,
-            vehicle_ownership=None,
-        ))  # Need run.models to exist
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                land_use="urbansim",
+                travel=None,
+                activity_demand=None,
+                vehicle_ownership=None,
+            )
+        ),  # Need run.models to exist
     )
     with pytest.raises(ValueError, match="Container Manager not specified"):
         GenericRunner.get_model_and_image(settings, "land_use_model")
@@ -68,8 +68,7 @@ def test_get_model_and_image_missing_manager():
 def test_get_model_and_image_missing_model():
     settings = SimpleNamespace(
         infrastructure=SimpleNamespace(
-            container_manager="docker",
-            docker_images={"urbansim": "my_image"}
+            container_manager="docker", docker_images={"urbansim": "my_image"}
         ),
         run=SimpleNamespace(
             models=SimpleNamespace(
@@ -78,18 +77,17 @@ def test_get_model_and_image_missing_model():
                 activity_demand=None,
                 vehicle_ownership=None,
             )
-        )
+        ),
     )
-    with pytest.raises(ValueError, match="No model land_use_model specified in settings."):
+    with pytest.raises(
+        ValueError, match="No model land_use_model specified in settings."
+    ):
         GenericRunner.get_model_and_image(settings, "land_use_model")
 
 
 def test_get_model_and_image_missing_image():
     settings = SimpleNamespace(
-        infrastructure=SimpleNamespace(
-            container_manager="docker",
-            docker_images={}
-        ),
+        infrastructure=SimpleNamespace(container_manager="docker", docker_images={}),
         run=SimpleNamespace(
             models=SimpleNamespace(
                 land_use="urbansim",
@@ -97,7 +95,9 @@ def test_get_model_and_image_missing_image():
                 activity_demand=None,
                 vehicle_ownership=None,
             )
-        )
+        ),
     )
-    with pytest.raises(ValueError, match="No docker image specified for model 'urbansim'"):
+    with pytest.raises(
+        ValueError, match="No docker image specified for model 'urbansim'"
+    ):
         GenericRunner.get_model_and_image(settings, "land_use_model")

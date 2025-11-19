@@ -172,7 +172,9 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
         )
 
     logger.info(f"Loading config with Pydantic validation: {settings_file}")
-    pydantic_config = load_config(settings_file) # Reload config to ensure Pydantic model is fully initialized
+    pydantic_config = load_config(
+        settings_file
+    )  # Reload config to ensure Pydantic model is fully initialized
     logger.info("✓ Config validated successfully!")
     logger.info(f"  Region: {pydantic_config.run.region}")
     logger.info(
@@ -217,7 +219,7 @@ def datastore_path(
         data_loc = get_setting(settings, "urbansim.local_data_input_folder")
     else:
         data_loc = mutable_data_dir
-        os.makedirs(data_loc, exist_ok=True) # Ensure the directory exists.
+        os.makedirs(data_loc, exist_ok=True)  # Ensure the directory exists.
 
     # Construct the datastore filename based on whether a specific year is provided.
     if year is None:
@@ -324,7 +326,9 @@ def read_datastore(
 
         # Fall back to base input file if year-specific doesn't exist or isn't configured.
         if not use_year_specific:
-            table_prefix_yr = ""  # Base input data store tables usually have no year prefix.
+            table_prefix_yr = (
+                ""  # Base input data store tables usually have no year prefix.
+            )
             usim_datastore = get_setting(
                 settings, "urbansim.input_file_template"
             ).format(region_id=region_id)
@@ -345,7 +349,9 @@ def read_datastore(
         usim_datastore = get_setting(settings, "urbansim.output_file_template").format(
             year=year
         )
-        table_prefix_yr = str(year) # UrbanSim output tables are typically year-prefixed.
+        table_prefix_yr = str(
+            year
+        )  # UrbanSim output tables are typically year-prefixed.
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
         store = pd.HDFStore(usim_datastore_fpath)
 
@@ -441,9 +447,7 @@ def locate_asim_file(
         raise ValueError(f"Unsupported file format: {fmt}")
 
 
-def locate_beam_file(
-    beam_scenario_folder: str, file_name: str, fmt: str
-) -> str:
+def locate_beam_file(beam_scenario_folder: str, file_name: str, fmt: str) -> str:
     """
     Constructs the full path to a BEAM output file based on its format.
 

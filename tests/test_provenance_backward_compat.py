@@ -77,7 +77,6 @@ def test_new_context_parameter():
     settings.provenance.context_file_path = None
     settings.state_file_loc = "/tmp/test_state_context.yaml"
 
-
     state = WorkflowState.from_settings(settings)
 
     with tempfile.TemporaryDirectory() as tmpdir:

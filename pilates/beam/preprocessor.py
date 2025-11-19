@@ -38,7 +38,9 @@ BEAM_PYDANTIC_PATH_MAP = {
 }
 
 
-def _prepare_beam_zone_shapefile(workspace: "Workspace", settings: PilatesConfig) -> Optional[str]:
+def _prepare_beam_zone_shapefile(
+    workspace: "Workspace", settings: PilatesConfig
+) -> Optional[str]:
     """
     Creates a sorted zone shapefile for BEAM from the canonical zone definitions
     and updates the BEAM config to use it.
@@ -46,15 +48,20 @@ def _prepare_beam_zone_shapefile(workspace: "Workspace", settings: PilatesConfig
     logger.info("--- Preparing BEAM Zone Shapefile ---")
     try:
         from pilates.utils.zone_utils import load_canonical_zones
+
         canonical_zones_gdf = load_canonical_zones(settings, workspace)
 
         region = settings.run.region
         beam_mutable_folder = workspace.get_beam_mutable_data_dir()
         output_shapefile_name = "canonical_zones_sorted.geojson"
-        output_shapefile_path = os.path.join(beam_mutable_folder, region, "shape", output_shapefile_name)
+        output_shapefile_path = os.path.join(
+            beam_mutable_folder, region, "shape", output_shapefile_name
+        )
         os.makedirs(os.path.dirname(output_shapefile_path), exist_ok=True)
 
-        logger.info(f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM.")
+        logger.info(
+            f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
+        )
 
         # Reset index so the ID becomes a column
         canonical_zones_gdf = canonical_zones_gdf.reset_index()
@@ -73,12 +80,14 @@ def _prepare_beam_zone_shapefile(workspace: "Workspace", settings: PilatesConfig
                 "Using existing sort order from load_canonical_zones."
             )
 
-        canonical_zones_gdf.to_file(output_shapefile_path, driver='GeoJSON')
+        canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
         return output_shapefile_path
     except Exception as e:
-        logger.error(f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True)
+        logger.error(
+            f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
+        )
         raise
 
 
@@ -90,31 +99,38 @@ class BeamDataHelper:
     # Column Renaming Maps
     RENAMES = {
         "plans": {
-            "tripId": "trip_id", "tripid": "trip_id",
-            "personId": "person_id", "personid": "person_id",
-            "vehicleId": "vehicle_id", "vehicleid": "vehicle_id",
-            "legVehicleIds": "leg_vehicle_ids", "legvehicleids": "leg_vehicle_ids"
+            "tripId": "trip_id",
+            "tripid": "trip_id",
+            "personId": "person_id",
+            "personid": "person_id",
+            "vehicleId": "vehicle_id",
+            "vehicleid": "vehicle_id",
+            "legVehicleIds": "leg_vehicle_ids",
+            "legvehicleids": "leg_vehicle_ids",
         },
-        "households": {
-            "VEHICL": "cars", "auto_ownership": "cars"
-        },
-        "persons": {}  # No common renames, but kept for consistency
+        "households": {"VEHICL": "cars", "auto_ownership": "cars"},
+        "persons": {},  # No common renames, but kept for consistency
     }
 
     # Dtypes for CSV reading to prevent Int64 -> Float conversion
     DTYPES = {
         "plans": {
-            "trip_id": pd.Int64Dtype(), "person_id": pd.Int64Dtype(),
-            "planindex": pd.Int64Dtype()
+            "trip_id": pd.Int64Dtype(),
+            "person_id": pd.Int64Dtype(),
+            "planindex": pd.Int64Dtype(),
         },
         "households": {
-            "household_id": pd.Int64Dtype(), "cars": pd.Int64Dtype(),
-            "auto_ownership": pd.Int64Dtype(), "VEHICL": pd.Int64Dtype()
+            "household_id": pd.Int64Dtype(),
+            "cars": pd.Int64Dtype(),
+            "auto_ownership": pd.Int64Dtype(),
+            "VEHICL": pd.Int64Dtype(),
         },
         "persons": {
-            "household_id": pd.Int64Dtype(), "person_id": pd.Int64Dtype(),
-            "age": pd.Int64Dtype(), "sex": pd.Int64Dtype()
-        }
+            "household_id": pd.Int64Dtype(),
+            "person_id": pd.Int64Dtype(),
+            "age": pd.Int64Dtype(),
+            "sex": pd.Int64Dtype(),
+        },
     }
 
     # Default columns to ensure exist in Plans
@@ -132,7 +148,9 @@ class BeamDataHelper:
     }
 
     @classmethod
-    def read_and_clean(cls, file_path: str, table_type: str, file_format: str) -> pd.DataFrame:
+    def read_and_clean(
+        cls, file_path: str, table_type: str, file_format: str
+    ) -> pd.DataFrame:
         """
         Reads a file (CSV/Parquet), applies dtypes, renames columns, and ensures defaults.
 
@@ -184,11 +202,11 @@ class BeamPreprocessor(GenericPreprocessor):
     """
 
     def __init__(
-            self,
-            model_name: str,
-            state: "WorkflowState",
-            provenance_tracker: FileProvenanceTracker,
-            major_stage: Optional["WorkflowState.Stage"] = None,
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        provenance_tracker: FileProvenanceTracker,
+        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data: List[str] = [
@@ -201,9 +219,9 @@ class BeamPreprocessor(GenericPreprocessor):
         self.settings = self.state.full_settings
 
     def _preprocess(
-            self,
-            workspace: "Workspace",
-            previous_records: RecordStore = RecordStore(),
+        self,
+        workspace: "Workspace",
+        previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Prepares all data needed to run BEAM for the current iteration.
@@ -223,11 +241,15 @@ class BeamPreprocessor(GenericPreprocessor):
         previous_beam_records = []
         if self.state.current_inner_iter > 0:
             previous_beam_records = (
-                self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
+                self.provenance_tracker.run_info.get_latest_model_run_output_records(
+                    "beam"
+                )
             )
             for record in previous_beam_records:
                 short_name = record.short_name.rsplit("_", 2)[0]
-                if (short_name in self.required_input_data) and ("_sub" not in record.short_name):
+                if (short_name in self.required_input_data) and (
+                    "_sub" not in record.short_name
+                ):
                     input_records.add_record(record)
 
         model_run_hash = self.provenance_tracker.start_model_run(
@@ -242,13 +264,16 @@ class BeamPreprocessor(GenericPreprocessor):
         self._update_beam_config(
             "max_plans_memory",
             value_override=0 if self.settings.beam.discard_plans_every_year else None,
-            base_path=workspace.full_path
+            base_path=workspace.full_path,
         )
         # Prepare the zone shapefile to ensure consistent zone ordering
         self.prepare_beam_zone_shapefile(workspace, model_run_hash)
 
         # Copy vehicle data from Atlas (only on first iteration)
-        if self.settings.vehicle_ownership_model_enabled and self.state.current_inner_iter == 0:
+        if (
+            self.settings.vehicle_ownership_model_enabled
+            and self.state.current_inner_iter == 0
+        ):
             self._copy_vehicles_from_atlas(workspace, model_run_hash)
 
         # Copy and merge plans from ActivitySim
@@ -256,14 +281,20 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Add BEAM production data repo to records
         beam_prod_repo_record = next(
-            (repo for repo in self.provenance_tracker.run_info.repo_records.values() if repo.short_name == "beam_prod"),
+            (
+                repo
+                for repo in self.provenance_tracker.run_info.repo_records.values()
+                if repo.short_name == "beam_prod"
+            ),
             None,
         )
         if beam_prod_repo_record:
             store.add_record(beam_prod_repo_record)
         store += output_records
 
-        self.provenance_tracker.complete_model_run(run_hash=model_run_hash, output_records=store.all_records())
+        self.provenance_tracker.complete_model_run(
+            run_hash=model_run_hash, output_records=store.all_records()
+        )
 
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)
@@ -271,7 +302,9 @@ class BeamPreprocessor(GenericPreprocessor):
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
 
-    def copy_data_to_mutable_location(self, settings: PilatesConfig, output_dir: str) -> Tuple[RecordStore, RecordStore]:
+    def copy_data_to_mutable_location(
+        self, settings: PilatesConfig, output_dir: str
+    ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy BEAM input files for the current region from the production directory
         to the run's mutable input directory.
@@ -281,72 +314,103 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_production_path = self._find_beam_production_path(region)
 
         if not beam_production_path:
-            logger.error(f"Could not find BEAM production directory for region {region}.")
+            logger.error(
+                f"Could not find BEAM production directory for region {region}."
+            )
             return RecordStore(), RecordStore()
 
         dest_region = os.path.join(os.path.abspath(output_dir), region)
-        logger.info(f"Copying BEAM production inputs from {beam_production_path} to {dest_region}")
+        logger.info(
+            f"Copying BEAM production inputs from {beam_production_path} to {dest_region}"
+        )
 
-        shutil.copytree(beam_production_path, dest_region, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns(".git", ".git*"))
+        shutil.copytree(
+            beam_production_path,
+            dest_region,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", ".git*"),
+        )
         git_hash = self.provenance_tracker.get_git_hash(beam_production_path)
         input_records.append(
             self.provenance_tracker.record_repo_input(
-                "beam", repo_path=beam_production_path, short_name="beam_prod",
-                description="Beam Production Data Repo", git_hash=git_hash
+                "beam",
+                repo_path=beam_production_path,
+                short_name="beam_prod",
+                description="Beam Production Data Repo",
+                git_hash=git_hash,
             )
         )
         output_records.append(
             self.provenance_tracker.record_repo_input(
-                "beam", repo_path=dest_region, short_name="beam_prod",
-                description="Beam Production Data Repo"
+                "beam",
+                repo_path=dest_region,
+                short_name="beam_prod",
+                description="Beam Production Data Repo",
             )
         )
 
         # Optionally copy 'common' configs if present
-        common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
+        common_config_path = os.path.join(
+            os.path.dirname(beam_production_path), "common"
+        )
         if os.path.exists(common_config_path):
             dest_common = os.path.join(os.path.abspath(output_dir), "common")
-            shutil.copytree(common_config_path, dest_common, dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns(".git", ".git*"))
+            shutil.copytree(
+                common_config_path,
+                dest_common,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git", ".git*"),
+            )
             input_records.append(
                 self.provenance_tracker.record_repo_input(
-                    "beam", repo_path=common_config_path, short_name="beam_common",
-                    description="Beam Common Data Repo", git_hash=git_hash
+                    "beam",
+                    repo_path=common_config_path,
+                    short_name="beam_common",
+                    description="Beam Common Data Repo",
+                    git_hash=git_hash,
                 )
             )
             output_records.append(
                 self.provenance_tracker.record_repo_input(
-                    "beam", repo_path=dest_common, short_name="beam_common",
-                    description="Beam Common Data Repo"
+                    "beam",
+                    repo_path=dest_common,
+                    short_name="beam_common",
+                    description="Beam Common Data Repo",
                 )
             )
 
         if hasattr(settings.beam, "skims_shapefile"):
             logger.info(
-                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}")
+                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}"
+            )
 
             # FIX: Calculate base path from output_dir if state.workspace is not guaranteed
             # Original code used triple split logic; here we approximate assuming output_dir is in the workspace
             # or fallback to self.state.workspace if available.
             # A safe fallback for initialization time:
             base_path = None
-            if hasattr(self.state, 'workspace'):
+            if hasattr(self.state, "workspace"):
                 base_path = self.state.workspace.full_path
             else:
                 # Replicate logic: output_dir is usually "{root}/beam/data"
                 # os.path.dirname(os.path.dirname(output_dir)) approx "{root}"
-                base_path = os.path.dirname(os.path.dirname(os.path.abspath(output_dir)))
+                base_path = os.path.dirname(
+                    os.path.dirname(os.path.abspath(output_dir))
+                )
 
             self._update_beam_config(
                 "skim_zone_geoid_col",
                 value_override=settings.beam.skim_zone_geoid_col,
-                base_path=base_path
+                base_path=base_path,
             )
 
-        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
+        return RecordStore(recordList=input_records), RecordStore(
+            recordList=output_records
+        )
 
-    def prepare_beam_zone_shapefile(self, workspace: "Workspace", model_run_hash: str) -> Optional[str]:
+    def prepare_beam_zone_shapefile(
+        self, workspace: "Workspace", model_run_hash: str
+    ) -> Optional[str]:
         """
         Creates a sorted zone shapefile for BEAM from the canonical zone definitions
         and updates the BEAM config to use it.
@@ -356,7 +420,8 @@ class BeamPreprocessor(GenericPreprocessor):
         output_shapefile_name = os.path.basename(output_shapefile_path)
 
         self.provenance_tracker.record_output_file(
-            "beam_preprocessor", output_shapefile_path,
+            "beam_preprocessor",
+            output_shapefile_path,
             short_name="beam_zone_shapefile_sorted",
             description="BEAM zone shapefile created from sorted canonical zones.",
             model_run_id=model_run_hash,
@@ -368,102 +433,147 @@ class BeamPreprocessor(GenericPreprocessor):
         # FIX: Pass workspace.full_path explicitly
         self._update_beam_config(
             "beam.agentsim.taz.filePath",
-            value_override='${beam.inputDirectory}' + f'/{relative_shapefile_path}',
-            base_path=workspace.full_path
+            value_override="${beam.inputDirectory}" + f"/{relative_shapefile_path}",
+            base_path=workspace.full_path,
         )
         self._update_beam_config(
             "beam.agentsim.taz.tazIdFieldName",
             value_override=self.settings.shared.geography.zones.activitysim_index_col,
-            base_path=workspace.full_path
+            base_path=workspace.full_path,
         )
         return output_shapefile_path
 
     def _copy_vehicles_from_atlas(self, workspace: "Workspace", model_run_hash: str):
         """Copies the vehicles file from the ATLAS output to the BEAM input scenario."""
         beam_scenario_folder = os.path.join(
-            workspace.get_beam_mutable_data_dir(), self.settings.run.region, self.settings.beam.scenario_folder
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
         )
         beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
         if self.state.run_info_path and os.path.exists(self.state.run_info_path):
             logger.info(
-                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
+                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
+            )
             previous_run_dir = os.path.dirname(self.state.run_info_path)
-            atlas_output_data_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
+            atlas_output_data_dir = os.path.join(
+                previous_run_dir, "atlas", "atlas_output"
+            )
         else:
             atlas_output_data_dir = workspace.get_atlas_output_dir()
 
         # Look for vehicles2_{year}.csv, falling back to year-1
-        atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir, f"vehicles2_{self.state.forecast_year}.csv")
+        atlas_vehicle_file_loc = os.path.join(
+            atlas_output_data_dir, f"vehicles2_{self.state.forecast_year}.csv"
+        )
         if not os.path.exists(atlas_vehicle_file_loc):
-            atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir,
-                                                  f"vehicles2_{self.state.forecast_year - 1}.csv")
+            atlas_vehicle_file_loc = os.path.join(
+                atlas_output_data_dir, f"vehicles2_{self.state.forecast_year - 1}.csv"
+            )
 
-        logger.info(f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}")
+        logger.info(
+            f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
+        )
 
         input_record = self.provenance_tracker.record_input_file(
-            "beam_preprocessor", atlas_vehicle_file_loc,
-            short_name="atlas_vehicles2_output", model_run_id=model_run_hash
+            "beam_preprocessor",
+            atlas_vehicle_file_loc,
+            short_name="atlas_vehicles2_output",
+            model_run_id=model_run_hash,
         )
 
         df = pd.read_csv(atlas_vehicle_file_loc)
         df.to_csv(beam_vehicles_path, compression="gzip", index=False)
 
         self.provenance_tracker.record_output_file_with_inputs(
-            "beam_preprocessor", beam_vehicles_path,
+            "beam_preprocessor",
+            beam_vehicles_path,
             input_records=[input_record],
             description="BEAM vehicles input copied from ATLAS vehicles2 output",
-            short_name="beam_vehicles_in", model_run_id=model_run_hash,
+            short_name="beam_vehicles_in",
+            model_run_id=model_run_hash,
         )
 
     def _copy_plans_from_asim(
-            self,
-            input_records: RecordStore,
-            workspace: "Workspace",
-            model_run_hash: str,
+        self,
+        input_records: RecordStore,
+        workspace: "Workspace",
+        model_run_hash: str,
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
         logger.info("Attempting to copy final ASIM plans from provenance tracker.")
         file_format = self.settings.activitysim.file_format
 
-        base_path = os.path.dirname(self.state.run_info_path) if self.state.run_info_path and os.path.exists(
-            self.state.run_info_path) else workspace.full_path
+        base_path = (
+            os.path.dirname(self.state.run_info_path)
+            if self.state.run_info_path and os.path.exists(self.state.run_info_path)
+            else workspace.full_path
+        )
 
         asim_file_paths = {}
         for record in input_records.all_records():
             splt = record.short_name.rsplit("_", 2)
-            shortened_name = splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
+            shortened_name = (
+                splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
+            )
             if shortened_name in self.required_input_data:
-                asim_file_paths[shortened_name] = (os.path.join(base_path, record.file_path), record)
-                logger.info(f"Found ActivitySim output file {record.short_name}: {record.file_path}")
+                asim_file_paths[shortened_name] = (
+                    os.path.join(base_path, record.file_path),
+                    record,
+                )
+                logger.info(
+                    f"Found ActivitySim output file {record.short_name}: {record.file_path}"
+                )
 
         if self.state.current_inner_iter <= 0:
             # First iteration: just copy files over
-            record_list = self._copy_initial_asim_files(asim_file_paths, file_format, model_run_hash, workspace)
+            record_list = self._copy_initial_asim_files(
+                asim_file_paths, file_format, model_run_hash, workspace
+            )
         else:
             # Subsequent iterations: merge replanned households/persons/plans
-            record_list = self._merge_replanned_asim_files(asim_file_paths, file_format, model_run_hash, workspace)
+            record_list = self._merge_replanned_asim_files(
+                asim_file_paths, file_format, model_run_hash, workspace
+            )
 
         return RecordStore(recordList=[r for r in record_list if r is not None])
 
-    def _copy_initial_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str,
-                                 workspace: "Workspace") -> List[Record]:
+    def _copy_initial_asim_files(
+        self,
+        asim_file_paths: dict,
+        file_format: str,
+        model_run_hash: str,
+        workspace: "Workspace",
+    ) -> List[Record]:
         """Directly copies ActivitySim outputs for the first BEAM iteration."""
         record_list = []
         asim_to_beam_mapping = [
-            ("beam_plans", "plans"),  # ActivitySim outputs 'beam_plans', BEAM needs 'plans'
+            (
+                "beam_plans",
+                "plans",
+            ),  # ActivitySim outputs 'beam_plans', BEAM needs 'plans'
             ("households", "households"),
             ("persons", "persons"),
         ]
-        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
-                                            self.settings.beam.scenario_folder)
+        beam_scenario_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
+        )
 
         for asim_name, beam_name in asim_to_beam_mapping:
-            asim_file_path, asim_file_record = asim_file_paths.get(asim_name, (None, None))
+            asim_file_path, asim_file_record = asim_file_paths.get(
+                asim_name, (None, None)
+            )
             if asim_file_path:
                 record = self._copy_with_compression_asim_file_to_beam(
-                    asim_file_path, beam_name, file_format, beam_scenario_folder,
-                    input_record=asim_file_record, model_run_hash=model_run_hash
+                    asim_file_path,
+                    beam_name,
+                    file_format,
+                    beam_scenario_folder,
+                    input_record=asim_file_record,
+                    model_run_hash=model_run_hash,
                 )
                 if record:
                     record_list.append(record)
@@ -471,44 +581,82 @@ class BeamPreprocessor(GenericPreprocessor):
                 logger.warning(f"ActivitySim output file not found: {asim_name}")
         return record_list
 
-    def _merge_replanned_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str,
-                                    workspace: "Workspace") -> List[Record]:
+    def _merge_replanned_asim_files(
+        self,
+        asim_file_paths: dict,
+        file_format: str,
+        model_run_hash: str,
+        workspace: "Workspace",
+    ) -> List[Record]:
         """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
         logger.info("Merging asim outputs with existing beam input scenario files.")
-        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
-                                            self.settings.beam.scenario_folder)
+        beam_scenario_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
+        )
 
-        asim_plans_path, asim_plans_rec = asim_file_paths.get("beam_plans", (None, None))
-        asim_persons_path, asim_persons_rec = asim_file_paths.get("persons", (None, None))
-        asim_households_path, asim_households_rec = asim_file_paths.get("households", (None, None))
+        asim_plans_path, asim_plans_rec = asim_file_paths.get(
+            "beam_plans", (None, None)
+        )
+        asim_persons_path, asim_persons_rec = asim_file_paths.get(
+            "persons", (None, None)
+        )
+        asim_households_path, asim_households_rec = asim_file_paths.get(
+            "households", (None, None)
+        )
 
         beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
-        beam_persons_path = locate_beam_file(beam_scenario_folder, "persons", file_format)
-        beam_households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
+        beam_persons_path = locate_beam_file(
+            beam_scenario_folder, "persons", file_format
+        )
+        beam_households_path = locate_beam_file(
+            beam_scenario_folder, "households", file_format
+        )
 
         # Existing BEAM files (previous iteration)
-        original_hh = BeamDataHelper.read_and_clean(beam_households_path, "households", file_format)
-        original_per = BeamDataHelper.read_and_clean(beam_persons_path, "persons", file_format)
-        original_plans = BeamDataHelper.read_and_clean(beam_plans_path, "plans", file_format)
+        original_hh = BeamDataHelper.read_and_clean(
+            beam_households_path, "households", file_format
+        )
+        original_per = BeamDataHelper.read_and_clean(
+            beam_persons_path, "persons", file_format
+        )
+        original_plans = BeamDataHelper.read_and_clean(
+            beam_plans_path, "plans", file_format
+        )
 
         # New ActivitySim files (current iteration)
-        updated_hh = BeamDataHelper.read_and_clean(asim_households_path, "households", file_format)
-        updated_per = BeamDataHelper.read_and_clean(asim_persons_path, "persons", file_format)
-        updated_plans = BeamDataHelper.read_and_clean(asim_plans_path, "plans", file_format)
+        updated_hh = BeamDataHelper.read_and_clean(
+            asim_households_path, "households", file_format
+        )
+        updated_per = BeamDataHelper.read_and_clean(
+            asim_persons_path, "persons", file_format
+        )
+        updated_plans = BeamDataHelper.read_and_clean(
+            asim_plans_path, "plans", file_format
+        )
 
         # Ensure new plans are marked as selected (override default False)
         updated_plans["planselected"] = True
 
         # Log overlap
-        logger.info(f"Replanned {len(updated_per)} persons and {len(updated_hh)} households.")
+        logger.info(
+            f"Replanned {len(updated_per)} persons and {len(updated_hh)} households."
+        )
 
         # Merge logic
         per_idx = updated_per.index
         hh_idx = updated_hh.index
 
-        persons_final = pd.concat([updated_per, original_per.loc[~original_per.index.isin(per_idx)]])
-        households_final = pd.concat([updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]])
-        plans_final = pd.concat([updated_plans, original_plans.loc[~original_plans.person_id.isin(per_idx)]])
+        persons_final = pd.concat(
+            [updated_per, original_per.loc[~original_per.index.isin(per_idx)]]
+        )
+        households_final = pd.concat(
+            [updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]]
+        )
+        plans_final = pd.concat(
+            [updated_plans, original_plans.loc[~original_plans.person_id.isin(per_idx)]]
+        )
 
         # Save and Record
         record_list = []
@@ -517,11 +665,13 @@ class BeamPreprocessor(GenericPreprocessor):
         outputs = [
             (persons_final, "persons", asim_persons_rec),
             (households_final, "households", asim_households_rec),
-            (plans_final, "plans", asim_plans_rec)
+            (plans_final, "plans", asim_plans_rec),
         ]
 
         # Retrieve beam_plans_record for provenance mixing
-        beam_plans_rec = self.provenance_tracker.find_latest_record(short_name="plans_beam_in")
+        beam_plans_rec = self.provenance_tracker.find_latest_record(
+            short_name="plans_beam_in"
+        )
 
         for df, name, asim_rec in outputs:
             path = locate_beam_file(beam_scenario_folder, name, file_format)
@@ -541,34 +691,43 @@ class BeamPreprocessor(GenericPreprocessor):
                 inputs.append(beam_plans_rec)
 
             rec = self.provenance_tracker.record_output_file_with_inputs(
-                "beam_preprocessor", path, input_records=inputs,
-                description=f"Merged {name} for BEAM input", model_run_id=model_run_hash,
+                "beam_preprocessor",
+                path,
+                input_records=inputs,
+                description=f"Merged {name} for BEAM input",
+                model_run_id=model_run_hash,
                 context=self.state,
-                short_name=f"{name}_beam_in_{self.state.current_year}_{self.state.current_inner_iter}"
+                short_name=f"{name}_beam_in_{self.state.current_year}_{self.state.current_inner_iter}",
             )
             record_list.append(rec)
 
         return record_list
 
     def _copy_with_compression_asim_file_to_beam(
-            self,
-            asim_file_path: str,
-            beam_file_name: str,
-            file_format: str,
-            beam_scenario_folder: str,
-            input_record: Optional[Record] = None,
-            model_run_hash: str = None,
+        self,
+        asim_file_path: str,
+        beam_file_name: str,
+        file_format: str,
+        beam_scenario_folder: str,
+        input_record: Optional[Record] = None,
+        model_run_hash: str = None,
     ) -> Optional[Record]:
         """Copies and compresses a single file from ActivitySim to BEAM, with provenance."""
-        beam_file_path = locate_beam_file(beam_scenario_folder, beam_file_name, file_format)
-        logger.info(f"Copying asim file {asim_file_path} to beam input scenario file {beam_file_path}")
+        beam_file_path = locate_beam_file(
+            beam_scenario_folder, beam_file_name, file_format
+        )
+        logger.info(
+            f"Copying asim file {asim_file_path} to beam input scenario file {beam_file_path}"
+        )
 
         if not os.path.exists(asim_file_path):
             logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
             return self.provenance_tracker.record_output_file(
-                "beam_preprocessor", beam_file_path,
+                "beam_preprocessor",
+                beam_file_path,
                 description=f"Missing BEAM input file: {beam_file_name}",
-                model_run_id=model_run_hash, skip_missing=False
+                model_run_id=model_run_hash,
+                skip_missing=False,
             )
 
         self.provenance_tracker.record_input_record(input_record)
@@ -583,32 +742,52 @@ class BeamPreprocessor(GenericPreprocessor):
             df.to_csv(beam_file_path, compression="gzip", index=False)
 
         return self.provenance_tracker.record_output_file_with_inputs(
-            "beam_preprocessor", beam_file_path,
+            "beam_preprocessor",
+            beam_file_path,
             input_records=[input_record],
             description=f"Copied from ActivitySim output: {beam_file_name}",
             short_name=beam_file_name + "_beam_in",
             model_run_id=model_run_hash,
         )
 
-    def _handle_linkstats(self, workspace: "Workspace", previous_beam_records: List, store: RecordStore):
+    def _handle_linkstats(
+        self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
+    ):
         """Finds or initializes the linkstats file and adds it to the record store."""
         linkstats_record = next(
-            (r for r in previous_beam_records if r.short_name.startswith("linkstats") and "_sub" not in r.short_name),
-            None)
+            (
+                r
+                for r in previous_beam_records
+                if r.short_name.startswith("linkstats") and "_sub" not in r.short_name
+            ),
+            None,
+        )
 
         if not linkstats_record:
-            linkstats_path = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
-                                          self.settings.beam.router_directory, "init.linkstats.csv.gz")
+            linkstats_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                self.settings.run.region,
+                self.settings.beam.router_directory,
+                "init.linkstats.csv.gz",
+            )
             if os.path.exists(linkstats_path):
                 linkstats_record = self.provenance_tracker.record_output_file(
-                    "beam_preprocessor", linkstats_path, self.state.year,
-                    description="Initialized linkstats file", short_name="linkstats", state=self.state
+                    "beam_preprocessor",
+                    linkstats_path,
+                    self.state.year,
+                    description="Initialized linkstats file",
+                    short_name="linkstats",
+                    state=self.state,
                 )
             else:
-                logger.warning(f"[BEAM Preprocessor] Could not find init.linkstats file at {linkstats_path}")
+                logger.warning(
+                    f"[BEAM Preprocessor] Could not find init.linkstats file at {linkstats_path}"
+                )
 
         if linkstats_record:
-            logger.info(f"[BEAM Preprocessor] Linkstats file at {linkstats_record.file_path} added to BEAM input store")
+            logger.info(
+                f"[BEAM Preprocessor] Linkstats file at {linkstats_record.file_path} added to BEAM input store"
+            )
             store.add_record(linkstats_record)
 
     @staticmethod
@@ -616,20 +795,37 @@ class BeamPreprocessor(GenericPreprocessor):
         """Finds the path to the BEAM production data directory."""
         pilates_root = find_project_root() or os.path.realpath(os.getcwd())
 
-        primary_path = os.path.abspath(os.path.join(pilates_root, "pilates", "beam", "production", region))
+        primary_path = os.path.abspath(
+            os.path.join(pilates_root, "pilates", "beam", "production", region)
+        )
         if os.path.exists(primary_path):
             return primary_path
 
         alt_path = os.path.abspath(
-            os.path.join(pilates_root, "sources", "PILATES", "pilates", "beam", "production", region))
+            os.path.join(
+                pilates_root,
+                "sources",
+                "PILATES",
+                "pilates",
+                "beam",
+                "production",
+                region,
+            )
+        )
         if os.path.exists(alt_path):
-            logger.info(f"Primary BEAM production path not found, using alternate: {alt_path}")
+            logger.info(
+                f"Primary BEAM production path not found, using alternate: {alt_path}"
+            )
             return alt_path
 
-        logger.error(f"BEAM production input directory does not exist at either {primary_path} or {alt_path}")
+        logger.error(
+            f"BEAM production input directory does not exist at either {primary_path} or {alt_path}"
+        )
         return None
 
-    def _update_beam_config(self, param: str, value_override=None, base_path: str = None):
+    def _update_beam_config(
+        self, param: str, value_override=None, base_path: str = None
+    ):
         """
         Update a BEAM config file parameter with a new value.
 
@@ -641,7 +837,8 @@ class BeamPreprocessor(GenericPreprocessor):
         config_header = beam_param_map.get(param)
         if not config_header:
             logger.warning(
-                f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml")
+                f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
+            )
             return
 
         if value_override is not None:
@@ -649,32 +846,40 @@ class BeamPreprocessor(GenericPreprocessor):
         else:
             pydantic_path = BEAM_PYDANTIC_PATH_MAP.get(param)
             if not pydantic_path:
-                logger.warning(f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config.")
+                logger.warning(
+                    f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
+                )
                 return
             config_value = get_setting(self.settings, pydantic_path)
 
         if config_value is None:
-            logger.debug(f"Skipping beam config update for '{param}' because value is None.")
+            logger.debug(
+                f"Skipping beam config update for '{param}' because value is None."
+            )
             return
 
         # FIX: Determine root path robustly
         root = base_path
-        if not root and hasattr(self.state, 'workspace'):
+        if not root and hasattr(self.state, "workspace"):
             root = self.state.workspace.full_path
 
         if not root:
-            logger.error(f"Cannot update BEAM config for {param}: Workspace root path could not be determined.")
+            logger.error(
+                f"Cannot update BEAM config for {param}: Workspace root path could not be determined."
+            )
             return
 
         beam_config_path = os.path.join(
             root,
             self.settings.beam.local_mutable_data_folder,
             self.settings.run.region,
-            self.settings.beam.config
+            self.settings.beam.config,
         )
 
         if not os.path.exists(beam_config_path):
-            logger.warning(f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}")
+            logger.warning(
+                f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
+            )
             return
 
         with open(beam_config_path, "r") as file:
@@ -692,4 +897,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if not modified:
                 file.write(f"\n{config_header} = {config_value}\n")
 
-        logger.info(f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}")
+        logger.info(
+            f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"
+        )

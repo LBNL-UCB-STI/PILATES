@@ -148,8 +148,11 @@ class TestDualStorageWorkflow(unittest.TestCase):
         )
 
         from pilates.activitysim.preprocessor import _copy_data_to_mutable_location
+
         _copy_data_to_mutable_location(
-            self.config, self.workspace.get_asim_mutable_data_dir(), self.provenance_tracker
+            self.config,
+            self.workspace.get_asim_mutable_data_dir(),
+            self.provenance_tracker,
         )
 
         print(f"🧪 Test setup complete - temp dir: {self.temp_dir}")
@@ -193,7 +196,7 @@ class TestDualStorageWorkflow(unittest.TestCase):
                         "source_file": "pilates/utils/data/sfbay/zones.geojson",
                         "canonical_id_col": "TAZ1454",
                         "activitysim_index_col": "TAZ",
-                    }
+                    },
                 },
                 "skims": {
                     "zone_type": "taz",
@@ -257,7 +260,9 @@ class TestDualStorageWorkflow(unittest.TestCase):
         """Test H5 structure detection for different formats."""
         print("\n🔍 Testing H5 structure detection...")
 
-        extractor = H5ActivitySimExtractor(self.h5_file_path, self.config, self.workspace)
+        extractor = H5ActivitySimExtractor(
+            self.h5_file_path, self.config, self.workspace
+        )
 
         # Test structure detection
         table_prefix = extractor._detect_h5_structure(year=2017)

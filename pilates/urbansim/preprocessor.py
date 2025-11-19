@@ -40,9 +40,7 @@ skim_dtypes = {
 }
 
 
-def _load_raw_skims(
-    settings, asim_data_dir, usim_data_dir, skim_format, workspace
-):
+def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspace):
     """
     Load raw skims and format for UrbanSim, ensuring canonical zone order.
     """
@@ -81,7 +79,7 @@ def _load_raw_skims(
                     # Use the canonical order for the DataFrame index and columns
                     index = pd.Index(canonical_order, name="from_zone_id", dtype=str)
                     columns = pd.Index(canonical_order, name="to_zone_id", dtype=str)
-                    
+
                     # The skim matrix data is assumed to be in the canonical order
                     # as enforced by the ActivitySim preprocessor.
                     travel_time_mins = np.array(skims["SOV_TIME__AM"])

@@ -628,7 +628,6 @@ class FileProvenanceTracker(ProvenanceTracker):
         )
         return repo_record
 
-
     def _create_h5_table_records(
         self,
         h5_file_path: str,

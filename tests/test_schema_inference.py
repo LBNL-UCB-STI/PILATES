@@ -25,10 +25,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.generic.records import RecordStore
-from pilates.utils.schema_inference import (
-    get_schema_from_file,
-    analyze_series_stats
-)
+from pilates.utils.schema_inference import get_schema_from_file, analyze_series_stats
 
 
 class TestSchemaInference(unittest.TestCase):
@@ -66,11 +63,17 @@ class TestSchemaInference(unittest.TestCase):
         """
         print("\n🔍 Testing Integer Range Detection...")
 
-        df = pd.DataFrame({
-            "tiny_int": np.array([-100, 0, 100], dtype=np.int8),  # Fits in SMALLINT
-            "standard_int": np.array([-50000, 0, 50000], dtype=np.int32),  # Fits in INTEGER
-            "big_int": np.array([3_000_000_000, 4_000_000_000, 3_500_000_000], dtype=np.int64)  # Needs BIGINT
-        })
+        df = pd.DataFrame(
+            {
+                "tiny_int": np.array([-100, 0, 100], dtype=np.int8),  # Fits in SMALLINT
+                "standard_int": np.array(
+                    [-50000, 0, 50000], dtype=np.int32
+                ),  # Fits in INTEGER
+                "big_int": np.array(
+                    [3_000_000_000, 4_000_000_000, 3_500_000_000], dtype=np.int64
+                ),  # Needs BIGINT
+            }
+        )
 
         file_path = self.create_parquet_file("integers.parquet", df)
 
@@ -78,22 +81,22 @@ class TestSchemaInference(unittest.TestCase):
         schema = get_schema_from_file(file_path)
 
         # Verify Tiny Int
-        tiny = next(col for col in schema if col['name'] == 'tiny_int')
-        self.assertEqual(tiny['min'], -100)
-        self.assertEqual(tiny['max'], 100)
-        self.assertIn('int', tiny['type'].lower())
+        tiny = next(col for col in schema if col["name"] == "tiny_int")
+        self.assertEqual(tiny["min"], -100)
+        self.assertEqual(tiny["max"], 100)
+        self.assertIn("int", tiny["type"].lower())
         print("   ✅ Tiny Int stats captured")
 
         # Verify Standard Int
-        std = next(col for col in schema if col['name'] == 'standard_int')
-        self.assertEqual(std['min'], -50000)
-        self.assertEqual(std['max'], 50000)
+        std = next(col for col in schema if col["name"] == "standard_int")
+        self.assertEqual(std["min"], -50000)
+        self.assertEqual(std["max"], 50000)
         print("   ✅ Standard Int stats captured")
 
         # Verify Big Int
-        big = next(col for col in schema if col['name'] == 'big_int')
-        self.assertEqual(big['min'], 3_000_000_000)
-        self.assertGreater(big['max'], 2_147_483_647)  # Greater than max 32-bit int
+        big = next(col for col in schema if col["name"] == "big_int")
+        self.assertEqual(big["min"], 3_000_000_000)
+        self.assertGreater(big["max"], 2_147_483_647)  # Greater than max 32-bit int
         print("   ✅ Big Int stats captured")
 
     def test_enum_detection(self):
@@ -104,10 +107,12 @@ class TestSchemaInference(unittest.TestCase):
 
         # 'mode' has low cardinality (3 unique values) -> Should be ENUM
         # 'id' has high cardinality (100 unique values) -> Should be VARCHAR
-        df = pd.DataFrame({
-            "mode": ["WALK", "DRIVE", "TRANSIT", "WALK"] * 25,
-            "id": [f"trip_{i}" for i in range(100)]
-        })
+        df = pd.DataFrame(
+            {
+                "mode": ["WALK", "DRIVE", "TRANSIT", "WALK"] * 25,
+                "id": [f"trip_{i}" for i in range(100)],
+            }
+        )
 
         file_path = self.create_csv_file("enums.csv", df)
 
@@ -116,14 +121,16 @@ class TestSchemaInference(unittest.TestCase):
         schema = get_schema_from_file(file_path)
 
         # Verify Enum
-        mode_col = next(col for col in schema if col['name'] == 'mode')
-        self.assertTrue(mode_col.get('is_enum'), "Should detect 'mode' as enum")
-        self.assertCountEqual(mode_col.get('enum_values'), ["WALK", "DRIVE", "TRANSIT"])
+        mode_col = next(col for col in schema if col["name"] == "mode")
+        self.assertTrue(mode_col.get("is_enum"), "Should detect 'mode' as enum")
+        self.assertCountEqual(mode_col.get("enum_values"), ["WALK", "DRIVE", "TRANSIT"])
         print("   ✅ Low cardinality strings detected as Enum")
 
         # Verify Non-Enum
-        id_col = next(col for col in schema if col['name'] == 'id')
-        self.assertFalse(id_col.get('is_enum'), "High cardinality 'id' should NOT be enum")
+        id_col = next(col for col in schema if col["name"] == "id")
+        self.assertFalse(
+            id_col.get("is_enum"), "High cardinality 'id' should NOT be enum"
+        )
         print("   ✅ High cardinality strings ignored")
 
     def test_integer_like_floats(self):
@@ -133,11 +140,13 @@ class TestSchemaInference(unittest.TestCase):
         """
         print("\n🔍 Testing Integer-like Floats...")
 
-        df = pd.DataFrame({
-            "real_float": [1.1, 2.5, 3.9],
-            "fake_float": [1.0, 2.0, 3.0],  # Can be safely cast to INT
-            "float_with_nan": [1.0, 2.0, None]  # Can be cast to INT (NULLABLE)
-        })
+        df = pd.DataFrame(
+            {
+                "real_float": [1.1, 2.5, 3.9],
+                "fake_float": [1.0, 2.0, 3.0],  # Can be safely cast to INT
+                "float_with_nan": [1.0, 2.0, None],  # Can be cast to INT (NULLABLE)
+            }
+        )
 
         # We use CSV here because Parquet preserves the type more strictly,
         # while CSV/Pandas often infers Float for ints with NaNs.
@@ -145,16 +154,18 @@ class TestSchemaInference(unittest.TestCase):
         schema = get_schema_from_file(file_path)
 
         # Real Float
-        real = next(col for col in schema if col['name'] == 'real_float')
-        self.assertFalse(real.get('is_integer_like'))
+        real = next(col for col in schema if col["name"] == "real_float")
+        self.assertFalse(real.get("is_integer_like"))
 
         # Fake Float
-        fake = next(col for col in schema if col['name'] == 'fake_float')
-        self.assertTrue(fake.get('is_integer_like'), "1.0, 2.0 should be integer-like")
+        fake = next(col for col in schema if col["name"] == "fake_float")
+        self.assertTrue(fake.get("is_integer_like"), "1.0, 2.0 should be integer-like")
 
         # Float with NaN
-        nan_col = next(col for col in schema if col['name'] == 'float_with_nan')
-        self.assertTrue(nan_col.get('is_integer_like'), "1.0, 2.0, NaN should be integer-like")
+        nan_col = next(col for col in schema if col["name"] == "float_with_nan")
+        self.assertTrue(
+            nan_col.get("is_integer_like"), "1.0, 2.0, NaN should be integer-like"
+        )
         print("   ✅ Integer-like floats correctly identified")
 
     def test_parquet_metadata_optimization(self):
@@ -171,8 +182,8 @@ class TestSchemaInference(unittest.TestCase):
             self.fail("Schema list is empty. Check if PyArrow can read the file.")
 
         col = schema[0]
-        self.assertEqual(col['min'], 0)
-        self.assertEqual(col['max'], 999)
+        self.assertEqual(col["min"], 0)
+        self.assertEqual(col["max"], 999)
         print("   ✅ Parquet stats extracted")
 
     def test_numpy_serialization(self):
@@ -182,20 +193,22 @@ class TestSchemaInference(unittest.TestCase):
         """
         print("\n🔍 Testing JSON Serialization Compatibility...")
 
-        df = pd.DataFrame({
-            "val": np.array([1, 2, 3], dtype=np.int64)
-        })
+        df = pd.DataFrame({"val": np.array([1, 2, 3], dtype=np.int64)})
 
         # Test via the helper method directly if accessible, or via CSV path
         # _analyze_series_stats is where the casting happens
-        stats = analyze_series_stats(df['val'])
+        stats = analyze_series_stats(df["val"])
 
-        min_val = stats['min']
-        max_val = stats['max']
+        min_val = stats["min"]
+        max_val = stats["max"]
 
         # Check types
-        self.assertNotIsInstance(min_val, np.generic, "Min value should be native Python int/float")
-        self.assertNotIsInstance(max_val, np.generic, "Max value should be native Python int/float")
+        self.assertNotIsInstance(
+            min_val, np.generic, "Min value should be native Python int/float"
+        )
+        self.assertNotIsInstance(
+            max_val, np.generic, "Max value should be native Python int/float"
+        )
 
         # Verify it dumps to JSON without error
         try:
@@ -216,7 +229,7 @@ class TestSchemaInference(unittest.TestCase):
             self.fail("Schema list is empty. Check get_schema_from_file logic.")
 
         col = schema[0]
-        self.assertIn("bool", col['type'].lower())
+        self.assertIn("bool", col["type"].lower())
         print("   ✅ Booleans identified")
 
 

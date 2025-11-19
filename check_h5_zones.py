@@ -11,14 +11,14 @@ if len(sys.argv) != 2:
 h5_path = sys.argv[1]
 
 print(f"Opening {h5_path}")
-store = pd.HDFStore(h5_path, mode='r')
+store = pd.HDFStore(h5_path, mode="r")
 
 print("\nKeys in H5 file:")
 for key in store.keys():
     print(f"  {key}")
 
 # Look for zone_geoms
-zone_keys = [k for k in store.keys() if 'zone_geoms' in k]
+zone_keys = [k for k in store.keys() if "zone_geoms" in k]
 
 if zone_keys:
     for zone_key in zone_keys:
@@ -29,7 +29,7 @@ if zone_keys:
         print(f"  Index dtype: {zones.index.dtype}")
         print(f"  First 10 index values: {zones.index[:10].tolist()}")
 
-        if 'GEOID' in zones.columns:
+        if "GEOID" in zones.columns:
             print(f"  GEOID column dtype: {zones['GEOID'].dtype}")
             print(f"  First 10 GEOID values: {zones['GEOID'].head(10).tolist()}")
 else:

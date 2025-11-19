@@ -115,7 +115,10 @@ def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
 
 
 def read_skims(
-    settings: PilatesConfig, mode: str = "a", data_dir: Optional[str] = None, file_name: str = "skims.omx"
+    settings: PilatesConfig,
+    mode: str = "a",
+    data_dir: Optional[str] = None,
+    file_name: str = "skims.omx",
 ) -> omx.File:
     """
     Opens an OpenMatrix (OMX) file for skims.
@@ -152,7 +155,10 @@ ASIM_PYDANTIC_PATH_MAP = {"random_seed": "activitysim.random_seed"}
 
 
 def update_asim_config(
-    settings: PilatesConfig, full_path: str, param: str, valueOverride: Optional[str] = None
+    settings: PilatesConfig,
+    full_path: str,
+    param: str,
+    valueOverride: Optional[str] = None,
 ) -> None:
     """
     Updates a specific parameter in the ActivitySim configuration file (`settings.yaml`).
@@ -413,7 +419,9 @@ def _raw_beam_skims_preprocess(
     # Validations: Ensure all origins and destinations in the skims are part of the canonical zones.
     origin_taz = skims_df.origin.unique()
     destination_taz = skims_df.destination.unique()
-    assert len(origin_taz) == len(destination_taz), "Number of unique origins and destinations must be equal."
+    assert len(origin_taz) == len(
+        destination_taz
+    ), "Number of unique origins and destinations must be equal."
 
     order = zone_order(settings, workspace)
 
@@ -445,7 +453,10 @@ def _raw_beam_skims_preprocess(
 
 
 def _raw_beam_origin_skims_preprocess(
-    settings: PilatesConfig, year: int, origin_skims_df: pd.DataFrame, workspace: "Workspace"
+    settings: PilatesConfig,
+    year: int,
+    origin_skims_df: pd.DataFrame,
+    workspace: "Workspace",
 ) -> pd.DataFrame:
     """
     Validates and preprocesses raw BEAM origin skims.
@@ -516,7 +527,9 @@ def _create_skims_by_mode(
 
     logger.info("Splitting out transit skims.")
     transit_df = skims_df.loc[pd.IndexSlice[:, transit_paths, :, :], :]
-    assert len(transit_df) > 0, "No transit skims found after splitting by transit paths."
+    assert (
+        len(transit_df) > 0
+    ), "No transit skims found after splitting by transit paths."
 
     # Delete the original skims_df to free up memory
     del skims_df
@@ -608,7 +621,7 @@ def _build_od_matrix(
         np.nan, index=order, columns=order, dtype=np.float32
     ).rename_axis(index="origin", columns="destination")
 
-    useDefaults = True # Assume defaults are used unless metric is found and processed
+    useDefaults = True  # Assume defaults are used unless metric is found and processed
 
     if metric in df.columns:
         # Pivot the DataFrame to get a matrix-like structure with origin as index and destination as columns.
@@ -620,19 +633,23 @@ def _build_od_matrix(
         # Check for and handle infinite values, replacing them with fill_na.
         infs = np.isinf(out)
         if np.any(infs):
-            logger.warning(
-                f"Replacing {infs.sum().sum()} infs in skim {metric}"
-            )
+            logger.warning(f"Replacing {infs.sum().sum()} infs in skim {metric}")
             out[infs] = fill_na
     else:
         # If the metric is not found in the DataFrame, useDefaults remains True.
-        logger.warning(f"Metric '{metric}' not found in DataFrame columns. Using default values.")
+        logger.warning(
+            f"Metric '{metric}' not found in DataFrame columns. Using default values."
+        )
 
     num_zones = len(order)
 
     # Assertions to ensure the resulting matrix is consistent with the expected zone order and is square.
-    assert out.index.isin(order).all(), "There are missing origins in the final OD matrix."
-    assert out.columns.isin(order).all(), "There are missing destinations in the final OD matrix."
+    assert out.index.isin(
+        order
+    ).all(), "There are missing origins in the final OD matrix."
+    assert out.columns.isin(
+        order
+    ).all(), "There are missing destinations in the final OD matrix."
     assert (
         num_zones,
         num_zones,
@@ -717,12 +734,16 @@ def impute_distances(
 
         # Select centroids for the specified origin and destination pairs.
         orig_centroids = gdf.loc[origin_idx].reset_index(drop=True).geometry.centroid
-        dest_centroids = gdf.loc[destination_idx].reset_index(drop=True).geometry.centroid
+        dest_centroids = (
+            gdf.loc[destination_idx].reset_index(drop=True).geometry.centroid
+        )
 
         # Calculate distances between selected origin and destination centroids.
         # Replace any zero distances with a small value (e.g., 100 meters) to avoid issues.
         # Convert meters to miles.
-        return orig_centroids.distance(dest_centroids).replace({0: 100}).values * (0.621371 / 1000)
+        return orig_centroids.distance(dest_centroids).replace({0: 100}).values * (
+            0.621371 / 1000
+        )
 
 
 def _distance_skims(
@@ -757,7 +778,9 @@ def _distance_skims(
 
     skims_fname = "skims.omx"
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+    needToClose = (
+        True  # Flag to determine if the OMX file needs to be closed at the end
+    )
 
     # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
@@ -768,7 +791,7 @@ def _distance_skims(
 
     # Determine the distance column from settings.
     dist_column = settings.beam.asim_hwy_measure_map["DIST"]
-    mx_dist = None # Initialize mx_dist
+    mx_dist = None  # Initialize mx_dist
 
     if isinstance(input_skims, pd.DataFrame):
         # If input is a DataFrame, extract distance and build OD matrix.
@@ -831,7 +854,7 @@ def _distance_skims(
 
 
 def _build_od_matrix_parallel(
-    tup: Tuple[pd.DataFrame, Dict[str, str], int, np.ndarray, float]
+    tup: Tuple[pd.DataFrame, Dict[str, str], int, np.ndarray, float],
 ) -> Dict[str, np.ndarray]:
     """
     Helper function to build Origin-Destination (OD) matrices in parallel.
@@ -919,7 +942,13 @@ def _transit_skims(
         ret_list = p.map(
             _build_od_matrix_parallel,
             [
-                (group.loc[name], settings.beam.asim_transit_measure_map, num_taz, order, fill_na)
+                (
+                    group.loc[name],
+                    settings.beam.asim_transit_measure_map,
+                    num_taz,
+                    order,
+                    fill_na,
+                )
                 for name, group in groupBy
             ],
         )
@@ -987,7 +1016,7 @@ def _ridehail_skims(
     measure_map = settings.beam.asim_ridehail_measure_map
     skims = read_skims(settings, mode="a", data_dir=data_dir)
     num_taz = len(order)
-    df = ridehail_df.copy() # Create a copy to avoid modifying the original DataFrame
+    df = ridehail_df.copy()  # Create a copy to avoid modifying the original DataFrame
 
     # Iterate through each defined ridehail path and time period.
     for path, skimPath in ridehail_path_map.items():
@@ -1077,7 +1106,9 @@ def _fill_ridehail_skims(
     # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+    needToClose = (
+        True  # Flag to determine if the OMX file needs to be closed at the end
+    )
 
     # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
@@ -1181,7 +1212,9 @@ def _fill_transit_skims(
     # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+    needToClose = (
+        True  # Flag to determine if the OMX file needs to be closed at the end
+    )
 
     # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
@@ -1328,7 +1361,9 @@ def _fill_auto_skims(
     # The beam_output_dir variable is commented out as it's not directly used here.
     # beam_output_dir = get_setting(settings, "beam.local_output_folder")
     mutable_skims_location = os.path.join(data_dir, skims_fname)
-    needToClose = True # Flag to determine if the OMX file needs to be closed at the end
+    needToClose = (
+        True  # Flag to determine if the OMX file needs to be closed at the end
+    )
 
     # If input_skims is already an open OMX file, use it directly; otherwise, open a new one.
     if input_skims is not None:
@@ -1340,7 +1375,7 @@ def _fill_auto_skims(
     # Get the distance matrix, which might be used for imputing missing auto times.
     distance_miles = np.array(output_skims["DIST"])
     output_skim_tables = output_skims.list_matrices()
-    nSkimsCreated = 0 # Counter for newly created skims.
+    nSkimsCreated = 0  # Counter for newly created skims.
 
     # NOTE: time is in units of minutes for ActivitySim skims.
 
@@ -1371,7 +1406,7 @@ def _fill_auto_skims(
                 output_skims[failed_measure].attrs.measure = "FAILURES"
                 output_skims[completed_measure].attrs.timePeriod = period
                 output_skims[failed_measure].attrs.timePeriod = period
-            
+
             # Iterate through each measure for the current path and period.
             for measure in measure_map.keys():
                 name = f"{path}_{measure}__{period}"
@@ -1778,6 +1813,7 @@ def _process_raw_h5_for_asim(
     """
     # Add zone id to blocks table
     from pilates.utils.zone_utils import get_block_to_zone_mapping
+
     block_to_zone_map = get_block_to_zone_mapping(settings, year, workspace)
     raw_blocks[asim_zone_id_col] = raw_blocks.index.map(block_to_zone_map)
 
@@ -2653,7 +2689,9 @@ def enrollment_tables(
         enrollment[asim_zone_id_col] = enrollment[asim_zone_id_col].astype(str)
         del enrollment_df
         logger.info("Saving {} enrollment data to disk!".format(enrollment_type))
-        os.makedirs(os.path.dirname(path_to_schools_data), exist_ok=True) # Create directory if it doesn't exist
+        os.makedirs(
+            os.path.dirname(path_to_schools_data), exist_ok=True
+        )  # Create directory if it doesn't exist
         enrollment.to_csv(path_to_schools_data)
 
     return enrollment
@@ -2842,6 +2880,7 @@ def copy_beam_geoms(
     zone_type = get_setting(settings, "shared.geography.zones.zone_type").lower()
     zone_id_col = zone_type_column[zone_type]
     from pilates.utils.zone_utils import get_block_to_zone_mapping
+
     mapping = get_block_to_zone_mapping(
         settings, get_setting(settings, "run.start_year"), workspace
     )
@@ -3290,6 +3329,7 @@ def _update_blocks_table(
 
     if zone_id_col not in blocks.columns:
         from pilates.utils.zone_utils import get_block_to_zone_mapping
+
         mapping = get_block_to_zone_mapping(settings, year, workspace)
 
         if zone_type == "block":
@@ -3428,7 +3468,8 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["AGE0004", "AGE0519", "AGE2044", "AGE4564", "AGE64P", "AGE62P"]
         ]
-        .sum().fillna(0)
+        .sum()
+        .fillna(0)
     )
     persons_agg["TOTPOP"] = persons.groupby(asim_zone_id_col).size()
 
@@ -3444,7 +3485,8 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["HHINCQ1", "HHINCQ2", "HHINCQ3", "HHINCQ4", "workers"]
         ]
-        .sum().fillna(0)
+        .sum()
+        .fillna(0)
     )
     households_agg["TOTHH"] = households.groupby(asim_zone_id_col).size()
     households_agg.rename(columns={"workers": "EMPRES"}, inplace=True)
@@ -3462,13 +3504,16 @@ def _create_land_use_table(
         .groupby(asim_zone_id_col)[
             ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
         ]
-        .sum().fillna(0)
+        .sum()
+        .fillna(0)
     )
     jobs_agg["TOTEMP"] = jobs.groupby(asim_zone_id_col).size().fillna(0)
 
     # Calculate OTHEMPN from the aggregated sums
     sector_columns = ["RETEMPN", "FPSEMPN", "HEREMPN", "AGREMPN", "MWTEMPN"]
-    jobs_agg["OTHEMPN"] = (jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)).fillna(0)
+    jobs_agg["OTHEMPN"] = (
+        jobs_agg["TOTEMP"] - jobs_agg[sector_columns].sum(axis=1)
+    ).fillna(0)
 
     # --- DIAGNOSTIC: Check aggregated data before join ---
     logger.info("=== PRE-JOIN DIAGNOSTICS ===")
@@ -3657,8 +3702,9 @@ def create_asim_data_from_database(
 
     try:
         with db_manager:
-            assert isinstance(db_manager, DuckDBManager), \
-                "This doesn't work with databases beyond duckdb yet"
+            assert isinstance(
+                db_manager, DuckDBManager
+            ), "This doesn't work with databases beyond duckdb yet"
             # Create ActivitySim input CSV files from database
             tables_created = 0
 
@@ -3822,6 +3868,7 @@ def create_asim_data_from_h5(
 
     # Get block to zone mapping
     from pilates.utils.zone_utils import get_block_to_zone_mapping
+
     block_to_zone_map = get_block_to_zone_mapping(settings, state.year, workspace)
 
     # Load UrbanSim data
@@ -3893,6 +3940,7 @@ def create_asim_data_from_h5(
         )
 
     return output_records
+
 
 def _create_minimal_placeholder(table_name: str) -> pd.DataFrame:
     """

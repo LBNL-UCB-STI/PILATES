@@ -354,10 +354,17 @@ class ActivitysimRunner(GenericRunner):
                 raise RuntimeError("ASim Compilation failed")
             else:
                 try:
-                    ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
+                    ensure_0_based_and_flag_zarr_skims(
+                        all_skims_path, settings, workspace
+                    )
                 except Exception as e:
-                    logger.error(f"Failed to correct and flag initial Zarr skims after compilation: {e}", exc_info=True)
-                    raise RuntimeError("Failed to correct initial Zarr skims, cannot proceed.") from e
+                    logger.error(
+                        f"Failed to correct and flag initial Zarr skims after compilation: {e}",
+                        exc_info=True,
+                    )
+                    raise RuntimeError(
+                        "Failed to correct initial Zarr skims, cannot proceed."
+                    ) from e
             self.state.compile_asim()  # Update state to mark as compiled
         else:
             if "beam" in self.provenance_tracker.run_info.models_used:

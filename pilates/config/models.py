@@ -94,7 +94,9 @@ class GeographyConfig(BaseModel):
     local_crs: str = Field(
         ..., description="Local coordinate reference system (e.g., EPSG:32048)"
     )
-    zones: Optional["ZonesConfig"] = Field(None, description="Canonical zone definitions (optional for tests)")
+    zones: Optional["ZonesConfig"] = Field(
+        None, description="Canonical zone definitions (optional for tests)"
+    )
 
 
 class ZonesConfig(BaseModel):

@@ -316,7 +316,15 @@ def get_minimal_settings(tmpdir: str, use_enhanced_stubs: bool = True) -> Dict:
                     "sfbay": {
                         "state": "06",
                         "counties": [
-                            "001", "013", "041", "055", "075", "081", "085", "095", "097",
+                            "001",
+                            "013",
+                            "041",
+                            "055",
+                            "075",
+                            "081",
+                            "085",
+                            "095",
+                            "097",
                         ],
                     }
                 },
@@ -396,14 +404,16 @@ class TestStubProvenanceFlow:
         settings_dict["run"]["models"]["land_use"] = "urbansim"
         settings_dict["run"]["models"]["vehicle_ownership"] = "atlas"
 
-
         # ATLAS-specific settings
         settings_dict["atlas_beamac"] = 0  # Use .RData files (tests Issue 3)
         settings_dict["atlas_host_output_folder"] = "atlas/output"
         settings_dict["atlas_host_input_folder"] = "atlas/input"
-        settings_dict["atlas_host_mutable_input_folder"] = "atlas/input"  # For workspace
+        settings_dict["atlas_host_mutable_input_folder"] = (
+            "atlas/input"  # For workspace
+        )
 
         from pilates.config.models import validate_config
+
         settings_obj = validate_config(settings_dict)
 
         # Change to temp directory for test
@@ -1314,6 +1324,7 @@ class TestStubProvenanceFlow:
         settings_dict["run"]["models"]["vehicle_ownership"] = None
 
         from pilates.config.models import validate_config
+
         settings_obj = validate_config(settings_dict)
 
         # Change to temp directory for test
@@ -1678,11 +1689,15 @@ class TestStubProvenanceFlow:
             assert len(asim_plans_records) > 0, "ActivitySim plans should be tracked"
             asim_plans_path = asim_plans_records[0]["file_path"]
             # The path from the record is relative to the run directory, but the CWD is the parent tmpdir
-            full_plans_path = os.path.join(settings_obj.run.output_run_name, asim_plans_path)
+            full_plans_path = os.path.join(
+                settings_obj.run.output_run_name, asim_plans_path
+            )
             assert os.path.exists(
                 full_plans_path
             ), f"ActivitySim plans file should exist at {full_plans_path}"
-            print(f"   ✅ File linkage verified: ActivitySim plans output exists at {full_plans_path}")
+            print(
+                f"   ✅ File linkage verified: ActivitySim plans output exists at {full_plans_path}"
+            )
 
             # ============================================================
             # Verify OpenLineage Events

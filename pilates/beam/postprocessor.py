@@ -2189,7 +2189,9 @@ def write_zarr_skim_as_omx(
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
 
-def verify_skim_zone_order(settings, skim_file_path: str, workspace: "Workspace") -> List[str]:
+def verify_skim_zone_order(
+    settings, skim_file_path: str, workspace: "Workspace"
+) -> List[str]:
     """
     Verifies that the zone order in a skim file (Zarr or OMX) matches the
     canonical order from the canonical_zones file.
@@ -2389,7 +2391,7 @@ def _merge_beam_skims_to_zarr(
         ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
     except Exception as e:
         logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
-        return None, None # Indicate failure
+        return None, None  # Indicate failure
 
     # Open the Zarr dataset in append mode to modify it in place
     try:
@@ -2398,8 +2400,6 @@ def _merge_beam_skims_to_zarr(
         logger.info(
             f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
         )
-
-
 
         # Store original zone IDs if needed
         if "original_zone_ids" not in skims_ds.attrs:
@@ -2690,14 +2690,17 @@ def _merge_beam_skims_to_zarr(
         # potential corruption or misalignment that may have occurred during the merge.
         expected_coords = np.arange(len(canonical_order))
         if not np.array_equal(skims_ds.coords["otaz"].values, expected_coords):
-            logger.warning("Correcting 'otaz' coordinates to be 0-based before final save.")
+            logger.warning(
+                "Correcting 'otaz' coordinates to be 0-based before final save."
+            )
             skims_ds = skims_ds.assign_coords(otaz=expected_coords)
         if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
-            logger.warning("Correcting 'dtaz' coordinates to be 0-based before final save.")
+            logger.warning(
+                "Correcting 'dtaz' coordinates to be 0-based before final save."
+            )
             skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
 
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
-
 
         skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
         logger.info("Completed writing zarr skims successfully.")
@@ -2712,10 +2715,12 @@ def _merge_beam_skims_to_zarr(
     try:
         with xr.open_zarr(all_skims_path) as verified_ds:
             logger.info(
-                    f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
-                )
+                f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
+            )
     except Exception as e:
-        logger.error(f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}")
+        logger.error(
+            f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}"
+        )
 
     # Close the datasets
     if partialSkims:

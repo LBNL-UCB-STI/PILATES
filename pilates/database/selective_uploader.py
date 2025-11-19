@@ -42,8 +42,15 @@ TABLES_WITH_DATA_YEAR = {
 }
 
 
-def build_smart_select(conn, data_path: str, table_name: str, record: dict, run_info: dict, year: int,
-                       iteration: int) -> Tuple[str, list]:
+def build_smart_select(
+    conn,
+    data_path: str,
+    table_name: str,
+    record: dict,
+    run_info: dict,
+    year: int,
+    iteration: int,
+) -> Tuple[str, list]:
     """
     Constructs a SQL SELECT clause that handles renames, casting, and metadata injection.
     Returns: (sql_query, list_of_sort_keys)
@@ -55,7 +62,9 @@ def build_smart_select(conn, data_path: str, table_name: str, record: dict, run_
 
     try:
         # DESCRIBE returns column_name, column_type, etc.
-        file_schema = conn.execute(f"DESCRIBE SELECT * FROM {reader_func}('{data_path}')").fetchall()
+        file_schema = conn.execute(
+            f"DESCRIBE SELECT * FROM {reader_func}('{data_path}')"
+        ).fetchall()
         raw_columns = [row[0] for row in file_schema]  # List of column names
     except Exception as e:
         raise ValueError(f"Could not read file header for {data_path}: {e}")
@@ -67,12 +76,12 @@ def build_smart_select(conn, data_path: str, table_name: str, record: dict, run_
         col_lower = col.lower()
 
         # --- LOGIC A: Rename 'year' to 'data_year' ---
-        if col_lower == 'year' and table_name in TABLES_WITH_DATA_YEAR:
+        if col_lower == "year" and table_name in TABLES_WITH_DATA_YEAR:
             # SQL equivalent of df.rename(columns={'year': 'data_year'})
             projection_parts.append(f'"{col}" AS data_year')
 
         # --- LOGIC B: Cast 'sector_id' to string ---
-        elif col_lower == 'sector_id' and table_name == 'atlas_jobs_csv':
+        elif col_lower == "sector_id" and table_name == "atlas_jobs_csv":
             # SQL equivalent of df['sector_id'].astype(str)
             projection_parts.append(f'CAST("{col}" AS VARCHAR) AS sector_id')
 
@@ -107,10 +116,10 @@ def build_smart_select(conn, data_path: str, table_name: str, record: dict, run_
     # FIX: .strip('"') ensures we catch keys even if they are quoted strings like "zone_id"
     final_cols = [p.split(" AS ")[-1].strip().strip('"') for p in projection_parts]
 
-    if 'zone_id' in final_cols:
-        sort_keys.append('zone_id')
-    elif 'origin' in final_cols:
-        sort_keys.append('origin')
+    if "zone_id" in final_cols:
+        sort_keys.append("zone_id")
+    elif "origin" in final_cols:
+        sort_keys.append("origin")
 
     return select_clause, sort_keys
 
@@ -126,7 +135,9 @@ def get_approved_tables(schema_dir: str) -> set:
 
     # Compile regex once for speed
     # Captures: CREATE TABLE [IF NOT EXISTS] table_name
-    table_pattern = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", re.IGNORECASE)
+    table_pattern = re.compile(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", re.IGNORECASE
+    )
     year_pattern = re.compile(r"(\d{4})")
 
     for current_dir in dirs_to_scan:
@@ -137,7 +148,7 @@ def get_approved_tables(schema_dir: str) -> set:
             if filename.endswith(".sql"):
                 file_path = os.path.join(current_dir, filename)
                 try:
-                    with open(file_path, 'r') as f:
+                    with open(file_path, "r") as f:
                         content = f.read()
 
                     # Extract year from filename if present (e.g. 'households_2010.sql')
@@ -191,6 +202,7 @@ def resolve_file_path(run_dir: str, record: dict, run_info: dict) -> Optional[st
         return candidate_parent
 
     return None
+
 
 def extract_iteration(short_name: str) -> Optional[int]:
     """Extracts iteration number from short_name (e.g., 'households_3')."""
@@ -313,27 +325,25 @@ def main():
 
         try:
             # === STRATEGY 1: NATIVE UPLOAD (Parquet/CSV) ===
-            if data_path.endswith(".parquet") or data_path.endswith((".csv", ".csv.gz")):
+            if data_path.endswith(".parquet") or data_path.endswith(
+                (".csv", ".csv.gz")
+            ):
 
                 conn = db_manager._get_connection()
 
                 # Generate the Smart SQL that handles your specific logic
                 select_sql, sort_keys = build_smart_select(
-                    conn,
-                    data_path,
-                    table_name,
-                    record,
-                    run_info,
-                    year,
-                    iteration
+                    conn, data_path, table_name, record, run_info, year, iteration
                 )
 
                 # Execute Insertion
-                conn.execute(f"""
+                conn.execute(
+                    f"""
                             INSERT INTO {table_name} 
                             SELECT * FROM ({select_sql}) 
                             ORDER BY {', '.join(sort_keys)}
-                        """)
+                        """
+                )
 
                 logging.info(f"Native upload complete for {table_name}")
 

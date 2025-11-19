@@ -244,6 +244,7 @@ class ConfigSnapshotManager:
         # Accept either a PilatesConfig instance or a raw dict (as used in tests)
         if isinstance(settings, dict):
             from pilates.config.models import validate_config
+
             settings = validate_config(settings)
         """
         Create a complete configuration snapshot.

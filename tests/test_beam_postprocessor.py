@@ -14,6 +14,7 @@ CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
 NUM_ZONES = len(CANONICAL_GEOID_ORDER)
 TIME_PERIODS = ["EA", "AM", "MD", "PM", "EV"]
 
+
 @pytest.fixture
 def canonical_zones_geojson(tmp_path):
     """Create a dummy canonical_zones.geojson file."""
@@ -34,6 +35,7 @@ def canonical_zones_geojson(tmp_path):
         json.dump(geojson_content, f)
     return geojson_path
 
+
 @pytest.fixture
 def mock_settings(tmp_path):
     """Create a mock hierarchical config file and load it."""
@@ -49,7 +51,7 @@ def mock_settings(tmp_path):
             "supply_demand_iters": 1,
             "output_directory": str(tmp_path),
             "output_run_name": "test_run",
-            "models": {"travel": "beam"}
+            "models": {"travel": "beam"},
         },
         "shared": {
             "geography": {
@@ -58,37 +60,62 @@ def mock_settings(tmp_path):
                 "zones": {
                     "source_file": str(tmp_path / "canonical_zones.geojson"),
                     "activitysim_index_col": "TAZ",
-                    "zone_type": "block_group", # Added for Pydantic validation
-                    "canonical_id_col": "zone_key" # Added for Pydantic validation
-                }
+                    "zone_type": "block_group",  # Added for Pydantic validation
+                    "canonical_id_col": "zone_key",  # Added for Pydantic validation
+                },
             },
-            "skims": {"zone_type": "block_group", "fname": "", "geoms_fname": "", "geoms_index_col": "", "periods": TIME_PERIODS},
-            "database": {"enabled": False, "type": "duckdb", "path": ""}
+            "skims": {
+                "zone_type": "block_group",
+                "fname": "",
+                "geoms_fname": "",
+                "geoms_index_col": "",
+                "periods": TIME_PERIODS,
+            },
+            "database": {"enabled": False, "type": "duckdb", "path": ""},
         },
-        "infrastructure": {"container_manager": "docker", "docker_images": {}, "docker_config": {}},
+        "infrastructure": {
+            "container_manager": "docker",
+            "docker_images": {},
+            "docker_config": {},
+        },
         "beam": {
             "config": "",
             "local_input_folder": "pilates/beam/production",
             "local_mutable_data_folder": "beam/input",
             "skims_shapefile": "shape/test_zones.shp",
             "skim_zone_geoid_col": "geoid10",
-            "sample": 1.0, "replanning_portion": 0.1, "memory": "1g", "local_output_folder": "",
-            "scenario_folder": "", "router_directory": "", "skim_zone_source_id_col": "",
-            "discard_plans_every_year": False, "max_plans_memory": 1, "simulated_hwy_paths": [],
-            "asim_hwy_measure_map": {}, "asim_transit_measure_map": {}, "asim_ridehail_measure_map": {},
-            "ridehail_path_map": {}
+            "sample": 1.0,
+            "replanning_portion": 0.1,
+            "memory": "1g",
+            "local_output_folder": "",
+            "scenario_folder": "",
+            "router_directory": "",
+            "skim_zone_source_id_col": "",
+            "discard_plans_every_year": False,
+            "max_plans_memory": 1,
+            "simulated_hwy_paths": [],
+            "asim_hwy_measure_map": {},
+            "asim_transit_measure_map": {},
+            "asim_ridehail_measure_map": {},
+            "ridehail_path_map": {},
         },
         "urbansim": {
-            "local_data_input_folder": str(tmp_path), # Dummy path
-            "input_file_template": "usim_data.h5", # Dummy file
-            "local_mutable_data_folder": "", "client_base_folder": "", "client_data_folder": "",
-            "input_file_template_year": "", "output_file_template": "", "command_template": "", "region_mappings": {}
-        }
+            "local_data_input_folder": str(tmp_path),  # Dummy path
+            "input_file_template": "usim_data.h5",  # Dummy file
+            "local_mutable_data_folder": "",
+            "client_base_folder": "",
+            "client_data_folder": "",
+            "input_file_template_year": "",
+            "output_file_template": "",
+            "command_template": "",
+            "region_mappings": {},
+        },
     }
     config_path = tmp_path / "test_settings_postproc.yaml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         yaml.dump(config_dict, f)
     return load_config(config_path)
+
 
 @pytest.fixture
 def initial_main_zarr(tmp_path):
@@ -97,16 +124,23 @@ def initial_main_zarr(tmp_path):
     Represents activitysim/output/cache/skims.zarr
     """
     main_zarr_path = tmp_path / "main_skims.zarr"
-    
+
     # Create an initial Zarr store with the expected structure and zeroed data
     # This mimics what ActivitySim might produce initially
-    initial_sov_trips_data = np.zeros((len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32)
-    initial_sov_failures_data = np.zeros((len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32)
+    initial_sov_trips_data = np.zeros(
+        (len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32
+    )
+    initial_sov_failures_data = np.zeros(
+        (len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32
+    )
 
     ds = xr.Dataset(
         {
             "SOV_TRIPS": (("time_period", "otaz", "dtaz"), initial_sov_trips_data),
-            "SOV_FAILURES": (("time_period", "otaz", "dtaz"), initial_sov_failures_data),
+            "SOV_FAILURES": (
+                ("time_period", "otaz", "dtaz"),
+                initial_sov_failures_data,
+            ),
         },
         coords={
             "time_period": TIME_PERIODS,
@@ -115,11 +149,12 @@ def initial_main_zarr(tmp_path):
         },
         attrs={
             "description": "Initial main skims",
-            "original_zone_ids": CANONICAL_GEOID_ORDER # Must have this for verification
-        }
+            "original_zone_ids": CANONICAL_GEOID_ORDER,  # Must have this for verification
+        },
     )
-    ds.to_zarr(main_zarr_path, mode='w', consolidated=True)
+    ds.to_zarr(main_zarr_path, mode="w", consolidated=True)
     return str(main_zarr_path)
+
 
 @pytest.fixture
 def beam_iteration_zarr_base(tmp_path):
@@ -127,10 +162,12 @@ def beam_iteration_zarr_base(tmp_path):
     Base fixture to create a partial Zarr skim file from a BEAM iteration.
     """
     beam_zarr_path = tmp_path / "beam_iteration.zarr"
-    
+
     # Create sample data for one skim measure
-    sov_trips_data = np.ones((len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32)
-    
+    sov_trips_data = np.ones(
+        (len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32
+    )
+
     ds = xr.Dataset(
         {
             "SOV_TRIPS": (("time_period", "otaz", "dtaz"), sov_trips_data),
@@ -142,59 +179,71 @@ def beam_iteration_zarr_base(tmp_path):
         },
         attrs={
             "description": "Partial skims from BEAM iteration",
-        }
+        },
     )
     return ds, str(beam_zarr_path)
+
 
 @pytest.fixture
 def beam_iteration_zarr_valid(beam_iteration_zarr_base):
     """Creates a valid BEAM Zarr with original_zone_ids in canonical order."""
     ds, path = beam_iteration_zarr_base
-    ds.otaz.attrs['original_zone_ids'] = CANONICAL_GEOID_ORDER
-    ds.to_zarr(path, mode='w', consolidated=True)
+    ds.otaz.attrs["original_zone_ids"] = CANONICAL_GEOID_ORDER
+    ds.to_zarr(path, mode="w", consolidated=True)
     return path
+
 
 @pytest.fixture
 def beam_iteration_zarr_scrambled(beam_iteration_zarr_base):
     """Creates a BEAM Zarr with original_zone_ids in a scrambled order."""
     ds, path = beam_iteration_zarr_base
-    scrambled_order = CANONICAL_GEOID_ORDER[::-1] # Reverse order
-    ds.otaz.attrs['original_zone_ids'] = scrambled_order
-    ds.to_zarr(path, mode='w', consolidated=True)
+    scrambled_order = CANONICAL_GEOID_ORDER[::-1]  # Reverse order
+    ds.otaz.attrs["original_zone_ids"] = scrambled_order
+    ds.to_zarr(path, mode="w", consolidated=True)
     return path
+
 
 @pytest.fixture
 def beam_iteration_zarr_missing_attr(beam_iteration_zarr_base):
     """Creates a BEAM Zarr without the original_zone_ids attribute."""
     ds, path = beam_iteration_zarr_base
     # Do not set ds.otaz.attrs['original_zone_ids']
-    ds.to_zarr(path, mode='w', consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True)
     return path
+
 
 @pytest.fixture
 def beam_iteration_zarr_0_based_int_ids(beam_iteration_zarr_base):
     """Creates a BEAM Zarr with original_zone_ids as [0, 1, 2, ...]."""
     ds, path = beam_iteration_zarr_base
-    ds.otaz.attrs['original_zone_ids'] = [str(i) for i in range(NUM_ZONES)]
-    ds.to_zarr(path, mode='w', consolidated=True)
+    ds.otaz.attrs["original_zone_ids"] = [str(i) for i in range(NUM_ZONES)]
+    ds.to_zarr(path, mode="w", consolidated=True)
     return path
+
 
 @pytest.fixture
 def beam_iteration_zarr_1_based_int_ids(beam_iteration_zarr_base):
     """Creates a BEAM Zarr with original_zone_ids as [1, 2, 3, ...]."""
     ds, path = beam_iteration_zarr_base
-    ds.otaz.attrs['original_zone_ids'] = [str(i + 1) for i in range(NUM_ZONES)]
-    ds.to_zarr(path, mode='w', consolidated=True)
+    ds.otaz.attrs["original_zone_ids"] = [str(i + 1) for i in range(NUM_ZONES)]
+    ds.to_zarr(path, mode="w", consolidated=True)
     return path
 
 
 class TestBeamPostprocessor:
     """Tests for the BEAM Postprocessor's skim merging logic."""
 
-    @patch('pilates.utils.zone_utils.load_canonical_zones')
-    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
     def test_merge_beam_skims_to_zarr_valid(
-        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_valid, tmp_path, canonical_zones_geojson
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_settings,
+        initial_main_zarr,
+        beam_iteration_zarr_valid,
+        tmp_path,
+        canonical_zones_geojson,
     ):
         """
         Test the basic merge functionality with valid BEAM skims:
@@ -203,129 +252,182 @@ class TestBeamPostprocessor:
         """
         # Arrange
         mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
-            {'zone_key': CANONICAL_GEOID_ORDER},
-            index=CANONICAL_GEOID_ORDER
+            {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
-        mock_verify_skim_zone_order.return_value = CANONICAL_GEOID_ORDER # Mock its return value
-        mock_workspace = MagicMock() # Create a mock workspace
+        mock_verify_skim_zone_order.return_value = (
+            CANONICAL_GEOID_ORDER  # Mock its return value
+        )
+        mock_workspace = MagicMock()  # Create a mock workspace
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
 
         # Act
         _merge_beam_skims_to_zarr(
             all_skims_path=initial_main_zarr,
             iteration_skims_path=beam_iteration_zarr_valid,
-            beam_output_dir="", # Not used in this logic path
+            beam_output_dir="",  # Not used in this logic path
             settings=mock_settings,
-            workspace=mock_workspace # Pass the mock workspace
+            workspace=mock_workspace,  # Pass the mock workspace
         )
 
         # Assert
-        mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace) # Assert with workspace
-        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_valid, mock_workspace)
-
+        mock_load_canonical_zones.assert_called_once_with(
+            mock_settings, mock_workspace
+        )  # Assert with workspace
+        mock_verify_skim_zone_order.assert_called_once_with(
+            mock_settings, beam_iteration_zarr_valid, mock_workspace
+        )
 
         updated_ds = xr.open_zarr(initial_main_zarr)
-        assert "SOV_TRIPS" in updated_ds.data_vars, "SOV_TRIPS was not merged into the main Zarr file."
-        expected_data = np.ones((len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32)
+        assert (
+            "SOV_TRIPS" in updated_ds.data_vars
+        ), "SOV_TRIPS was not merged into the main Zarr file."
+        expected_data = np.ones(
+            (len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32
+        )
         np.testing.assert_array_equal(
             updated_ds["SOV_TRIPS"].values,
             expected_data,
-            "Data for SOV_TRIPS in main Zarr file is incorrect after merge."
+            "Data for SOV_TRIPS in main Zarr file is incorrect after merge.",
         )
         assert "original_zone_ids" in updated_ds.attrs
         assert updated_ds.attrs["original_zone_ids"] == CANONICAL_GEOID_ORDER
 
-    @patch('pilates.utils.zone_utils.load_canonical_zones')
-    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
     def test_merge_beam_skims_to_zarr_scrambled_order_raises_error(
-        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_scrambled, tmp_path, canonical_zones_geojson
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_settings,
+        initial_main_zarr,
+        beam_iteration_zarr_scrambled,
+        tmp_path,
+        canonical_zones_geojson,
     ):
         """
         Test that merging BEAM skims with scrambled zone order raises a ValueError.
         """
         # Arrange
         mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
-            {'zone_key': CANONICAL_GEOID_ORDER},
-            index=CANONICAL_GEOID_ORDER
+            {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
-        mock_verify_skim_zone_order.side_effect = ValueError("FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order!")
+        mock_verify_skim_zone_order.side_effect = ValueError(
+            "FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order!"
+        )
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!"):
+        with pytest.raises(
+            ValueError,
+            match="FATAL: Skim zone order \\(from original_zone_ids attribute\\) does not match canonical order!",
+        ):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_scrambled,
                 beam_output_dir="",
                 settings=mock_settings,
-                workspace=mock_workspace
+                workspace=mock_workspace,
             )
         mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace)
-        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_scrambled, mock_workspace)
+        mock_verify_skim_zone_order.assert_called_once_with(
+            mock_settings, beam_iteration_zarr_scrambled, mock_workspace
+        )
 
-    @patch('pilates.utils.zone_utils.load_canonical_zones')
-    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
     def test_merge_beam_skims_to_zarr_missing_attr_raises_error(
-        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_missing_attr, tmp_path, canonical_zones_geojson
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_settings,
+        initial_main_zarr,
+        beam_iteration_zarr_missing_attr,
+        tmp_path,
+        canonical_zones_geojson,
     ):
         """
         Test that merging BEAM skims missing the original_zone_ids attribute raises a ValueError.
         """
         # Arrange
         mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
-            {'zone_key': CANONICAL_GEOID_ORDER},
-            index=CANONICAL_GEOID_ORDER
+            {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
-        mock_verify_skim_zone_order.side_effect = ValueError("Zarr file does not contain 'original_zone_ids' metadata.")
+        mock_verify_skim_zone_order.side_effect = ValueError(
+            "Zarr file does not contain 'original_zone_ids' metadata."
+        )
 
         # Act & Assert
-        with pytest.raises(ValueError, match="Zarr file does not contain 'original_zone_ids' metadata."):
+        with pytest.raises(
+            ValueError, match="Zarr file does not contain 'original_zone_ids' metadata."
+        ):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_missing_attr,
                 beam_output_dir="",
                 settings=mock_settings,
-                workspace=mock_workspace
+                workspace=mock_workspace,
             )
         mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace)
-        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_missing_attr, mock_workspace)
+        mock_verify_skim_zone_order.assert_called_once_with(
+            mock_settings, beam_iteration_zarr_missing_attr, mock_workspace
+        )
 
-    @patch('pilates.utils.zone_utils.load_canonical_zones')
-    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
     def test_merge_beam_skims_to_zarr_0_based_int_ids_raises_error(
-        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_0_based_int_ids, tmp_path, canonical_zones_geojson
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_settings,
+        initial_main_zarr,
+        beam_iteration_zarr_0_based_int_ids,
+        tmp_path,
+        canonical_zones_geojson,
     ):
         """
         Test that merging BEAM skims with 0-based integer zone IDs raises a ValueError.
         """
         # Arrange
         mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
-            {'zone_key': CANONICAL_GEOID_ORDER},
-            index=CANONICAL_GEOID_ORDER
+            {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
-        mock_verify_skim_zone_order.side_effect = ValueError("FATAL: Zarr 'otaz' coordinates are not 0-based as expected!")
+        mock_verify_skim_zone_order.side_effect = ValueError(
+            "FATAL: Zarr 'otaz' coordinates are not 0-based as expected!"
+        )
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Zarr 'otaz' coordinates are not 0-based as expected!"):
+        with pytest.raises(
+            ValueError,
+            match="FATAL: Zarr 'otaz' coordinates are not 0-based as expected!",
+        ):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_0_based_int_ids,
                 beam_output_dir="",
                 settings=mock_settings,
-                workspace=mock_workspace
+                workspace=mock_workspace,
             )
         mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace)
-        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_0_based_int_ids, mock_workspace)
+        mock_verify_skim_zone_order.assert_called_once_with(
+            mock_settings, beam_iteration_zarr_0_based_int_ids, mock_workspace
+        )
 
-    @patch('pilates.utils.zone_utils.load_canonical_zones')
-    @patch('pilates.beam.postprocessor.verify_skim_zone_order')
+    @patch("pilates.utils.zone_utils.load_canonical_zones")
+    @patch("pilates.beam.postprocessor.verify_skim_zone_order")
     def test_merge_beam_skims_to_zarr_1_based_int_ids_raises_error(
-        self, mock_verify_skim_zone_order, mock_load_canonical_zones, mock_settings, initial_main_zarr, beam_iteration_zarr_1_based_int_ids, tmp_path, canonical_zones_geojson
+        self,
+        mock_verify_skim_zone_order,
+        mock_load_canonical_zones,
+        mock_settings,
+        initial_main_zarr,
+        beam_iteration_zarr_1_based_int_ids,
+        tmp_path,
+        canonical_zones_geojson,
     ):
         """
         Test that merging BEAM skims with 1-based integer zone IDs raises a ValueError
@@ -333,21 +435,27 @@ class TestBeamPostprocessor:
         """
         # Arrange
         mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
-            {'zone_key': CANONICAL_GEOID_ORDER},
-            index=CANONICAL_GEOID_ORDER
+            {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
         mock_workspace.get_asim_mutable_data_dir.return_value = tmp_path
-        mock_verify_skim_zone_order.side_effect = ValueError("FATAL: Zarr 'otaz' coordinates are not 0-based as expected!")
+        mock_verify_skim_zone_order.side_effect = ValueError(
+            "FATAL: Zarr 'otaz' coordinates are not 0-based as expected!"
+        )
 
         # Act & Assert
-        with pytest.raises(ValueError, match="FATAL: Zarr 'otaz' coordinates are not 0-based as expected!"):
+        with pytest.raises(
+            ValueError,
+            match="FATAL: Zarr 'otaz' coordinates are not 0-based as expected!",
+        ):
             _merge_beam_skims_to_zarr(
                 all_skims_path=initial_main_zarr,
                 iteration_skims_path=beam_iteration_zarr_1_based_int_ids,
                 beam_output_dir="",
                 settings=mock_settings,
-                workspace=mock_workspace
+                workspace=mock_workspace,
             )
         mock_load_canonical_zones.assert_called_once_with(mock_settings, mock_workspace)
-        mock_verify_skim_zone_order.assert_called_once_with(mock_settings, beam_iteration_zarr_1_based_int_ids, mock_workspace)
+        mock_verify_skim_zone_order.assert_called_once_with(
+            mock_settings, beam_iteration_zarr_1_based_int_ids, mock_workspace
+        )

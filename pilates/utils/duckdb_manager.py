@@ -117,7 +117,9 @@ class DuckDBManager(DatabaseManager):
             try:
                 conn.execute("INSTALL spatial; LOAD spatial;")
             except Exception:
-                logger.warning("Could not load DuckDB spatial extension. Geometry columns may fail.")
+                logger.warning(
+                    "Could not load DuckDB spatial extension. Geometry columns may fail."
+                )
 
             # Get the directory where this script is located to build absolute paths to schema files
             utils_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2770,10 +2772,7 @@ class DuckDBManager(DatabaseManager):
             return False
 
     def store_generic_table(
-            self,
-            table_name: str,
-            df: pd.DataFrame,
-            sort_by: List[str] = None
+        self, table_name: str, df: pd.DataFrame, sort_by: List[str] = None
     ) -> bool:
         """
         Stores a pandas DataFrame into a specified table in DuckDB.
@@ -2812,19 +2811,22 @@ class DuckDBManager(DatabaseManager):
                 # Priority: Run -> Time -> Space -> Agent
                 candidates = []
                 # We always want to cluster by run and year first
-                if 'run_id' in insert_cols: candidates.append('run_id')
-                if 'year' in insert_cols: candidates.append('year')
-                if 'iteration' in insert_cols: candidates.append('iteration')
+                if "run_id" in insert_cols:
+                    candidates.append("run_id")
+                if "year" in insert_cols:
+                    candidates.append("year")
+                if "iteration" in insert_cols:
+                    candidates.append("iteration")
 
                 # Spatial clustering (pick the most granular one available)
-                if 'block_id' in insert_cols:
-                    candidates.append('block_id')
-                elif 'zone_id' in insert_cols:
-                    candidates.append('zone_id')
-                elif 'taz' in insert_cols:
-                    candidates.append('taz')
-                elif 'origin' in insert_cols:
-                    candidates.append('origin')
+                if "block_id" in insert_cols:
+                    candidates.append("block_id")
+                elif "zone_id" in insert_cols:
+                    candidates.append("zone_id")
+                elif "taz" in insert_cols:
+                    candidates.append("taz")
+                elif "origin" in insert_cols:
+                    candidates.append("origin")
 
                 # We usually STOP at spatial clustering for the physical sort,
                 # because Agent IDs (household_id) are often random/hashed

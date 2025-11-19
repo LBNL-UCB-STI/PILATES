@@ -103,7 +103,9 @@ def _normalize_table_name(short_name: str, year: Optional[int]) -> str:
     return normalized_name.strip("_")
 
 
-def determine_duckdb_type(col_data: Dict[str, Any], table_name: str, enum_definitions: List[str]) -> str:
+def determine_duckdb_type(
+    col_data: Dict[str, Any], table_name: str, enum_definitions: List[str]
+) -> str:
     """
     Analyzes column metadata to determine the optimal DuckDB SQL type.
     Populates enum_definitions list if an ENUM type is created.
@@ -118,7 +120,7 @@ def determine_duckdb_type(col_data: Dict[str, Any], table_name: str, enum_defini
             enum_type_name = f"{table_name}_{col_name}_enum"
 
             # Clean values: escape single quotes
-            clean_values = [str(v).replace("'", "''") for v in col_data['enum_values']]
+            clean_values = [str(v).replace("'", "''") for v in col_data["enum_values"]]
             values_str = ", ".join([f"'{v}'" for v in clean_values])
 
             enum_sql = f"CREATE TYPE {enum_type_name} AS ENUM ({values_str});"
@@ -178,7 +180,7 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
         "integers": [],
         "doubles": [],
         "enums": [],
-        "others": []
+        "others": [],
     }
 
     # 1. Process columns and categorize them
@@ -195,7 +197,9 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
             columns_by_category["integers"].append(col_def)
         elif "DOUBLE" in sql_type:
             columns_by_category["doubles"].append(col_def)
-        elif "ENUM" in sql_type:  # The type name will contain 'enum' based on our naming convention
+        elif (
+            "ENUM" in sql_type
+        ):  # The type name will contain 'enum' based on our naming convention
             columns_by_category["enums"].append(col_def)
         else:
             columns_by_category["others"].append(col_def)
@@ -205,7 +209,7 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
         f"-- Auto-generated schema for table: {table_name}",
         f"-- Source: {record.get('short_name', 'N/A')}",
         f"-- Description: {record.get('description', 'N/A')}",
-        ""
+        "",
     ]
 
     # Add ENUM definitions first
@@ -221,7 +225,9 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
 
     # 3. Add Columns in specific order
     sql_lines.append("    -- Primary & Foreign Keys")
-    sql_lines.append(f"    id BIGINT PRIMARY KEY DEFAULT nextval('{table_name}_id_seq'),")
+    sql_lines.append(
+        f"    id BIGINT PRIMARY KEY DEFAULT nextval('{table_name}_id_seq'),"
+    )
     sql_lines.append("    run_id VARCHAR,")
     sql_lines.append("    file_record_id VARCHAR,")
     sql_lines.append("    year INTEGER,")
@@ -256,12 +262,14 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
     sql_lines.append("")
     sql_lines.append("    -- Constraints")
     sql_lines.append("    FOREIGN KEY (run_id) REFERENCES runs(run_id),")
-    sql_lines.append("    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)")
+    sql_lines.append(
+        "    FOREIGN KEY (file_record_id) REFERENCES file_records(unique_id)"
+    )
     sql_lines.append(");")
     sql_lines.append("")
 
     description = (
-            record.get("description", "Table auto-generated from run data.") or ""
+        record.get("description", "Table auto-generated from run data.") or ""
     ).replace("'", "''")
     sql_lines.append(f"COMMENT ON TABLE {table_name} IS '{description}';")
 
@@ -269,30 +277,38 @@ def generate_sql_for_record(record: dict, table_name: str) -> str:
 
     # We KEEP indexes on high-cardinality identifiers (run_id, unique IDs)
     # because they are often used for joins or strict lookups.
-    sql_lines.extend([
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_run_id ON {table_name}(run_id);",
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_year_iter ON {table_name}(year, iteration);",
-    ])
+    sql_lines.extend(
+        [
+            f"CREATE INDEX IF NOT EXISTS idx_{table_name}_run_id ON {table_name}(run_id);",
+            f"CREATE INDEX IF NOT EXISTS idx_{table_name}_year_iter ON {table_name}(year, iteration);",
+        ]
+    )
 
     # If the table has a 'person_id' or 'household_id', we create an index
     # because users might query these randomly, and the data might be sorted by Zone.
-    entity_ids = ['person_id', 'household_id', 'tour_id', 'trip_id']
+    entity_ids = ["person_id", "household_id", "tour_id", "trip_id"]
 
-    col_names = [c['name'].lower() for c in record["schema"]]
+    col_names = [c["name"].lower() for c in record["schema"]]
 
     for eid in entity_ids:
         if eid in col_names:
-            sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_{eid} ON {table_name}({eid});")
+            sql_lines.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{table_name}_{eid} ON {table_name}({eid});"
+            )
 
     # C. Spatial Sorting Note (Keep this from previous step)
     sort_candidates = []
-    if 'zone_id' in col_names: sort_candidates.append('zone_id')
-    if 'origin' in col_names: sort_candidates.append('origin')
+    if "zone_id" in col_names:
+        sort_candidates.append("zone_id")
+    if "origin" in col_names:
+        sort_candidates.append("origin")
 
     if sort_candidates:
         cols_str = ", ".join(sort_candidates)
         sql_lines.append("")
-        sql_lines.append(f"-- PERFORMANCE NOTE: Data should be physically sorted by (run_id, {cols_str})")
+        sql_lines.append(
+            f"-- PERFORMANCE NOTE: Data should be physically sorted by (run_id, {cols_str})"
+        )
 
     return "\n".join(sql_lines)
 
