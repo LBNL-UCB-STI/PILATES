@@ -739,7 +739,7 @@ def _aggregate_on_trip(df, name):
         "distance_ridehail": np.sum,
         "distance_privateCar": np.sum,
         "distance_transit": np.sum,
-        "legVehicleIds": np.sum,
+        "legVehicleIds": lambda x: ", ".join(set(x.dropna().astype(str))),
         "mode_choice_planned_BEAM": lambda x: ", ".join(set(x.dropna().astype(str))),
         "mode_choice_actual_BEAM": lambda x: ", ".join(set(x.dropna().astype(str))),
         "vehicle": lambda x: ", ".join(set(x.dropna().astype(str))),
@@ -819,9 +819,9 @@ def _process_person_trip_events(person_trip_events):
         + person_trip_events["actStartType"].astype(str)
     )
     person_trip_events.rename(
-        columns={"legVehicleIds": "vehicleIds_estimate"}, inplace=True
+        columns={"legVehicleIds": "leg_vehicle_ids"}, inplace=True
     )
-    person_trip_events.rename(columns={"vehicle": "vehicleIds"}, inplace=True)
+    person_trip_events.rename(columns={"vehicle": "vehicle_id"}, inplace=True)
     # Column with five summarized modes
     conditions = [
         (person_trip_events["mode_choice_actual_BEAM"] == "ride_hail")

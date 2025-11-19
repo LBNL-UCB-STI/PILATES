@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import yaml
 import json
 
-from pilates.beam.preprocessor import prepare_beam_zone_shapefile
+from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
 from pilates.config.models import load_config
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -125,7 +125,7 @@ def mock_settings(tmp_path, mock_h5_datastore, mock_beam_shapefile):
             "local_input_folder": "pilates/beam/production", # Not used by test, but required by model
             "local_mutable_data_folder": "beam/input",
             "skims_shapefile": "shape/test_zones.shp",
-            "skim_zone_geoid_col": "geoid10",
+            "skim_zone_geoid_col": "TAZ",
             # Add other required fields with dummy values
             "sample": 1.0, "replanning_portion": 0.1, "memory": "1g", "local_output_folder": "",
             "scenario_folder": "", "router_directory": "", "skim_zone_source_id_col": "",
@@ -164,8 +164,9 @@ class TestBeamPreprocessor:
 
         # Act
         # Call the function that performs the sorting
-        prepare_beam_zone_shapefile(
-            mock_settings, mock_workspace, provenance_tracker, model_run_hash
+        mock_beam_shapefile = _prepare_beam_zone_shapefile(
+            mock_workspace,
+            mock_settings,
         )
 
         # Assert

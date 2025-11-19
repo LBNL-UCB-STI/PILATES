@@ -13,7 +13,7 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import load_canonical_zones
-from pilates.beam.preprocessor import BeamPreprocessor, prepare_beam_zone_shapefile
+from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.beam.postprocessor import verify_skim_zone_order
 from pilates.utils.provenance import FileProvenanceTracker
@@ -286,8 +286,8 @@ class TestZoneIdWorkflow:
         # 2a. Initialize the BEAM preprocessor and run its zone preparation
         beam_preprocessor = BeamPreprocessor("beam", self.state, self.provenance_tracker)
         beam_run_hash = self.provenance_tracker.start_model_run("beam_preprocessor", year=2020)
-        beam_zone_shapefile_path = prepare_beam_zone_shapefile(
-            self.settings, self.workspace, self.provenance_tracker, beam_run_hash
+        beam_zone_shapefile_path = beam_preprocessor.prepare_beam_zone_shapefile(
+            self.workspace, beam_run_hash
         )
 
         # 2b. Assert that the shapefile was created
