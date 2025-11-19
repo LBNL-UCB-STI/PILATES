@@ -14,6 +14,8 @@ logging.basicConfig(
 SMALLINT_MIN, SMALLINT_MAX = -32768, 32767
 INTEGER_MIN, INTEGER_MAX = -2147483648, 2147483647
 
+CONVERT_ENUMS = False
+
 
 def get_existing_definitions(schema_dir: str) -> set:
     """
@@ -109,18 +111,21 @@ def determine_duckdb_type(col_data: Dict[str, Any], table_name: str, enum_defini
     raw_type = str(col_data.get("type", "varchar")).lower()
     col_name = sanitize_name(col_data.get("name", "unknown"))
 
-    # 1. Handle Enums (High Priority)
+    # 1. Handle Enums
     if col_data.get("is_enum") and col_data.get("enum_values"):
-        # Create a unique name for the enum type
-        enum_type_name = f"{table_name}_{col_name}_enum"
+        if CONVERT_ENUMS:
+            # Create a unique name for the enum type
+            enum_type_name = f"{table_name}_{col_name}_enum"
 
-        # Clean values: escape single quotes
-        clean_values = [str(v).replace("'", "''") for v in col_data['enum_values']]
-        values_str = ", ".join([f"'{v}'" for v in clean_values])
+            # Clean values: escape single quotes
+            clean_values = [str(v).replace("'", "''") for v in col_data['enum_values']]
+            values_str = ", ".join([f"'{v}'" for v in clean_values])
 
-        enum_sql = f"CREATE TYPE {enum_type_name} AS ENUM ({values_str});"
-        enum_definitions.append(enum_sql)
-        return enum_type_name
+            enum_sql = f"CREATE TYPE {enum_type_name} AS ENUM ({values_str});"
+            enum_definitions.append(enum_sql)
+            return enum_type_name
+        else:
+            return "VARCHAR"
 
     # 2. Handle Integers (Downcasting Logic)
     # Check if it is explicitly an int, or a float that looks like an int (common in pandas)

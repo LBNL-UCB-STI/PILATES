@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -147,31 +148,58 @@ def _get_sparse_schema_for_wide_csv(file_path: str) -> List[Dict[str, str]]:
 
 def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
     """
-    Reads Parquet metadata directly. This is highly optimized and does NOT
-    need to read the actual rows to get Min/Max stats, as Parquet
-    stores these in the footer.
+    Reads Parquet metadata directly.
+    Optimized to extract ENUM values from the first Row Group's dictionary page.
     """
     schema_info = []
     try:
         pq_file = pq.ParquetFile(file_path)
-
-        # FIX: Convert physical ParquetSchema to logical ArrowSchema
-        # This gives us access to .field() and rich types (Int8 vs Int64)
         schema = pq_file.schema.to_arrow_schema()
         metadata = pq_file.metadata
 
-        # Iterate over columns using the Arrow schema
         for i in range(len(schema.names)):
             name = schema.names[i]
-            field = schema.field(name)  # Now this works!
+            field = schema.field(name)
+
+            # Defaults
+            is_enum = False
+            enum_values = []
+            type_str = str(field.type)
+
+            # --- ENUM EXTRACTION LOGIC ---
+            # Check if it's a Dictionary (Categorical) type
+            if isinstance(field.type, pa.DictionaryType):
+                # 1. Fix Type Name: Report the value type (String), not the index type (Int)
+                type_str = str(field.type.value_type)
+
+                # 2. Peek at values: Read just the FIRST Row Group for this column
+                # This is fast (reads ~10k-100k rows of one column)
+                try:
+                    if pq_file.num_row_groups > 0:
+                        # Read column chunk from first row group
+                        rg = pq_file.read_row_group(0, columns=[name])
+                        col_chunk = rg.column(0)
+
+                        # Access the dictionary directly (Zero-Scan)
+                        # PyArrow chunks usually share a dictionary or have one per chunk
+                        if col_chunk.num_chunks > 0:
+                            chunk = col_chunk.chunk(0)
+                            if chunk.dictionary:
+                                # .to_pylist() on the dictionary array is cheap
+                                enum_values = chunk.dictionary.to_pylist()
+                                is_enum = True
+                except Exception as e:
+                    logger.debug(f"Could not peek dictionary values for {name}: {e}")
 
             col_stats = {
                 "name": name,
-                "type": str(field.type),
-                "nullable": field.nullable
+                "type": type_str,
+                "nullable": field.nullable,
+                "is_enum": is_enum,
+                "enum_values": sorted([str(v) for v in enum_values]) if is_enum else None
             }
 
-            # Parquet stores stats in RowGroups. We iterate them to find global min/max.
+            # --- Existing Min/Max Logic (Keep as is) ---
             min_val = None
             max_val = None
             has_stats = False
@@ -183,23 +211,18 @@ def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
                     has_stats = True
                     rg_min = col_meta.statistics.min
                     rg_max = col_meta.statistics.max
-
-                    # Update global min
                     if min_val is None or (rg_min is not None and rg_min < min_val):
                         min_val = rg_min
-                    # Update global max
                     if max_val is None or (rg_max is not None and rg_max > max_val):
                         max_val = rg_max
 
             if has_stats:
-                # Parquet stats might be bytes, ensure serializability
                 if isinstance(min_val, (bytes, bytearray)):
-                    # Decode if text, otherwise leave for now (or skip)
                     try:
                         col_stats["min"] = min_val.decode('utf-8')
                         col_stats["max"] = max_val.decode('utf-8')
                     except:
-                        pass  # Binary data
+                        pass
                 else:
                     col_stats["min"] = min_val
                     col_stats["max"] = max_val
@@ -207,7 +230,6 @@ def get_schema_from_parquet(file_path: str) -> List[Dict[str, Any]]:
             schema_info.append(col_stats)
 
     except Exception as e:
-        # This log message was visible in your test output, which confirmed the location
         logger.warning(f"Error reading Parquet metadata for {file_path}: {e}")
 
     return schema_info
