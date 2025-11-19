@@ -1,19 +1,17 @@
-import gzip
 import logging
 import os
 import shutil
 from typing import Optional, List, Tuple
 
-import numpy as np
 import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record, FileRecord
+from pilates.generic.records import RecordStore, Record
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
-from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
+from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +113,14 @@ class BeamDataHelper:
     PLAN_DEFAULTS = {
         "planindex": 0,
         "planselected": False,  # Default to False; logic can override to True
-        "planscore": 0.0
+        "planscore": 0.0,
+        "legtraveltime": 0.0,
+        "legroutetype": "",
+        "legroutestartlink": 0,
+        "legrouteendlink": 0,
+        "legroutetraveltime": 0.0,
+        "legroutedistance": 0.0,
+        "legroutelinks": "",
     }
 
     @classmethod
@@ -163,6 +168,7 @@ class BeamDataHelper:
 
         return df
 
+
 class BeamPreprocessor(GenericPreprocessor):
     """
     Preprocessor for the BEAM model. Handles data preparation, configuration updates,
@@ -170,11 +176,11 @@ class BeamPreprocessor(GenericPreprocessor):
     """
 
     def __init__(
-        self,
-        model_name: str,
-        state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
-        major_stage: Optional["WorkflowState.Stage"] = None,
+            self,
+            model_name: str,
+            state: "WorkflowState",
+            provenance_tracker: FileProvenanceTracker,
+            major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
         self.required_input_data: List[str] = [
@@ -187,9 +193,9 @@ class BeamPreprocessor(GenericPreprocessor):
         self.settings = self.state.full_settings
 
     def _preprocess(
-        self,
-        workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
+            self,
+            workspace: "Workspace",
+            previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
         Prepares all data needed to run BEAM for the current iteration.
@@ -272,7 +278,8 @@ class BeamPreprocessor(GenericPreprocessor):
         dest_region = os.path.join(os.path.abspath(output_dir), region)
         logger.info(f"Copying BEAM production inputs from {beam_production_path} to {dest_region}")
 
-        shutil.copytree(beam_production_path, dest_region, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", ".git*"))
+        shutil.copytree(beam_production_path, dest_region, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".git", ".git*"))
         git_hash = self.provenance_tracker.get_git_hash(beam_production_path)
         input_records.append(
             self.provenance_tracker.record_repo_input(
@@ -291,7 +298,8 @@ class BeamPreprocessor(GenericPreprocessor):
         common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
         if os.path.exists(common_config_path):
             dest_common = os.path.join(os.path.abspath(output_dir), "common")
-            shutil.copytree(common_config_path, dest_common, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", ".git*"))
+            shutil.copytree(common_config_path, dest_common, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns(".git", ".git*"))
             input_records.append(
                 self.provenance_tracker.record_repo_input(
                     "beam", repo_path=common_config_path, short_name="beam_common",
@@ -361,7 +369,6 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         return output_shapefile_path
 
-
     def _copy_vehicles_from_atlas(self, workspace: "Workspace", model_run_hash: str):
         """Copies the vehicles file from the ATLAS output to the BEAM input scenario."""
         beam_scenario_folder = os.path.join(
@@ -370,7 +377,8 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
         if self.state.run_info_path and os.path.exists(self.state.run_info_path):
-            logger.info(f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
+            logger.info(
+                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}")
             previous_run_dir = os.path.dirname(self.state.run_info_path)
             atlas_output_data_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
         else:
@@ -379,7 +387,8 @@ class BeamPreprocessor(GenericPreprocessor):
         # Look for vehicles2_{year}.csv, falling back to year-1
         atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir, f"vehicles2_{self.state.forecast_year}.csv")
         if not os.path.exists(atlas_vehicle_file_loc):
-            atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir, f"vehicles2_{self.state.forecast_year - 1}.csv")
+            atlas_vehicle_file_loc = os.path.join(atlas_output_data_dir,
+                                                  f"vehicles2_{self.state.forecast_year - 1}.csv")
 
         logger.info(f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}")
 
@@ -399,16 +408,17 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def _copy_plans_from_asim(
-        self,
-        input_records: RecordStore,
-        workspace: "Workspace",
-        model_run_hash: str,
+            self,
+            input_records: RecordStore,
+            workspace: "Workspace",
+            model_run_hash: str,
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
         logger.info("Attempting to copy final ASIM plans from provenance tracker.")
         file_format = self.settings.activitysim.file_format
 
-        base_path = os.path.dirname(self.state.run_info_path) if self.state.run_info_path and os.path.exists(self.state.run_info_path) else workspace.full_path
+        base_path = os.path.dirname(self.state.run_info_path) if self.state.run_info_path and os.path.exists(
+            self.state.run_info_path) else workspace.full_path
 
         asim_file_paths = {}
         for record in input_records.all_records():
@@ -427,7 +437,8 @@ class BeamPreprocessor(GenericPreprocessor):
 
         return RecordStore(recordList=[r for r in record_list if r is not None])
 
-    def _copy_initial_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str, workspace: "Workspace") -> List[Record]:
+    def _copy_initial_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str,
+                                 workspace: "Workspace") -> List[Record]:
         """Directly copies ActivitySim outputs for the first BEAM iteration."""
         record_list = []
         asim_to_beam_mapping = [
@@ -435,8 +446,8 @@ class BeamPreprocessor(GenericPreprocessor):
             ("households", "households"),
             ("persons", "persons"),
         ]
-        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region, self.settings.beam.scenario_folder)
-
+        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
+                                            self.settings.beam.scenario_folder)
 
         for asim_name, beam_name in asim_to_beam_mapping:
             asim_file_path, asim_file_record = asim_file_paths.get(asim_name, (None, None))
@@ -451,10 +462,12 @@ class BeamPreprocessor(GenericPreprocessor):
                 logger.warning(f"ActivitySim output file not found: {asim_name}")
         return record_list
 
-    def _merge_replanned_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str, workspace: "Workspace") -> List[Record]:
+    def _merge_replanned_asim_files(self, asim_file_paths: dict, file_format: str, model_run_hash: str,
+                                    workspace: "Workspace") -> List[Record]:
         """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
         logger.info("Merging asim outputs with existing beam input scenario files.")
-        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region, self.settings.beam.scenario_folder)
+        beam_scenario_folder = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
+                                            self.settings.beam.scenario_folder)
 
         asim_plans_path, asim_plans_rec = asim_file_paths.get("beam_plans", (None, None))
         asim_persons_path, asim_persons_rec = asim_file_paths.get("persons", (None, None))
@@ -527,15 +540,15 @@ class BeamPreprocessor(GenericPreprocessor):
             record_list.append(rec)
 
         return record_list
-        
+
     def _copy_with_compression_asim_file_to_beam(
-        self,
-        asim_file_path: str,
-        beam_file_name: str,
-        file_format: str,
-        beam_scenario_folder: str,
-        input_record: Optional[Record] = None,
-        model_run_hash: str = None,
+            self,
+            asim_file_path: str,
+            beam_file_name: str,
+            file_format: str,
+            beam_scenario_folder: str,
+            input_record: Optional[Record] = None,
+            model_run_hash: str = None,
     ) -> Optional[Record]:
         """Copies and compresses a single file from ActivitySim to BEAM, with provenance."""
         beam_file_path = locate_beam_file(beam_scenario_folder, beam_file_name, file_format)
@@ -570,10 +583,13 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def _handle_linkstats(self, workspace: "Workspace", previous_beam_records: List, store: RecordStore):
         """Finds or initializes the linkstats file and adds it to the record store."""
-        linkstats_record = next((r for r in previous_beam_records if r.short_name.startswith("linkstats") and "_sub" not in r.short_name), None)
+        linkstats_record = next(
+            (r for r in previous_beam_records if r.short_name.startswith("linkstats") and "_sub" not in r.short_name),
+            None)
 
         if not linkstats_record:
-            linkstats_path = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region, self.settings.beam.router_directory, "init.linkstats.csv.gz")
+            linkstats_path = os.path.join(workspace.get_beam_mutable_data_dir(), self.settings.run.region,
+                                          self.settings.beam.router_directory, "init.linkstats.csv.gz")
             if os.path.exists(linkstats_path):
                 linkstats_record = self.provenance_tracker.record_output_file(
                     "beam_preprocessor", linkstats_path, self.state.year,
@@ -590,12 +606,13 @@ class BeamPreprocessor(GenericPreprocessor):
     def _find_beam_production_path(region: str) -> Optional[str]:
         """Finds the path to the BEAM production data directory."""
         pilates_root = find_project_root() or os.path.realpath(os.getcwd())
-        
+
         primary_path = os.path.abspath(os.path.join(pilates_root, "pilates", "beam", "production", region))
         if os.path.exists(primary_path):
             return primary_path
 
-        alt_path = os.path.abspath(os.path.join(pilates_root, "sources", "PILATES", "pilates", "beam", "production", region))
+        alt_path = os.path.abspath(
+            os.path.join(pilates_root, "sources", "PILATES", "pilates", "beam", "production", region))
         if os.path.exists(alt_path):
             logger.info(f"Primary BEAM production path not found, using alternate: {alt_path}")
             return alt_path
@@ -650,7 +667,7 @@ class BeamPreprocessor(GenericPreprocessor):
         if not os.path.exists(beam_config_path):
             logger.warning(f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}")
             return
-        
+
         with open(beam_config_path, "r") as file:
             lines = file.readlines()
 
@@ -658,12 +675,12 @@ class BeamPreprocessor(GenericPreprocessor):
         with open(beam_config_path, "w") as file:
             for line in lines:
                 if line.strip().startswith(config_header):
-                    if not modified: # Write only the first occurrence
+                    if not modified:  # Write only the first occurrence
                         file.write(f"{config_header} = {config_value}\n")
                         modified = True
                 else:
                     file.write(line)
             if not modified:
                 file.write(f"\n{config_header} = {config_value}\n")
-        
+
         logger.info(f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}")
