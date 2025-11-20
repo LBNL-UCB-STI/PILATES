@@ -669,7 +669,7 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
 
         # Retrieve beam_plans_record for provenance mixing
-        beam_plans_rec = self.provenance_tracker.find_latest_record(
+        beam_plans_rec = self.provenance_tracker.run_info.get_most_recent_record(
             short_name="plans_beam_in"
         )
 
