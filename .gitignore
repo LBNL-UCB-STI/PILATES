@@ -114,3 +114,5 @@ pilates_conda_env_setup4hima.txt
 
 .apptainer/
 .singularity/
+
+pilates/database/schema/generated/

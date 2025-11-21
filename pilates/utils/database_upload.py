@@ -53,12 +53,8 @@ def create_database_manager(settings: DatabaseConfig) -> Optional[DatabaseManage
     try:
         if db_type == "duckdb":
             manager = DuckDBManager(db_path)
-            if manager.initialize_database():
-                logger.info(f"Initialized DuckDB database at {db_path}")
-                return manager
-            else:
-                logger.error("Failed to initialize DuckDB database")
-                return None
+            logger.info(f"Created DuckDB manager for {db_path}")
+            return manager
         else:
             logger.error(f"Unsupported database type: {db_type}")
             return None

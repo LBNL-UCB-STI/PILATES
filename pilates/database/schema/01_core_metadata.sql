@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS file_records (
     metadata JSON,
     schema JSON,
     exists BOOLEAN DEFAULT TRUE,
+    storage_location VARCHAR,
+    data_format VARCHAR,
+    logical_table_name VARCHAR,
     FOREIGN KEY (run_id) REFERENCES runs(run_id),
     FOREIGN KEY (model_run_id) REFERENCES model_runs(unique_id),
     UNIQUE (run_id, year, iteration, sub_iteration, short_name)
@@ -139,8 +142,8 @@ COMMENT ON COLUMN h5_table_records.unique_id IS 'Unique ID of the table record, 
 COMMENT ON COLUMN h5_table_records.h5_file_unique_id IS 'Unique ID of the parent H5 container file, foreign key to file_records.unique_id';
 COMMENT ON COLUMN h5_table_records.table_name IS 'Name of the table within the H5 file';
 
--- Versioned Zarr manifest data
-CREATE TABLE IF NOT EXISTS zarr_snapshots (
+-- Metadata for all data artifacts (Zarr, NetCDF, etc.)
+CREATE TABLE IF NOT EXISTS snapshots (
     snapshot_id VARCHAR PRIMARY KEY,
     run_id VARCHAR,
     year INTEGER,
@@ -150,38 +153,40 @@ CREATE TABLE IF NOT EXISTS zarr_snapshots (
     model VARCHAR,
     parent_snapshot_id VARCHAR,
     created_at TIMESTAMP,
-    full_skims_path VARCHAR,
-    full_skims_n_variables INTEGER,
-    full_skims_n_chunks INTEGER,
-    full_skims_total_size_mb FLOAT,
-    partial_skims_path VARCHAR,
+    format VARCHAR, -- Format of the artifact (e.g., 'zarr', 'netcdf')
+    artifact_path VARCHAR, -- Relative path to the stored artifact
+    n_variables INTEGER, -- Number of variables in the artifact
+    n_chunks INTEGER, -- Number of chunks in the artifact (for chunked formats like Zarr)
+    total_size_mb FLOAT, -- Total size of the artifact in MB
+    partial_skims_path VARCHAR, -- Path to partial skims (if applicable, e.g., BEAM output)
     partial_skims_n_variables INTEGER,
     partial_skims_n_chunks INTEGER,
     partial_skims_total_size_mb FLOAT,
-    changed_chunks INTEGER,
-    chunk_manifest JSON,
+    changed_chunks INTEGER, -- Number of chunks changed from parent (for Zarr)
+    chunk_manifest JSON, -- JSON object containing chunk-level manifest (for Zarr)
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
-COMMENT ON TABLE zarr_snapshots IS 'Detailed metadata for each versioned Zarr skim snapshot';
-COMMENT ON COLUMN zarr_snapshots.snapshot_id IS 'Unique identifier for this Zarr snapshot';
-COMMENT ON COLUMN zarr_snapshots.run_id IS 'Foreign key to runs table';
-COMMENT ON COLUMN zarr_snapshots.year IS 'Simulation year of the snapshot';
-COMMENT ON COLUMN zarr_snapshots.iteration IS 'Simulation iteration of the snapshot';
-COMMENT ON COLUMN zarr_snapshots.sub_iteration IS 'Simulation sub-iteration of the snapshot (if applicable).';
-COMMENT ON COLUMN zarr_snapshots.snapshot_type IS 'Type of snapshot (e.g., initialization, merged)';
-COMMENT ON COLUMN zarr_snapshots.model IS 'Model that produced this snapshot';
-COMMENT ON COLUMN zarr_snapshots.parent_snapshot_id IS 'ID of the previous snapshot in the lineage';
-COMMENT ON COLUMN zarr_snapshots.created_at IS 'Timestamp when the snapshot was created';
-COMMENT ON COLUMN zarr_snapshots.full_skims_path IS 'Relative path to the full skims Zarr store';
-COMMENT ON COLUMN zarr_snapshots.full_skims_n_variables IS 'Number of variables in the full skims Zarr store';
-COMMENT ON COLUMN zarr_snapshots.full_skims_n_chunks IS 'Number of chunks in the full skims Zarr store';
-COMMENT ON COLUMN zarr_snapshots.full_skims_total_size_mb IS 'Total size of the full skims Zarr store in MB';
-COMMENT ON COLUMN zarr_snapshots.partial_skims_path IS 'Relative path to the partial skims Zarr store (if applicable)';
-COMMENT ON COLUMN zarr_snapshots.partial_skims_n_variables IS 'Number of variables in the partial skims Zarr store (if applicable)';
-COMMENT ON COLUMN zarr_snapshots.partial_skims_n_chunks IS 'Number of chunks in the partial skims Zarr store (if applicable)';
-COMMENT ON COLUMN zarr_snapshots.partial_skims_total_size_mb IS 'Total size of the partial skims Zarr store in MB (if applicable)';
-COMMENT ON COLUMN zarr_snapshots.changed_chunks IS 'Number of chunks changed from the parent snapshot';
-COMMENT ON COLUMN zarr_snapshots.chunk_manifest IS 'JSON object containing the chunk-level manifest for the full skims';
+COMMENT ON TABLE snapshots IS 'Detailed metadata for each versioned data artifact snapshot (Zarr, NetCDF, etc.)';
+COMMENT ON COLUMN snapshots.snapshot_id IS 'Unique identifier for this data artifact snapshot';
+COMMENT ON COLUMN snapshots.run_id IS 'Foreign key to runs table';
+COMMENT ON COLUMN snapshots.year IS 'Simulation year of the snapshot';
+COMMENT ON COLUMN snapshots.iteration IS 'Simulation iteration of the snapshot';
+COMMENT ON COLUMN snapshots.sub_iteration IS 'Simulation sub-iteration of the snapshot (if applicable).';
+COMMENT ON COLUMN snapshots.snapshot_type IS 'Type of snapshot (e.g., initialization, merged)';
+COMMENT ON COLUMN snapshots.model IS 'Model that produced this snapshot';
+COMMENT ON COLUMN snapshots.parent_snapshot_id IS 'ID of the previous snapshot in the lineage';
+COMMENT ON COLUMN snapshots.created_at IS 'Timestamp when the snapshot was created';
+COMMENT ON COLUMN snapshots.format IS 'Format of the data artifact (e.g., "zarr", "netcdf").';
+COMMENT ON COLUMN snapshots.artifact_path IS 'Relative path to the stored data artifact.';
+COMMENT ON COLUMN snapshots.n_variables IS 'Number of data variables in the artifact.';
+COMMENT ON COLUMN snapshots.n_chunks IS 'Number of data chunks in the artifact (relevant for chunked formats like Zarr).';
+COMMENT ON COLUMN snapshots.total_size_mb IS 'Total size of the data artifact in MB.';
+COMMENT ON COLUMN snapshots.partial_skims_path IS 'Relative path to partial skims (if applicable, e.g., BEAM output).';
+COMMENT ON COLUMN snapshots.partial_skims_n_variables IS 'Number of variables in the partial skims (if applicable).';
+COMMENT ON COLUMN snapshots.partial_skims_n_chunks IS 'Number of chunks in the partial skims (if applicable).';
+COMMENT ON COLUMN snapshots.partial_skims_total_size_mb IS 'Total size of the partial skims in MB (if applicable).';
+COMMENT ON COLUMN snapshots.changed_chunks IS 'Number of chunks changed from the parent snapshot (for Zarr format).';
+COMMENT ON COLUMN snapshots.chunk_manifest IS 'JSON object containing the chunk-level manifest (for Zarr format).';
 
 
 -- Sequence for openlineage_events

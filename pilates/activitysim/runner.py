@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from typing import Tuple, Optional
 
 from pilates.config import PilatesConfig
@@ -8,7 +9,8 @@ from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.zarr_versioning import VersionedZarrStore
+from pilates.utils.snapshot_manager import SnapshotManager
+from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 logger = logging.getLogger(__name__)
@@ -303,19 +305,24 @@ class ActivitysimRunner(GenericRunner):
                     logger.info(
                         "Creating initial zarr version snapshot after ActivitySim compilation..."
                     )
+                    database_path_str = settings.shared.database.path
+                    if database_path_str:
+                        db_manager = DuckDBManager(database_path_str)
+                        
+                        archive_root_str = settings.shared.database.shapshot_path
+                        archive_root_path = Path(archive_root_str) if archive_root_str else None
+                        
+                        snapshot_manager = SnapshotManager(db_manager, archive_root_path=archive_root_path)
 
-                    # Get database path from settings
-                    database_path = settings.shared.database.path
-                    if database_path:
-                        # Initialize zarr version manager
-                        zarr_base_path = os.path.dirname(database_path)
-                        zarr_manager = VersionedZarrStore(zarr_base_path)
-
-                        # Create initialization snapshot (iteration -1)
-                        snapshot_id = zarr_manager.create_snapshot_from_initialization(
+                        snapshot_id = snapshot_manager.create_snapshot(
                             run_id=self.provenance_tracker.run_info.run_id,
                             year=self.state.current_year,
-                            source_zarr_path=all_skims_path,
+                            iteration=-1,
+                            sub_iteration=None,
+                            model="activitysim",
+                            snapshot_type="initialization",
+                            source_path=Path(all_skims_path),
+                            artifact_format="zarr",
                             provenance_tracker=self.provenance_tracker,
                         )
                         logger.info(f"Created initial zarr snapshot: {snapshot_id}")
@@ -325,7 +332,8 @@ class ActivitysimRunner(GenericRunner):
                         )
                 except Exception as e:
                     logger.warning(
-                        f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot."
+                        f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.",
+                        exc_info=True
                     )
 
             # Prepare runtime metadata for compilation run

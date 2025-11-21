@@ -159,6 +159,8 @@ class FileRecord(Record):
         models: List of model names that produced/consume this file.
         description: Optional description (overrides base.description).
         year: Optional year tag associated with the dataset.
+        iteration: Optional iteration index.
+        sub_iteration: Optional sub-iteration index.
         source_file_paths: List of original source paths used to create this file.
         metadata: Arbitrary key/value metadata dict.
         producing_run_id: ModelRunInfo.unique_id that produced this file, if known.
@@ -170,6 +172,8 @@ class FileRecord(Record):
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
     year: Optional[int] = None
+    iteration: Optional[int] = None
+    sub_iteration: Optional[int] = None
     source_file_paths: List[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
     producing_run_id: Optional[str] = None

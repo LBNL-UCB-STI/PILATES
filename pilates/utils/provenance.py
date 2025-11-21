@@ -695,6 +695,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         short_name: Optional[str] = None,
         state: Optional[ExecutionContext] = None,
         source_file_paths: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[Union["FileRecord", "H5FileRecord"]]:
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
@@ -705,15 +706,24 @@ class FileProvenanceTracker(ProvenanceTracker):
             if not file_hash:
                 logger.warning(f"Could not calculate hash for H5 file {file_path}")
                 return None
+            
             if file_hash in self.run_info.file_records:
-                return self.run_info.file_records[file_hash]
+                existing_record = self.run_info.file_records[file_hash]
+                if metadata:
+                    existing_record.metadata.update(metadata)
+                return existing_record
+
+            combined_metadata = self._load_metadata(path_to_use)
+            if metadata:
+                combined_metadata.update(metadata)
+
             h5_file_record = H5FileRecord(
                 unique_id=file_hash,
                 file_path=relative_path,
                 created_at=datetime.now().isoformat(),
                 short_name=short_name
                 or os.path.splitext(os.path.basename(file_path))[0],
-                metadata=self._load_metadata(path_to_use),
+                metadata=combined_metadata,
                 description=description,
                 year=state.current_year if state else None,
                 models=[],
@@ -740,9 +750,14 @@ class FileProvenanceTracker(ProvenanceTracker):
                 return None
 
             if file_hash in self.run_info.file_records:
-                return self.run_info.file_records[file_hash]
+                existing_record = self.run_info.file_records[file_hash]
+                if metadata:
+                    existing_record.metadata.update(metadata)
+                return existing_record
 
-            metadata = self._load_metadata(path_to_use)
+            combined_metadata = self._load_metadata(path_to_use)
+            if metadata:
+                combined_metadata.update(metadata)
             schema = get_schema_from_file(path_to_use)
 
             file_record = FileRecord(
@@ -750,7 +765,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 file_path=relative_path,
                 created_at=datetime.now().isoformat(),
                 short_name=short_name,
-                metadata=metadata,
+                metadata=combined_metadata,
                 description=description,
                 year=state.current_year if state else None,
                 schema=schema,
@@ -1166,6 +1181,7 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: list = None,
         state: Optional[ExecutionContext] = None,
         context: Optional[ExecutionContext] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[FileRecord]:
         """
         Record an output file with optional execution context.
@@ -1195,6 +1211,8 @@ class FileProvenanceTracker(ProvenanceTracker):
             Execution context providing year, stage, and iteration metadata.
             Any object with current_year, current_major_stage, and current_inner_iter
             attributes works (including WorkflowState).
+        metadata : dict, optional
+            Arbitrary key/value metadata to merge into the record.
 
         Returns
         -------
@@ -1211,6 +1229,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             short_name,
             state=ctx,
             source_file_paths=source_file_paths,
+            metadata=metadata,
         )
         if not file_record:
             return None

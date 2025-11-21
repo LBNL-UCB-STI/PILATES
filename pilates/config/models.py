@@ -136,6 +136,7 @@ class DatabaseConfig(BaseModel):
     enabled: bool = Field(False, description="Enable database storage")
     type: str = Field("duckdb", description="Database type")
     path: str = Field(..., description="Database file path")
+    shapshot_path: str = Field(None, description="Matrix snapshot file path")
 
     @field_validator("path")
     @classmethod

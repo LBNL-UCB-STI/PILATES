@@ -27,6 +27,7 @@ from pilates.utils.database import (
     DatabaseUploadError,
     DatabaseQueryError,
 )
+from pilates.database.schema_generator import _normalize_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,23 @@ def _execute_sql_from_file(conn, sql_file_path: str):
         )
         raise
 
+def _infer_data_format(file_path: str) -> str:
+    """Infers data format from file extension."""
+    if not file_path:
+        return "unknown"
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".parquet":
+        return "parquet"
+    elif ext in [".csv", ".csv.gz"]:
+        return "csv"
+    elif ext == ".h5":
+        return "h5"
+    return "unknown"
+
+def _get_logical_table_name(short_name: str, year: Optional[int]) -> str:
+    """Wrapper for _normalize_table_name, ensuring it returns a string."""
+    return _normalize_table_name(short_name, year) if short_name else "unknown"
+
 
 class DuckDBManager(DatabaseManager):
     """
@@ -93,6 +111,16 @@ class DuckDBManager(DatabaseManager):
         super().__init__(database_path, **kwargs)
         self.connection = None
 
+    def __enter__(self):
+        """Override for diagnostics to see when the context is entered."""
+        # Call the parent's __enter__ if it does anything important in the future
+        super().__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Override for diagnostics to see when the context is exited."""
+        super().__exit__(exc_type, exc_val, exc_tb) # This calls self.close()
+
     def _get_connection(self):
         """Get or create database connection."""
         if self.connection is None:
@@ -101,19 +129,30 @@ class DuckDBManager(DatabaseManager):
             if dir_name:
                 os.makedirs(dir_name, exist_ok=True)
             self.connection = duckdb.connect(self.database_path)
-            print("[DEBUG] _get_connection: duckdb.connect successful.")
             logger.info(f"Connected to DuckDB database at {self.database_path}")
         return self.connection
 
-    def initialize_database(self) -> bool:
+    def execute_sql(self, sql_text: str, values_to_insert: Optional[list] = None):
+        conn = self._get_connection()
+        if values_to_insert:
+            result = conn.execute(sql_text, values_to_insert)
+        else:
+            result = conn.execute(sql_text)
+        conn.commit()
+        return result
+
+    def initialize_database(self, schema_dir: Optional[str] = None) -> bool:
         """
         Initialize DuckDB database with PILATES schema by executing SQL scripts.
+        
+        Args:
+            schema_dir: Optional path to the schema directory. If not provided,
+                        it's inferred from the location of this file.
         """
         try:
             conn = self._get_connection()
 
             # 1. Load Extensions first
-            # spatial is needed for some geometry operations if used
             try:
                 conn.execute("INSTALL spatial; LOAD spatial;")
             except Exception:
@@ -121,19 +160,31 @@ class DuckDBManager(DatabaseManager):
                     "Could not load DuckDB spatial extension. Geometry columns may fail."
                 )
 
-            # Get the directory where this script is located to build absolute paths to schema files
-            utils_dir = os.path.dirname(os.path.abspath(__file__))
-            pilates_dir = os.path.dirname(utils_dir)
-            schema_dir = os.path.join(pilates_dir, "database", "schema")
+            if schema_dir is None:
+                # Get schema and generated schema directories relative to this file
+                utils_dir = os.path.dirname(os.path.abspath(__file__))
+                pilates_dir = os.path.dirname(utils_dir)
+                schema_dir = os.path.join(pilates_dir, "database", "schema")
 
-            # Dynamically find all SQL files in the schema directory and execute them
-            sql_files_to_execute = sorted(
-                [f for f in os.listdir(schema_dir) if f.endswith(".sql")]
-            )
+            generated_schema_dir = os.path.join(schema_dir, "generated")
 
-            for sql_file in sql_files_to_execute:
+            # 2. Execute base schema files (excluding those handled by generation script)
+            base_sql_files = sorted([
+                f for f in os.listdir(schema_dir) 
+                if f.endswith(".sql") and f not in ["06_asim_outputs.sql"]
+            ])
+            for sql_file in base_sql_files:
                 full_path = os.path.join(schema_dir, sql_file)
                 _execute_sql_from_file(conn, full_path)
+            
+            # 3. Execute generated schema files in order
+            if os.path.isdir(generated_schema_dir):
+                generated_sql_files = sorted(
+                    [f for f in os.listdir(generated_schema_dir) if f.endswith(".sql")]
+                )
+                for sql_file in generated_sql_files:
+                    full_path = os.path.join(generated_schema_dir, sql_file)
+                    _execute_sql_from_file(conn, full_path)
 
             conn.commit()
             logger.info("DuckDB database initialized successfully from SQL files.")
@@ -456,15 +507,38 @@ class DuckDBManager(DatabaseManager):
                     file_and_h5_container_records.append(rec)
 
             for file_record in file_and_h5_container_records:
+                # Infer initial data format and logical table name
+                inferred_data_format = _infer_data_format(file_record.file_path)
+                inferred_logical_table_name = _get_logical_table_name(file_record.short_name, file_record.year)
+
                 # Insert common fields into file_records table
                 conn.execute(
                     """
                     INSERT INTO file_records (
                         unique_id, record_type, run_id, openlineage_id, file_path, created_at,
                         short_name, description, year, models, producing_run_id,
-                        consuming_run_ids, source_file_paths, metadata, schema, exists
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                        consuming_run_ids, source_file_paths, metadata, schema, exists,
+                        storage_location, data_format, logical_table_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (unique_id) DO UPDATE SET
+                        record_type = excluded.record_type,
+                        run_id = excluded.run_id,
+                        openlineage_id = excluded.openlineage_id,
+                        file_path = excluded.file_path,
+                        created_at = excluded.created_at,
+                        short_name = excluded.short_name,
+                        description = excluded.description,
+                        year = excluded.year,
+                        models = excluded.models,
+                        producing_run_id = excluded.producing_run_id,
+                        consuming_run_ids = excluded.consuming_run_ids,
+                        source_file_paths = excluded.source_file_paths,
+                        metadata = excluded.metadata,
+                        schema = excluded.schema,
+                        exists = excluded.exists,
+                        storage_location = excluded.storage_location,
+                        data_format = excluded.data_format,
+                        logical_table_name = excluded.logical_table_name
                     """,
                     [
                         file_record.unique_id,
@@ -487,19 +561,42 @@ class DuckDBManager(DatabaseManager):
                         json.dumps(_convert_numpy_types(file_record.metadata)),
                         json.dumps(_convert_numpy_types(file_record.schema)),
                         file_record.exists,
+                        'database', # Initial default storage_location
+                        inferred_data_format,
+                        inferred_logical_table_name,
                     ],
                 )
 
             for h5_table_record in h5_table_records:
                 # Insert into file_records first
+                # For H5 table records, data_format is always 'h5' and logical_table_name is table_name
                 conn.execute(
                     """
                     INSERT INTO file_records (
                         unique_id, record_type, run_id, openlineage_id, file_path, created_at,
                         short_name, description, year, models, producing_run_id,
-                        consuming_run_ids, source_file_paths, metadata, schema, exists
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO NOTHING
+                        consuming_run_ids, source_file_paths, metadata, schema, exists,
+                        storage_location, data_format, logical_table_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (unique_id) DO UPDATE SET
+                        record_type = excluded.record_type,
+                        run_id = excluded.run_id,
+                        openlineage_id = excluded.openlineage_id,
+                        file_path = excluded.file_path,
+                        created_at = excluded.created_at,
+                        short_name = excluded.short_name,
+                        description = excluded.description,
+                        year = excluded.year,
+                        models = excluded.models,
+                        producing_run_id = excluded.producing_run_id,
+                        consuming_run_ids = excluded.consuming_run_ids,
+                        source_file_paths = excluded.source_file_paths,
+                        metadata = excluded.metadata,
+                        schema = excluded.schema,
+                        exists = excluded.exists,
+                        storage_location = excluded.storage_location,
+                        data_format = excluded.data_format,
+                        logical_table_name = excluded.logical_table_name
                     """,
                     [
                         h5_table_record.unique_id,
@@ -518,6 +615,9 @@ class DuckDBManager(DatabaseManager):
                         json.dumps(_convert_numpy_types(h5_table_record.metadata)),
                         json.dumps(_convert_numpy_types(h5_table_record.schema)),
                         h5_table_record.exists,
+                        'database', # Initial default storage_location
+                        'h5', # H5 table, so data_format is h5
+                        h5_table_record.table_name, # logical_table_name is the table_name within the H5 file
                     ],
                 )
                 # Then insert into h5_table_records
@@ -566,9 +666,28 @@ class DuckDBManager(DatabaseManager):
                             INSERT INTO file_records (
                                 unique_id, record_type, run_id, openlineage_id, file_path, created_at,
                                 short_name, description, year, models, producing_run_id,
-                                consuming_run_ids, source_file_paths, metadata, schema, exists
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT (unique_id) DO NOTHING
+                                consuming_run_ids, source_file_paths, metadata, schema, exists,
+                                storage_location, data_format, logical_table_name
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT (unique_id) DO UPDATE SET
+                                record_type = excluded.record_type,
+                                run_id = excluded.run_id,
+                                openlineage_id = excluded.openlineage_id,
+                                file_path = excluded.file_path,
+                                created_at = excluded.created_at,
+                                short_name = excluded.short_name,
+                                description = excluded.description,
+                                year = excluded.year,
+                                models = excluded.models,
+                                producing_run_id = excluded.producing_run_id,
+                                consuming_run_ids = excluded.consuming_run_ids,
+                                source_file_paths = excluded.source_file_paths,
+                                metadata = excluded.metadata,
+                                schema = excluded.schema,
+                                exists = excluded.exists,
+                                storage_location = excluded.storage_location,
+                                data_format = excluded.data_format,
+                                logical_table_name = excluded.logical_table_name
                             """,
                             [
                                 file_record.unique_id,
@@ -587,6 +706,9 @@ class DuckDBManager(DatabaseManager):
                                 json.dumps(_convert_numpy_types(file_record.metadata)),
                                 json.dumps(_convert_numpy_types(file_record.schema)),
                                 file_record.exists,
+                                'unknown', # Default for placeholders
+                                _infer_data_format(file_record.file_path),
+                                _get_logical_table_name(file_record.short_name, file_record.year)
                             ],
                         )
                         logger.info(
@@ -602,9 +724,28 @@ class DuckDBManager(DatabaseManager):
                             INSERT INTO file_records (
                                 unique_id, record_type, run_id, openlineage_id, file_path, created_at,
                                 short_name, description, year, models, producing_run_id,
-                                consuming_run_ids, source_file_paths, metadata, schema, exists
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT (unique_id) DO NOTHING
+                                consuming_run_ids, source_file_paths, metadata, schema, exists,
+                                storage_location, data_format, logical_table_name
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT (unique_id) DO UPDATE SET
+                                record_type = excluded.record_type,
+                                run_id = excluded.run_id,
+                                openlineage_id = excluded.openlineage_id,
+                                file_path = excluded.file_path,
+                                created_at = excluded.created_at,
+                                short_name = excluded.short_name,
+                                description = excluded.description,
+                                year = excluded.year,
+                                models = excluded.models,
+                                producing_run_id = excluded.producing_run_id,
+                                consuming_run_ids = excluded.consuming_run_ids,
+                                source_file_paths = excluded.source_file_paths,
+                                metadata = excluded.metadata,
+                                schema = excluded.schema,
+                                exists = excluded.exists,
+                                storage_location = excluded.storage_location,
+                                data_format = excluded.data_format,
+                                logical_table_name = excluded.logical_table_name
                             """,
                             [
                                 unique_id,
@@ -623,6 +764,9 @@ class DuckDBManager(DatabaseManager):
                                 "{}",
                                 "{}",
                                 False,
+                                'unknown', # Default for minimal placeholders
+                                'unknown',
+                                'unknown'
                             ],
                         )
 
@@ -975,6 +1119,55 @@ class DuckDBManager(DatabaseManager):
 
         except Exception as e:
             logger.error(f"Failed to check dataset existence {openlineage_id}: {e}")
+            return False
+
+    def update_file_record_storage_info(
+        self,
+        unique_id: str,
+        storage_location: str,
+        logical_table_name: str,
+        data_format: str,
+        file_path: str,
+    ) -> bool:
+        """
+        Updates the storage_location, logical_table_name, data_format, and file_path for a file_record.
+
+        Args:
+            unique_id: The unique_id of the file_record to update.
+            storage_location: The new storage location ('database' or 'external').
+            logical_table_name: The logical table name for the file_record.
+            data_format: The format of the data ('parquet', 'csv', 'h5', etc.).
+            file_path: The absolute path to the file.
+
+        Returns:
+            True if the update was successful, False otherwise.
+        """
+        try:
+            conn = self._get_connection()
+            conn.execute(
+                """
+                UPDATE file_records
+                SET
+                    storage_location = ?,
+                    logical_table_name = ?,
+                    data_format = ?,
+                    file_path = ?
+                WHERE unique_id = ?
+                """,
+                [storage_location, logical_table_name, data_format, file_path, unique_id],
+            )
+            logger.info(
+                f"Updated file_record {unique_id} to storage_location={storage_location}, "
+                f"logical_table_name={logical_table_name}, data_format={data_format}"
+            )
+            print(
+                f"Updated file_record {unique_id} to storage_location={storage_location}, "
+                f"logical_table_name={logical_table_name}, data_format={data_format}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update file_record {unique_id} storage info: {e}")
+            print(f"Failed to update file_record {unique_id} storage info: {e}")
             return False
 
     def get_model_runs_by_config(
@@ -1877,6 +2070,86 @@ class DuckDBManager(DatabaseManager):
         except Exception as e:
             logger.error(f"Failed to store raw parcels data: {e}")
             return False
+
+    def query_hybrid_table(self, logical_table_name: str) -> duckdb.DuckDBPyRelation:
+        """
+        Constructs and executes a dynamic SQL query to fetch data from both
+        the database and external Parquet files, ensuring schemas are aligned.
+
+        Args:
+            logical_table_name: The logical name of the table to query.
+
+        Returns:
+            A DuckDB relation object representing the combined result set.
+        """
+        conn = self._get_connection()
+        
+        # 1. Determine the canonical schema from the `uploaded_` table.
+        # This is the schema all parts of the UNION must conform to.
+        try:
+            uploaded_table_schema_desc = conn.execute(f"DESCRIBE uploaded_{logical_table_name}").fetchall()
+            # Making a set for quick lookups and a list to preserve order
+            uploaded_cols_ordered = [row[0] for row in uploaded_table_schema_desc]
+        except duckdb.Error as e:
+            # If the uploaded table doesn't exist, we cannot proceed.
+            logger.error(f"Cannot query hybrid table '{logical_table_name}': The base table 'uploaded_{logical_table_name}' does not exist. {e}")
+            raise DatabaseQueryError(f"Base table for {logical_table_name} not found.")
+
+        # The base query is always on the uploaded table.
+        # We explicitly list columns to ensure consistent ordering.
+        col_list_str = ', '.join([f'"{c}"' for c in uploaded_cols_ordered])
+        all_queries = [f"SELECT {col_list_str} FROM uploaded_{logical_table_name}"]
+
+        # 2. Find all external files and build a schema-aligned query for each.
+        external_files_df = conn.execute(
+            """
+            SELECT unique_id, run_id, file_path, "year", iteration
+            FROM file_records 
+            WHERE logical_table_name = ? AND storage_location = 'external' AND data_format = 'parquet'
+            """,
+            [logical_table_name]
+        ).fetchdf()
+
+        for _, record in external_files_df.iterrows():
+            file_path = record['file_path']
+            try:
+                # Get the schema of the current parquet file
+                parquet_schema_desc = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{file_path}')").fetchall()
+                parquet_cols = {row[0] for row in parquet_schema_desc}
+            except duckdb.Error as e:
+                logger.warning(f"Could not read schema for external file {file_path}, skipping. Error: {e}")
+                continue
+
+            # 3. Build the projection list for this specific parquet file
+            # This aligns its output with the canonical schema.
+            projection = []
+            for col in uploaded_cols_ordered:
+                if col in parquet_cols:
+                    # Column exists in the parquet file, select it directly.
+                    projection.append(f'"{col}"')
+                # Check for metadata columns that exist in the file_records table
+                elif col == 'run_id':
+                    projection.append(f"'{record['run_id']}' AS run_id")
+                elif col == 'file_record_id':
+                    projection.append(f"'{record['unique_id']}' AS file_record_id")
+                elif col == 'year':
+                    projection.append(f"{record['year']} AS year")
+                elif col == 'iteration':
+                    iteration_val = 'NULL' if pd.isna(record['iteration']) else record['iteration']
+                    projection.append(f"{iteration_val} AS iteration")
+                elif col == 'sub_iteration':
+                     projection.append(f"0 AS sub_iteration") # Default sub_iteration if not present
+                else:
+                    # Column is in the canonical schema but not this parquet file. Project NULL.
+                    projection.append(f"NULL AS \"{col}\"")
+            
+            all_queries.append(f"SELECT {', '.join(projection)} FROM read_parquet('{file_path}')")
+
+        # 4. Combine all queries into a single UNION ALL statement.
+        final_query = "\nUNION ALL\n".join(all_queries)
+        
+        print(f"Executing Hybrid Query:\n{final_query}")  # For debugging
+        return conn.sql(final_query)
 
     def retrieve_activitysim_data(
         self,
@@ -2861,10 +3134,13 @@ class DuckDBManager(DatabaseManager):
         """Close DuckDB connection with explicit checkpoint."""
         if self.connection:
             try:
-                # Force merge of WAL to main DB file
+                # 1. COMMIT the active transaction to make all changes permanent.
+                self.connection.commit()
+
+                # 2. Force merge of WAL to main DB file.
                 self.connection.execute("CHECKPOINT;")
             except Exception as e:
-                logger.warning(f"Checkpoint on close failed: {e}")
+                logger.warning(f"Commit/Checkpoint on close failed: {e}")
 
             self.connection.close()
             self.connection = None

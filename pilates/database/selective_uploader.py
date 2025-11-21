@@ -9,6 +9,8 @@ import pandas as pd
 import sys
 from pathlib import Path
 
+from polars import Boolean
+
 # Add the project root to the Python path to allow imports from pilates.*
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -213,6 +215,173 @@ def extract_iteration(short_name: str) -> Optional[int]:
     return None
 
 
+def run_uploader(run_info_path: str, database_path: str, tables: list = None, no_upload_parquet: bool = False) -> bool:
+    """
+    The core logic of the uploader, refactored into a callable function.
+    """
+    if not os.path.exists(run_info_path):
+        logging.error(f"Input file not found: {run_info_path}")
+        return False
+
+    with DuckDBManager(database_path) as db_manager:
+
+        # --- Configuration ---
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        approved_schema_dir = os.path.join(script_dir, "schema")
+        run_dir = os.path.dirname(run_info_path)
+
+        # --- Logic ---
+        approved_tables = get_approved_tables(approved_schema_dir)
+        if not approved_tables:
+            logging.warning("No approved schemas found. Nothing to upload.")
+            print("No approved schemas found. Nothing to upload.")
+            return False
+
+        # If user specifies tables, filter the approved list
+        target_tables = set(tables) if tables else approved_tables
+        upload_list = approved_tables.intersection(target_tables)
+
+        if not upload_list:
+            logging.warning("No tables matched the criteria for upload.")
+            print("No tables matched the criteria for upload.")
+            return False
+
+        logging.info(f"Attempting to upload data for tables: {sorted(list(upload_list))}")
+
+        # Load run_info.json
+        try:
+            with open(run_info_path, "r") as f:
+                run_info = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logging.error(f"Failed to read or parse {run_info_path}: {e}")
+            print(f"Failed to read or parse {run_info_path}: {e}")
+            return False
+
+        # Convert run_info dict to PilatesRunInfo object
+        file_records = {}
+        for uid, rec in run_info.get("file_records", {}).items():
+            if "h5_file_unique_id" in rec:
+                file_records[uid] = H5TableRecord(**rec)
+            elif "table_record_ids" in rec:
+                file_records[uid] = H5FileRecord(**rec)
+            else:
+                file_records[uid] = FileRecord(**rec)
+        model_runs = {
+            uid: ModelRunInfo(**run) for uid, run in run_info.get("model_runs", {}).items()
+        }
+
+        run_info_obj = PilatesRunInfo(
+            run_id=run_info.get("run_id"),
+            created_at=run_info.get("created_at"),
+            start_year=run_info.get("start_year"),
+            end_year=run_info.get("end_year"),
+            models_used=run_info.get("models_used", []),
+            settings_hash=run_info.get("settings_hash"),
+            code_version=run_info.get("code_version"),
+            hostname=run_info.get("hostname"),
+            file_records=file_records,
+            repo_records=run_info.get("repo_records", {}),
+            model_runs=model_runs,
+            config_snapshot=run_info.get("config_snapshot"),
+            openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
+        )
+
+        # Upload the entire run_info structure to ensure all records exist
+        db_manager.upload_run_data(run_info_obj)
+        logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
+
+        for record in run_info.get("file_records", {}).values():
+            try:
+                # Validation checks
+                if not record.get("short_name"):
+                    continue
+
+                # Determine Year, Table Name, Iteration, etc.
+                year = record.get("year")
+                if year is None:
+                    match = re.search(r"(\d{4})", record["short_name"])
+                    year = int(match.group(1)) if match else 0
+                table_name = _normalize_table_name(record["short_name"], year)
+                if table_name not in upload_list:
+                    continue
+                iteration = extract_iteration(record["short_name"]) or 0
+                data_path = resolve_file_path(run_dir, record, run_info)
+                if not data_path:
+                    logging.error(f"Missing file for {record['short_name']}")
+                    continue
+
+                # Ensure the path is absolute for database storage
+                data_path = str(Path(data_path).resolve())
+
+                # Infer data format and logical table name
+                data_format = "unknown"
+                if data_path.endswith(".parquet"):
+                    data_format = "parquet"
+                elif data_path.endswith((".csv", ".csv.gz")):
+                    data_format = "csv"
+                elif data_path.endswith(".h5"):
+                    data_format = "h5"
+                logical_table_name = table_name
+
+                # Decide the final storage location definitively.
+                final_storage_location = "database"
+                if data_format == "parquet" and no_upload_parquet:
+                    final_storage_location = "external"
+
+                logging.info(
+                    f"Processing {logical_table_name} from {os.path.basename(data_path)} -> storage: {final_storage_location}")
+
+                # First, write the authoritative record for this file to the database.
+                # This ensures the state is correct *before* any data is moved.
+                db_manager.update_file_record_storage_info(
+                    unique_id=record["unique_id"],
+                    storage_location=final_storage_location,
+                    logical_table_name=logical_table_name,
+                    data_format=data_format,
+                    file_path=data_path,
+                )
+
+                # Second, if the strategy is to upload, then upload the data.
+                if final_storage_location == "database":
+                    if data_format == "parquet" or data_format == "csv":
+                        # === NATIVE UPLOAD (Parquet/CSV) ===
+                        conn = db_manager._get_connection()
+                        select_sql, sort_keys = build_smart_select(
+                            conn, data_path, table_name, record, run_info, year, iteration
+                        )
+                        
+                        # Get the list of columns from the select statement to use in the insert
+                        desc_rel = conn.execute(f"DESCRIBE ({select_sql})")
+                        insert_cols = [row[0] for row in desc_rel.fetchall()]
+                        insert_cols_str = ', '.join([f'"{c}"' for c in insert_cols])
+
+                        conn.execute(
+                            f"INSERT INTO uploaded_{table_name} ({insert_cols_str}) SELECT * FROM ({select_sql}) ORDER BY {', '.join(sort_keys)}"
+                        )
+                        logging.info(f"Native upload complete for {logical_table_name}")
+                    else:
+                        # === PANDAS UPLOAD (H5 / Complex) ===
+                        if record.get("h5_file_unique_id"):
+                            df = pd.read_hdf(data_path, key=record["table_name"])
+                        else:
+                            logging.warning(f"Unsupported format for direct upload: {data_path}")
+                            continue
+
+                        df.columns = [sanitize_name(c) for c in df.columns]
+                        df["run_id"] = run_info["run_id"]
+                        df["file_record_id"] = record["unique_id"]
+                        df["year"] = year
+                        df["iteration"] = iteration
+                        df["sub_iteration"] = 0
+                        db_manager.store_generic_table(f"uploaded_{table_name}", df)
+                        logging.info(f"Pandas upload complete for {logical_table_name}")
+
+            except Exception as e:
+                logging.error(f"Failed to process {logical_table_name}: {e}", exc_info=True)
+                print(f"Failed to process {logical_table_name}: {e}")
+                return False
+    return True
+
 def main():
     """Main function to drive the selective data upload process."""
     parser = argparse.ArgumentParser(
@@ -221,161 +390,23 @@ def main():
     parser.add_argument("run_info_path", help="Path to the run_info.json file.")
     parser.add_argument("database_path", help="Path to the DuckDB database file.")
     parser.add_argument(
+        "--no-upload-parquet",
+        action="store_true",
+        help="If set, parquet files will not be uploaded to the database but linked externally.",
+    )
+    parser.add_argument(
         "--table",
         action="append",
         help="Specify a table to upload. Can be used multiple times. If not provided, all approved tables found in the run will be uploaded.",
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.run_info_path):
-        logging.error(f"Input file not found: {args.run_info_path}")
-        return
-
-    # --- Configuration ---
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    approved_schema_dir = os.path.join(script_dir, "schema")
-    run_dir = os.path.dirname(args.run_info_path)
-
-    # --- Logic ---
-    approved_tables = get_approved_tables(approved_schema_dir)
-    if not approved_tables:
-        logging.warning("No approved schemas found. Nothing to upload.")
-        return
-
-    # If user specifies tables, filter the approved list
-    target_tables = set(args.table) if args.table else approved_tables
-    upload_list = approved_tables.intersection(target_tables)
-
-    if not upload_list:
-        logging.warning("No tables matched the criteria for upload.")
-        return
-
-    logging.info(f"Attempting to upload data for tables: {sorted(list(upload_list))}")
-
-    # Load run_info.json
-    try:
-        with open(args.run_info_path, "r") as f:
-            run_info = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        logging.error(f"Failed to read or parse {args.run_info_path}: {e}")
-        return
-
-    # Connect to the database
-    db_manager = DuckDBManager(args.database_path)
-
-    # Convert run_info dict to PilatesRunInfo object
-    file_records = {}
-    for uid, rec in run_info.get("file_records", {}).items():
-        if "h5_file_unique_id" in rec:
-            file_records[uid] = H5TableRecord(**rec)
-        elif "table_record_ids" in rec:
-            file_records[uid] = H5FileRecord(**rec)
-        else:
-            file_records[uid] = FileRecord(**rec)
-    model_runs = {
-        uid: ModelRunInfo(**run) for uid, run in run_info.get("model_runs", {}).items()
-    }
-
-    run_info_obj = PilatesRunInfo(
-        run_id=run_info.get("run_id"),
-        created_at=run_info.get("created_at"),
-        start_year=run_info.get("start_year"),
-        end_year=run_info.get("end_year"),
-        models_used=run_info.get("models_used", []),
-        settings_hash=run_info.get("settings_hash"),
-        code_version=run_info.get("code_version"),
-        hostname=run_info.get("hostname"),
-        file_records=file_records,
-        repo_records=run_info.get("repo_records", {}),
-        model_runs=model_runs,
-        config_snapshot=run_info.get("config_snapshot"),
-        openlineage_event_metadata=run_info.get("openlineage_event_metadata", []),
+    run_uploader(
+        run_info_path=args.run_info_path,
+        database_path=args.database_path,
+        tables=args.table,
+        no_upload_parquet=args.no_upload_parquet
     )
-
-    # Upload the entire run_info structure to ensure all records exist
-    db_manager.upload_run_data(run_info_obj)
-    logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
-
-    for record in run_info.get("file_records", {}).values():
-        # Validation checks
-        if not record.get("schema") or not record.get("short_name"):
-            continue
-
-        # Determine Year
-        year = record.get("year")
-        if year is None:
-            match = re.search(r"(\d{4})", record["short_name"])
-            year = int(match.group(1)) if match else 0
-
-        # Determine Table Name
-        table_name = _normalize_table_name(record["short_name"], year)
-        if table_name not in upload_list:
-            continue
-
-        # Determine Iteration
-        iteration = extract_iteration(record["short_name"]) or 0
-
-        # Resolve Path
-        data_path = resolve_file_path(run_dir, record, run_info)
-        if not data_path:
-            logging.error(f"Missing file for {record['short_name']}")
-            continue
-
-        logging.info(f"Uploading {table_name} from {os.path.basename(data_path)}")
-
-        try:
-            # === STRATEGY 1: NATIVE UPLOAD (Parquet/CSV) ===
-            if data_path.endswith(".parquet") or data_path.endswith(
-                (".csv", ".csv.gz")
-            ):
-
-                conn = db_manager._get_connection()
-
-                # Generate the Smart SQL that handles your specific logic
-                select_sql, sort_keys = build_smart_select(
-                    conn, data_path, table_name, record, run_info, year, iteration
-                )
-
-                # Execute Insertion
-                conn.execute(
-                    f"""
-                            INSERT INTO {table_name} 
-                            SELECT * FROM ({select_sql}) 
-                            ORDER BY {', '.join(sort_keys)}
-                        """
-                )
-
-                logging.info(f"Native upload complete for {table_name}")
-
-            # === STRATEGY 2: PANDAS UPLOAD (H5 / Complex) ===
-            # HDF5 requires Pandas. We fall back to your existing logic here.
-            else:
-                if record.get("h5_file_unique_id"):
-                    df = pd.read_hdf(data_path, key=record["table_name"])
-                else:
-                    # Fallback for other weird formats
-                    logging.warning(f"Unknown format {data_path}, trying generic read")
-                    continue  # Or handle generic
-
-                # Sanitize
-                df.columns = [sanitize_name(c) for c in df.columns]
-
-                # Inject Metadata
-                df["run_id"] = run_info["run_id"]
-                df["file_record_id"] = record["unique_id"]
-                df["year"] = year
-                df["iteration"] = iteration
-                df["sub_iteration"] = 0
-
-                # Use the manager's method (which we updated to include sorting!)
-                db_manager.store_generic_table(table_name, df)
-                logging.info(f"Pandas upload complete for {table_name}")
-
-        except Exception as e:
-            logging.error(f"Failed to upload {table_name}: {e}")
-
-    db_manager.close()
-    logging.info("Upload process finished.")
 
 
 if __name__ == "__main__":

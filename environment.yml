@@ -197,6 +197,7 @@ dependencies:
   - zarr=3.0.6
   - zlib=1.2.11=h36c2ea0_1013
   - zstd=1.5.0=ha95c52a_0
+  - sqlmodel
   - pip:
     - h5py==3.4.0
     - openmatrix==0.3.5.0

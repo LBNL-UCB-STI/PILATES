@@ -91,7 +91,7 @@ class TestInitDbSchema(unittest.TestCase):
                 "activitysim_land_use",
                 "activitysim_data_generic",
                 "h5_table_records",
-                "zarr_snapshots",
+                "snapshots",
                 "usim_data_reference_counties",
                 "usim_data_reference_ect",
             ]

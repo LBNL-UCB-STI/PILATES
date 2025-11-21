@@ -1,331 +1,152 @@
-# Zarr Versioning Implementation Summary
+# Data Versioning & Analysis Architecture Plan
 
-**Status**: ✅ **COMPLETE & TESTED**
-**Date**: October 6, 2025
-**Files**: `pilates/utils/zarr_versioning.py`, `tests/test_zarr_versioning.py`
+**Status**: 📝 **DESIGN & PLANNING**
+**Date**: November 20, 2025
 
 ## Overview
 
-Successfully implemented a comprehensive zarr versioning system for PILATES skim data management with snapshot creation, restoration, and cross-version analysis capabilities.
+This document outlines a new plan for versioning PILATES simulation data artifacts (e.g., Zarr skims, NetCDF outputs). The architecture is designed to provide **robust, immutable storage** for data provenance and reproducibility, combined with a **powerful, flexible analysis layer** for ergonomic, cross-run comparisons.
 
-## Implementation Details
+The system is separated into two distinct components:
+1.  **Storage Layer**: Prioritizes simplicity and data integrity by storing each data artifact version as a full, independent snapshot in a persistent location (e.g., cloud object storage).
+2.  **Analysis Layer**: Provides a virtual, unified `xarray.Dataset` view over multiple, independent snapshots, enabling powerful `numpy`-like slicing and analysis across different runs, years, and iterations.
 
-### Core Class: `VersionedZarrStore`
+This approach solves the flaws of shared, mutable data stores (data corruption, concurrency issues) while providing a superior analysis experience.
 
-**Location**: `pilates/utils/zarr_versioning.py` (750+ lines)
+## Proposed Architecture
 
-**Key Features**:
-1. ✅ Snapshot creation from ActivitySim initialization
-2. ✅ Snapshot creation from BEAM iterations (partial + merged skims)
-3. ✅ Efficient storage with hardlink optimization
-4. ✅ Full restoration to any historical state
-5. ✅ Cross-version analysis with xarray integration
-6. ✅ Lineage tracking and metadata management
-
-### Storage Architecture
+The new architecture decouples physical storage from logical analysis, while being flexible enough to handle various data formats like Zarr and NetCDF.
 
 ```
-database_directory/
-└── zarr_stores/
-    ├── manifest.json                        # Version tracking metadata
-    ├── full_skims/
-    │   └── skims.zarr/                      # Shared full skim store (311 MB)
-    │       ├── .zattrs, .zgroup, .zmetadata
-    │       ├── SOV_TIME/, HOV2_TIME/, ...   # 188 variables
-    │       └── [1454 x 1454 x 5 chunks]
-    └── partial_skims/
-        ├── run123_2011_0_beam.zarr/         # BEAM partial outputs (~5 MB each)
-        ├── run123_2011_1_beam.zarr/
-        └── ...
++-----------------------------+      +---------------------------------+
+|   PILATES Run Environment   |      |   Persistent Storage (e.g., S3) |
+|  (e.g., Local, HPC, Cloud)  |      |                                 |
+|                             |      | /data_archives/                 |
+|  +-----------------------+  |      |  ├─ {snapshot_id_1}/artifact.zarr/  (or .nc) |
+|  | BEAM Postprocessor    |  |      |  ├─ {snapshot_id_2}/artifact.zarr/  (or .nc) |
+|  | Generates artifact    |  |      |  └─ {snapshot_id_3}/artifact.zarr/  (or .nc) |
+|  +-----------------------+  |      +----------------|----------------+
+|             |               |                       ^
+|             v               |                       | 1. Snapshot
+|  +-----------------------+  |                       |
+|  |      Snapshotter      |-------------------------+
+|  | (Copies full artifact)|
+|  +-----------------------+
+|             |
+|             v 2. Write Metadata
+|  +-----------------------+
+|  |   Central Database    |
+|  |  (e.g., PostgreSQL)   |
+|  | ┌-------------------┐ |
+|  | | snapshots         | |
+|  | └-------------------┘ |
+|  +-----------------------+
+|             ^
+|             | 3. Query Snapshots
+|             |
+|  +-----------------------+
+|  |   Analysis Client     |
+|  | (Jupyter, Script)   |
+|  | +-------------------+ |
+|  | | SnapshotAnalysisMgr | |
+|  | +-------------------+ |
+|  +-----------------------+
+
 ```
 
-### Test Coverage
+### 1. Storage Layer: Immutable Snapshots
 
-**Unit Tests**: `tests/test_zarr_versioning.py` (400+ lines, 12 tests)
+-   **Principle**: Treat each generated data artifact as an immutable artifact.
+-   **Workflow**: After a model run produces a final data artifact (e.g., a `skims.zarr` directory or a `data.nc` file), a "snapshot" process copies the entire artifact to a unique, persistent path in a central storage location (like S3 or a network file system).
+-   **Path Scheme**: `s3://<bucket>/data_archives/{snapshot_id}/artifact.zarr` (or `artifact.nc`). The `artifact_path` column in the database will specify the exact location.
+-   **Benefit**: This eliminates concurrency problems and data corruption risks. Restoration is a simple `copy` operation. Data integrity is guaranteed.
 
-All tests passing ✅:
-- `test_initialization` - Manager initialization
-- `test_create_initialization_snapshot` - ActivitySim snapshot creation
-- `test_create_beam_snapshot` - BEAM iteration snapshots
-- `test_restore_snapshot` - Snapshot restoration
-- `test_get_snapshot_info` - Metadata retrieval
-- `test_get_snapshots_for_run` - Run-specific queries
-- `test_get_snapshot_lineage` - Lineage tracking
-- `test_create_multi_version_view` - Cross-version analysis
-- `test_delete_snapshot` - Snapshot deletion
-- `test_manifest_persistence` - Persistence verification
-- `test_invalid_snapshot_id` - Error handling
-- `test_missing_source_zarr` - Error handling
+### 2. Analysis Layer: Virtual Unified View
 
-**Real Data Test**: Successfully tested with actual PILATES run data
-- ✅ 188 variables, 1454 zones, 5 time periods
-- ✅ Full skims: 311.4 MB
-- ✅ Partial skims: 4.6 MB
-- ✅ All operations (create, restore, multi-version view) working
+-   **Principle**: Provide a high-level, ergonomic interface for data analysis without altering the underlying storage.
+-   **Component**: A new `SnapshotAnalysisManager` class will serve as the query engine.
+-   **Workflow**:
+    1.  The manager queries the central database to find paths to relevant snapshots based on user criteria (e.g., run IDs, years) and their `format` (e.g., 'zarr', 'netcdf').
+    2.  It uses the appropriate `xarray` function (`xarray.open_zarr()` or `xarray.open_dataset()`) to **lazily** open each of the independent data artifacts. This is fast as it only reads metadata.
+    3.  It concatenates these individual datasets into a single `xarray.Dataset` and applies a **`MultiIndex`** using metadata (`run_id`, `year`, `iteration`).
+-   **Benefit**: This provides the user with a single, massive-feeling dataset that can be sliced intuitively, while the underlying data remains in simple, independent archives.
 
-## Key Methods
+## Key Components & Methods
 
-### 1. `create_snapshot_from_initialization()`
-Creates initial snapshot when ActivitySim converts `.omx` → `.zarr`:
+### 1. Snapshotter (Process)
+A simple, reliable process that performs two actions after a data artifact is finalized:
+1.  Copies the entire artifact (directory for Zarr, file for NetCDF) to its unique, archival storage path.
+2.  Writes the metadata (including the `artifact_path`, `format`, `run_id`, `year`, `chunk_manifest` (if applicable), etc.) to the `snapshots` table in the central database.
+
+### 2. `SnapshotAnalysisManager` (Class)
+
+**Location**: `pilates/utils/snapshot_analysis.py` (to be created)
+
+This class will be the primary tool for post-run analysis.
+
+#### `build_view(query_filters)`
+Creates a virtual, multi-dimensional `xarray.Dataset` from multiple snapshots.
 
 ```python
-snapshot_id = zarr_manager.create_snapshot_from_initialization(
-    run_id="50f78fdf",
-    year=2011,
-    source_zarr_path="activitysim/output/cache/skims.zarr",
-    provenance_tracker=tracker  # Optional
-)
-# Returns: "50f78fdf_2011_-1"
-```
+# Conceptual Usage
+from pilates.utils.snapshot_analysis import SnapshotAnalysisManager
 
-### 2. `create_snapshot_from_beam()`
-Creates snapshot after BEAM iteration with both partial and merged skims:
+# 1. Initialize manager with DB connection
+analyzer = SnapshotAnalysisManager(db_connection)
 
-```python
-snapshot_id = zarr_manager.create_snapshot_from_beam(
-    run_id="50f78fdf",
-    year=2011,
-    iteration=0,
-    beam_partial_zarr_path="beam/ITERS/it.0/0.activitySimODSkims_current.zarr",
-    merged_full_zarr_path="activitysim/output/cache/skims.zarr",
-    parent_snapshot_id="50f78fdf_2011_-1"
-)
-# Returns: "50f78fdf_2011_0_merged"
-```
-
-### 3. `restore_snapshot()`
-Restores full skims to any historical state:
-
-```python
-restored_path = zarr_manager.restore_snapshot(
-    snapshot_id="50f78fdf_2011_0_merged",
-    target_path="/path/to/restore/skims.zarr"
-)
-# Returns path to restored zarr store
-```
-
-### 4. `create_multi_version_view()`
-Creates xarray Dataset with version dimension for cross-version analysis:
-
-```python
-multi_view = zarr_manager.create_multi_version_view(
-    snapshot_ids=['run123_2011_0', 'run123_2011_1', 'run123_2012_0'],
-    variables=['SOV_TIME', 'SOV_DIST']  # Optional filter
+# 2. Build a view based on a query
+my_view = analyzer.build_view(
+    run_ids=['run_A', 'run_B'],
+    years=[2025, 2030]
 )
 
-# Cross-version slicing
-od_evolution = multi_view['SOV_TIME'].sel(otaz=1, dtaz=10, time_period='AM')
-# Returns array with values for each version
+# 3. Perform powerful, intuitive analysis
+#    Xarray's MultiIndex handles the ragged data structure.
+sov_time_run_A = my_view['SOV_TIME'].sel(run_id='run_A', year=2025)
+
+# Compare the mean of a skim for the same year across two runs
+mean_A = my_view['SOV_DIST'].sel(run_id='run_A', year=2030).mean()
+mean_B = my_view['SOV_DIST'].sel(run_id='run_B', year=2030).mean()
+
+# Data is only loaded from storage when a computation is triggered
+diff = (mean_A - mean_B).compute()
 ```
 
-### 5. Helper Methods
-- `get_snapshot_info(snapshot_id)` - Get metadata for specific snapshot
-- `get_snapshots_for_run(run_id)` - All snapshots for a run
-- `get_snapshot_lineage(snapshot_id)` - Full lineage chain
-- `get_all_snapshots()` - All snapshots in manifest
-- `delete_snapshot(snapshot_id)` - Remove snapshot from manifest
+#### `restore_snapshot(snapshot_id, target_path)`
+A straightforward method to retrieve a historical artifact.
 
-## Manifest Structure
+-   **Logic**:
+    1.  Queries the database to find the `artifact_path` and `format` for the given `snapshot_id`.
+    2.  Copies the entire artifact from that archival path to the local `target_path`.
 
-```json
-{
-  "version": "1.0",
-  "zarr_format": 2,
-  "created": "2025-10-06T...",
-  "snapshots": {
-    "run123_2011_-1": {
-      "run_id": "run123",
-      "year": 2011,
-      "iteration": -1,
-      "snapshot_type": "initialization",
-      "model": "activitysim",
-      "created_at": "2025-10-06T...",
-      "full_skims": {
-        "path": "zarr_stores/full_skims/skims.zarr",
-        "chunk_manifest": {
-          "SOV_TIME/0.0.0": "abc123...",  // Chunk hash
-          "SOV_TIME/0.0.1": "def456...",
-          ...
-        },
-        "n_variables": 188,
-        "n_chunks": 939,
-        "total_size_mb": 311.4
-      },
-      "partial_skims": null
-    },
-    "run123_2011_0_merged": {
-      "run_id": "run123",
-      "year": 2011,
-      "iteration": 0,
-      "snapshot_type": "merged",
-      "model": "beam_postprocessor",
-      "parent_snapshot": "run123_2011_-1",
-      "created_at": "2025-10-06T...",
-      "full_skims": {
-        "path": "zarr_stores/full_skims/skims.zarr",
-        "chunk_manifest": {...},
-        "n_variables": 188,
-        "n_chunks": 939,
-        "total_size_mb": 311.4,
-        "changed_chunks": 127  // Only these changed from parent
-      },
-      "partial_skims": {
-        "path": "zarr_stores/partial_skims/run123_2011_0_beam.zarr",
-        "n_variables": 195,
-        "total_size_mb": 4.6
-      }
-    }
-  }
-}
-```
+## Database Integration
 
-## Storage Efficiency
+The `manifest.json` file is superseded by the central database. The `snapshots` table is the source of truth for all versioning metadata. Key columns relevant for storing different artifact types are:
+-   `snapshot_id`: The primary key for a version.
+-   `artifact_path`: The direct, unique path to the archived data artifact (e.g., `skims.zarr`, `data.nc`).
+-   `format`: The format of the artifact (e.g., `'zarr'`, `'netcdf'`).
+-   `run_id`, `year`, `iteration`: Metadata used for querying and building the analysis `MultiIndex`.
+-   `chunk_manifest`: Still stored for Zarr artifacts for potential future use (see Future Work) and for deep data auditing.
 
-**Real-world measurements** (from test with actual PILATES data):
-- Initial snapshot: 311.4 MB (full skims)
-- Per BEAM iteration: 4.6 MB (partial skims)
-- Changed chunks: ~127/939 chunks (~14% changed per iteration)
+## Advantages of this Architecture
 
-**Projected storage** (40-year simulation with 2 iterations/year):
-- Initial: 311 MB
-- Per iteration: ~5 MB partial + minimal full skim updates
-- Total for 80 iterations: ~11 GB (very manageable)
+1.  **Solves Data Corruption Risk**: The "last write wins" problem of a shared, mutable store is completely eliminated by using immutable, independent snapshots.
+2.  **Cloud-Native & Scalable**: This design is perfectly suited for cloud object storage (S3, GCS) and avoids filesystem-specific features like hardlinks.
+3.  **Simplifies Concurrency**: Multiple PILATES runs can execute and snapshot their data in parallel without interfering with each other.
+4.  **Enables Powerful Analysis**: The `SnapshotAnalysisManager` provides a far more powerful and ergonomic analysis experience than previous methods, gracefully handling ragged data across runs and years.
+5.  **Robust & Simple Restoration**: Restoring a snapshot is a simple, predictable bulk copy operation.
+6.  **Future-Proof for Other Formats**: The design inherently supports different `xarray`-compatible data formats like Zarr and NetCDF with minimal, isolated changes.
 
-**Efficiency features**:
-- Chunk-level deduplication via manifest tracking
-- Partial skims stored separately (20x smaller than full)
-- Hardlink-friendly structure (same filesystem)
-- No redundant coordinate data
+## Trade-offs & Future Work
 
-## XArray Integration
+**Primary Trade-off**:
+-   **Storage Cost**: This approach prioritizes simplicity, robustness, and developer velocity over storage efficiency. It intentionally duplicates unchanged data between snapshots. This is a conscious design choice based on the principle that storage is cheaper than complex engineering and data corruption risks.
 
-The zarr stores are fully compatible with xarray for analysis:
-
-```python
-# Single version analysis
-ds = xr.open_zarr(zarr_manager.full_skims_path)
-sov_time = ds['SOV_TIME'].sel(otaz=1, dtaz=10, time_period='AM')
-
-# Multi-version analysis
-multi = zarr_manager.create_multi_version_view(
-    snapshot_ids=['snap1', 'snap2', 'snap3']
-)
-evolution = multi['SOV_TIME'].sel(
-    otaz=1,
-    dtaz=10,
-    time_period='AM'
-)  # → Array with 3 values (one per version)
-```
-
-## Error Handling
-
-Comprehensive error handling with informative messages:
-- `FileNotFoundError` - Source zarr doesn't exist
-- `ValueError` - Invalid snapshot ID
-- Logging at INFO/DEBUG/WARNING levels
-- Graceful handling of missing files
-
-## Dependencies
-
-Required packages (already in PILATES environment):
-- `xarray` - Dataset operations
-- `zarr >= 2.14` - Zarr format support (ActivitySim constraint)
-- `numpy` - Array operations
-- Standard library: `json`, `hashlib`, `shutil`, `pathlib`, `logging`
-
-## Integration Points
-
-### With Provenance System
-- Integrates with `FileProvenanceTracker`
-- Records snapshots in provenance metadata
-- Links to OpenLineage events
-
-### With Database
-- Manifest stored alongside DuckDB database
-- FileRecords reference zarr snapshots
-- Supports database restoration workflow
-
-### With ActivitySim Postprocessor
-To be integrated:
-```python
-# After ActivitySim initialization
-from pilates.utils.zarr_versioning import VersionedZarrStore
-
-zarr_mgr = VersionedZarrStore(database_path.parent)
-snapshot_id = zarr_mgr.create_snapshot_from_initialization(
-    run_id=run_info.run_id,
-    year=state.current_year,
-    source_zarr_path=activitysim_skims_path,
-    provenance_tracker=tracker
-)
-```
-
-### With BEAM Postprocessor
-To be integrated:
-```python
-# After BEAM skims merge
-snapshot_id = zarr_mgr.create_snapshot_from_beam(
-    run_id=run_info.run_id,
-    year=state.current_year,
-    iteration=state.current_inner_iter,
-    beam_partial_zarr_path=beam_partial_skims,
-    merged_full_zarr_path=merged_skims,
-    parent_snapshot_id=previous_snapshot_id,
-    provenance_tracker=tracker
-)
-```
-
-## Performance
-
-**Snapshot creation** (measured on real data):
-- Initialization: ~2-3 seconds (311 MB copy)
-- BEAM iteration: ~1 second (5 MB copy + manifest update)
-
-**Restoration** (measured):
-- Full restore: ~2 seconds (311 MB copy)
-- With hardlinks: ~1 second (metadata + links)
-
-**Multi-version view** (measured):
-- 2 versions: ~3 seconds
-- 10 versions: ~15 seconds (linear scaling)
-
-## Limitations & Future Work
-
-**Current limitations**:
-1. All snapshots share same full_skims.zarr (last write wins for restoration)
-   - **Workaround**: Use chunk manifest to track changes
-   - **Future**: Implement true chunk-level versioning
-
-2. Hardlinks not fully utilized
-   - **Current**: Full copy on each update
-   - **Future**: Implement hardlink-based chunk storage
-
-3. No automatic cleanup of old snapshots
-   - **Future**: Add retention policies
-
-**Future enhancements**:
-- Automatic snapshot creation hooks in postprocessors
-- Cloud storage backends (S3/GCS)
-- Compression optimization
-- Snapshot comparison tools
-- Automatic validation on restoration
-
-## Documentation
-
-Comprehensive documentation created:
-- ✅ `docs/zarr_versioning_design.md` - Detailed design spec
-- ✅ `pilates/utils/zarr_versioning.py` - Extensive docstrings
-- ✅ `tests/test_zarr_versioning.py` - Example usage in tests
-- ✅ This summary document
+**Future Enhancements**:
+1.  **Content-Addressable Chunk Store**: If storage costs become a significant concern, the system can be evolved into a more "Git-like" model. Because we are already storing the `chunk_manifest` in the database, we have the necessary metadata to implement a central, content-addressable chunk pool for global deduplication. This would be a major engineering effort but would represent the gold standard for storage efficiency.
+2.  **Analysis View Optimization**: For very large queries (spanning terabytes of skim data), the `SnapshotAnalysisManager` could be optimized to use distributed computing backends like Dask.
+3.  **Automated Cleanup**: Implement retention policies to automatically archive or delete old snapshots from storage based on rules defined in the database.
 
 ## Conclusion
 
-The zarr versioning system is **production-ready** with:
-- ✅ Complete implementation (750+ lines)
-- ✅ Comprehensive test coverage (12 unit tests, all passing)
-- ✅ Real data validation (tested with 188-variable, 311MB zarr store)
-- ✅ XArray integration for cross-version analysis
-- ✅ Efficient storage with minimal overhead
-- ✅ Full documentation
-
-Ready for integration into PILATES workflow!
+This two-layer architecture provides a clear path forward. It establishes a robust and simple foundation for data versioning while enabling a highly sophisticated and flexible analysis workflow. It addresses the key limitations of the previous plan and is well-suited for a scalable, multi-run simulation environment.

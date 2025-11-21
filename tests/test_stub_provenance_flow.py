@@ -32,7 +32,7 @@ Standalone Usage with Preserved Output:
 
     See docs/test_output_preservation.md for details
 """
-
+from datetime import datetime
 import os
 import tempfile
 import shutil
@@ -41,6 +41,7 @@ import json
 import pandas as pd
 from pathlib import Path
 from typing import Dict
+from datetime import datetime
 
 # Import PILATES modules
 from pilates.generic.model_factory import ModelFactory
@@ -782,18 +783,36 @@ class TestStubProvenanceFlow:
             # ZARR VERSIONING: Create initialization snapshot
             # ============================================================
             zarr_snapshot_id = None
+            beam_snapshot_id = None
+            snapshot_manager = None
             if fixture_zarr.exists():
                 print("\n📸 Creating zarr initialization snapshot...")
-                from pilates.utils.zarr_versioning import VersionedZarrStore
+                from pilates.utils.snapshot_manager import SnapshotManager
+                db_manager = create_database_manager(settings_obj.shared.database)
+                assert db_manager is not None
+                db_manager.initialize_database()
 
-                # Initialize zarr version manager
-                zarr_manager = VersionedZarrStore(tmpdir)
+                # Manually insert the run record to satisfy FK constraints before snapshotting
+                with db_manager:
+                    conn = db_manager._get_connection()
+                    conn.execute(
+                        "INSERT INTO runs (run_id, created_at) VALUES (?, ?)",
+                        [run_id, datetime.now().isoformat()]
+                    )
+
+                # Initialize snapshot manager
+                zarr_archive_path = Path(tmpdir) / "zarr_archives"
+                snapshot_manager = SnapshotManager(db_manager, zarr_archive_path)
 
                 # Create initialization snapshot (iteration -1)
-                zarr_snapshot_id = zarr_manager.create_snapshot_from_initialization(
+                zarr_snapshot_id = snapshot_manager.create_snapshot(
                     run_id=run_id,
                     year=state.current_year,
-                    source_zarr_path=initial_zarr_path,
+                    iteration=-1,
+                    model="activitysim",
+                    snapshot_type="initialization",
+                    source_path=Path(initial_zarr_path),
+                    artifact_format="zarr",
                     provenance_tracker=provenance_tracker,
                 )
                 print(f"   ✅ Created initialization snapshot: {zarr_snapshot_id}")
@@ -937,14 +956,17 @@ class TestStubProvenanceFlow:
                 merged_zarr_path = initial_zarr_path
 
                 # Create BEAM iteration snapshot
-                beam_snapshot_id = zarr_manager.create_snapshot_from_beam(
+                beam_snapshot_id = snapshot_manager.create_snapshot(
                     run_id=run_id,
                     year=state.current_year,
                     iteration=state.current_inner_iter,
-                    beam_partial_zarr_path=beam_partial_zarr,
-                    merged_full_zarr_path=merged_zarr_path,
+                    model="beam",
+                    snapshot_type="merged",
+                    source_path=Path(merged_zarr_path),
+                    artifact_format="zarr",
                     parent_snapshot_id=zarr_snapshot_id,
                     provenance_tracker=provenance_tracker,
+                    partial_skims_path=str(beam_partial_zarr)
                 )
                 print(f"   ✅ Created BEAM snapshot: {beam_snapshot_id}")
 
@@ -1168,95 +1190,89 @@ class TestStubProvenanceFlow:
             if fixture_zarr.exists() and zarr_snapshot_id:
                 print("\n🔍 Verifying zarr versioning...")
 
-                # Check manifest exists
-                manifest_path = os.path.join(tmpdir, "zarr_stores", "manifest.json")
-                assert os.path.exists(manifest_path), "Zarr manifest should exist"
-                print(f"   ✅ Manifest exists: {manifest_path}")
+                # The new design uses a central DB and immutable snapshots, not a manifest.
+                # We verify that the snapshot artifacts were created in the archive.
+                zarr_archive_path = Path(tmpdir) / "zarr_archives"
 
-                # Load manifest and verify snapshots
-                with open(manifest_path) as f:
-                    manifest = json.load(f)
+                # Verify initialization snapshot artifact
+                init_snapshot_path = zarr_archive_path / zarr_snapshot_id / "artifact.zarr"
+                assert init_snapshot_path.exists(), f"Initialization snapshot artifact should exist at {init_snapshot_path}"
+                assert init_snapshot_path.is_dir(), "Zarr snapshot artifact should be a directory"
+                print(f"   ✅ Initialization snapshot artifact found: {init_snapshot_path}")
 
-                assert "snapshots" in manifest, "Manifest should have snapshots"
-                snapshots = manifest["snapshots"]
+                # Verify BEAM snapshot artifact
+                assert beam_snapshot_id, "BEAM snapshot should have been created"
+                beam_snapshot_path = zarr_archive_path / beam_snapshot_id / "artifact.zarr"
+                assert beam_snapshot_path.exists(), f"BEAM snapshot artifact should exist at {beam_snapshot_path}"
+                assert beam_snapshot_path.is_dir(), "Zarr snapshot artifact should be a directory"
+                print(f"   ✅ BEAM snapshot artifact found: {beam_snapshot_path}")
 
-                # Should have 2 snapshots: initialization + BEAM iteration
-                assert (
-                    len(snapshots) >= 2
-                ), f"Expected at least 2 snapshots, got {len(snapshots)}"
-                print(f"   ✅ Found {len(snapshots)} zarr snapshots")
+                # The rest of the verification can rely on the database, which is what the `SnapshotManager` does.
+                # Verify lineage by checking parent id from DB
+                beam_snap_info = snapshot_manager.get_snapshot_info(beam_snapshot_id)
+                assert beam_snap_info, "Should be able to retrieve BEAM snapshot info from DB"
+                assert beam_snap_info['parent_snapshot_id'] == zarr_snapshot_id, "Lineage check failed: parent_snapshot_id does not match"
+                print(f"   ✅ Lineage verified via DB: {zarr_snapshot_id} → {beam_snapshot_id}")
 
-                # Verify initialization snapshot
+                # Verify snapshot info retrieval from DB
+                init_snapshot_info = snapshot_manager.get_snapshot_info(zarr_snapshot_id)
                 assert (
-                    zarr_snapshot_id in snapshots
-                ), f"Initialization snapshot {zarr_snapshot_id} should exist"
-                init_snapshot = snapshots[zarr_snapshot_id]
-                assert (
-                    init_snapshot["snapshot_type"] == "initialization"
-                ), "First snapshot should be initialization"
-                assert (
-                    init_snapshot["iteration"] == -1
-                ), "Initialization should be iteration -1"
-                assert (
-                    "full_skims" in init_snapshot
-                ), "Initialization should have full_skims"
-                assert (
-                    init_snapshot["partial_skims"] is None
-                ), "Initialization should not have partial_skims"
-                print(f"   ✅ Initialization snapshot verified: {zarr_snapshot_id}")
-
-                # Verify BEAM snapshot
-                beam_snapshots = [
-                    sid
-                    for sid in snapshots
-                    if snapshots[sid].get("snapshot_type") == "merged"
-                ]
-                assert (
-                    len(beam_snapshots) >= 1
-                ), "Should have at least one BEAM snapshot"
-
-                beam_snap = snapshots[beam_snapshots[0]]
-                assert (
-                    beam_snap["iteration"] == state.current_inner_iter
-                ), "BEAM snapshot should have correct iteration"
-                assert "full_skims" in beam_snap, "BEAM snapshot should have full_skims"
-                assert (
-                    "partial_skims" in beam_snap
-                ), "BEAM snapshot should have partial_skims"
-                assert (
-                    beam_snap["parent_snapshot"] == zarr_snapshot_id
-                ), "BEAM snapshot should reference parent"
-                print(f"   ✅ BEAM snapshot verified: {beam_snapshots[0]}")
-
-                # Verify lineage
-                lineage = zarr_manager.get_snapshot_lineage(beam_snapshots[0])
-                assert len(lineage) == 2, "Lineage should have 2 snapshots"
-                assert (
-                    lineage[0] == zarr_snapshot_id
-                ), "Lineage should start with initialization"
-                assert (
-                    lineage[1] == beam_snapshots[0]
-                ), "Lineage should end with BEAM snapshot"
-                print(f"   ✅ Lineage verified: {' → '.join(lineage)}")
-
-                # Verify snapshot info retrieval
-                snapshot_info = zarr_manager.get_snapshot_info(zarr_snapshot_id)
-                assert (
-                    snapshot_info is not None
+                    init_snapshot_info is not None
                 ), "Should be able to retrieve snapshot info"
                 assert (
-                    "chunk_manifest" in snapshot_info["full_skims"]
+                    "chunk_manifest" in init_snapshot_info
                 ), "Should have chunk manifest"
                 print("   ✅ Snapshot info retrieval working")
 
-                # Verify snapshots for run
-                run_snapshots = zarr_manager.get_snapshots_for_run(run_id)
-                assert (
-                    len(run_snapshots) >= 2
-                ), "Should have at least 2 snapshots for run"
-                print(f"   ✅ Found {len(run_snapshots)} snapshots for run {run_id}")
-
                 print("\n   ✅ All zarr versioning features validated!")
+
+            # ============================================================
+            # Verify SnapshotManager restore and query methods
+            # ============================================================
+            if 'snapshot_manager' in locals() and snapshot_manager and 'beam_snapshot_id' in locals() and beam_snapshot_id:
+                print("\n🔍 Verifying SnapshotManager restore and query...")
+
+                # 1. Test get_latest_snapshot_id_for_run
+                latest_id = snapshot_manager.get_latest_snapshot_id_for_run(run_id)
+                # The BEAM snapshot should be the latest one created in this test.
+                assert latest_id == beam_snapshot_id, f"Expected latest snapshot to be {beam_snapshot_id}, but got {latest_id}"
+                print(f"   ✅ get_latest_snapshot_id_for_run returned correct ID: {latest_id}")
+
+                # 2. Test restore_snapshot with a Zarr artifact
+                restore_dir = Path(tmpdir) / "restored_skims"
+                restored_path = snapshot_manager.restore_snapshot(zarr_snapshot_id, restore_dir)
+
+                assert restored_path.exists(), "Restored snapshot path should exist"
+                assert restored_path.is_dir(), "Restored Zarr snapshot should be a directory"
+                # A simple check to see if it looks like a Zarr store
+                assert (restored_path / ".zattrs").exists(), "Restored Zarr store should have .zattrs"
+                print(f"   ✅ restore_snapshot successfully restored Zarr artifact to {restored_path}")
+
+                # 3. Test with a non-Zarr artifact to ensure format-agnosticism
+                dummy_file = Path(tmpdir) / "dummy_artifact.txt"
+                dummy_file.write_text("This is a test artifact.")
+
+                text_snapshot_id = snapshot_manager.create_snapshot(
+                    run_id=run_id,
+                    year=state.current_year,
+                    iteration=state.current_inner_iter,
+                    model="test",
+                    snapshot_type="test_format",
+                    source_path=dummy_file,
+                    artifact_format="txt",
+                )
+
+                text_snapshot_info = snapshot_manager.get_snapshot_info(text_snapshot_id)
+                assert text_snapshot_info is not None
+                assert text_snapshot_info["format"] == "txt"
+                print("   ✅ create_snapshot works for non-Zarr formats")
+
+                # Restore the text artifact and check its content
+                restored_txt_path = Path(tmpdir) / "restored_artifact.txt"
+                snapshot_manager.restore_snapshot(text_snapshot_id, restored_txt_path)
+                assert restored_txt_path.exists()
+                assert restored_txt_path.read_text() == "This is a test artifact."
+                print("   ✅ restore_snapshot works for non-Zarr formats")
 
             # ============================================================
             # Preserve Test Artifacts (if requested)
@@ -1434,16 +1450,33 @@ class TestStubProvenanceFlow:
 
             # Create zarr initialization snapshot
             zarr_snapshot_id = None
-            zarr_manager = None
+            snapshot_manager = None
             if fixture_zarr.exists():
                 print("\n📸 Creating zarr initialization snapshot...")
-                from pilates.utils.zarr_versioning import VersionedZarrStore
+                from pilates.utils.snapshot_manager import SnapshotManager
+                db_manager = create_database_manager(settings_obj.shared.database)
+                assert db_manager is not None
+                db_manager.initialize_database()
 
-                zarr_manager = VersionedZarrStore(tmpdir)
-                zarr_snapshot_id = zarr_manager.create_snapshot_from_initialization(
+                # Manually insert the run record to satisfy FK constraints before snapshotting
+                with db_manager:
+                    conn = db_manager._get_connection()
+                    conn.execute(
+                        "INSERT INTO runs (run_id, created_at) VALUES (?, ?)",
+                        [run_id, datetime.now().isoformat()]
+                    )
+
+                zarr_archive_path = Path(tmpdir) / "zarr_archives"
+                snapshot_manager = SnapshotManager(db_manager, zarr_archive_path)
+
+                zarr_snapshot_id = snapshot_manager.create_snapshot(
                     run_id=run_id,
                     year=state.current_year,
-                    source_zarr_path=initial_zarr_path,
+                    iteration=-1,
+                    model="activitysim",
+                    snapshot_type="initialization",
+                    source_path=Path(initial_zarr_path),
+                    artifact_format="zarr",
                     provenance_tracker=provenance_tracker,
                 )
                 print(f"   ✅ Created initialization snapshot: {zarr_snapshot_id}")
@@ -1559,7 +1592,7 @@ class TestStubProvenanceFlow:
             print("   ✅ BEAM runner (stub)")
 
             # Create zarr BEAM iteration snapshot
-            if fixture_zarr.exists() and zarr_snapshot_id and zarr_manager:
+            if fixture_zarr.exists() and zarr_snapshot_id:
                 print("\n📸 Creating zarr BEAM iteration snapshot...")
 
                 # Create BEAM partial zarr
@@ -1574,14 +1607,17 @@ class TestStubProvenanceFlow:
                 shutil.copytree(fixture_zarr, beam_partial_zarr)
 
                 # Create BEAM snapshot
-                beam_snapshot_id = zarr_manager.create_snapshot_from_beam(
+                beam_snapshot_id = snapshot_manager.create_snapshot(
                     run_id=run_id,
                     year=state.current_year,
                     iteration=state.current_inner_iter,
-                    beam_partial_zarr_path=beam_partial_zarr,
-                    merged_full_zarr_path=initial_zarr_path,
+                    model="beam",
+                    snapshot_type="merged",
+                    source_path=Path(initial_zarr_path),
+                    artifact_format="zarr",
                     parent_snapshot_id=zarr_snapshot_id,
                     provenance_tracker=provenance_tracker,
+                    partial_skims_path=str(beam_partial_zarr)
                 )
                 print(f"   ✅ Created BEAM snapshot: {beam_snapshot_id}")
 
@@ -1924,40 +1960,24 @@ class TestStubProvenanceFlow:
             # ============================================================
             # Verify Zarr Versioning
             # ============================================================
-            if fixture_zarr.exists() and zarr_snapshot_id and zarr_manager:
+            if fixture_zarr.exists() and zarr_snapshot_id and snapshot_manager:
                 print("\n🔍 Verifying zarr versioning...")
 
-                # Check manifest exists
-                manifest_path = os.path.join(tmpdir, "zarr_stores", "manifest.json")
-                assert os.path.exists(manifest_path), "Zarr manifest should exist"
+                # This test does not create a full manifest, so we check the db
+                beam_snapshot_id = snapshot_manager.get_latest_snapshot_id_for_run(run_id)
+                assert beam_snapshot_id is not None, "BEAM snapshot should have been created"
 
-                # Load and verify
-                with open(manifest_path) as f:
-                    manifest = json.load(f)
+                beam_snap_info = snapshot_manager.get_snapshot_info(beam_snapshot_id)
+                init_snap_info = snapshot_manager.get_snapshot_info(zarr_snapshot_id)
 
-                assert (
-                    len(manifest["snapshots"]) >= 2
-                ), "Should have at least 2 snapshots"
-                print(f"   ✅ Found {len(manifest['snapshots'])} zarr snapshots")
-
-                # Verify initialization snapshot
-                init_snapshot = manifest["snapshots"][zarr_snapshot_id]
-                assert init_snapshot["snapshot_type"] == "initialization"
-                assert init_snapshot["iteration"] == -1
+                assert init_snap_info['snapshot_type'] == 'initialization'
+                assert init_snap_info['iteration'] == -1
                 print("   ✅ Initialization snapshot verified")
 
-                # Verify BEAM snapshot
-                beam_snapshots = [
-                    s
-                    for s in manifest["snapshots"]
-                    if manifest["snapshots"][s].get("snapshot_type") == "merged"
-                ]
-                assert len(beam_snapshots) >= 1
+                assert beam_snap_info['snapshot_type'] == 'merged'
+                assert beam_snap_info['parent_snapshot_id'] == zarr_snapshot_id
                 print("   ✅ BEAM snapshot verified")
-
-                # Verify lineage
-                lineage = zarr_manager.get_snapshot_lineage(beam_snapshots[0])
-                assert len(lineage) == 2
+                
                 print("   ✅ Lineage tracking working")
 
                 print("   ✅ All zarr versioning features validated!")
@@ -1986,7 +2006,7 @@ class TestStubProvenanceFlow:
             print("  ✓ Data dictionary export (Markdown, JSON, CSV, HTML)")
             print("  ✓ Validation report generator")
             print("  ✓ Schema versioning")
-            if fixture_zarr.exists() and zarr_snapshot_id and zarr_manager:
+            if fixture_zarr.exists() and zarr_snapshot_id:
                 print("\nZarr Versioning:")
                 print("  ✓ Initialization snapshot created")
                 print("  ✓ BEAM iteration snapshot created")
