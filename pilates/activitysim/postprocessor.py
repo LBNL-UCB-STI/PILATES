@@ -620,7 +620,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         target
                     )
                     moved_record.iteration = self.state.current_inner_iter
-                    moved_record.sub_iteration = self.state.current_sub_iter
                     processed_records.append(moved_record)
                 else:
                     shutil.move(source, target)
