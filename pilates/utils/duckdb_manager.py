@@ -811,22 +811,25 @@ class DuckDBManager(DatabaseManager):
 
             # 5. Upload OpenLineage event metadata
             for event_metadata in run_info.openlineage_event_metadata:
-                conn.execute(
-                    """
-                    INSERT INTO openlineage_events (
-                        id, run_id, model_run_id, event_time, event_type,
-                        run_uuid, job_name
-                    ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
-                """,
-                    [
-                        run_info.run_id,
-                        event_metadata.model_run_id,
-                        event_metadata.event_time,
-                        event_metadata.event_type,
-                        event_metadata.run_uuid,
-                        event_metadata.job_name,
-                    ],
-                )
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO openlineage_events (
+                            id, run_id, model_run_id, event_time, event_type,
+                            run_uuid, job_name
+                        ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
+                    """,
+                        [
+                            run_info.run_id,
+                            event_metadata.model_run_id,
+                            event_metadata.event_time,
+                            event_metadata.event_type,
+                            event_metadata.run_uuid,
+                            event_metadata.job_name,
+                        ],
+                    )
+                except AttributeError as e:
+                    logger.error(f"Missing openlineage event metadata: {e}. Full event metadata: {event_metadata}")
 
             # Commit transaction
             conn.commit()
