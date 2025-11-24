@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -973,9 +974,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
-                short_name=record.short_name.replace("_asim_out", "").replace(
-                    "_beam_out", ""
-                ),  # TODO: This is a hack
+                short_name=re.sub(r'_(asim|beam)_out.*', '', record.short_name),
                 model_run_id=self.current_model_run_id,
                 state=state,
             )

@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 SCRIPT_DIR = Path(__file__).resolve().parent
 # The schema directory is a sibling to the 'scripts' directory
 SCHEMA_DIR = SCRIPT_DIR.parent / "schema"
-GENERATED_DIR = SCHEMA_DIR
+GENERATED_DIR = SCHEMA_DIR / "generated"
 # We start with just the activitysim outputs as per user feedback
 FILES_TO_PROCESS = ["06_asim_outputs.sql"]
 

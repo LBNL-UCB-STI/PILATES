@@ -502,11 +502,13 @@ class ActivitysimRunner(GenericRunner):
                         fpath,
                         year=self.state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
-                        short_name=fname + "_asim_out",
+                        short_name=fname + "_asim_out_temp",
                         model_run_id=new_asim_run_hash,
                         state=self.state,
                     )
                     if output_rec:
+                        # Explicitly set iteration numbers to ensure they are captured.
+                        output_rec.iteration = self.state.current_inner_iter
                         output_records.append(output_rec)
 
         # Prepare runtime metadata for main run

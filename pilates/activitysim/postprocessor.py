@@ -1,4 +1,5 @@
 import logging
+import shutil
 
 import pandas as pd
 import zipfile
@@ -604,14 +605,25 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     iteration_folder_path,
                     record.short_name.replace("_asim_out", "") + ".parquet",
                 )
-                moved_record = self.provenance_tracker.move_file(
-                    record,
-                    source,
-                    target,
-                    model="activitysim_postprocessor",
-                    state=self.state,
-                )
-                processed_records.append(moved_record)
+                if self.provenance_tracker:
+                    moved_record = self.provenance_tracker.move_file(
+                        record,
+                        source,
+                        target,
+                        model="activitysim_postprocessor",
+                        state=self.state,
+                    )
+                    # BUG FIX: Explicitly update the file_path and iteration context.
+                    # This ensures the correct, archived path and iteration numbers are
+                    # stored in provenance, as the internal `move_file` logic may not.
+                    moved_record.file_path = self.provenance_tracker.get_path_relative_to_workspace_root(
+                        target
+                    )
+                    moved_record.iteration = self.state.current_inner_iter
+                    moved_record.sub_iteration = self.state.current_sub_iter
+                    processed_records.append(moved_record)
+                else:
+                    shutil.move(source, target)
 
         # 1. Load raw ActivitySim outputs from files
         # The raw_outputs RecordStore contains the paths to these files.
