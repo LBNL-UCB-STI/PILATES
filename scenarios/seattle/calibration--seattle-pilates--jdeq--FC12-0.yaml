@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: pilates-calibration--jdeq--cbg120fwc--FC10-0
+output_run_name: pilates-calibration--jdeq--cbg120fwc--FC12-0
 
 # URBANSIM
 region_to_region_id:
@@ -100,7 +100,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: scenarios/network-calibration/seattle-pilates--jdeq--cbg120fwc--FC10-0.conf # OR austin-pilates-base.conf
+beam_config: scenarios/network-calibration/seattle-pilates--jdeq--cbg120fwc--FC12-0.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
