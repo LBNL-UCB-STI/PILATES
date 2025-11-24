@@ -342,6 +342,8 @@ class H5FileRecord(Record):
     models: List[str] = field(default_factory=list)
     description: Optional[str] = None
     year: Optional[int] = None
+    iteration: Optional[int] = None
+    sub_iteration: Optional[int] = None
     metadata: dict = field(default_factory=dict)
     table_record_ids: List[str] = field(default_factory=list)
     source_file_paths: List[str] = field(default_factory=list)
