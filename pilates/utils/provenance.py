@@ -974,7 +974,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
-                short_name=re.sub(r'_(asim|beam)_out.*', '', record.short_name),
+                short_name=re.sub(r'_temp$', '', record.short_name),
                 model_run_id=self.current_model_run_id,
                 state=state,
             )

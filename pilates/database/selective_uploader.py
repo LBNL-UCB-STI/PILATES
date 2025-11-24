@@ -258,6 +258,11 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
         # Convert run_info dict to PilatesRunInfo object
         file_records = {}
         for uid, rec in run_info.get("file_records", {}).items():
+            # Coalesce null iteration fields to 0 to satisfy NOT NULL constraint in DB
+            if rec.get("iteration") is None:
+                rec["iteration"] = 0
+            if rec.get("sub_iteration") is None:
+                rec["sub_iteration"] = 0
             if "h5_file_unique_id" in rec:
                 file_records[uid] = H5TableRecord(**rec)
             elif "table_record_ids" in rec:
