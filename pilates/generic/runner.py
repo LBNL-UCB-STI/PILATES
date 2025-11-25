@@ -221,7 +221,7 @@ class GenericRunner(ABC, Model):
     @staticmethod
     def run_container(
         client,
-        settings: dict,
+        settings: PilatesConfig,
         image: str,
         volumes: dict,
         command: str,
@@ -324,9 +324,7 @@ class GenericRunner(ABC, Model):
             logger.info("Running singularity command: %s", " ".join(proc))
 
             # Check if using stubs
-            if get_setting(
-                settings, "use_stubs"
-            ):  # Pass the full command string as config_name to the stub
+            if settings.run.use_stubs:  # Pass the full command string as config_name to the stub
                 stub_cmd = [
                     "python",
                     os.path.join(
@@ -354,20 +352,18 @@ class GenericRunner(ABC, Model):
                     print("Stub stdout:\n", result.stdout)
                     print("Stub stderr:\n", result.stderr)
                     logger.info(f"Stub for {model_name} finished successfully.")
-                    return True  # Stub success is check=True
                 except subprocess.CalledProcessError as e:
                     logger.error(
                         f"Stub for {model_name} failed with exit code {e.returncode}."
                     )
                     print("Stub stdout:\n", e.stdout)
                     print("Stub stderr:\n", e.stderr)
-                    return False
                 except FileNotFoundError:
                     logger.error(f"Stub script not found at {stub_cmd[2]}.")
-                    return False
                 except Exception as e:
                     logger.error(f"Unexpected error running stub for {model_name}: {e}")
-                    return False
+                finally:
+                    return True
 
             else:  # Run actual singularity container
                 try:

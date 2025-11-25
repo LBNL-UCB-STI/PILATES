@@ -76,10 +76,13 @@ def get_county_block_geoms(
     df = pd.DataFrame()
     for feature in all_features:
         tmp = pd.DataFrame([feature["attributes"]])
-        tmp["geometry"] = Polygon(
-            feature["geometry"]["rings"][0], feature["geometry"]["rings"][1:]
-        )
-        df = pd.concat((df, tmp))
+        try:
+            tmp["geometry"] = Polygon(
+                feature["geometry"]["rings"][0], feature["geometry"]["rings"][1:]
+            )
+            df = pd.concat((df, tmp))
+        except Exception as e:
+            logger.error(f"Error parsing features: {e}. Geometry: {feature['geometry']}")
     gdf = gpd.GeoDataFrame(df, crs="EPSG:4326")
     return gdf
 

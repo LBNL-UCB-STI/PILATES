@@ -14,7 +14,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record
+from pilates.generic.records import RecordStore, Record, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
@@ -529,40 +529,47 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Fallback: If required files are not found via provenance, try to locate them directly on the filesystem.
         # This provides robustness against provenance database issues or missing entries.
-        required_asim_files_mapping = {
-            "households": "final_households.csv",
-            "persons": "final_persons.csv",
-            "beam_plans": "final_plans.csv", # ActivitySim outputs final_plans.csv for BEAM
-        }
-        asim_output_dir = workspace.get_asim_output_dir()
+        required_asim_base_names = [
+            "households",
+            "persons",
+            "beam_plans", # ActivitySim outputs beam_plans
+        ]
+        # Construct the full path to the year-iteration specific output directory
+        asim_output_iter_dir = os.path.join(
+            workspace.get_asim_output_dir(),
+            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}"
+        )
 
-        for short_name, expected_file_name in required_asim_files_mapping.items():
-            if short_name not in asim_file_paths:
-                expected_full_path = os.path.join(asim_output_dir, expected_file_name)
+        for base_name in required_asim_base_names:
+            if base_name not in asim_file_paths:
+                # Construct the full filename including the format extension
+                expected_file_name = f"{base_name}.{file_format}"
+                expected_full_path = os.path.join(asim_output_iter_dir, expected_file_name)
+
                 if os.path.exists(expected_full_path):
                     logger.warning(
-                        f"ActivitySim output file '{short_name}' (expected: {expected_file_name}) "
+                        f"ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
                         f"not found in provenance records. Falling back to filesystem at: {expected_full_path}"
                     )
                     # Create a dummy FileRecord for consistency, linking it to the current run
                     # A more complete FileRecord could be created by parsing file properties if needed,
                     # but for basic path retrieval, this is sufficient.
-                    dummy_record = Record(
+                    dummy_record = FileRecord(
                         file_path=os.path.relpath(expected_full_path, base_path), # Relative path for record
-                        short_name=short_name,
+                        short_name=base_name,
                         description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
                         model="activitysim",
                         run_id=self.provenance_tracker.run_info.run_id,
-                        unique_id=f"fallback-{short_name}-{self.provenance_tracker.run_info.run_id}", # Unique ID for dummy record
+                        unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}", # Unique ID for dummy record
                         exists=True,
                         year=self.state.current_year,
                         is_input=True,
                         created_at=str(datetime.now()),
                     )
-                    asim_file_paths[short_name] = (expected_full_path, dummy_record)
+                    asim_file_paths[base_name] = (expected_full_path, dummy_record)
                 else:
                     logger.warning(
-                        f"Required ActivitySim output file '{short_name}' (expected: {expected_file_name}) "
+                        f"Required ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
                         f"not found in provenance records AND not found on filesystem at: {expected_full_path}"
                     )
 
