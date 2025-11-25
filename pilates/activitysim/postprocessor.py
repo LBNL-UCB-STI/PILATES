@@ -623,18 +623,19 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 else:
                     shutil.move(source, target)
 
-        # 1. Load raw ActivitySim outputs from files
-        # The raw_outputs RecordStore contains the paths to these files.
-        asim_output_dict = _load_asim_outputs(settings, workspace)
-
-        # The raw output files are implicitly the source for all derived products in this post-processing step.
-        source_file_paths = [
-            getattr(r, "file_path")
-            for r in raw_outputs.all_records()
-            if hasattr(r, "file_path")
-        ]
-
         if self.state.is_enabled(WorkflowState.Stage.land_use):
+
+            # 1. Load raw ActivitySim outputs from files
+            # The raw_outputs RecordStore contains the paths to these files.
+            # TODO: update this to only grad tables_updated_by_asim
+            asim_output_dict = _load_asim_outputs(settings, workspace)
+
+            # The raw output files are implicitly the source for all derived products in this post-processing step.
+            source_file_paths = [
+                getattr(r, "file_path")
+                for r in raw_outputs.all_records()
+                if hasattr(r, "file_path")
+            ]
 
             # 2. Prepare tables for integration with UrbanSim
             tables_updated_by_asim = ["households", "persons"]
@@ -662,21 +663,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             )
             if usim_record:
                 processed_records.append(usim_record)
-
-        # 4. Create BEAM input data THIS ISN'T ACTUALLY USED
-        # if settings.get("traffic_assignment_enabled", False):
-        #     beam_input_zip_path, beam_record = create_beam_input_data(
-        #         settings,
-        #         state,
-        #         workspace,
-        #         provenance_tracker,
-        #         runInfo,
-        #         asim_output_dict,
-        #         source_file_paths,
-        #         model_run_hash,
-        #     )
-        #     if beam_record:
-        #         processed_records.append(beam_record)
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)

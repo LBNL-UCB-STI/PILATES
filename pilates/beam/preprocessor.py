@@ -234,9 +234,12 @@ class BeamPreprocessor(GenericPreprocessor):
         asim_post_records = previous_records.all_records()
         for record in asim_post_records:
             if record.short_name:
-                short_name = record.short_name.rsplit("_", 2)[0]
+                short_name = record.short_name.rsplit("_", 2)[0].replace("_asim_out","") # Updated to handle format e.g. beam_plans_asim_out_2018_0
                 if short_name in self.required_input_data:
                     input_records.add_record(record)
+                    logger.info(f"Added {short_name} to beam inputs")
+                else:
+                    logger.info(f"Skipping {record.short_name} produced by activitysim")
 
         # For replanning iterations, get outputs from the previous BEAM run
         previous_beam_records = []
@@ -558,12 +561,10 @@ class BeamPreprocessor(GenericPreprocessor):
                         file_path=os.path.relpath(expected_full_path, base_path), # Relative path for record
                         short_name=base_name,
                         description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
-                        model="activitysim",
-                        run_id=self.provenance_tracker.run_info.run_id,
+                        producing_run_id=self.provenance_tracker.run_info.run_id,
                         unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}", # Unique ID for dummy record
                         exists=True,
                         year=self.state.current_year,
-                        is_input=True,
                         created_at=str(datetime.now()),
                     )
                     asim_file_paths[base_name] = (expected_full_path, dummy_record)

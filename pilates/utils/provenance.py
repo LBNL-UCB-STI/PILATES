@@ -974,6 +974,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             output_record = self.record_output_file(
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
+                description=record.description,
                 short_name=re.sub(r'_temp$', '', record.short_name),
                 model_run_id=self.current_model_run_id,
                 state=state,
