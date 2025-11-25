@@ -977,6 +977,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 short_name=re.sub(r'_temp$', '', record.short_name),
                 model_run_id=self.current_model_run_id,
                 state=state,
+                source_file_paths=[record.file_path],
             )
             return output_record
         else:

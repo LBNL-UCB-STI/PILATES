@@ -1,4 +1,5 @@
 import logging
+import re
 import shutil
 
 import pandas as pd
@@ -601,9 +602,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
                 source = record.get_absolute_path(base_path=workspace.full_path)
+                clean_name = re.sub(r'_asim_out_temp$', '', record.short_name)
                 target = os.path.join(
                     iteration_folder_path,
-                    record.short_name.replace("_asim_out", "") + ".parquet",
+                    clean_name + ".parquet",
                 )
                 if self.provenance_tracker:
                     moved_record = self.provenance_tracker.move_file(
@@ -613,9 +615,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         model="activitysim_postprocessor",
                         state=self.state,
                     )
-                    # BUG FIX: Explicitly update the file_path and iteration context.
-                    # This ensures the correct, archived path and iteration numbers are
-                    # stored in provenance, as the internal `move_file` logic may not.
                     moved_record.file_path = self.provenance_tracker.get_path_relative_to_workspace_root(
                         target
                     )
