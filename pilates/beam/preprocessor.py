@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -526,6 +527,45 @@ class BeamPreprocessor(GenericPreprocessor):
                     f"Found ActivitySim output file {record.short_name}: {record.file_path}"
                 )
 
+        # Fallback: If required files are not found via provenance, try to locate them directly on the filesystem.
+        # This provides robustness against provenance database issues or missing entries.
+        required_asim_files_mapping = {
+            "households": "final_households.csv",
+            "persons": "final_persons.csv",
+            "beam_plans": "final_plans.csv", # ActivitySim outputs final_plans.csv for BEAM
+        }
+        asim_output_dir = workspace.get_asim_output_dir()
+
+        for short_name, expected_file_name in required_asim_files_mapping.items():
+            if short_name not in asim_file_paths:
+                expected_full_path = os.path.join(asim_output_dir, expected_file_name)
+                if os.path.exists(expected_full_path):
+                    logger.warning(
+                        f"ActivitySim output file '{short_name}' (expected: {expected_file_name}) "
+                        f"not found in provenance records. Falling back to filesystem at: {expected_full_path}"
+                    )
+                    # Create a dummy FileRecord for consistency, linking it to the current run
+                    # A more complete FileRecord could be created by parsing file properties if needed,
+                    # but for basic path retrieval, this is sufficient.
+                    dummy_record = Record(
+                        file_path=os.path.relpath(expected_full_path, base_path), # Relative path for record
+                        short_name=short_name,
+                        description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
+                        model="activitysim",
+                        run_id=self.provenance_tracker.run_info.run_id,
+                        unique_id=f"fallback-{short_name}-{self.provenance_tracker.run_info.run_id}", # Unique ID for dummy record
+                        exists=True,
+                        year=self.state.current_year,
+                        is_input=True,
+                        created_at=str(datetime.now()),
+                    )
+                    asim_file_paths[short_name] = (expected_full_path, dummy_record)
+                else:
+                    logger.warning(
+                        f"Required ActivitySim output file '{short_name}' (expected: {expected_file_name}) "
+                        f"not found in provenance records AND not found on filesystem at: {expected_full_path}"
+                    )
+
         if self.state.current_inner_iter <= 0:
             # First iteration: just copy files over
             record_list = self._copy_initial_asim_files(
@@ -606,6 +646,13 @@ class BeamPreprocessor(GenericPreprocessor):
             "households", (None, None)
         )
 
+        def get_data(path: str, table_type: str, file_format: str, file_source: str) -> pd.DataFrame:
+            if path is None:
+                raise FileNotFoundError(f"{file_source} file for table '{table_type}' not found.")
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"{file_source} file for table '{table_type}' not found at {path}.")
+            return BeamDataHelper.read_and_clean(path, table_type, file_format)
+
         beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
         beam_persons_path = locate_beam_file(
             beam_scenario_folder, "persons", file_format
@@ -615,26 +662,14 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
         # Existing BEAM files (previous iteration)
-        original_hh = BeamDataHelper.read_and_clean(
-            beam_households_path, "households", file_format
-        )
-        original_per = BeamDataHelper.read_and_clean(
-            beam_persons_path, "persons", file_format
-        )
-        original_plans = BeamDataHelper.read_and_clean(
-            beam_plans_path, "plans", file_format
-        )
+        original_hh = get_data(beam_households_path, "households", file_format, "BEAM")
+        original_per = get_data(beam_persons_path, "persons", file_format, "BEAM")
+        original_plans = get_data(beam_plans_path, "plans", file_format, "BEAM")
 
         # New ActivitySim files (current iteration)
-        updated_hh = BeamDataHelper.read_and_clean(
-            asim_households_path, "households", file_format
-        )
-        updated_per = BeamDataHelper.read_and_clean(
-            asim_persons_path, "persons", file_format
-        )
-        updated_plans = BeamDataHelper.read_and_clean(
-            asim_plans_path, "plans", file_format
-        )
+        updated_hh = get_data(asim_households_path, "households", file_format, "ActivitySim")
+        updated_per = get_data(asim_persons_path, "persons", file_format, "ActivitySim")
+        updated_plans = get_data(asim_plans_path, "plans", file_format, "ActivitySim")
 
         # Ensure new plans are marked as selected (override default False)
         updated_plans["planselected"] = True

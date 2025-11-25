@@ -2738,17 +2738,17 @@ def _merge_beam_skims_to_zarr(
 
             database_path_str = get_setting(settings, "shared.database.path")
             if database_path_str:
-                db_manager = DuckDBManager(database_path_str)
+                with DuckDBManager(database_path_str) as db_manager:
 
-                # Ensure the run data is in the database before creating a snapshot
-                if provenance_tracker and provenance_tracker.run_info:
-                    logger.info(f"Uploading run data for run {provenance_tracker.run_info.run_id} to database before creating snapshot.")
-                    db_manager.upload_run_data(provenance_tracker.run_info)
+                    # Ensure the run data is in the database before creating a snapshot
+                    if provenance_tracker and provenance_tracker.run_info:
+                        logger.info(f"Uploading run data for run {provenance_tracker.run_info.run_id} to database before creating snapshot.")
+                        db_manager.upload_run_data(provenance_tracker.run_info)
 
-                archive_root_str = settings.shared.database.shapshot_path
-                archive_root_path = Path(archive_root_str) if archive_root_str else None
-                
-                snapshot_manager = SnapshotManager(db_manager, archive_root_path=archive_root_path)
+                    archive_root_str = settings.shared.database.shapshot_path
+                    archive_root_path = Path(archive_root_str) if archive_root_str else None
+                    
+                    snapshot_manager = SnapshotManager(db_manager, archive_root_path=archive_root_path)
 
                 parent_snapshot_id = snapshot_manager.get_latest_snapshot_id_for_run(run_id)
 
