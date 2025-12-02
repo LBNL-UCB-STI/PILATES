@@ -7,6 +7,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.model import provenance_logging
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
@@ -102,6 +103,7 @@ class AtlasPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
 
+    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
@@ -127,14 +129,8 @@ class AtlasPostprocessor(GenericPostprocessor):
             self.state.current_year,
         )
 
-        if model_run_hash is None:
-            model_run_hash = self.provenance_tracker.start_model_run(
-                "atlas_postprocessor",
-                self.state.current_year,
-                self.state.current_inner_iter,
-                description="Post-processing ATLAS outputs",
-                inputs=raw_outputs,
-            )
+        # Get the model_run_hash from the decorator's start_model_run call
+        model_run_hash = self.provenance_tracker.current_model_run_id
 
         settings = self.state.full_settings
         output_year = self.state.forecast_year
@@ -229,26 +225,21 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             if os.path.exists(atlas_veh2_file):
-                atlas_veh2_output_record = (
-                    self.provenance_tracker.record_output_file_with_inputs(
-                        "atlas_postprocessor",
-                        atlas_veh2_file,
-                        input_records=[atlas_veh_input_record],
-                        year=output_year,
-                        description="ATLAS vehicles2 CSV with vehicleTypeId",
-                        short_name="atlas_vehicles2_output",
-                        model_run_id=model_run_hash,
-                    )
+                from pilates.generic.records import FileRecord
+
+                source_file_paths = (
+                    [atlas_veh_input_record.file_path] if atlas_veh_input_record else []
+                )
+                atlas_veh2_output_record = FileRecord(
+                    file_path=atlas_veh2_file,
+                    models=["atlas_postprocessor"],
+                    year=output_year,
+                    description="ATLAS vehicles2 CSV with vehicleTypeId",
+                    short_name="atlas_vehicles2_output",
+                    source_file_paths=source_file_paths,
                 )
                 output_records.append(atlas_veh2_output_record)
 
-        self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=output_records
-        )
-        logger.info(
-            "[AtlasPostprocessor] Completed provenance model run for ATLAS postprocessing: %s",
-            model_run_hash,
-        )
         return RecordStore(recordList=output_records)
 
     def atlas_update_h5_vehicle(

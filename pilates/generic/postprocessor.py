@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
-from pilates.generic.model import Model
+from pilates.generic.model import Model, provenance_logging
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -55,6 +55,8 @@ class GenericPostprocessor(ABC, Model):
     ) -> RecordStore:
         """
         Postprocess the output data for the model.
+
+        Subclasses should apply the @provenance_logging decorator to their implementation.
 
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.

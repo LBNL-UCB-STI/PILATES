@@ -79,6 +79,15 @@ class ProvenanceTracker:
     """
 
     def __init__(self, run_id: str, output_path: str = None, folder_name: str = None):
+        """
+        Initializes the ProvenanceTracker.
+
+        Args:
+            run_id (str): A unique identifier for the current run.
+            output_path (str, optional): The base directory for storing run-related outputs.
+            folder_name (str, optional): An optional subfolder name within `output_path`
+                                         to organize run data.
+        """
         self.run_id = run_id
         self.output_path = output_path
         self.folder_name = folder_name
@@ -121,6 +130,15 @@ class ProvenanceTracker:
         return model.lower() if model else model
 
     def initialize_from_settings(self, settings: PilatesConfig):
+        """
+        Initializes the tracker with settings from a PilatesConfig object.
+
+        This populates the `run_info` with global run parameters like start/end year
+        and lists the models used based on the provided settings.
+
+        Args:
+            settings (PilatesConfig): The Pilates configuration object.
+        """
         self.run_info.start_year = settings.run.start_year
         self.run_info.end_year = settings.run.end_year
         self.run_info.settings_hash = None  # FileProvenanceTracker will set this
@@ -142,6 +160,19 @@ class ProvenanceTracker:
         description: str = None,
         git_hash: str = None,
     ):
+        """
+        Records a repository as an input to a specific model run.
+
+        This method adds a `RepoRecord` to the `run_info.repo_records` for the given model.
+
+        Args:
+            model (str): The name of the model consuming this repository.
+            repo_path (str): The file system path to the repository.
+            description (str, optional): A human-readable description of the repository.
+            git_hash (str, optional): The Git commit hash of the repository. If None,
+                                      the `FileProvenanceTracker` subclass will attempt to
+                                      derive it or use a path hash.
+        """
         model = self._normalize_model_name(model)
         if model not in self.run_info.repo_records:
             self.run_info.repo_records[model] = []
@@ -224,6 +255,10 @@ class ProvenanceTracker:
         Returns:
             The unique run id string assigned to this model run.
         """
+        for record in inputs.all_records():
+            if record.unique_id not in self.run_info.file_records:
+                self.run_info.file_records[record.unique_id] = record
+
         model_run_id = (
             f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
         )
@@ -271,6 +306,15 @@ class ProvenanceTracker:
                 self.run_info.model_runs[run_hash].metadata.update(metadata)
             for dataset in output_records:
                 if isinstance(dataset, Record):
+                    if dataset.unique_id not in self.run_info.file_records:
+                        self.run_info.file_records[dataset.unique_id] = dataset
+                    # Ensure the record is linked to this run as a producer
+                    dataset.producing_run_id = run_hash
+                    if dataset.models is None:
+                        dataset.models = []
+                    if self.run_info.model_runs[run_hash].model not in dataset.models:
+                        dataset.models.append(self.run_info.model_runs[run_hash].model)
+
                     if (
                         dataset.unique_id
                         not in self.run_info.model_runs[run_hash].output_record_hashes
@@ -293,6 +337,16 @@ class FileProvenanceTracker(ProvenanceTracker):
     """
 
     def __init__(self, run_id: str, output_path: str, folder_name: str = None):
+        """
+        Initializes the FileProvenanceTracker.
+
+        Args:
+            run_id (str): A unique identifier for the current run.
+            output_path (str): The base directory for storing run-related outputs.
+                               This path must be absolute or will be converted to absolute.
+            folder_name (str, optional): An optional subfolder name within `output_path`
+                                         to organize run data.
+        """
         super().__init__(run_id, output_path, folder_name)
         self.output_path = os.path.abspath(output_path) if output_path else None
         self.folder_name = folder_name
@@ -634,6 +688,20 @@ class FileProvenanceTracker(ProvenanceTracker):
         h5_file_path: str,
         h5_file_record: "H5FileRecord",
     ) -> List["H5TableRecord"]:
+        """
+        Creates H5TableRecord objects for all tables found within a given HDF5 file.
+
+        These records capture metadata and a unique hash for each individual table
+        within the H5 container, linking them back to the parent `H5FileRecord`.
+
+        Args:
+            h5_file_path (str): The absolute path to the HDF5 file on disk.
+            h5_file_record (H5FileRecord): The parent H5FileRecord for the container file.
+
+        Returns:
+            List[H5TableRecord]: A list of `H5TableRecord` objects, one for each table
+                                 found in the HDF5 file.
+        """
         table_records = []
         try:
             file_mtime = os.path.getmtime(h5_file_path)
@@ -698,6 +766,31 @@ class FileProvenanceTracker(ProvenanceTracker):
         source_file_paths: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[Union["FileRecord", "H5FileRecord"]]:
+        """
+        Retrieves an existing `FileRecord` or `H5FileRecord` for a given file path,
+        or creates a new one if it doesn't exist.
+
+        This function handles both regular files and HDF5 container files,
+        automatically generating `H5TableRecord`s for HDF5 files.
+
+        Args:
+            file_path (str): The path to the file (or directory for Zarr).
+            skip_missing (bool, optional): If True, returns None if the file does not exist.
+                                          Defaults to True.
+            description (Optional[str], optional): A human-readable description for the file.
+            short_name (Optional[str], optional): A short, unique name for the file.
+                                                  If None, it's derived from the file path.
+            state (Optional[ExecutionContext], optional): Execution context to include in the hash
+                                                        (e.g., year, iteration).
+            source_file_paths (Optional[List[str]], optional): List of paths to source files
+                                                                 that produced this file.
+            metadata (Optional[Dict[str, Any]], optional): Additional metadata to associate with the record.
+
+        Returns:
+            Optional[Union[FileRecord, H5FileRecord]]: The created or retrieved `FileRecord`
+                                                     (or `H5FileRecord`), or None if the
+                                                     file is missing and `skip_missing` is True.
+        """
         path_to_use, relative_path = self._get_validated_paths(file_path, skip_missing)
         if not path_to_use:
             return None
@@ -707,7 +800,7 @@ class FileProvenanceTracker(ProvenanceTracker):
             if not file_hash:
                 logger.warning(f"Could not calculate hash for H5 file {file_path}")
                 return None
-            
+
             if file_hash in self.run_info.file_records:
                 existing_record = self.run_info.file_records[file_hash]
                 if metadata:
@@ -975,7 +1068,7 @@ class FileProvenanceTracker(ProvenanceTracker):
                 model=self._normalize_model_name(model),
                 file_path=destination_path,
                 description=record.description,
-                short_name=re.sub(r'_temp$', '', record.short_name),
+                short_name=re.sub(r"_temp$", "", record.short_name),
                 model_run_id=self.current_model_run_id,
                 state=state,
                 source_file_paths=[record.file_path],
@@ -1684,6 +1777,27 @@ class OpenLineageTracker(FileProvenanceTracker):
         model: str,
         state: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
+        """
+        Moves a file on disk and updates provenance records accordingly,
+        extending the parent method to include year and iteration in the short name.
+
+        Copies the file from `source_path` to `destination_path`, marks the
+        original record as no longer existing, and records the destination as an
+        output of the current model run. Only file records are supported; for
+        repo moves callers must handle git operations manually.
+
+        Args:
+            record (Record): The provenance record of the file to move.
+            source_path (str): The original path of the file.
+            destination_path (str): The new path for the file.
+            model (str): The name of the model performing the move.
+            state (Optional[ExecutionContext], optional): Current execution context
+                                                        containing year and iteration.
+
+        Returns:
+            Optional[FileRecord]: The updated `FileRecord` for the moved file, or None if the
+                                  original record was not a `FileRecord`.
+        """
         output_record = super().move_file(
             record, source_path, destination_path, model, state
         )
@@ -1704,7 +1818,22 @@ class OpenLineageTracker(FileProvenanceTracker):
         description: str = None,
         inputs: RecordStore = RecordStore(),
     ) -> str:
-        """Start a model run and emit OpenLineage event."""
+        """
+        Starts tracking a new model run and emits an OpenLineage START event.
+
+        This method extends the parent's `start_model_run` by also generating
+        and emitting an OpenLineage event to signal the beginning of a job execution.
+
+        Args:
+            model (str): The name of the model.
+            year (int, optional): Optional year associated with the run.
+            iteration (int, optional): Optional iteration index for supply-demand loops.
+            description (str, optional): Human-friendly description of this run.
+            inputs (RecordStore, optional): A `RecordStore` containing input records to attach to the run.
+
+        Returns:
+            str: The unique run ID string assigned to this model run.
+        """
         model_run_id = super().start_model_run(
             model, year, iteration, description, inputs
         )
@@ -1744,7 +1873,23 @@ class OpenLineageTracker(FileProvenanceTracker):
         output_records: List[Union[FileRecord, RepoRecord]] = None,
         metadata: dict = None,
     ):
-        """Complete a model run and emit OpenLineage event."""
+        """
+        Completes a model run and emits an OpenLineage COMPLETE or FAIL event.
+
+        This method extends the parent's `complete_model_run` by also generating
+        and emitting an OpenLineage event to signal the completion (or failure)
+        of a job execution.
+
+        Args:
+            run_hash (str): The unique ID of the model run to complete.
+            status (str, optional): Final status (e.g., 'completed' or 'failed').
+                                    Defaults to "completed".
+            output_records (List[Union[FileRecord, RepoRecord]], optional): Optional list
+                                                                             of `FileRecord`
+                                                                             or `RepoRecord`
+                                                                             objects produced by the run.
+            metadata (dict, optional): Optional dictionary with runtime execution metadata.
+        """
         if output_records is None:
             output_records = []
 

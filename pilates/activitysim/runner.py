@@ -285,19 +285,19 @@ class ActivitysimRunner(GenericRunner):
 
             output_records = []
 
-            zarr_skims_rec = self.provenance_tracker.record_output_file(
-                "activitysim",
-                all_skims_path,
-                model_run_id=asim_compile_run_hash,
-                description="Zarr skims initialized from omx.",
-                short_name=f"zarr_skims_{self.state.current_year}_-1",
-                context=self.state,
-            )
-            if zarr_skims_rec:
-                output_records.append(zarr_skims_rec)
-                logger.info(
-                    f"Using zarr skims from ASIM compilation: {zarr_skims_rec.file_path}"
+            # Record output files for this compilation run
+            if os.path.exists(all_skims_path):
+                from pilates.generic.records import FileRecord
+
+                zarr_skims_rec = FileRecord(
+                    file_path=all_skims_path,
+                    models=["activitysim"],
+                    year=self.state.current_year,
+                    description="Zarr skims initialized from omx.",
+                    short_name=f"zarr_skims_{self.state.current_year}_-1",
                 )
+                output_records.append(zarr_skims_rec)
+                logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
 
             # Create initial zarr version snapshot after compilation
             if success and os.path.exists(all_skims_path):
@@ -308,11 +308,15 @@ class ActivitysimRunner(GenericRunner):
                     database_path_str = settings.shared.database.path
                     if database_path_str:
                         db_manager = DuckDBManager(database_path_str)
-                        
+
                         archive_root_str = settings.shared.database.shapshot_path
-                        archive_root_path = Path(archive_root_str) if archive_root_str else None
-                        
-                        snapshot_manager = SnapshotManager(db_manager, archive_root_path=archive_root_path)
+                        archive_root_path = (
+                            Path(archive_root_str) if archive_root_str else None
+                        )
+
+                        snapshot_manager = SnapshotManager(
+                            db_manager, archive_root_path=archive_root_path
+                        )
 
                         snapshot_id = snapshot_manager.create_snapshot(
                             run_id=self.provenance_tracker.run_info.run_id,
@@ -333,7 +337,7 @@ class ActivitysimRunner(GenericRunner):
                 except Exception as e:
                     logger.warning(
                         f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.",
-                        exc_info=True
+                        exc_info=True,
                     )
 
             # Prepare runtime metadata for compilation run
@@ -496,20 +500,18 @@ class ActivitysimRunner(GenericRunner):
             for fname in os.listdir(output_dir):
                 fpath = os.path.join(output_dir, fname, "final.parquet")
                 if os.path.isfile(fpath):
-                    # Record as output file in provenance and collect FileRecord
-                    output_rec = self.provenance_tracker.record_output_file(
-                        "activitysim",
-                        fpath,
+                    # Record output files for this full run
+                    from pilates.generic.records import FileRecord
+
+                    output_rec = FileRecord(
+                        file_path=fpath,
+                        models=["activitysim"],
                         year=self.state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname + "_asim_out_temp",
-                        model_run_id=new_asim_run_hash,
-                        state=self.state,
+                        iteration=self.state.current_inner_iter,
                     )
-                    if output_rec:
-                        # Explicitly set iteration numbers to ensure they are captured.
-                        output_rec.iteration = self.state.current_inner_iter
-                        output_records.append(output_rec)
+                    output_records.append(output_rec)
 
         # Prepare runtime metadata for main run
         runtime_metadata = {

@@ -1,3 +1,11 @@
+"""
+Geospatial utility functions for PILATES.
+
+This module provides functions for fetching and manipulating geographical data,
+primarily focusing on Census TIGERweb API interactions and spatial assignments
+for various geographical entities like blocks and zones.
+"""
+
 from __future__ import annotations
 
 import time
@@ -9,7 +17,7 @@ import requests
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Any
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -20,8 +28,27 @@ logger = logging.getLogger(__name__)
 
 
 def get_county_block_geoms(
-    state_fips, county_fips, zone_type="block", result_size=10000
-):
+    state_fips: str,
+    county_fips: str,
+    zone_type: str = "block",
+    result_size: int = 10000,
+) -> gpd.GeoDataFrame:
+    """
+    Fetches block or block group geometries from the Census TIGERweb API for a given state and county.
+
+    Args:
+        state_fips (str): FIPS code of the state.
+        county_fips (str): FIPS code of the county.
+        zone_type (str, optional): Type of geographical zone to retrieve.
+                                   Can be "block", "taz" (which triggers block geometries),
+                                   or "block_group". Defaults to "block".
+        result_size (int, optional): Number of records to request per API call. Defaults to 10000.
+
+    Returns:
+        gpd.GeoDataFrame: A GeoDataFrame containing the requested geographical features
+                          with 'GEOID', 'STATE', 'COUNTY', 'TRACT', 'BLKGRP', 'BLOCK',
+                          'CENTLAT', 'CENTLON' attributes, and 'geometry'.
+    """
     if (zone_type == "block") or (zone_type == "taz"):  # to map blocks to taz.
         base_url = (
             "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/"
@@ -82,12 +109,40 @@ def get_county_block_geoms(
             )
             df = pd.concat((df, tmp))
         except Exception as e:
-            logger.error(f"Error parsing features: {e}. Geometry: {feature['geometry']}")
+            logger.error(
+                f"Error parsing features: {e}. Geometry: {feature['geometry']}"
+            )
     gdf = gpd.GeoDataFrame(df, crs="EPSG:4326")
     return gdf
 
 
-def get_block_geoms(settings, workspace: "Workspace", data_dir="./tmp/", year=None):
+def get_block_geoms(
+    settings: Dict[str, Any],
+    workspace: "Workspace",
+    data_dir: str = "./tmp/",
+    year: Optional[int] = None,
+) -> gpd.GeoDataFrame:
+    """
+    Retrieves block geometries for the specified region, either from a cached shapefile
+    or by downloading them from the Census TIGERweb API.
+
+    The function first attempts to load existing block geometries from `data_dir`.
+    If not found, it downloads the geometries for all counties specified in the
+    PILATES settings and saves them to `data_dir` for future use.
+
+    Args:
+        settings (Dict[str, Any]): The PILATES settings dictionary, used to extract
+                                   FIPS codes (state and counties) and zone type.
+        workspace (Workspace): The workspace object, though not directly used for paths here,
+                               it's part of the standard signature for model inputs.
+        data_dir (str, optional): Directory to store/load cached block geometries.
+                                  Defaults to "./tmp/".
+        year (Optional[int], optional): Simulation year. Not directly used by this function
+                                        but part of the standard signature. Defaults to None.
+
+    Returns:
+        gpd.GeoDataFrame: A GeoDataFrame containing block geometries for the configured region.
+    """
     region = get_setting(settings, "run.region") or "beam"
 
     # Handle both flat and nested FIPS config structures
@@ -148,7 +203,33 @@ def get_block_geoms(settings, workspace: "Workspace", data_dir="./tmp/", year=No
     return blocks_gdf
 
 
-def get_taz_from_block_geoms(blocks_gdf, zones_gdf, local_crs, zone_col_name):
+def get_taz_from_block_geoms(
+    blocks_gdf: gpd.GeoDataFrame,
+    zones_gdf: gpd.GeoDataFrame,
+    local_crs: str,
+    zone_col_name: str,
+) -> pd.Series:
+    """
+    Assigns Traffic Analysis Zones (TAZs) to block geometries based on spatial intersection
+    and proximity.
+
+    Blocks are assigned to TAZs first by finding the TAZ with the maximum
+    intersection area. Unassigned blocks are then assigned to the nearest TAZ
+    based on centroid distance.
+
+    Args:
+        blocks_gdf (gpd.GeoDataFrame): GeoDataFrame of block geometries (e.g., from `get_block_geoms`).
+        zones_gdf (gpd.GeoDataFrame): GeoDataFrame of TAZ geometries, with a column
+                                      identified by `zone_col_name` representing the TAZ ID.
+        local_crs (str): The local Coordinate Reference System (e.g., "EPSG:26910")
+                         to use for area and distance calculations.
+        zone_col_name (str): The name of the column in `zones_gdf` that contains
+                             the unique zone identifiers (e.g., 'TAZ').
+
+    Returns:
+        pd.Series: A pandas Series where the index is 'GEOID' from `blocks_gdf`
+                   and values are the assigned TAZ IDs.
+    """
     logger.info("Assigning blocks to TAZs!")
 
     # df to store GEOID to TAZ results
@@ -198,17 +279,27 @@ def get_taz_from_block_geoms(blocks_gdf, zones_gdf, local_crs, zone_col_name):
     return block_to_taz_results.set_index("GEOID")[zone_col_name]
 
 
-def get_zone_from_points(df, zones_gdf, local_crs):
+def get_zone_from_points(
+    df: pd.DataFrame, zones_gdf: gpd.GeoDataFrame, local_crs: str
+) -> pd.Series:
     """
-    Assigns the gdf index (zone_id) for each index in df
-    Parameters:
-    -----------
-    - df columns names x, and y. The index is the ID of the point feature.
-    - zones_gdf: GeoPandas GeoDataFrame with zone_id as index, geometry, area.
+    Assigns zone IDs to point features based on their spatial location.
+
+    This function performs a spatial join to determine which zone each point
+    (defined by 'x' and 'y' coordinates in the input DataFrame) falls within.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing point features.
+                           Must have 'x' and 'y' columns representing coordinates.
+                           The DataFrame's index will be used as the ID of the point feature.
+        zones_gdf (gpd.GeoDataFrame): GeoDataFrame of zone geometries.
+                                      Its index should represent the unique zone IDs (e.g., 'zone_id').
+        local_crs (str): The local Coordinate Reference System (e.g., "EPSG:26910")
+                         to use for spatial operations.
 
     Returns:
-    -----------
-        A series with df index and corresponding gdf id
+        pd.Series: A pandas Series where the index matches `df.index`
+                   and values are the corresponding zone IDs from `zones_gdf`.
     """
     logger.info("Assigning zone IDs to {0}".format(df.index.name))
     zone_id_col = zones_gdf.index.name

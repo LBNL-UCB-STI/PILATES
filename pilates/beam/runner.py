@@ -6,6 +6,7 @@ import sys
 from typing import Tuple, List, Optional
 
 from pilates.config import PilatesConfig
+from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo, Record
 from pilates.beam.postprocessor import (
@@ -94,19 +95,16 @@ class BeamRunner(GenericRunner):
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
                     else:
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
-                    output_rec = self.provenance_tracker.record_output_file(
-                        self.model_name,
-                        full_path,
+                    # Output file provenance is automatically tracked by @provenance_logging decorator on _run()
+                    from pilates.generic.records import FileRecord
+
+                    output_rec = FileRecord(
+                        file_path=full_path,
+                        models=[self.model_name],
                         year=self.state.forecast_year,
                         short_name=dataset_name,
-                        model_run_id=run_info.unique_id,
                     )
-                    if output_rec:
-                        output_records.append(output_rec)
-                    else:
-                        logger.warning(
-                            f"[BEAM Runner] Could not record output file: {full_path}"
-                        )
+                    output_records.append(output_rec)
 
         return output_records
 
@@ -127,6 +125,7 @@ class BeamRunner(GenericRunner):
             },
         }
 
+    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -134,8 +133,6 @@ class BeamRunner(GenericRunner):
     ) -> Tuple[RecordStore, ModelRunInfo]:
         settings = self.state.full_settings
         region = settings.run.region
-        beam_workdir = os.path.join("/app/input", region)
-        beam_config = settings.beam.config
         beam_memory = settings.beam.memory
 
         self.setup_container_cache_dirs(settings)
@@ -152,7 +149,6 @@ class BeamRunner(GenericRunner):
             settings, "travel_model"
         )
         beam_config = settings.beam.config
-        region = settings.run.region
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
 
         abs_beam_input = workspace.get_beam_mutable_data_dir()
@@ -161,31 +157,12 @@ class BeamRunner(GenericRunner):
         # Make sure there's a temp dir for the JVM to use
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
-        # 2. RUN BEAM
         logger.info(
             "[BEAM Runner] Starting BEAM container, input: %s, output: %s, config: %s",
             abs_beam_input,
             abs_beam_output,
             beam_config,
         )
-
-        # Record BEAM run start
-        beam_run_hash = self.provenance_tracker.start_model_run(
-            self.model_name,
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="BEAM run",
-            inputs=store,
-        )
-
-        # beam_data_repo = provenance_tracker.run_info.repo_records["beam"][0]
-
-        # provenance_tracker.record_input_record(beam_data_repo)
-
-        # for record in store:
-        #     if isinstance(record, FileRecord):
-        #         provenance_tracker.record_input_record(record)
-
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
         java_opts = (
@@ -216,9 +193,6 @@ class BeamRunner(GenericRunner):
             "-XX:G1ReservePercent=15 "  # I (27GB reserve)
             # Less aggressive old gen collection
             "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
-            # "-XX:+UnlockDiagnosticVMOptions "
-            # "-XX:+LogCompilation "
-            # "-XX:+PrintInlining "
             # GC logging
             f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
             f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
@@ -240,29 +214,29 @@ class BeamRunner(GenericRunner):
             environment={"JAVA_OPTS": java_opts},
         )
 
-        # Prepare runtime metadata
-        runtime_metadata = {
-            "container_command": f"--config={path_to_beam_config}",
-            "runtime_parameters": {
-                "beam_config": beam_config,
-                "path_to_beam_config": path_to_beam_config,
-                "beam_memory": beam_memory,
-                "region": region,
-            },
-            "container_image": travel_model_image,
-            "container_manager": get_setting(
-                settings, "infrastructure.container_manager", "docker"
-            ),
-            "working_directory": "/app",
-            "java_opts": java_opts,
-        }
+        # The decorator needs runtime metadata. We can pass it back via the run_info object.
+        run_info = self.provenance_tracker.current_model_run()
+        if run_info:
+            run_info.metadata.update(
+                {
+                    "container_command": f"--config={path_to_beam_config}",
+                    "runtime_parameters": {
+                        "beam_config": beam_config,
+                        "path_to_beam_config": path_to_beam_config,
+                        "beam_memory": beam_memory,
+                        "region": region,
+                    },
+                    "container_image": travel_model_image,
+                    "container_manager": get_setting(
+                        settings, "infrastructure.container_manager", "docker"
+                    ),
+                    "working_directory": "/app",
+                    "java_opts": java_opts,
+                }
+            )
 
         if not success:
-            logger.error("[BEAM Runner] BEAM run failed.")
-            self.provenance_tracker.complete_model_run(
-                beam_run_hash, status="failed", metadata=runtime_metadata
-            )
-            sys.exit(1)
+            raise RuntimeError("BEAM run failed after container execution.")
 
         output_path_for_gather: str
         try:
@@ -280,32 +254,21 @@ class BeamRunner(GenericRunner):
             )
             output_path_for_gather = workspace.get_beam_output_dir()
 
-        # 3. ASSEMBLE OUTPUTS
+        # ASSEMBLE OUTPUTS
         skims_fname = get_setting(settings, "shared.skims.fname")
         if skims_fname.endswith(".csv.gz"):
             skimFormat = "csv.gz"
         elif skims_fname.endswith(".omx"):
             skimFormat = "omx"
         else:
-            # BEAM outputs an OMX file that is then merged into the Zarr store
             skimFormat = "omx"
             logger.info(
                 "[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs."
             )
 
-        run_info = self.provenance_tracker.run_info.model_runs.get(beam_run_hash)
         output_records = self.gather_outputs(
             output_path_for_gather, run_info, skimFormat
         )
-
-        # Record BEAM run completion now that outputs are recorded
-        self.provenance_tracker.complete_model_run(
-            beam_run_hash,
-            status="completed",
-            output_records=output_records,
-            metadata=runtime_metadata,
-        )
-
         output_store = RecordStore(recordList=output_records)
 
         logger.info(

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import pandas as pd
 import numpy as np
 
@@ -28,6 +28,9 @@ from pilates.utils.database import (
     DatabaseQueryError,
 )
 from pilates.database.schema_generator import _normalize_table_name
+
+if TYPE_CHECKING:
+    from pilates.generic.records import ModelRun, OpenLineageEventMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,7 @@ def _execute_sql_from_file(conn, sql_file_path: str):
         )
         raise
 
+
 def _infer_data_format(file_path: str) -> str:
     """Infers data format from file extension."""
     if not file_path:
@@ -81,6 +85,7 @@ def _infer_data_format(file_path: str) -> str:
     elif ext == ".h5":
         return "h5"
     return "unknown"
+
 
 def _get_logical_table_name(short_name: str, year: Optional[int]) -> str:
     """Wrapper for _normalize_table_name, ensuring it returns a string."""
@@ -119,7 +124,7 @@ class DuckDBManager(DatabaseManager):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Override for diagnostics to see when the context is exited."""
-        super().__exit__(exc_type, exc_val, exc_tb) # This calls self.close()
+        super().__exit__(exc_type, exc_val, exc_tb)  # This calls self.close()
 
     def _get_connection(self):
         """Get or create database connection."""
@@ -133,6 +138,17 @@ class DuckDBManager(DatabaseManager):
         return self.connection
 
     def execute_sql(self, sql_text: str, values_to_insert: Optional[list] = None):
+        """
+        Executes a SQL command with optional parameterization and commits the transaction.
+
+        Args:
+            sql_text: The SQL query string to execute.
+            values_to_insert: Optional list of values to insert into the query,
+                              used for parameterized queries to prevent SQL injection.
+
+        Returns:
+            The result of the SQL execution (e.g., a DuckDBPyRelation object for SELECT statements).
+        """
         conn = self._get_connection()
         if values_to_insert:
             result = conn.execute(sql_text, values_to_insert)
@@ -144,7 +160,7 @@ class DuckDBManager(DatabaseManager):
     def initialize_database(self, schema_dir: Optional[str] = None) -> bool:
         """
         Initialize DuckDB database with PILATES schema by executing SQL scripts.
-        
+
         Args:
             schema_dir: Optional path to the schema directory. If not provided,
                         it's inferred from the location of this file.
@@ -169,14 +185,17 @@ class DuckDBManager(DatabaseManager):
             generated_schema_dir = os.path.join(schema_dir, "generated")
 
             # 2. Execute base schema files (excluding those handled by generation script)
-            base_sql_files = sorted([
-                f for f in os.listdir(schema_dir) 
-                if f.endswith(".sql") and f not in ["06_asim_outputs.sql"]
-            ])
+            base_sql_files = sorted(
+                [
+                    f
+                    for f in os.listdir(schema_dir)
+                    if f.endswith(".sql") and f not in ["06_asim_outputs.sql"]
+                ]
+            )
             for sql_file in base_sql_files:
                 full_path = os.path.join(schema_dir, sql_file)
                 _execute_sql_from_file(conn, full_path)
-            
+
             # 3. Execute generated schema files in order
             if os.path.isdir(generated_schema_dir):
                 generated_sql_files = sorted(
@@ -334,142 +353,75 @@ class DuckDBManager(DatabaseManager):
             logger.error(f"Failed to check dataset existence {unique_id}: {e}")
             return False
 
-    def upload_file_record(self, file_record: FileRecord, run_id: str) -> bool:
-        """
-        Upload a single file record to the database.
-        """
-        try:
-            conn = self._get_connection()
-            conn.execute(
-                """
-                INSERT INTO file_records (
-                    unique_id, run_id, openlineage_id, file_path, created_at,
-                    short_name, description, year, models, producing_run_id,
-                    consuming_run_ids, source_file_paths, metadata, schema, exists
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (unique_id) UPDATE
-            """,
-                [
-                    file_record.unique_id,
-                    run_id,
-                    file_record.openlineage_id,
-                    file_record.file_path,
-                    file_record.created_at,
-                    file_record.short_name,
-                    file_record.description,
-                    file_record.year,
-                    file_record.models,
-                    file_record.producing_run_id,
-                    file_record.consuming_run_ids,
-                    file_record.source_file_paths,
-                    json.dumps(_convert_numpy_types(file_record.metadata)),
-                    json.dumps(_convert_numpy_types(file_record.schema)),
-                    file_record.exists,
-                ],
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
-            return False
+    # =========================================================================
+    # NEW GRANULAR AND IDEMPOTENT UPLOAD METHODS
+    # =========================================================================
 
-    def upload_config_snapshot(self, config_snapshot: Dict[str, Any]) -> bool:
+    def upsert_config_snapshot(
+        self, conn: duckdb.DuckDBPyConnection, config_snapshot: Dict[str, Any]
+    ) -> Optional[str]:
         """
-        Upload a single config snapshot to the database.
-        """
-        try:
-            conn = self._get_connection()
-            config_snapshot_id = config_snapshot.get("snapshot_id")
-
-            # Check if config snapshot already exists
-            existing = conn.execute(
-                "SELECT snapshot_id FROM config_snapshots WHERE snapshot_id = ?",
-                [config_snapshot_id],
-            ).fetchone()
-
-            if not existing:
-                conn.execute(
-                    """
-                    INSERT INTO config_snapshots (
-                        snapshot_id, created_timestamp, config_content_hash,
-                        git_hashes, config_files, pilates_settings,
-                        beam_config, asim_subdir, region
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    [
-                        config_snapshot_id,
-                        config_snapshot.get("created_timestamp"),
-                        config_snapshot.get("config_content_hash"),
-                        json.dumps(config_snapshot.get("git_hashes", {})),
-                        json.dumps(config_snapshot.get("config_files", {})),
-                        json.dumps(config_snapshot.get("pilates_settings", {})),
-                        config_snapshot.get("beam_config"),
-                        config_snapshot.get("asim_subdir"),
-                        config_snapshot.get("region"),
-                    ],
-                )
-                logger.info(f"Uploaded config snapshot {config_snapshot_id}")
-            return True
-        except Exception as e:
-            logger.error(
-                f"Failed to upload config snapshot {config_snapshot.get('snapshot_id')}: {e}"
-            )
-            return False
-
-    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
-        """
-        Upload complete run data to DuckDB.
+        Inserts a configuration snapshot if it doesn't already exist.
+        Idempotent based on the snapshot_id.
 
         Args:
-            run_info: Complete PILATES run information
+            conn: An active DuckDB connection.
+            config_snapshot: A dictionary representing the config snapshot.
 
         Returns:
-            bool: True if upload successful
+            The snapshot_id of the inserted or existing record.
+        """
+        if not config_snapshot:
+            return None
+
+        config_snapshot_id = config_snapshot.get("snapshot_id")
+        if not config_snapshot_id:
+            return None
+
+        try:
+            conn.execute(
+                """
+                INSERT INTO config_snapshots (
+                    snapshot_id, created_timestamp, config_content_hash,
+                    git_hashes, config_files, pilates_settings,
+                    beam_config, asim_subdir, region
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (snapshot_id) DO NOTHING
+                """,
+                [
+                    config_snapshot_id,
+                    config_snapshot.get("created_timestamp"),
+                    config_snapshot.get("config_content_hash"),
+                    json.dumps(config_snapshot.get("git_hashes", {})),
+                    json.dumps(config_snapshot.get("config_files", {})),
+                    json.dumps(config_snapshot.get("pilates_settings", {})),
+                    config_snapshot.get("beam_config"),
+                    config_snapshot.get("asim_subdir"),
+                    config_snapshot.get("region"),
+                ],
+            )
+            logger.debug(f"Upserted config snapshot {config_snapshot_id}")
+            return config_snapshot_id
+        except Exception as e:
+            logger.error(f"Failed to upsert config snapshot {config_snapshot_id}: {e}")
+            raise
+
+    def upsert_pilates_run(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        run_info: PilatesRunInfo,
+        config_snapshot_id: Optional[str],
+    ):
+        """
+        Inserts the main run record in the 'runs' table if it does not exist.
+        Idempotent based on the run_id.
+
+        Args:
+            conn: An active DuckDB connection.
+            run_info: The main PilatesRunInfo object.
+            config_snapshot_id: The foreign key to the config_snapshots table.
         """
         try:
-            conn = self._get_connection()
-
-            # Start transaction
-            conn.begin()
-
-            # 1. Upload config snapshot if present
-            config_snapshot_id = None
-            if run_info.config_snapshot:
-                config_snapshot_id = run_info.config_snapshot.get("snapshot_id")
-
-                # Check if config snapshot already exists
-                existing = conn.execute(
-                    "SELECT snapshot_id FROM config_snapshots WHERE snapshot_id = ?",
-                    [config_snapshot_id],
-                ).fetchone()
-
-                if not existing:
-                    conn.execute(
-                        """
-                        INSERT INTO config_snapshots (
-                            snapshot_id, created_timestamp, config_content_hash,
-                            git_hashes, config_files, pilates_settings,
-                            beam_config, asim_subdir, region
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                        [
-                            config_snapshot_id,
-                            run_info.config_snapshot.get("created_timestamp"),
-                            run_info.config_snapshot.get("config_content_hash"),
-                            json.dumps(run_info.config_snapshot.get("git_hashes", {})),
-                            json.dumps(
-                                run_info.config_snapshot.get("config_files", {})
-                            ),
-                            json.dumps(
-                                run_info.config_snapshot.get("pilates_settings", {})
-                            ),
-                            run_info.config_snapshot.get("beam_config"),
-                            run_info.config_snapshot.get("asim_subdir"),
-                            run_info.config_snapshot.get("region"),
-                        ],
-                    )
-                    logger.info(f"Uploaded config snapshot {config_snapshot_id}")
-
-            # 2. Upload main run record
             conn.execute(
                 """
                 INSERT INTO runs (
@@ -478,7 +430,7 @@ class DuckDBManager(DatabaseManager):
                     config_content_hash
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO NOTHING
-            """,
+                """,
                 [
                     run_info.run_id,
                     run_info.created_at,
@@ -496,131 +448,91 @@ class DuckDBManager(DatabaseManager):
                     ),
                 ],
             )
+            logger.debug(f"Upserted pilates run {run_info.run_id}")
+        except Exception as e:
+            logger.error(f"Failed to upsert pilates run {run_info.run_id}: {e}")
+            raise
 
-            # 3. Upload file records in two passes to handle foreign key constraints
-            file_and_h5_container_records = []
-            h5_table_records = []
-            for rec in run_info.file_records.values():
-                if isinstance(rec, H5TableRecord):
-                    h5_table_records.append(rec)
-                else:
-                    file_and_h5_container_records.append(rec)
+    def upsert_file_record(
+        self, conn: duckdb.DuckDBPyConnection, file_record: FileRecord, run_id: str
+    ):
+        """
+        Inserts or updates a single file record, handling regular files,
+        H5 containers, and H5 tables. Idempotent based on unique_id.
 
-            for file_record in file_and_h5_container_records:
-                # Infer initial data format and logical table name
-                inferred_data_format = _infer_data_format(file_record.file_path)
-                inferred_logical_table_name = _get_logical_table_name(file_record.short_name, file_record.year)
+        Args:
+            conn: An active DuckDB connection.
+            file_record: The FileRecord, H5FileRecord, or H5TableRecord object.
+            run_id: The ID of the parent Pilates run.
+        """
+        try:
+            record_type = "file"
+            if isinstance(file_record, H5TableRecord):
+                record_type = "h5_table"
+            elif isinstance(file_record, H5FileRecord):
+                record_type = "h5_container"
 
-                # Insert common fields into file_records table
-                conn.execute(
-                    """
-                    INSERT INTO file_records (
-                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
-                        short_name, description, year, models, producing_run_id,
-                        consuming_run_ids, source_file_paths, metadata, schema, exists,
-                        storage_location, data_format, logical_table_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO UPDATE SET
-                        record_type = excluded.record_type,
-                        run_id = excluded.run_id,
-                        openlineage_id = excluded.openlineage_id,
-                        file_path = excluded.file_path,
-                        created_at = excluded.created_at,
-                        short_name = excluded.short_name,
-                        description = excluded.description,
-                        year = excluded.year,
-                        models = excluded.models,
-                        producing_run_id = excluded.producing_run_id,
-                        consuming_run_ids = excluded.consuming_run_ids,
-                        source_file_paths = excluded.source_file_paths,
-                        metadata = excluded.metadata,
-                        schema = excluded.schema,
-                        exists = excluded.exists,
-                        storage_location = excluded.storage_location,
-                        data_format = excluded.data_format,
-                        logical_table_name = excluded.logical_table_name
-                    """,
-                    [
-                        file_record.unique_id,
-                        (
-                            "file"
-                            if not isinstance(file_record, H5FileRecord)
-                            else "h5_container"
-                        ),
-                        run_info.run_id,
-                        file_record.openlineage_id,
-                        file_record.file_path,
-                        file_record.created_at,
-                        file_record.short_name,
-                        file_record.description,
-                        file_record.year,
-                        file_record.models,
-                        file_record.producing_run_id,
-                        file_record.consuming_run_ids,
-                        file_record.source_file_paths,
-                        json.dumps(_convert_numpy_types(file_record.metadata)),
-                        json.dumps(_convert_numpy_types(file_record.schema)),
-                        file_record.exists,
-                        'database', # Initial default storage_location
-                        inferred_data_format,
-                        inferred_logical_table_name,
-                    ],
-                )
+            inferred_data_format = _infer_data_format(file_record.file_path)
+            logical_table_name = (
+                file_record.table_name
+                if isinstance(file_record, H5TableRecord)
+                else _get_logical_table_name(file_record.short_name, file_record.year)
+            )
+            if record_type == "h5_table":
+                inferred_data_format = "h5"
 
-            for h5_table_record in h5_table_records:
-                # Insert into file_records first
-                # For H5 table records, data_format is always 'h5' and logical_table_name is table_name
-                conn.execute(
-                    """
-                    INSERT INTO file_records (
-                        unique_id, record_type, run_id, openlineage_id, file_path, created_at,
-                        short_name, description, year, models, producing_run_id,
-                        consuming_run_ids, source_file_paths, metadata, schema, exists,
-                        storage_location, data_format, logical_table_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO UPDATE SET
-                        record_type = excluded.record_type,
-                        run_id = excluded.run_id,
-                        openlineage_id = excluded.openlineage_id,
-                        file_path = excluded.file_path,
-                        created_at = excluded.created_at,
-                        short_name = excluded.short_name,
-                        description = excluded.description,
-                        year = excluded.year,
-                        models = excluded.models,
-                        producing_run_id = excluded.producing_run_id,
-                        consuming_run_ids = excluded.consuming_run_ids,
-                        source_file_paths = excluded.source_file_paths,
-                        metadata = excluded.metadata,
-                        schema = excluded.schema,
-                        exists = excluded.exists,
-                        storage_location = excluded.storage_location,
-                        data_format = excluded.data_format,
-                        logical_table_name = excluded.logical_table_name
-                    """,
-                    [
-                        h5_table_record.unique_id,
-                        "h5_table",
-                        run_info.run_id,
-                        h5_table_record.openlineage_id,
-                        h5_table_record.file_path,
-                        h5_table_record.created_at,
-                        h5_table_record.short_name,
-                        h5_table_record.description,
-                        h5_table_record.year,
-                        h5_table_record.models,
-                        h5_table_record.producing_run_id,
-                        h5_table_record.consuming_run_ids,
-                        h5_table_record.source_file_paths,
-                        json.dumps(_convert_numpy_types(h5_table_record.metadata)),
-                        json.dumps(_convert_numpy_types(h5_table_record.schema)),
-                        h5_table_record.exists,
-                        'database', # Initial default storage_location
-                        'h5', # H5 table, so data_format is h5
-                        h5_table_record.table_name, # logical_table_name is the table_name within the H5 file
-                    ],
-                )
-                # Then insert into h5_table_records
+            conn.execute(
+                """
+                INSERT INTO file_records (
+                    unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                    short_name, description, year, models, producing_run_id,
+                    consuming_run_ids, source_file_paths, metadata, schema, exists,
+                    storage_location, data_format, logical_table_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (unique_id) DO UPDATE SET
+                    record_type = excluded.record_type,
+                    run_id = excluded.run_id,
+                    openlineage_id = excluded.openlineage_id,
+                    file_path = excluded.file_path,
+                    created_at = excluded.created_at,
+                    short_name = excluded.short_name,
+                    description = excluded.description,
+                    year = excluded.year,
+                    models = excluded.models,
+                    producing_run_id = excluded.producing_run_id,
+                    consuming_run_ids = excluded.consuming_run_ids,
+                    source_file_paths = excluded.source_file_paths,
+                    metadata = excluded.metadata,
+                    schema = excluded.schema,
+                    exists = excluded.exists,
+                    storage_location = excluded.storage_location,
+                    data_format = excluded.data_format,
+                    logical_table_name = excluded.logical_table_name
+                """,
+                [
+                    file_record.unique_id,
+                    record_type,
+                    run_id,
+                    file_record.openlineage_id,
+                    file_record.file_path,
+                    file_record.created_at,
+                    file_record.short_name,
+                    file_record.description,
+                    file_record.year,
+                    file_record.models,
+                    file_record.producing_run_id,
+                    file_record.consuming_run_ids,
+                    file_record.source_file_paths,
+                    json.dumps(_convert_numpy_types(file_record.metadata)),
+                    json.dumps(_convert_numpy_types(file_record.schema)),
+                    file_record.exists,
+                    "database",  # Default storage_location, can be updated later
+                    inferred_data_format,
+                    logical_table_name,
+                ],
+            )
+
+            if isinstance(file_record, H5TableRecord):
                 conn.execute(
                     """
                     INSERT INTO h5_table_records (
@@ -629,221 +541,275 @@ class DuckDBManager(DatabaseManager):
                     ON CONFLICT (unique_id) DO NOTHING
                     """,
                     [
-                        h5_table_record.unique_id,
-                        h5_table_record.h5_file_unique_id,
-                        h5_table_record.table_name,
+                        file_record.unique_id,
+                        file_record.h5_file_unique_id,
+                        file_record.table_name,
                     ],
                 )
+            logger.debug(f"Upserted file record {file_record.unique_id}")
+        except Exception as e:
+            logger.error(f"Failed to upsert file record {file_record.unique_id}: {e}")
+            raise
 
-            # 4. Upload model runs
-            # Ensure all referenced file_records exist before inserting model_runs
-            referenced_file_record_ids = set()
-            for model_run in run_info.model_runs.values():
-                for hash_id in model_run.input_record_hashes:
-                    referenced_file_record_ids.add(hash_id)
-                for hash_id in model_run.output_record_hashes:
-                    referenced_file_record_ids.add(hash_id)
+    def upsert_model_run(
+        self, conn: duckdb.DuckDBPyConnection, model_run: "ModelRun", run_id: str
+    ):
+        """
+        Inserts or updates a single model run record.
+        Idempotent based on unique_id.
 
-            for unique_id in referenced_file_record_ids:
-                # Check if the file_record already exists in the database
-                existing_file_record = conn.execute(
-                    "SELECT unique_id FROM file_records WHERE unique_id = ?",
-                    [unique_id],
-                ).fetchone()
-
-                if not existing_file_record:
-                    # If not in DB, try to find it in the current run_info
-                    if unique_id in run_info.file_records:
-                        file_record = run_info.file_records[unique_id]
-                        record_type = "file"
-                        if isinstance(file_record, H5TableRecord):
-                            record_type = "h5_table"
-                        elif isinstance(file_record, H5FileRecord):
-                            record_type = "h5_container"
-
-                        conn.execute(
-                            """
-                            INSERT INTO file_records (
-                                unique_id, record_type, run_id, openlineage_id, file_path, created_at,
-                                short_name, description, year, models, producing_run_id,
-                                consuming_run_ids, source_file_paths, metadata, schema, exists,
-                                storage_location, data_format, logical_table_name
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT (unique_id) DO UPDATE SET
-                                record_type = excluded.record_type,
-                                run_id = excluded.run_id,
-                                openlineage_id = excluded.openlineage_id,
-                                file_path = excluded.file_path,
-                                created_at = excluded.created_at,
-                                short_name = excluded.short_name,
-                                description = excluded.description,
-                                year = excluded.year,
-                                models = excluded.models,
-                                producing_run_id = excluded.producing_run_id,
-                                consuming_run_ids = excluded.consuming_run_ids,
-                                source_file_paths = excluded.source_file_paths,
-                                metadata = excluded.metadata,
-                                schema = excluded.schema,
-                                exists = excluded.exists,
-                                storage_location = excluded.storage_location,
-                                data_format = excluded.data_format,
-                                logical_table_name = excluded.logical_table_name
-                            """,
-                            [
-                                file_record.unique_id,
-                                record_type,
-                                run_info.run_id,
-                                file_record.openlineage_id,
-                                file_record.file_path,
-                                file_record.created_at,
-                                file_record.short_name,
-                                file_record.description,
-                                file_record.year,
-                                file_record.models,
-                                file_record.producing_run_id,
-                                file_record.consuming_run_ids,
-                                file_record.source_file_paths,
-                                json.dumps(_convert_numpy_types(file_record.metadata)),
-                                json.dumps(_convert_numpy_types(file_record.schema)),
-                                file_record.exists,
-                                'unknown', # Default for placeholders
-                                _infer_data_format(file_record.file_path),
-                                _get_logical_table_name(file_record.short_name, file_record.year)
-                            ],
-                        )
-                        logger.info(
-                            f"Inserted missing referenced file_record: {unique_id}"
-                        )
-                    else:
-                        # If not in DB and not in current run_info, create a minimal placeholder
-                        logger.warning(
-                            f"Referenced file_record {unique_id} not found in DB or current run_info. Creating placeholder."
-                        )
-                        conn.execute(
-                            """
-                            INSERT INTO file_records (
-                                unique_id, record_type, run_id, openlineage_id, file_path, created_at,
-                                short_name, description, year, models, producing_run_id,
-                                consuming_run_ids, source_file_paths, metadata, schema, exists,
-                                storage_location, data_format, logical_table_name
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT (unique_id) DO UPDATE SET
-                                record_type = excluded.record_type,
-                                run_id = excluded.run_id,
-                                openlineage_id = excluded.openlineage_id,
-                                file_path = excluded.file_path,
-                                created_at = excluded.created_at,
-                                short_name = excluded.short_name,
-                                description = excluded.description,
-                                year = excluded.year,
-                                models = excluded.models,
-                                producing_run_id = excluded.producing_run_id,
-                                consuming_run_ids = excluded.consuming_run_ids,
-                                source_file_paths = excluded.source_file_paths,
-                                metadata = excluded.metadata,
-                                schema = excluded.schema,
-                                exists = excluded.exists,
-                                storage_location = excluded.storage_location,
-                                data_format = excluded.data_format,
-                                logical_table_name = excluded.logical_table_name
-                            """,
-                            [
-                                unique_id,
-                                "placeholder",
-                                run_info.run_id,  # Link to current run_id
-                                str(uuid.uuid4()),  # Generate a new OpenLineage ID
-                                "unknown",
-                                datetime.now().isoformat(),
-                                "missing_reference",
-                                f"Placeholder for missing file_record {unique_id}",
-                                None,
-                                [],
-                                None,
-                                [],
-                                [],
-                                "{}",
-                                "{}",
-                                False,
-                                'unknown', # Default for minimal placeholders
-                                'unknown',
-                                'unknown'
-                            ],
-                        )
-
-            for model_run in run_info.model_runs.values():
-                conn.execute(
-                    """
-                    INSERT INTO model_runs (
-                        unique_id, run_id, openlineage_id, model, year, iteration,
-                        description, created_at, completed_at, status,
-                        input_record_hashes, output_record_hashes, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (unique_id) DO UPDATE SET
-                        run_id = excluded.run_id,
-                        openlineage_id = excluded.openlineage_id,
-                        model = excluded.model,
-                        year = excluded.year,
-                        iteration = excluded.iteration,
-                        description = excluded.description,
-                        created_at = excluded.created_at,
-                        completed_at = excluded.completed_at,
-                        status = excluded.status,
-                        input_record_hashes = excluded.input_record_hashes,
-                        output_record_hashes = excluded.output_record_hashes,
-                        metadata = excluded.metadata
+        Args:
+            conn: An active DuckDB connection.
+            model_run: The ModelRun data record.
+            run_id: The ID of the parent Pilates run.
+        """
+        try:
+            conn.execute(
+                """
+                INSERT INTO model_runs (
+                    unique_id, run_id, openlineage_id, model, year, iteration,
+                    description, created_at, completed_at, status,
+                    input_record_hashes, output_record_hashes, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (unique_id) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    openlineage_id = excluded.openlineage_id,
+                    model = excluded.model,
+                    year = excluded.year,
+                    iteration = excluded.iteration,
+                    description = excluded.description,
+                    created_at = excluded.created_at,
+                    completed_at = excluded.completed_at,
+                    status = excluded.status,
+                    input_record_hashes = excluded.input_record_hashes,
+                    output_record_hashes = excluded.output_record_hashes,
+                    metadata = excluded.metadata
                 """,
-                    [
-                        model_run.unique_id,
-                        run_info.run_id,
-                        model_run.openlineage_id,
-                        model_run.model,
-                        model_run.year,
-                        model_run.iteration,
-                        model_run.description,
-                        model_run.created_at,
-                        model_run.completed_at,
-                        model_run.status,
-                        model_run.input_record_hashes,
-                        model_run.output_record_hashes,
-                        json.dumps(_convert_numpy_types(model_run.metadata)),
-                    ],
-                )
+                [
+                    model_run.unique_id,
+                    run_id,
+                    model_run.openlineage_id,
+                    model_run.model,
+                    model_run.year,
+                    model_run.iteration,
+                    model_run.description,
+                    model_run.created_at,
+                    model_run.completed_at,
+                    model_run.status,
+                    model_run.input_record_hashes,
+                    model_run.output_record_hashes,
+                    json.dumps(_convert_numpy_types(model_run.metadata)),
+                ],
+            )
+            logger.debug(f"Upserted model run {model_run.unique_id}")
+        except Exception as e:
+            logger.error(f"Failed to upsert model run {model_run.unique_id}: {e}")
+            raise
 
-            # 5. Upload OpenLineage event metadata
-            for event_metadata in run_info.openlineage_event_metadata:
-                try:
+    def insert_openlineage_event(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        event: "OpenLineageEventMetadata",
+        run_id: str,
+    ):
+        """
+        Inserts a single OpenLineage event record. This is append-only.
+
+        Args:
+            conn: An active DuckDB connection.
+            event: The OpenLineageEvent data record.
+            run_id: The ID of the parent Pilates run.
+        """
+        try:
+            # Events are append-only, so we just insert.
+            # The table has a sequence for the primary key.
+            conn.execute(
+                """
+                INSERT INTO openlineage_events (
+                    run_id, model_run_id, event_time, event_type,
+                    run_uuid, job_name
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+                [
+                    run_id,
+                    event.model_run_id,
+                    event.event_time,
+                    event.event_type,
+                    event.run_uuid,
+                    event.job_name,
+                ],
+            )
+            logger.debug(
+                f"Inserted openlineage event for model run {event.model_run_id}"
+            )
+        except AttributeError as e:
+            logger.error(
+                f"Missing openlineage event metadata: {e}. Full event metadata: {event}"
+            )
+            # Do not re-raise as this is not always critical
+        except Exception as e:
+            logger.error(f"Failed to insert openlineage event: {e}")
+            # Do not re-raise as this is not always critical
+
+    # =========================================================================
+    # BATCH AND DEPRECATED UPLOAD METHODS
+    # =========================================================================
+
+    def upload_file_record(self, file_record: FileRecord, run_id: str) -> bool:
+        """
+        DEPRECATED: Upload a single file record to the database.
+        Use `upsert_file_record` in a transaction context instead.
+        """
+        logger.warning(
+            "`upload_file_record` is deprecated. Use `upsert_file_record` within a transaction."
+        )
+        try:
+            conn = self._get_connection()
+            conn.begin()
+            self.upsert_file_record(conn, file_record, run_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload file record {file_record.unique_id}: {e}")
+            conn.rollback()
+            return False
+
+    def upload_config_snapshot(self, config_snapshot: Dict[str, Any]) -> bool:
+        """
+        DEPRECATED: Upload a single config snapshot to the database.
+        Use `upsert_config_snapshot` in a transaction context instead.
+        """
+        logger.warning(
+            "`upload_config_snapshot` is deprecated. Use `upsert_config_snapshot` within a transaction."
+        )
+        try:
+            conn = self._get_connection()
+            conn.begin()
+            self.upsert_config_snapshot(conn, config_snapshot)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to upload config snapshot {config_snapshot.get('snapshot_id')}: {e}"
+            )
+            conn.rollback()
+            return False
+
+    def upload_run_data(self, run_info: PilatesRunInfo) -> bool:
+        """
+        Upload complete run data to DuckDB in a single transaction.
+        This method is idempotent and can be called multiple times. Records that
+        already exist will be skipped or updated.
+
+        Args:
+            run_info: Complete PILATES run information object.
+
+        Returns:
+            bool: True if upload is successful.
+        """
+        conn = self._get_connection()
+        try:
+            conn.begin()
+
+            # 1. Upsert Config Snapshot
+            config_snapshot_id = self.upsert_config_snapshot(
+                conn, run_info.config_snapshot
+            )
+
+            # 2. Upsert Main Run Record
+            self.upsert_pilates_run(conn, run_info, config_snapshot_id)
+
+            # 3. Upsert all File Records (in two passes)
+            h5_table_records = []
+            other_file_records = []
+            for rec in run_info.file_records.values():
+                if isinstance(rec, H5TableRecord):
+                    h5_table_records.append(rec)
+                else:
+                    other_file_records.append(rec)
+
+            # Pass 1: Insert all non-H5-table records first to satisfy FKs
+            for file_record in other_file_records:
+                self.upsert_file_record(conn, file_record, run_info.run_id)
+
+            # Pass 2: Insert H5 table records, whose parents now exist
+            for file_record in h5_table_records:
+                self.upsert_file_record(conn, file_record, run_info.run_id)
+
+            # 4. Ensure referenced file records exist (for model run FKs)
+            referenced_ids = set()
+            for model_run in run_info.model_runs.values():
+                referenced_ids.update(model_run.input_record_hashes)
+                referenced_ids.update(model_run.output_record_hashes)
+
+            # Find which of the referenced IDs are actually missing
+            if referenced_ids:
+                placeholders = [f"'{rid}'" for rid in referenced_ids]
+                existing_ids_df = conn.execute(
+                    f"SELECT unique_id FROM file_records WHERE unique_id IN ({','.join(placeholders)})"
+                ).fetchdf()
+                existing_ids = set(existing_ids_df["unique_id"].tolist())
+                missing_ids = referenced_ids - existing_ids
+
+                for missing_id in missing_ids:
+                    logger.warning(
+                        f"Referenced file_record {missing_id} not found. Creating placeholder."
+                    )
                     conn.execute(
                         """
-                        INSERT INTO openlineage_events (
-                            id, run_id, model_run_id, event_time, event_type,
-                            run_uuid, job_name
-                        ) VALUES (nextval('openlineage_events_id_seq'), ?, ?, ?, ?, ?, ?)
-                    """,
+                        INSERT INTO file_records (
+                            unique_id, record_type, run_id, openlineage_id, file_path, created_at,
+                            short_name, description, year, models, producing_run_id,
+                            consuming_run_ids, source_file_paths, metadata, schema, exists,
+                            storage_location, data_format, logical_table_name
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (unique_id) DO NOTHING
+                        """,
                         [
+                            missing_id,
+                            "placeholder",
                             run_info.run_id,
-                            event_metadata.model_run_id,
-                            event_metadata.event_time,
-                            event_metadata.event_type,
-                            event_metadata.run_uuid,
-                            event_metadata.job_name,
+                            str(uuid.uuid4()),
+                            "unknown",
+                            datetime.now().isoformat(),
+                            "missing_reference",
+                            f"Placeholder for missing file_record {missing_id}",
+                            None,
+                            [],
+                            None,
+                            [],
+                            [],
+                            "{}",
+                            "{}",
+                            False,
+                            "unknown",
+                            "unknown",
+                            "unknown",
                         ],
                     )
-                except AttributeError as e:
-                    logger.error(f"Missing openlineage event metadata: {e}. Full event metadata: {event_metadata}")
 
-            # Commit transaction
+            # 5. Upsert Model Runs
+            for model_run in run_info.model_runs.values():
+                self.upsert_model_run(conn, model_run, run_info.run_id)
+
+            # 6. Insert OpenLineage Events (append-only)
+            for event in run_info.openlineage_event_metadata:
+                self.insert_openlineage_event(conn, event, run_info.run_id)
+
             conn.commit()
-
-            logger.info(f"Successfully uploaded run data for {run_info.run_id}")
+            logger.info(f"Successfully uploaded batch run data for {run_info.run_id}")
             return True
 
         except Exception as e:
+            logger.error(
+                f"Failed to upload batch run data for {run_info.run_id}: {e}",
+                exc_info=True,
+            )
             try:
                 conn.rollback()
-            except:
-                pass
-            logger.error(f"Failed to upload run data for {run_info.run_id}: {e}")
-            raise DatabaseUploadError(f"Upload failed: {e}")
+            except Exception as re:
+                logger.error(f"Rollback failed: {re}")
+            raise DatabaseUploadError(f"Batch upload failed: {e}")
 
     def upload_zarr_manifest_data(self, run_id: str, manifest_data: dict) -> bool:
         """
@@ -1157,7 +1123,13 @@ class DuckDBManager(DatabaseManager):
                     file_path = ?
                 WHERE unique_id = ?
                 """,
-                [storage_location, logical_table_name, data_format, file_path, unique_id],
+                [
+                    storage_location,
+                    logical_table_name,
+                    data_format,
+                    file_path,
+                    unique_id,
+                ],
             )
             logger.info(
                 f"Updated file_record {unique_id} to storage_location={storage_location}, "
@@ -2086,21 +2058,25 @@ class DuckDBManager(DatabaseManager):
             A DuckDB relation object representing the combined result set.
         """
         conn = self._get_connection()
-        
+
         # 1. Determine the canonical schema from the `uploaded_` table.
         # This is the schema all parts of the UNION must conform to.
         try:
-            uploaded_table_schema_desc = conn.execute(f"DESCRIBE uploaded_{logical_table_name}").fetchall()
+            uploaded_table_schema_desc = conn.execute(
+                f"DESCRIBE uploaded_{logical_table_name}"
+            ).fetchall()
             # Making a set for quick lookups and a list to preserve order
             uploaded_cols_ordered = [row[0] for row in uploaded_table_schema_desc]
         except duckdb.Error as e:
             # If the uploaded table doesn't exist, we cannot proceed.
-            logger.error(f"Cannot query hybrid table '{logical_table_name}': The base table 'uploaded_{logical_table_name}' does not exist. {e}")
+            logger.error(
+                f"Cannot query hybrid table '{logical_table_name}': The base table 'uploaded_{logical_table_name}' does not exist. {e}"
+            )
             raise DatabaseQueryError(f"Base table for {logical_table_name} not found.")
 
         # The base query is always on the uploaded table.
         # We explicitly list columns to ensure consistent ordering.
-        col_list_str = ', '.join([f'"{c}"' for c in uploaded_cols_ordered])
+        col_list_str = ", ".join([f'"{c}"' for c in uploaded_cols_ordered])
         all_queries = [f"SELECT {col_list_str} FROM uploaded_{logical_table_name}"]
 
         # 2. Find all external files and build a schema-aligned query for each.
@@ -2110,17 +2086,21 @@ class DuckDBManager(DatabaseManager):
             FROM file_records 
             WHERE logical_table_name = ? AND storage_location = 'external' AND data_format = 'parquet'
             """,
-            [logical_table_name]
+            [logical_table_name],
         ).fetchdf()
 
         for _, record in external_files_df.iterrows():
-            file_path = record['file_path']
+            file_path = record["file_path"]
             try:
                 # Get the schema of the current parquet file
-                parquet_schema_desc = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{file_path}')").fetchall()
+                parquet_schema_desc = conn.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{file_path}')"
+                ).fetchall()
                 parquet_cols = {row[0] for row in parquet_schema_desc}
             except duckdb.Error as e:
-                logger.warning(f"Could not read schema for external file {file_path}, skipping. Error: {e}")
+                logger.warning(
+                    f"Could not read schema for external file {file_path}, skipping. Error: {e}"
+                )
                 continue
 
             # 3. Build the projection list for this specific parquet file
@@ -2131,26 +2111,32 @@ class DuckDBManager(DatabaseManager):
                     # Column exists in the parquet file, select it directly.
                     projection.append(f'"{col}"')
                 # Check for metadata columns that exist in the file_records table
-                elif col == 'run_id':
+                elif col == "run_id":
                     projection.append(f"'{record['run_id']}' AS run_id")
-                elif col == 'file_record_id':
+                elif col == "file_record_id":
                     projection.append(f"'{record['unique_id']}' AS file_record_id")
-                elif col == 'year':
+                elif col == "year":
                     projection.append(f"{record['year']} AS year")
-                elif col == 'iteration':
-                    iteration_val = 'NULL' if pd.isna(record['iteration']) else record['iteration']
+                elif col == "iteration":
+                    iteration_val = (
+                        "NULL" if pd.isna(record["iteration"]) else record["iteration"]
+                    )
                     projection.append(f"{iteration_val} AS iteration")
-                elif col == 'sub_iteration':
-                     projection.append(f"0 AS sub_iteration") # Default sub_iteration if not present
+                elif col == "sub_iteration":
+                    projection.append(
+                        f"0 AS sub_iteration"
+                    )  # Default sub_iteration if not present
                 else:
                     # Column is in the canonical schema but not this parquet file. Project NULL.
-                    projection.append(f"NULL AS \"{col}\"")
-            
-            all_queries.append(f"SELECT {', '.join(projection)} FROM read_parquet('{file_path}')")
+                    projection.append(f'NULL AS "{col}"')
+
+            all_queries.append(
+                f"SELECT {', '.join(projection)} FROM read_parquet('{file_path}')"
+            )
 
         # 4. Combine all queries into a single UNION ALL statement.
         final_query = "\nUNION ALL\n".join(all_queries)
-        
+
         print(f"Executing Hybrid Query:\n{final_query}")  # For debugging
         return conn.sql(final_query)
 

@@ -596,13 +596,95 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
 
+        # Archive ActivitySim inputs for this iteration
+        # This ensures Consist can find input files at stable paths for hybrid views
+        inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
+            year, replanning_iteration_number
+        )
+        inputs_folder_path = os.path.join(
+            workspace.get_asim_output_dir(), inputs_folder_name
+        )
+        if not os.path.exists(os.path.abspath(inputs_folder_path)):
+            os.makedirs(inputs_folder_path, exist_ok=True)
+
         processed_records = []
+
+        # Archive input files from activitysim/data/
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
+        input_files_to_archive = [
+            "households.csv",
+            "persons.csv",
+            "land_use.csv",
+            "skims.omx",
+        ]
+
+        for input_file in input_files_to_archive:
+            source_path = os.path.join(asim_data_dir, input_file)
+            if os.path.exists(source_path):
+                target_path = os.path.join(inputs_folder_path, input_file)
+                shutil.copy(source_path, target_path)
+
+                if self.provenance_tracker:
+                    archived_record = self.provenance_tracker.record_output_file(
+                        model="activitysim_postprocessor",
+                        file_path=target_path,
+                        year=self.state.current_year,
+                        description=f"Archived ActivitySim input: {input_file}",
+                        short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
+                        source_file_paths=[source_path],
+                        state=self.state,
+                        model_run_id=model_run_hash,
+                    )
+                    if archived_record:
+                        archived_record.file_path = (
+                            self.provenance_tracker.get_path_relative_to_workspace_root(
+                                target_path
+                            )
+                        )
+                        archived_record.iteration = self.state.current_inner_iter
+                        processed_records.append(archived_record)
+                logger.info(f"Archived ActivitySim input: {input_file}")
+            else:
+                logger.debug(f"Input file not found, skipping archive: {source_path}")
+
+        # Archive skims.zarr from activitysim/output/cache/
+        zarr_source_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
+        if os.path.exists(zarr_source_path):
+            zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
+            if os.path.exists(zarr_target_path):
+                shutil.rmtree(zarr_target_path)
+            shutil.copytree(zarr_source_path, zarr_target_path)
+
+            if self.provenance_tracker:
+                zarr_record = self.provenance_tracker.record_output_file(
+                    model="activitysim_postprocessor",
+                    file_path=zarr_target_path,
+                    year=self.state.current_year,
+                    description="Archived ActivitySim input: skims.zarr (snapshot)",
+                    short_name=f"asim_input_skims_zarr_archived",
+                    source_file_paths=[zarr_source_path],
+                    state=self.state,
+                    model_run_id=model_run_hash,
+                )
+                if zarr_record:
+                    zarr_record.file_path = (
+                        self.provenance_tracker.get_path_relative_to_workspace_root(
+                            zarr_target_path
+                        )
+                    )
+                    zarr_record.iteration = self.state.current_inner_iter
+                    processed_records.append(zarr_record)
+            logger.info("Archived ActivitySim input: skims.zarr")
+        else:
+            logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
 
         # Record raw outputs as inputs to this post-processing run
         for record in raw_outputs.all_records():
             if hasattr(record, "file_path"):
                 source = record.get_absolute_path(base_path=workspace.full_path)
-                clean_name = re.sub(r'_asim_out_temp$', '', record.short_name)
+                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
                 target = os.path.join(
                     iteration_folder_path,
                     clean_name + ".parquet",
@@ -615,8 +697,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         model="activitysim_postprocessor",
                         state=self.state,
                     )
-                    moved_record.file_path = self.provenance_tracker.get_path_relative_to_workspace_root(
-                        target
+                    moved_record.file_path = (
+                        self.provenance_tracker.get_path_relative_to_workspace_root(
+                            target
+                        )
                     )
                     moved_record.iteration = self.state.current_inner_iter
                     processed_records.append(moved_record)

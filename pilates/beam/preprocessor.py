@@ -15,6 +15,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, Record, FileRecord
+from pilates.generic.model import provenance_logging
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
@@ -219,6 +220,7 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
         self.settings = self.state.full_settings
 
+    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -234,7 +236,9 @@ class BeamPreprocessor(GenericPreprocessor):
         asim_post_records = previous_records.all_records()
         for record in asim_post_records:
             if record.short_name:
-                short_name = record.short_name.rsplit("_", 2)[0].replace("_asim_out","") # Updated to handle format e.g. beam_plans_asim_out_2018_0
+                short_name = record.short_name.rsplit("_", 2)[0].replace(
+                    "_asim_out", ""
+                )  # Updated to handle format e.g. beam_plans_asim_out_2018_0
                 if short_name in self.required_input_data:
                     input_records.add_record(record)
                     logger.info(f"Added {short_name} to beam inputs")
@@ -256,13 +260,9 @@ class BeamPreprocessor(GenericPreprocessor):
                 ):
                     input_records.add_record(record)
 
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "beam_preprocessor",
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
-            description="Preprocessing for BEAM",
-            inputs=input_records,
-        )
+        model_run_hash = self.provenance_tracker.run_info.model_runs.get(
+            next(iter(self.provenance_tracker.run_info.model_runs), None), {}
+        ).get("run_id")
 
         # Update BEAM config based on settings
         self._update_beam_config(
@@ -295,10 +295,6 @@ class BeamPreprocessor(GenericPreprocessor):
         if beam_prod_repo_record:
             store.add_record(beam_prod_repo_record)
         store += output_records
-
-        self.provenance_tracker.complete_model_run(
-            run_hash=model_run_hash, output_records=store.all_records()
-        )
 
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)
@@ -535,19 +531,21 @@ class BeamPreprocessor(GenericPreprocessor):
         required_asim_base_names = [
             "households",
             "persons",
-            "beam_plans", # ActivitySim outputs beam_plans
+            "beam_plans",  # ActivitySim outputs beam_plans
         ]
         # Construct the full path to the year-iteration specific output directory
         asim_output_iter_dir = os.path.join(
             workspace.get_asim_output_dir(),
-            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}"
+            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
         )
 
         for base_name in required_asim_base_names:
             if base_name not in asim_file_paths:
                 # Construct the full filename including the format extension
                 expected_file_name = f"{base_name}.{file_format}"
-                expected_full_path = os.path.join(asim_output_iter_dir, expected_file_name)
+                expected_full_path = os.path.join(
+                    asim_output_iter_dir, expected_file_name
+                )
 
                 if os.path.exists(expected_full_path):
                     logger.warning(
@@ -558,11 +556,13 @@ class BeamPreprocessor(GenericPreprocessor):
                     # A more complete FileRecord could be created by parsing file properties if needed,
                     # but for basic path retrieval, this is sufficient.
                     dummy_record = FileRecord(
-                        file_path=os.path.relpath(expected_full_path, base_path), # Relative path for record
+                        file_path=os.path.relpath(
+                            expected_full_path, base_path
+                        ),  # Relative path for record
                         short_name=base_name,
                         description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
                         producing_run_id=self.provenance_tracker.run_info.run_id,
-                        unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}", # Unique ID for dummy record
+                        unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}",  # Unique ID for dummy record
                         exists=True,
                         year=self.state.current_year,
                         created_at=str(datetime.now()),
@@ -654,11 +654,17 @@ class BeamPreprocessor(GenericPreprocessor):
             "households", (None, None)
         )
 
-        def get_data(path: str, table_type: str, file_format: str, file_source: str) -> pd.DataFrame:
+        def get_data(
+            path: str, table_type: str, file_format: str, file_source: str
+        ) -> pd.DataFrame:
             if path is None:
-                raise FileNotFoundError(f"{file_source} file for table '{table_type}' not found.")
+                raise FileNotFoundError(
+                    f"{file_source} file for table '{table_type}' not found."
+                )
             if not os.path.exists(path):
-                raise FileNotFoundError(f"{file_source} file for table '{table_type}' not found at {path}.")
+                raise FileNotFoundError(
+                    f"{file_source} file for table '{table_type}' not found at {path}."
+                )
             return BeamDataHelper.read_and_clean(path, table_type, file_format)
 
         beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
@@ -675,7 +681,9 @@ class BeamPreprocessor(GenericPreprocessor):
         original_plans = get_data(beam_plans_path, "plans", file_format, "BEAM")
 
         # New ActivitySim files (current iteration)
-        updated_hh = get_data(asim_households_path, "households", file_format, "ActivitySim")
+        updated_hh = get_data(
+            asim_households_path, "households", file_format, "ActivitySim"
+        )
         updated_per = get_data(asim_persons_path, "persons", file_format, "ActivitySim")
         updated_plans = get_data(asim_plans_path, "plans", file_format, "ActivitySim")
 

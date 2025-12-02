@@ -1,3 +1,11 @@
+"""
+Input/Output utility functions for PILATES.
+
+This module provides functions for reading and parsing configuration settings,
+determining data store paths, and locating various input/output files
+for ActivitySim, UrbanSim, and BEAM models.
+"""
+
 import argparse
 import logging
 import os

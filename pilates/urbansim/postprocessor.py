@@ -8,6 +8,7 @@ from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.model import provenance_logging
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
@@ -194,6 +195,8 @@ def create_next_iter_usim_data(
     )
     logger.info(f"Recorded merged input H5 for provenance: {input_store_path}")
 
+    return final_output_container
+
 
 class UrbansimPostprocessor(GenericPostprocessor):
     """
@@ -211,6 +214,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
 
+    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
@@ -235,40 +239,26 @@ class UrbansimPostprocessor(GenericPostprocessor):
             self.state.current_year,
         )
 
-        if model_run_hash is None:
-            model_run_hash = self.provenance_tracker.start_model_run(
-                "urbansim_postprocessor",
-                self.state.current_year,
-                self.state.current_inner_iter,
-                description="Post-processing UrbanSim outputs",
-                inputs=raw_outputs,
-            )
-
         settings = self.state.full_settings
         processed_records = []
 
         try:
             if settings.run.models.land_use == "urbansim":
-                create_next_iter_usim_data(
+                output_record = create_next_iter_usim_data(
                     settings,
                     self.state.forecast_year,
                     workspace.get_usim_mutable_data_dir(),
                     provenance_tracker=self.provenance_tracker,
-                    model_run_hash=model_run_hash,
+                    model_run_hash=self.provenance_tracker.current_model_run_id,
                 )
+                if output_record:
+                    processed_records.append(output_record)
                 logger.info("Prepared UrbanSim data for next iteration")
             else:
                 logger.info("Urbansim model is not activated, skipping postprocessing.")
 
         except Exception as e:
             logger.error(f"Error during UrbanSim postprocessing: {e}")
-            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
             raise
-
-        # Complete postprocessor tracking
-        # Note: The output records are created within create_next_iter_usim_data
-        self.provenance_tracker.complete_model_run(
-            model_run_hash, status="completed", output_records=[]
-        )
 
         return RecordStore(recordList=processed_records)

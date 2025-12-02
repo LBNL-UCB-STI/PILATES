@@ -51,6 +51,9 @@ class Record:
     openlineage_id: Optional[str] = None
 
     def __post_init__(self):
+        # Ensure every record has a unique_id for provenance tracking.
+        if self.unique_id is None:
+            self.unique_id = str(uuid.uuid4())
         # Ensure every record has an OpenLineage UUID for event payloads.
         if self.openlineage_id is None:
             self.openlineage_id = str(uuid.uuid4())

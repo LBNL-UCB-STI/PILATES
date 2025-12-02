@@ -18,6 +18,7 @@ import subprocess
 
 # Import PILATES modules
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pilates.utils.duckdb_manager import DuckDBManager
@@ -26,8 +27,11 @@ from pilates.database.selective_uploader import run_uploader
 
 
 # Since selective_uploader is a script, we'll use subprocess to run it
-UPLOADER_SCRIPT_PATH = Path(__file__).parent.parent / "pilates" / "database" / "selective_uploader.py"
+UPLOADER_SCRIPT_PATH = (
+    Path(__file__).parent.parent / "pilates" / "database" / "selective_uploader.py"
+)
 PYTHON_EXECUTABLE = "/Users/zaneedell/miniforge3/envs/PILATES/bin/python"
+
 
 class TestHybridStorage(unittest.TestCase):
     """Test the dual storage (in-db vs. external) workflow."""
@@ -45,9 +49,11 @@ class TestHybridStorage(unittest.TestCase):
         self.generated_dir.mkdir(parents=True, exist_ok=True)
 
         # Copy original schema files to the temporary location
-        original_schema_dir = Path(__file__).parent.parent / "pilates" / "database" / "schema"
+        original_schema_dir = (
+            Path(__file__).parent.parent / "pilates" / "database" / "schema"
+        )
         for fname in os.listdir(original_schema_dir):
-            if fname.endswith('.sql'):
+            if fname.endswith(".sql"):
                 shutil.copy(original_schema_dir / fname, self.test_schema_dir)
 
         # Point the view creation script to our temporary directories and run it
@@ -59,19 +65,20 @@ class TestHybridStorage(unittest.TestCase):
         with self.db_manager:
             self.db_manager.initialize_database(schema_dir=str(self.test_schema_dir))
 
-
     def tearDown(self):
         """Clean up the test environment."""
         shutil.rmtree(self.temp_dir)
 
-    def _create_dummy_run(self, run_id: str, file_name: str, data: pd.DataFrame) -> Path:
+    def _create_dummy_run(
+        self, run_id: str, file_name: str, data: pd.DataFrame
+    ) -> Path:
         """Helper to create a dummy run directory with a parquet file and run_info.json."""
         run_dir = self.temp_dir / run_id
         run_dir.mkdir()
-        
+
         parquet_path = run_dir / file_name
         data.to_parquet(parquet_path)
-        
+
         file_record = {
             "unique_id": f"hash_{run_id}",
             "openlineage_id": str(uuid.uuid4()),
@@ -94,16 +101,15 @@ class TestHybridStorage(unittest.TestCase):
             "models_used": ["dummy_model"],
             "code_version": "test",
             "hostname": "test-host",
-            "file_records": {
-                f"hash_{run_id}": file_record
-            }
+            "file_records": {f"hash_{run_id}": file_record},
         }
-        
+
         run_info_path = run_dir / "run_info.json"
-        with open(run_info_path, 'w') as f:
+        with open(run_info_path, "w") as f:
             import json
+
             json.dump(run_info, f, indent=4)
-            
+
         return run_info_path
 
     def test_parquet_upload_to_database(self):
@@ -111,17 +117,19 @@ class TestHybridStorage(unittest.TestCase):
         Tests that Parquet files are uploaded into the database by default.
         """
         print("\n📤 Testing Parquet upload to database...")
-        
+
         # 1. Setup
         run_id = "run_upload"
-        df = pd.DataFrame({'household_id': [1, 2], 'hhsize': [3, 4]})
-        run_info_path = self._create_dummy_run(run_id, "households_asim_out.parquet", df)
-        
+        df = pd.DataFrame({"household_id": [1, 2], "hhsize": [3, 4]})
+        run_info_path = self._create_dummy_run(
+            run_id, "households_asim_out.parquet", df
+        )
+
         # 2. Execute
         success = run_uploader(
             run_info_path=str(run_info_path),
             database_path=str(self.db_path),
-            tables=["households_asim_out"]
+            tables=["households_asim_out"],
         )
 
         self.assertTrue(success, f"Uploader script failed")
@@ -131,19 +139,31 @@ class TestHybridStorage(unittest.TestCase):
             conn = self.db_manager._get_connection()
 
             # Check physical table has data
-            count = conn.execute("SELECT COUNT(*) FROM uploaded_households_asim_out").fetchone()[0]
+            count = conn.execute(
+                "SELECT COUNT(*) FROM uploaded_households_asim_out"
+            ).fetchone()[0]
             self.assertEqual(count, 2, "Data should be in the uploaded_ table")
             print(f"   ✅ `uploaded_households_asim_out` contains {count} rows.")
 
             # Check file_record metadata
-            storage_loc = conn.execute("SELECT storage_location FROM file_records WHERE run_id=?", [run_id]).fetchone()[0]
-            self.assertEqual(storage_loc, 'database', "storage_location should be 'database'")
+            storage_loc = conn.execute(
+                "SELECT storage_location FROM file_records WHERE run_id=?", [run_id]
+            ).fetchone()[0]
+            self.assertEqual(
+                storage_loc, "database", "storage_location should be 'database'"
+            )
             print(f"   ✅ file_record storage_location is '{storage_loc}'.")
 
             # Check combined query
-            result_relation = self.db_manager.query_hybrid_table('households_asim_out')
-            view_count = result_relation.filter(f"run_id='{run_id}'").aggregate('COUNT(*)').fetchone()[0]
-            self.assertEqual(view_count, 2, "Hybrid query should return the uploaded data.")
+            result_relation = self.db_manager.query_hybrid_table("households_asim_out")
+            view_count = (
+                result_relation.filter(f"run_id='{run_id}'")
+                .aggregate("COUNT(*)")
+                .fetchone()[0]
+            )
+            self.assertEqual(
+                view_count, 2, "Hybrid query should return the uploaded data."
+            )
             print(f"   ✅ Hybrid query returns {view_count} rows.")
 
     def test_parquet_link_external(self):
@@ -154,39 +174,58 @@ class TestHybridStorage(unittest.TestCase):
 
         # 1. Setup
         run_id = "run_link"
-        df = pd.DataFrame({'household_id': [10, 20], 'hhsize': [1, 5]})
-        run_info_path = self._create_dummy_run(run_id, "households_asim_out.parquet", df)
-        
+        df = pd.DataFrame({"household_id": [10, 20], "hhsize": [1, 5]})
+        run_info_path = self._create_dummy_run(
+            run_id, "households_asim_out.parquet", df
+        )
+
         # 2. Execute
 
         success = run_uploader(
             run_info_path=str(run_info_path),
             database_path=str(self.db_path),
             tables=["households_asim_out"],
-            no_upload_parquet=True
+            no_upload_parquet=True,
         )
         self.assertTrue(success, f"Uploader script failed")
 
         # 3. Verify
         with self.db_manager:
             conn = self.db_manager._get_connection()
-            
+
             # Check physical table is empty
-            count = conn.execute("SELECT COUNT(*) FROM uploaded_households_asim_out").fetchone()[0]
+            count = conn.execute(
+                "SELECT COUNT(*) FROM uploaded_households_asim_out"
+            ).fetchone()[0]
             self.assertEqual(count, 0, "Data should NOT be in the uploaded_ table")
             print(f"   ✅ `uploaded_households_asim_out` is empty as expected.")
 
             # Check file_record metadata
-            record = conn.execute("SELECT storage_location, file_path FROM file_records WHERE run_id=?", [run_id]).fetchone()
-            self.assertEqual(record[0], 'external', "storage_location should be 'external'")
-            self.assertTrue(Path(record[1]).exists(), "File path in record should exist")
-            self.assertTrue(Path(record[1]).is_absolute(), "File path in record should be absolute")
+            record = conn.execute(
+                "SELECT storage_location, file_path FROM file_records WHERE run_id=?",
+                [run_id],
+            ).fetchone()
+            self.assertEqual(
+                record[0], "external", "storage_location should be 'external'"
+            )
+            self.assertTrue(
+                Path(record[1]).exists(), "File path in record should exist"
+            )
+            self.assertTrue(
+                Path(record[1]).is_absolute(), "File path in record should be absolute"
+            )
             print(f"   ✅ file_record storage_location is '{record[0]}'.")
 
             # Check combined query
-            result_relation = self.db_manager.query_hybrid_table('households_asim_out')
-            view_count = result_relation.filter(f"run_id='{run_id}'").aggregate('COUNT(*)').fetchone()[0]
-            self.assertEqual(view_count, 2, "Hybrid query should read from the external file.")
+            result_relation = self.db_manager.query_hybrid_table("households_asim_out")
+            view_count = (
+                result_relation.filter(f"run_id='{run_id}'")
+                .aggregate("COUNT(*)")
+                .fetchone()[0]
+            )
+            self.assertEqual(
+                view_count, 2, "Hybrid query should read from the external file."
+            )
             print(f"   ✅ Hybrid query returns {view_count} rows from external file.")
 
     def test_unified_view_combines_sources(self):
@@ -197,13 +236,15 @@ class TestHybridStorage(unittest.TestCase):
 
         # 1. Setup & Execute for Run 1 (Upload)
         run_id_1 = "run_hybrid_upload"
-        df1 = pd.DataFrame({'household_id': [1, 2, 3], 'hhsize': [3, 4, 1]})
-        run_info_path_1 = self._create_dummy_run(run_id_1, "households_asim_out.parquet", df1)
+        df1 = pd.DataFrame({"household_id": [1, 2, 3], "hhsize": [3, 4, 1]})
+        run_info_path_1 = self._create_dummy_run(
+            run_id_1, "households_asim_out.parquet", df1
+        )
 
         success1 = run_uploader(
             run_info_path=str(run_info_path_1),
             database_path=str(self.db_path),
-            tables=["households_asim_out"]
+            tables=["households_asim_out"],
         )
         # self.assertTrue(success1, f"Uploader script failed for run 1")
 
@@ -211,14 +252,16 @@ class TestHybridStorage(unittest.TestCase):
 
         # 2. Setup & Execute for Run 2 (Link)
         run_id_2 = "run_hybrid_link"
-        df2 = pd.DataFrame({'household_id': [10, 20], 'hhsize': [1, 5]})
-        run_info_path_2 = self._create_dummy_run(run_id_2, "households_asim_out.parquet", df2)
+        df2 = pd.DataFrame({"household_id": [10, 20], "hhsize": [1, 5]})
+        run_info_path_2 = self._create_dummy_run(
+            run_id_2, "households_asim_out.parquet", df2
+        )
 
         success2 = run_uploader(
             run_info_path=str(run_info_path_2),
             database_path=str(self.db_path),
             tables=["households_asim_out"],
-            no_upload_parquet=True
+            no_upload_parquet=True,
         )
         # self.assertTrue(success2, f"Uploader script failed for run 2")
         print("   - Run 2 (link) complete.")
@@ -230,17 +273,23 @@ class TestHybridStorage(unittest.TestCase):
             # --- ADD THIS DIAGNOSTIC BLOCK ---
             print("\n--- DIAGNOSTIC: DUMPING file_records TABLE ---")
             conn = self.db_manager._get_connection()
-            records_df = conn.execute("SELECT run_id, unique_id, storage_location, logical_table_name, data_format FROM file_records").fetchdf()
+            records_df = conn.execute(
+                "SELECT run_id, unique_id, storage_location, logical_table_name, data_format FROM file_records"
+            ).fetchdf()
             print(records_df.T)
             print("--------------------------------------------\n")
             # --- END DIAGNOSTIC BLOCK ---
-            result_relation = self.db_manager.query_hybrid_table('households_asim_out')
+            result_relation = self.db_manager.query_hybrid_table("households_asim_out")
 
             # You can now work with the result
             # CORRECT WAY to get the total count:
-            total_count = result_relation.aggregate('COUNT(*)').fetchone()[0]
+            total_count = result_relation.aggregate("COUNT(*)").fetchone()[0]
 
-            self.assertEqual(total_count, 5, "Unified query should return combined count from both sources.")
+            self.assertEqual(
+                total_count,
+                5,
+                "Unified query should return combined count from both sources.",
+            )
             print(f"   ✅ Unified query returned a total of {total_count} rows.")
 
             # To get data for a specific run, use .filter() and then a terminator

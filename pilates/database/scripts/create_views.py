@@ -4,7 +4,9 @@ import logging
 from pathlib import Path
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # --- Configuration ---
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,34 +41,37 @@ def parse_create_table(sql_content: str):
     """
     create_table_pattern = re.compile(
         r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\((.*?)\);",
-        re.DOTALL | re.IGNORECASE
+        re.DOTALL | re.IGNORECASE,
     )
 
     tables = {}
     for match in create_table_pattern.finditer(sql_content):
         table_name = match.group(1)
         body = match.group(2)
-        
+
         # Remove SQL comments
-        body = re.sub(r'--.*$', '', body, flags=re.MULTILINE)
-        
+        body = re.sub(r"--.*$", "", body, flags=re.MULTILINE)
+
         columns = []
         # Split into potential column definitions or constraints
         # Split by comma that is NOT inside parentheses (for constraint definitions)
-        parts = re.split(r',\s*(?![^()]*\))', body)
-        
+        parts = re.split(r",\s*(?![^()]*\))", body)
+
         for part in parts:
             part = part.strip()
-            if not part: continue
-            
-            # Check if this part is a constraint definition
-            if re.match(r'(PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CONSTRAINT)', part, re.IGNORECASE):
+            if not part:
                 continue
-            
+
+            # Check if this part is a constraint definition
+            if re.match(
+                r"(PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CONSTRAINT)", part, re.IGNORECASE
+            ):
+                continue
+
             # Extract column name - it's the first word. Can be quoted.
             col_match = re.match(r'^("?\w+"?)\s+', part)
             if col_match:
-                column_name = col_match.group(1) # Keep quotes for now
+                column_name = col_match.group(1)  # Keep quotes for now
                 columns.append(column_name)
 
         # Filter out duplicates and ensure proper order
@@ -85,7 +90,7 @@ def parse_create_table(sql_content: str):
 def generate_sql(file_path: Path):
     """
     Generates the SQL for renamed tables from a given schema file.
-    The concept of a static, unified view is deprecated in favor of 
+    The concept of a static, unified view is deprecated in favor of
     programmatic query generation.
     """
     logging.info(f"Processing schema file: {file_path.name}")
@@ -100,28 +105,24 @@ def generate_sql(file_path: Path):
         # 1. Rename the original table to "uploaded_<name>"
         renamed_tables_sql = renamed_tables_sql.replace(
             f"CREATE TABLE IF NOT EXISTS {table_name}",
-            f"CREATE TABLE IF NOT EXISTS uploaded_{table_name}"
+            f"CREATE TABLE IF NOT EXISTS uploaded_{table_name}",
         )
-        
+
         # 2. Update foreign key references within this file
         for t_name in tables_and_columns.keys():
             renamed_tables_sql = renamed_tables_sql.replace(
-                f"REFERENCES {t_name}",
-                f"REFERENCES uploaded_{t_name}"
+                f"REFERENCES {t_name}", f"REFERENCES uploaded_{t_name}"
             )
-        
+
         # 3. Rename indexes
         renamed_tables_sql = renamed_tables_sql.replace(
-            f"ON {table_name}",
-            f"ON uploaded_{table_name}"
+            f"ON {table_name}", f"ON uploaded_{table_name}"
         )
         renamed_tables_sql = renamed_tables_sql.replace(
-            f"idx_{table_name}_",
-            f"idx_uploaded_{table_name}_"
+            f"idx_{table_name}_", f"idx_uploaded_{table_name}_"
         )
         renamed_tables_sql = renamed_tables_sql.replace(
-            f"COMMENT ON TABLE {table_name}",
-            f"COMMENT ON TABLE uploaded_{table_name}"
+            f"COMMENT ON TABLE {table_name}", f"COMMENT ON TABLE uploaded_{table_name}"
         )
 
     return renamed_tables_sql
@@ -133,9 +134,9 @@ def main():
     """
     logging.info("Starting SQL table rename script.")
     GENERATED_DIR.mkdir(exist_ok=True)
-    
+
     all_renamed_sql = []
-    
+
     for file_name in FILES_TO_PROCESS:
         file_path = SCHEMA_DIR / file_name
         if not file_path.exists():

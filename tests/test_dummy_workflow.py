@@ -83,7 +83,9 @@ import shutil
 from pathlib import Path
 import tempfile
 from typing import Tuple
+from types import SimpleNamespace
 
+from pilates.generic.model import provenance_logging
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.runner import GenericRunner
 from pilates.generic.postprocessor import GenericPostprocessor
@@ -171,6 +173,11 @@ class DummyWorkflowState:
         self.current_major_stage = current_major_stage
         self.current_inner_iter = current_inner_iter
         self.sub_stage_progress = None
+        # ADDED: Mock settings object to provide database path
+        self.full_settings = SimpleNamespace(
+            shared=SimpleNamespace(database=SimpleNamespace(path=None))
+        )
+        self.run_id = "test_run"
 
     def set_sub_stage_progress(self, progress):
         """Set the current sub-stage (e.g., 'preprocessor', 'runner', 'postprocessor')."""
@@ -285,34 +292,43 @@ class DummyModelAPreprocessor(GenericPreprocessor):
             input_h5_table2_record.unique_id,
         ]
 
-        self.provenance_tracker.record_input_file(
-            model=self.model_name,
-            file_path=input_csv_record.file_path,
-            description=input_csv_record.description,
-            short_name=input_csv_record.short_name,
-            context=self.state,
+        # Record provenance for copied files (inputs)
+        input_csv_path = os.path.join(input_dir, "data.csv")
+        input_csv_record = FileRecord(
+            file_path=input_csv_path,
+            short_name="data.csv",
+            description="Dummy CSV input for Model A",
+            unique_id=make_unique_id(input_csv_path),
         )
-        self.provenance_tracker.record_input_file(
-            model=self.model_name,
-            file_path=input_h5_file_record.file_path,
-            description=input_h5_file_record.description,
-            short_name=input_h5_file_record.short_name,
-            context=self.state,
+        # Create H5FileRecord first to get its unique_id
+        input_h5_path = os.path.join(input_dir, "data.h5")
+        input_h5_file_record = H5FileRecord(
+            file_path=input_h5_path,
+            short_name="data.h5",
+            description="Dummy H5 input for Model A",
+            unique_id=make_unique_id(input_h5_path),
         )
-        self.provenance_tracker.record_input_file(
-            model=self.model_name,
-            file_path=input_h5_table1_record.file_path,
-            description=input_h5_table1_record.description,
-            short_name=input_h5_table1_record.short_name,
-            context=self.state,
+        # Now create H5TableRecords using the H5FileRecord's unique_id
+        input_h5_table1_path = input_h5_path + "/table1"
+        input_h5_table1_record = H5TableRecord(
+            file_path=input_h5_table1_path,
+            h5_file_unique_id=input_h5_file_record.unique_id,
+            table_name="table1",
+            description="Table 1 from dummy H5",
+            unique_id=make_unique_id(input_h5_table1_path),
         )
-        self.provenance_tracker.record_input_file(
-            model=self.model_name,
-            file_path=input_h5_table2_record.file_path,
-            description=input_h5_table2_record.description,
-            short_name=input_h5_table2_record.short_name,
-            context=self.state,
+        input_h5_table2_path = input_h5_path + "/table2"
+        input_h5_table2_record = H5TableRecord(
+            file_path=input_h5_table2_path,
+            h5_file_unique_id=input_h5_file_record.unique_id,
+            table_name="table2",
+            description="Table 2 from dummy H5",
+            unique_id=make_unique_id(input_h5_table2_path),
         )
+        input_h5_file_record.table_record_ids = [
+            input_h5_table1_record.unique_id,
+            input_h5_table2_record.unique_id,
+        ]
 
         # Record provenance for copied files (outputs of this copy operation)
         output_csv_path = os.path.join(output_dir, "data.csv")
@@ -348,35 +364,6 @@ class DummyModelAPreprocessor(GenericPreprocessor):
             output_h5_table2_record.unique_id,
         ]
 
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_csv_record.file_path,
-            description=output_csv_record.description,
-            short_name=output_csv_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_file_record.file_path,
-            description=output_h5_file_record.description,
-            short_name=output_h5_file_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_table1_record.file_path,
-            description=output_h5_table1_record.description,
-            short_name=output_h5_table1_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_table2_record.file_path,
-            description=output_h5_table2_record.description,
-            short_name=output_h5_table2_record.short_name,
-            context=self.state,
-        )
-
         return RecordStore(
             recordList=[
                 input_csv_record,
@@ -393,16 +380,14 @@ class DummyModelAPreprocessor(GenericPreprocessor):
             ]
         )
 
+    @provenance_logging
     def _preprocess(
         self, workspace: Workspace, previous_records: RecordStore = RecordStore()
     ) -> RecordStore:
-        # In this dummy example, _preprocess doesn't need to do much
-        # as the initial data copying is handled by copy_data_to_mutable_location.
-        # It just needs to return the records that are now available in the workspace.
-        # These would be the output_records from copy_data_to_mutable_location.
-        # However, the `preprocess` method in GenericPreprocessor already handles this.
-        # So, _preprocess can simply return an empty RecordStore or the previous_records if needed.
-        # For now, let's assume it just passes through the records it received.
+        # In this dummy example, the preprocessor simply passes through the records
+        # that were copied to the mutable location.
+        # The actual copying is handled by copy_data_to_mutable_location,
+        # and its outputs are passed as previous_records to this method.
         return previous_records
 
 
@@ -453,6 +438,7 @@ class DummyModelARunner(GenericRunner):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
+    @provenance_logging
     def _run(
         self, store: RecordStore, workspace: Workspace
     ) -> Tuple[RecordStore, ModelRunInfo]:
@@ -502,32 +488,11 @@ class DummyModelARunner(GenericRunner):
             file_path=output_h5_table_path,
             h5_file_unique_id=output_h5_file_record.unique_id,
             table_name="table1_modified",
+            short_name="table1_modified",
             description="Modified Table 1 from Model A H5 output",
             unique_id=make_unique_id(output_h5_table_path),
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
-
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_csv_path,
-            short_name=f"model_a_output_{year}.csv",
-            description="Output CSV from Model A Runner",
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_file_record.file_path,
-            description=output_h5_file_record.description,
-            short_name=output_h5_file_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_table_record.file_path,
-            description=output_h5_table_record.description,
-            short_name=output_h5_table_record.short_name,
-            context=self.state,
-        )
 
         return (
             RecordStore(
@@ -567,6 +532,7 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
+    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
@@ -623,31 +589,10 @@ class DummyModelAPostprocessor(GenericPostprocessor):
             file_path=final_h5_path + "/table1_final",
             h5_file_unique_id=final_h5_file_record.unique_id,
             table_name="table1_final",
+            short_name="table1_final",
             description="Final Table from Model A H5 output",
         )
         final_h5_file_record.table_record_ids = [final_h5_table_record.unique_id]
-
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=final_csv_path,
-            short_name=f"model_a_final_output_{year}.csv",
-            description="Final CSV from Model A Postprocessor",
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=final_h5_file_record.file_path,
-            description=final_h5_file_record.description,
-            short_name=final_h5_file_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=final_h5_table_record.file_path,
-            description=final_h5_table_record.description,
-            short_name=final_h5_table_record.short_name,
-            context=self.state,
-        )
 
         return RecordStore(
             recordList=[
@@ -692,6 +637,7 @@ class DummyModelBPreprocessor(GenericPreprocessor):
         # So, this method can return empty RecordStores.
         return RecordStore(), RecordStore()
 
+    @provenance_logging
     def _preprocess(
         self, workspace: Workspace, previous_records: RecordStore = RecordStore()
     ) -> RecordStore:
@@ -725,6 +671,7 @@ class DummyModelBRunner(GenericRunner):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
+    @provenance_logging
     def _run(
         self, store: RecordStore, workspace: Workspace
     ) -> Tuple[RecordStore, ModelRunInfo]:
@@ -777,31 +724,10 @@ class DummyModelBRunner(GenericRunner):
             file_path=output_h5_path + "/table_b_modified",
             h5_file_unique_id=output_h5_file_record.unique_id,
             table_name="table_b_modified",
+            short_name="table_b_modified",
             description="Modified Table from Model B H5 output",
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
-
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_csv_path,
-            short_name=f"model_b_output_{year}.csv",
-            description="Output CSV from Model B Runner",
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_file_record.file_path,
-            description=output_h5_file_record.description,
-            short_name=output_h5_file_record.short_name,
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=output_h5_table_record.file_path,
-            description=output_h5_table_record.description,
-            short_name=output_h5_table_record.short_name,
-            context=self.state,
-        )
 
         return (
             RecordStore(
@@ -824,6 +750,7 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         super().__init__(model_name, state, provenance_tracker)
         self.config = config
 
+    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
@@ -871,21 +798,6 @@ class DummyModelBPostprocessor(GenericPostprocessor):
             f.write(f"Total sum from Model B H5: {total_sum}")
 
         # Record provenance for final output files
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=final_txt_path,
-            short_name=f"model_b_final_output_{year}.txt",
-            description="Final TXT from Model B Postprocessor (row count)",
-            context=self.state,
-        )
-        self.provenance_tracker.record_output_file(
-            model=self.model_name,
-            file_path=final_h5_summary_path,
-            short_name=f"model_b_final_output_summary_{year}.txt",
-            description="Final TXT from Model B Postprocessor (H5 sum)",
-            context=self.state,
-        )
-
         return RecordStore(
             recordList=[
                 FileRecord(
@@ -988,6 +900,8 @@ class TestDummyWorkflow:
 
         # Initialize DummyWorkflowState and DummyWorkspace
         workflow_state = DummyWorkflowState(current_year=year)
+        # Set the database path for the dummy state to allow provenance logging
+        workflow_state.full_settings.shared.database.path = str(db_path)
         workspace = DummyWorkspace(output_dir=str(workflow_output_dir))
 
         # --- Run Model A ---

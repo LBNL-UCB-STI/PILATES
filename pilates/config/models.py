@@ -47,7 +47,10 @@ class RunConfig(BaseModel):
     scenario: str = Field(..., description="Scenario name")
     start_year: int = Field(..., description="First simulation year", ge=1900, le=2100)
     end_year: int = Field(..., description="Final simulation year", ge=1900, le=2100)
-    use_stubs: bool = Field(False, description="Whether to substitute stub models for containers -- used for testing")
+    use_stubs: bool = Field(
+        False,
+        description="Whether to substitute stub models for containers -- used for testing",
+    )
 
     # Model execution frequencies (GLOBAL scope)
     land_use_freq: int = Field(1, description="How often land use model runs", ge=1)

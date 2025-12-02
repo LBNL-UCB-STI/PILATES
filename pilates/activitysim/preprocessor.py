@@ -2077,12 +2077,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 description="BEAM skims from production (copied on demand)",
                 short_name="omx_skims_production",
             )
-            self.provenance_tracker.record_output_file(
-                "activitysim_preprocessor",
-                path_to_beam_skims_in_current_run_workspace,
+            # Record output file for this model run
+            from pilates.generic.records import FileRecord
+
+            beam_skims_output_rec = FileRecord(
+                file_path=path_to_beam_skims_in_current_run_workspace,
+                models=["activitysim_preprocessor"],
                 description="BEAM skims copied to current workspace",
                 short_name="omx_skims_current_workspace",
             )
+            output_records.add_record(beam_skims_output_rec)
 
         input_records = workspace.output_data.get("activitysim", RecordStore())
         input_records_filtered = RecordStore(
@@ -2126,10 +2130,12 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             )
 
         # Record the skims file as an OUTPUT of the preprocessor
-        skim_record = self.provenance_tracker.record_output_file(
-            "activitysim_preprocessor",
-            skims_loc,
-            model_run_id=pre_run_hash,
+        # Record output file for this model run
+        from pilates.generic.records import FileRecord
+
+        skim_record = FileRecord(
+            file_path=skims_loc,
+            models=["activitysim_preprocessor"],
             short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
         )

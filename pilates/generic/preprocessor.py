@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
-from pilates.generic.model import Model
+from pilates.generic.model import Model, provenance_logging
 from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
 
@@ -85,5 +85,7 @@ class GenericPreprocessor(ABC, Model):
     ) -> RecordStore:
         """
         Preprocess input data for the model.
+
+        Subclasses should apply the @provenance_logging decorator to their implementation.
         """
         raise NotImplementedError

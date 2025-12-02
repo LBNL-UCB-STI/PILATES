@@ -1,3 +1,12 @@
+"""
+Utility functions for managing geographical zones and their mappings.
+
+This module provides functionalities for loading canonical zone definitions,
+generating block-to-zone mappings, and ensuring consistent indexing and metadata
+for zonal data, particularly important for ActivitySim and other spatially-aware
+models within the PILATES framework.
+"""
+
 import logging
 import os
 import pandas as pd

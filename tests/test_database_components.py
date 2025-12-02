@@ -16,6 +16,7 @@ from pathlib import Path
 # Import PILATES modules
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from duckdb.duckdb import ConstraintException
@@ -103,13 +104,16 @@ class TestDatabaseComponents(unittest.TestCase):
         self.generated_dir.mkdir(parents=True, exist_ok=True)
 
         # Copy original schema files to the temporary location
-        original_schema_dir = Path(__file__).parent.parent / "pilates" / "database" / "schema"
+        original_schema_dir = (
+            Path(__file__).parent.parent / "pilates" / "database" / "schema"
+        )
         for fname in os.listdir(original_schema_dir):
-            if fname.endswith('.sql'):
+            if fname.endswith(".sql"):
                 shutil.copy(original_schema_dir / fname, self.test_schema_dir)
-        
+
         # Point the view creation script to our temporary directories and run it
         from pilates.database.scripts import create_views
+
         create_views.SCHEMA_DIR = self.test_schema_dir
         create_views.GENERATED_DIR = self.generated_dir
         create_views.main()

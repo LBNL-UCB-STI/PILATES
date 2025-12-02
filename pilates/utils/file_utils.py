@@ -1,3 +1,11 @@
+"""
+Utility functions for file operations.
+
+This module provides helper functions for validating file paths,
+calculating file hashes, determining relative paths, and loading
+associated metadata for various files within the PILATES framework.
+"""
+
 import os
 import hashlib
 import json

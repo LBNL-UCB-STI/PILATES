@@ -15,6 +15,7 @@ import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
+from pilates.generic.model import provenance_logging
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 
@@ -108,6 +109,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             recordList=output_records
         )
 
+    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -119,10 +121,10 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         Steps:
         1. Record all input files (UrbanSim HDF5, BEAM skims if needed) for provenance.
-        2. Start the model run in provenance.
+        2. Start the model run in provenance (handled by @provenance_logging decorator).
         3. Extract UrbanSim HDF5 tables and write them as CSVs for ATLAS.
         4. If enabled, compute accessibility using BEAM skims.
-        5. Complete the model run in provenance and return a RecordStore of all input/output files.
+        5. Complete the model run in provenance (handled by @provenance_logging decorator).
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
@@ -224,7 +226,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             "year{}".format(self.state.year),
         )
 
-        # --- Record all input files before starting model run ---
+        # --- Record all input files before processing ---
         input_records = []
 
         # Record UrbanSim HDF5 as input
@@ -293,15 +295,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                             )
                         )
 
-        # Now start the model run, passing all input records
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "atlas_preprocessor",
-            self.state.current_year,
-            description="ATLAS preprocessing",
-            inputs=RecordStore(recordList=[r for r in input_records if r is not None]),
-        )
-        logger.info(
-            f"[AtlasPreprocessor] Started provenance model run for ATLAS preprocessing: {model_run_hash}"
+        # Get the model_run_hash from the provenance tracker (set by the decorator)
+        model_run_hash = next(
+            iter(self.provenance_tracker.run_info.model_runs.keys()), None
         )
 
         # --- Write ATLAS input CSVs and record as outputs ---
@@ -438,12 +434,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     )
                 )
 
-        self.provenance_tracker.complete_model_run(
-            run_hash=model_run_hash, output_records=output_records
-        )
-        logger.info(
-            f"[AtlasPreprocessor] Completed provenance model run for ATLAS preprocessing: {model_run_hash}"
-        )
+        logger.info("[AtlasPreprocessor] ATLAS preprocessing complete.")
         return RecordStore(recordList=output_records)
 
 

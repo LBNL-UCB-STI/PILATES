@@ -49,7 +49,9 @@ def compute_zarr_chunk_manifest(zarr_path: Path) -> Dict[str, str]:
     """
     chunk_manifest = {}
     if not zarr_path.is_dir():
-        logger.warning(f"Zarr path {zarr_path} is not a directory. Cannot compute chunk manifest.")
+        logger.warning(
+            f"Zarr path {zarr_path} is not a directory. Cannot compute chunk manifest."
+        )
         return chunk_manifest
 
     # Find all chunk files (e.g., 0.0.0, 1.2.3, etc.)
@@ -77,12 +79,14 @@ def get_zarr_metadata(zarr_path: Path) -> Dict[str, Any]:
         Dict with 'n_variables', 'n_chunks', 'total_size_mb'.
     """
     if not zarr_path.is_dir():
-        logger.warning(f"Zarr path {zarr_path} is not a directory. Cannot get Zarr metadata.")
+        logger.warning(
+            f"Zarr path {zarr_path} is not a directory. Cannot get Zarr metadata."
+        )
         return {"n_variables": 0, "n_chunks": 0, "total_size_mb": 0.0}
 
     try:
-        with xr.open_zarr(zarr_path) as ds: # Open with xarray
-            n_variables = len(ds.data_vars) # Count xarray data variables
+        with xr.open_zarr(zarr_path) as ds:  # Open with xarray
+            n_variables = len(ds.data_vars)  # Count xarray data variables
 
         # Count chunk files using the heuristic from compute_zarr_chunk_manifest
         n_chunks = sum(
@@ -119,7 +123,9 @@ def get_netcdf_metadata(netcdf_path: Path) -> Dict[str, Any]:
         Dict with 'n_variables', 'file_size_mb'.
     """
     if not netcdf_path.is_file():
-        logger.warning(f"NetCDF path {netcdf_path} is not a file. Cannot get NetCDF metadata.")
+        logger.warning(
+            f"NetCDF path {netcdf_path} is not a file. Cannot get NetCDF metadata."
+        )
         return {"n_variables": 0, "file_size_mb": 0.0}
 
     try:
@@ -151,7 +157,9 @@ def get_artifact_metadata(path: Path, artifact_format: str) -> Dict[str, Any]:
     elif artifact_format.lower() == "netcdf":
         return get_netcdf_metadata(path)
     else:
-        logger.warning(f"Unsupported artifact format: {artifact_format}. Returning empty metadata.")
+        logger.warning(
+            f"Unsupported artifact format: {artifact_format}. Returning empty metadata."
+        )
         return {}
 
 
@@ -180,14 +188,19 @@ def copy_artifact(source_path: Path, destination_path: Path, artifact_format: st
 
     if artifact_format.lower() == "zarr":
         if not source_path.is_dir():
-            raise TypeError(f"Source path for Zarr artifact must be a directory: {source_path}")
+            raise TypeError(
+                f"Source path for Zarr artifact must be a directory: {source_path}"
+            )
         if destination_path.exists():
             shutil.rmtree(destination_path)
         shutil.copytree(source_path, destination_path)
         logger.info(f"Copied Zarr store from {source_path} to {destination_path}")
     else:  # Assume any other format is a single file
         if not source_path.is_file():
-            raise TypeError(f"Source path for file-based artifact '{artifact_format}' must be a file: {source_path}")
+            raise TypeError(
+                f"Source path for file-based artifact '{artifact_format}' must be a file: {source_path}"
+            )
         shutil.copy2(source_path, destination_path)
-        logger.info(f"Copied {artifact_format.upper()} file from {source_path} to {destination_path}")
-
+        logger.info(
+            f"Copied {artifact_format.upper()} file from {source_path} to {destination_path}"
+        )

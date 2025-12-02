@@ -790,6 +790,7 @@ class TestStubProvenanceFlow:
             if fixture_zarr.exists():
                 print("\n📸 Creating zarr initialization snapshot...")
                 from pilates.utils.snapshot_manager import SnapshotManager
+
                 db_manager = create_database_manager(settings_obj.shared.database)
                 assert db_manager is not None
                 db_manager.initialize_database()
@@ -799,7 +800,7 @@ class TestStubProvenanceFlow:
                     conn = db_manager._get_connection()
                     conn.execute(
                         "INSERT INTO runs (run_id, created_at) VALUES (?, ?)",
-                        [run_id, datetime.now().isoformat()]
+                        [run_id, datetime.now().isoformat()],
                     )
 
                 # Initialize snapshot manager
@@ -968,7 +969,7 @@ class TestStubProvenanceFlow:
                     artifact_format="zarr",
                     parent_snapshot_id=zarr_snapshot_id,
                     provenance_tracker=provenance_tracker,
-                    partial_skims_path=str(beam_partial_zarr)
+                    partial_skims_path=str(beam_partial_zarr),
                 )
                 print(f"   ✅ Created BEAM snapshot: {beam_snapshot_id}")
 
@@ -1197,27 +1198,49 @@ class TestStubProvenanceFlow:
                 zarr_archive_path = Path(tmpdir) / "zarr_archives"
 
                 # Verify initialization snapshot artifact
-                init_snapshot_path = zarr_archive_path / zarr_snapshot_id / "artifact.zarr"
-                assert init_snapshot_path.exists(), f"Initialization snapshot artifact should exist at {init_snapshot_path}"
-                assert init_snapshot_path.is_dir(), "Zarr snapshot artifact should be a directory"
-                print(f"   ✅ Initialization snapshot artifact found: {init_snapshot_path}")
+                init_snapshot_path = (
+                    zarr_archive_path / zarr_snapshot_id / "artifact.zarr"
+                )
+                assert (
+                    init_snapshot_path.exists()
+                ), f"Initialization snapshot artifact should exist at {init_snapshot_path}"
+                assert (
+                    init_snapshot_path.is_dir()
+                ), "Zarr snapshot artifact should be a directory"
+                print(
+                    f"   ✅ Initialization snapshot artifact found: {init_snapshot_path}"
+                )
 
                 # Verify BEAM snapshot artifact
                 assert beam_snapshot_id, "BEAM snapshot should have been created"
-                beam_snapshot_path = zarr_archive_path / beam_snapshot_id / "artifact.zarr"
-                assert beam_snapshot_path.exists(), f"BEAM snapshot artifact should exist at {beam_snapshot_path}"
-                assert beam_snapshot_path.is_dir(), "Zarr snapshot artifact should be a directory"
+                beam_snapshot_path = (
+                    zarr_archive_path / beam_snapshot_id / "artifact.zarr"
+                )
+                assert (
+                    beam_snapshot_path.exists()
+                ), f"BEAM snapshot artifact should exist at {beam_snapshot_path}"
+                assert (
+                    beam_snapshot_path.is_dir()
+                ), "Zarr snapshot artifact should be a directory"
                 print(f"   ✅ BEAM snapshot artifact found: {beam_snapshot_path}")
 
                 # The rest of the verification can rely on the database, which is what the `SnapshotManager` does.
                 # Verify lineage by checking parent id from DB
                 beam_snap_info = snapshot_manager.get_snapshot_info(beam_snapshot_id)
-                assert beam_snap_info, "Should be able to retrieve BEAM snapshot info from DB"
-                assert beam_snap_info['parent_snapshot_id'] == zarr_snapshot_id, "Lineage check failed: parent_snapshot_id does not match"
-                print(f"   ✅ Lineage verified via DB: {zarr_snapshot_id} → {beam_snapshot_id}")
+                assert (
+                    beam_snap_info
+                ), "Should be able to retrieve BEAM snapshot info from DB"
+                assert (
+                    beam_snap_info["parent_snapshot_id"] == zarr_snapshot_id
+                ), "Lineage check failed: parent_snapshot_id does not match"
+                print(
+                    f"   ✅ Lineage verified via DB: {zarr_snapshot_id} → {beam_snapshot_id}"
+                )
 
                 # Verify snapshot info retrieval from DB
-                init_snapshot_info = snapshot_manager.get_snapshot_info(zarr_snapshot_id)
+                init_snapshot_info = snapshot_manager.get_snapshot_info(
+                    zarr_snapshot_id
+                )
                 assert (
                     init_snapshot_info is not None
                 ), "Should be able to retrieve snapshot info"
@@ -1231,24 +1254,41 @@ class TestStubProvenanceFlow:
             # ============================================================
             # Verify SnapshotManager restore and query methods
             # ============================================================
-            if 'snapshot_manager' in locals() and snapshot_manager and 'beam_snapshot_id' in locals() and beam_snapshot_id:
+            if (
+                "snapshot_manager" in locals()
+                and snapshot_manager
+                and "beam_snapshot_id" in locals()
+                and beam_snapshot_id
+            ):
                 print("\n🔍 Verifying SnapshotManager restore and query...")
 
                 # 1. Test get_latest_snapshot_id_for_run
                 latest_id = snapshot_manager.get_latest_snapshot_id_for_run(run_id)
                 # The BEAM snapshot should be the latest one created in this test.
-                assert latest_id == beam_snapshot_id, f"Expected latest snapshot to be {beam_snapshot_id}, but got {latest_id}"
-                print(f"   ✅ get_latest_snapshot_id_for_run returned correct ID: {latest_id}")
+                assert (
+                    latest_id == beam_snapshot_id
+                ), f"Expected latest snapshot to be {beam_snapshot_id}, but got {latest_id}"
+                print(
+                    f"   ✅ get_latest_snapshot_id_for_run returned correct ID: {latest_id}"
+                )
 
                 # 2. Test restore_snapshot with a Zarr artifact
                 restore_dir = Path(tmpdir) / "restored_skims"
-                restored_path = snapshot_manager.restore_snapshot(zarr_snapshot_id, restore_dir)
+                restored_path = snapshot_manager.restore_snapshot(
+                    zarr_snapshot_id, restore_dir
+                )
 
                 assert restored_path.exists(), "Restored snapshot path should exist"
-                assert restored_path.is_dir(), "Restored Zarr snapshot should be a directory"
+                assert (
+                    restored_path.is_dir()
+                ), "Restored Zarr snapshot should be a directory"
                 # A simple check to see if it looks like a Zarr store
-                assert (restored_path / ".zattrs").exists(), "Restored Zarr store should have .zattrs"
-                print(f"   ✅ restore_snapshot successfully restored Zarr artifact to {restored_path}")
+                assert (
+                    restored_path / ".zattrs"
+                ).exists(), "Restored Zarr store should have .zattrs"
+                print(
+                    f"   ✅ restore_snapshot successfully restored Zarr artifact to {restored_path}"
+                )
 
                 # 3. Test with a non-Zarr artifact to ensure format-agnosticism
                 dummy_file = Path(tmpdir) / "dummy_artifact.txt"
@@ -1264,7 +1304,9 @@ class TestStubProvenanceFlow:
                     artifact_format="txt",
                 )
 
-                text_snapshot_info = snapshot_manager.get_snapshot_info(text_snapshot_id)
+                text_snapshot_info = snapshot_manager.get_snapshot_info(
+                    text_snapshot_id
+                )
                 assert text_snapshot_info is not None
                 assert text_snapshot_info["format"] == "txt"
                 print("   ✅ create_snapshot works for non-Zarr formats")
@@ -1456,6 +1498,7 @@ class TestStubProvenanceFlow:
             if fixture_zarr.exists():
                 print("\n📸 Creating zarr initialization snapshot...")
                 from pilates.utils.snapshot_manager import SnapshotManager
+
                 db_manager = create_database_manager(settings_obj.shared.database)
                 assert db_manager is not None
                 db_manager.initialize_database()
@@ -1465,7 +1508,7 @@ class TestStubProvenanceFlow:
                     conn = db_manager._get_connection()
                     conn.execute(
                         "INSERT INTO runs (run_id, created_at) VALUES (?, ?)",
-                        [run_id, datetime.now().isoformat()]
+                        [run_id, datetime.now().isoformat()],
                     )
 
                 zarr_archive_path = Path(tmpdir) / "zarr_archives"
@@ -1619,7 +1662,7 @@ class TestStubProvenanceFlow:
                     artifact_format="zarr",
                     parent_snapshot_id=zarr_snapshot_id,
                     provenance_tracker=provenance_tracker,
-                    partial_skims_path=str(beam_partial_zarr)
+                    partial_skims_path=str(beam_partial_zarr),
                 )
                 print(f"   ✅ Created BEAM snapshot: {beam_snapshot_id}")
 
@@ -1966,20 +2009,24 @@ class TestStubProvenanceFlow:
                 print("\n🔍 Verifying zarr versioning...")
 
                 # This test does not create a full manifest, so we check the db
-                beam_snapshot_id = snapshot_manager.get_latest_snapshot_id_for_run(run_id)
-                assert beam_snapshot_id is not None, "BEAM snapshot should have been created"
+                beam_snapshot_id = snapshot_manager.get_latest_snapshot_id_for_run(
+                    run_id
+                )
+                assert (
+                    beam_snapshot_id is not None
+                ), "BEAM snapshot should have been created"
 
                 beam_snap_info = snapshot_manager.get_snapshot_info(beam_snapshot_id)
                 init_snap_info = snapshot_manager.get_snapshot_info(zarr_snapshot_id)
 
-                assert init_snap_info['snapshot_type'] == 'initialization'
-                assert init_snap_info['iteration'] == -1
+                assert init_snap_info["snapshot_type"] == "initialization"
+                assert init_snap_info["iteration"] == -1
                 print("   ✅ Initialization snapshot verified")
 
-                assert beam_snap_info['snapshot_type'] == 'merged'
-                assert beam_snap_info['parent_snapshot_id'] == zarr_snapshot_id
+                assert beam_snap_info["snapshot_type"] == "merged"
+                assert beam_snap_info["parent_snapshot_id"] == zarr_snapshot_id
                 print("   ✅ BEAM snapshot verified")
-                
+
                 print("   ✅ Lineage tracking working")
 
                 print("   ✅ All zarr versioning features validated!")
@@ -2034,12 +2081,13 @@ class TestStubProvenanceFlow:
         settings_dict = get_minimal_settings(tmpdir)
 
         from pilates.config.models import validate_config
+
         settings_obj = validate_config(settings_dict)
 
         # 1. Setup
         provenance_tracker = OpenLineageTracker(run_id, tmpdir, folder_name="move_test")
         provenance_tracker.initialize_from_settings(settings_obj)
-        
+
         state = WorkflowState.from_settings(settings_obj)
         state.current_year = 2025
         state.current_inner_iter = 1
@@ -2052,7 +2100,9 @@ class TestStubProvenanceFlow:
 
         # 2. Act
         # Simulate the runner creating the initial record for the temp file
-        runner_run_hash = provenance_tracker.start_model_run("dummy_runner", state.current_year, state.current_inner_iter)
+        runner_run_hash = provenance_tracker.start_model_run(
+            "dummy_runner", state.current_year, state.current_inner_iter
+        )
         original_record = provenance_tracker.record_output_file(
             "dummy_runner",
             source_path,
@@ -2060,15 +2110,26 @@ class TestStubProvenanceFlow:
             model_run_id=runner_run_hash,
             state=state,
         )
-        provenance_tracker.complete_model_run(runner_run_hash, output_records=[original_record])
-        
+        provenance_tracker.complete_model_run(
+            runner_run_hash, output_records=[original_record]
+        )
+
         assert original_record is not None
-        print(f"   ✅ Original record created with short_name: '{original_record.short_name}'")
+        print(
+            f"   ✅ Original record created with short_name: '{original_record.short_name}'"
+        )
 
         # Simulate the post-processor moving the file
-        destination_path = os.path.join(tmpdir, "archive", "year-2025-iteration-1", "my_output.txt")
-        
-        post_run_hash = provenance_tracker.start_model_run("dummy_postprocessor", state.current_year, state.current_inner_iter, inputs=RecordStore(recordList=[original_record]))
+        destination_path = os.path.join(
+            tmpdir, "archive", "year-2025-iteration-1", "my_output.txt"
+        )
+
+        post_run_hash = provenance_tracker.start_model_run(
+            "dummy_postprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            inputs=RecordStore(recordList=[original_record]),
+        )
 
         moved_record = provenance_tracker.move_file(
             record=original_record,
@@ -2077,17 +2138,23 @@ class TestStubProvenanceFlow:
             model="dummy_postprocessor",
             state=state,
         )
-        
+
         assert moved_record is not None, "`move_file` should return the new record"
 
         # In a real run, the postprocessor would now apply our fixes. We simulate that here.
-        moved_record.file_path = provenance_tracker.get_path_relative_to_workspace_root(destination_path)
+        moved_record.file_path = provenance_tracker.get_path_relative_to_workspace_root(
+            destination_path
+        )
         moved_record.iteration = state.current_inner_iter
         moved_record.sub_iteration = state.current_sub_iter
-        
-        provenance_tracker.complete_model_run(post_run_hash, output_records=[moved_record])
-        
-        print("   ✅ `move_file` executed and record manually corrected for test validation.")
+
+        provenance_tracker.complete_model_run(
+            post_run_hash, output_records=[moved_record]
+        )
+
+        print(
+            "   ✅ `move_file` executed and record manually corrected for test validation."
+        )
 
         # 3. Assert
         run_info = provenance_tracker.get_run_info()
@@ -2097,43 +2164,63 @@ class TestStubProvenanceFlow:
 
         # Find the original record by its unique ID
         original_record_from_log = file_records.get(original_record.unique_id)
-        assert original_record_from_log is not None, "Original record should still be in the log"
-        assert original_record_from_log["exists"] is False, "Original record should be marked as not existing."
+        assert (
+            original_record_from_log is not None
+        ), "Original record should still be in the log"
+        assert (
+            original_record_from_log["exists"] is False
+        ), "Original record should be marked as not existing."
         print("   ✅ Original record correctly marked with exists=False.")
 
         # Find the new, moved record by its destination path.
-        relative_dest_path = provenance_tracker.get_path_relative_to_workspace_root(destination_path)
+        relative_dest_path = provenance_tracker.get_path_relative_to_workspace_root(
+            destination_path
+        )
         archived_record_from_log = None
         for rec in file_records.values():
             if rec.get("file_path") == relative_dest_path:
                 archived_record_from_log = rec
                 break
-                
-        assert archived_record_from_log is not None, "A new record for the destination path should have been created."
+
+        assert (
+            archived_record_from_log is not None
+        ), "A new record for the destination path should have been created."
         print("   ✅ Archived record found in log.")
 
         # Assertions that would have failed before the fixes
-        assert archived_record_from_log["file_path"] == relative_dest_path, "Archived record must have the correct destination path."
-        print(f"   ✅ Archived record has correct path: {archived_record_from_log['file_path']}")
-        
-        assert archived_record_from_log["iteration"] == 1, "Archived record must have the correct iteration number."
-        print(f"   ✅ Archived record has correct iteration: {archived_record_from_log['iteration']}")
-        
-        assert archived_record_from_log["sub_iteration"] == 0, "Archived record must have the correct sub-iteration number."
-        print(f"   ✅ Archived record has correct sub-iteration: {archived_record_from_log['sub_iteration']}")
+        assert (
+            archived_record_from_log["file_path"] == relative_dest_path
+        ), "Archived record must have the correct destination path."
+        print(
+            f"   ✅ Archived record has correct path: {archived_record_from_log['file_path']}"
+        )
+
+        assert (
+            archived_record_from_log["iteration"] == 1
+        ), "Archived record must have the correct iteration number."
+        print(
+            f"   ✅ Archived record has correct iteration: {archived_record_from_log['iteration']}"
+        )
+
+        assert (
+            archived_record_from_log["sub_iteration"] == 0
+        ), "Archived record must have the correct sub-iteration number."
+        print(
+            f"   ✅ Archived record has correct sub-iteration: {archived_record_from_log['sub_iteration']}"
+        )
 
         # Check the short_name transformation. The override in OpenLineageTracker adds year/iter.
         final_short_name = archived_record_from_log["short_name"]
         assert "my_output" in final_short_name
         assert "temp" not in final_short_name
         assert "2025_1" in final_short_name
-        print(f"   ✅ Archived record has a clean, versioned short_name: '{final_short_name}'")
+        print(
+            f"   ✅ Archived record has a clean, versioned short_name: '{final_short_name}'"
+        )
 
         print("\n" + "=" * 60)
         print("✅ `move_file` PROVENANCE TEST PASSED")
         print("=" * 60)
-
-
 
 
 if __name__ == "__main__":

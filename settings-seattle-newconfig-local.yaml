@@ -17,6 +17,7 @@ run:
   supply_demand_iters: 6
   output_directory: /Users/zaneedell/git/PILATES/tmp
   output_run_name: new-asim-fast-beam-bigger-pool
+  use_stubs: true
   models:
     land_use: null
     travel: beam
@@ -40,7 +41,7 @@ shared:
     zones:
       zone_type: "block_group"
       source_file: "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson"
-      canonical_id_col: "TAZ"
+      canonical_id_col: "OBJECTID"
       activitysim_index_col: "TAZ"
   skims:
     fname: as-base-skims-seattle-bg.omx

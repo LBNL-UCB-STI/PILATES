@@ -1,3 +1,12 @@
+"""
+Utilities for inferring data schemas from various file formats.
+
+This module provides functions to automatically detect and extract schema
+information (e.g., column names, data types, statistics) from common data files
+like CSV, Parquet, and HDF5, which is crucial for provenance tracking
+and database integration within the PILATES framework.
+"""
+
 import logging
 import os
 from typing import Dict, Any, List

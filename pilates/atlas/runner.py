@@ -2,6 +2,7 @@ from typing import Tuple, Optional
 import logging
 import os
 
+from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
@@ -297,6 +298,7 @@ class AtlasRunner(GenericRunner):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
 
+    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -324,15 +326,6 @@ class AtlasRunner(GenericRunner):
         )
         settings = self.state.full_settings
         self.setup_container_cache_dirs(settings)
-
-        # Start provenance tracking for this run
-        model_run_hash = self.provenance_tracker.start_model_run(
-            self.model_name,
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="ATLAS vehicle ownership model run",
-            inputs=store,
-        )
 
         # Get container configuration
         vehicle_ownership_model, atlas_image = self.get_model_and_image(
@@ -376,9 +369,6 @@ class AtlasRunner(GenericRunner):
                 client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
-                self.provenance_tracker.complete_model_run(
-                    model_run_hash, status="failed"
-                )
                 raise
 
         # Execute container
@@ -400,16 +390,10 @@ class AtlasRunner(GenericRunner):
 
             if not success:
                 logger.error("ATLAS container execution failed")
-                self.provenance_tracker.complete_model_run(
-                    model_run_hash, status="failed"
-                )
-                return RecordStore(), ModelRunInfo(
-                    model=self.model_name, year=self.state.current_year
-                )
+                raise RuntimeError("ATLAS container execution failed")
 
         except Exception as e:
             logger.error(f"ATLAS container execution error: {e}")
-            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
             raise
 
         # Collect outputs
@@ -427,18 +411,18 @@ class AtlasRunner(GenericRunner):
         for output_file in expected_outputs:
             output_path = os.path.join(atlas_output_dir, output_file)
             if os.path.exists(output_path):
-                output_record = self.provenance_tracker.record_output_file(
-                    self.model_name,
-                    output_path,
+                # Output file provenance is automatically tracked by @provenance_logging decorator
+                from pilates.generic.records import FileRecord
+
+                output_record = FileRecord(
+                    file_path=output_path,
+                    models=[self.model_name],
                     year=output_year,
                     description=f"ATLAS {output_file} output for year {output_year}",
                     short_name=output_file.replace(".csv", ""),
-                    model_run_id=model_run_hash,
-                    state=self.state,
                 )
-                if output_record:
-                    output_records.append(output_record)
-                    logger.info(f"Recorded ATLAS output: {output_path}")
+                output_records.append(output_record)
+                logger.info(f"Recorded ATLAS output: {output_path}")
             else:
                 logger.warning(f"Expected ATLAS output file not found: {output_path}")
 
@@ -462,21 +446,12 @@ class AtlasRunner(GenericRunner):
             "working_directory": "/",
         }
 
-        # Complete provenance tracking
-        self.provenance_tracker.complete_model_run(
-            model_run_hash,
-            status="completed" if output_records else "failed",
-            output_records=output_records,
-            metadata=runtime_metadata,
-        )
-
-        # Get the model run info object to return
-        run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
-
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (outputs=%d)",
             self.state.current_year,
             len(output_records),
         )
 
-        return RecordStore(recordList=output_records), run_info
+        return RecordStore(recordList=output_records), ModelRunInfo(
+            model=self.model_name, year=self.state.current_year
+        )

@@ -1,3 +1,11 @@
+"""
+Utility functions for Git repository interactions.
+
+This module provides helper functions to check if a directory is a Git repository
+and to retrieve the current commit hash, essential for provenance tracking
+within the PILATES framework.
+"""
+
 import os
 import subprocess
 import logging

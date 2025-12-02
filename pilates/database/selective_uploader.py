@@ -213,7 +213,12 @@ def extract_iteration(short_name: str) -> Optional[int]:
     return None
 
 
-def run_uploader(run_info_path: str, database_path: str, tables: list = None, no_upload_parquet: bool = False) -> bool:
+def run_uploader(
+    run_info_path: str,
+    database_path: str,
+    tables: list = None,
+    no_upload_parquet: bool = False,
+) -> bool:
     """
     The core logic of the uploader, refactored into a callable function.
     """
@@ -244,7 +249,9 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
             print("No tables matched the criteria for upload.")
             return False
 
-        logging.info(f"Attempting to upload data for tables: {sorted(list(upload_list))}")
+        logging.info(
+            f"Attempting to upload data for tables: {sorted(list(upload_list))}"
+        )
 
         # Load run_info.json
         try:
@@ -270,7 +277,8 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
             else:
                 file_records[uid] = FileRecord(**rec)
         model_runs = {
-            uid: ModelRunInfo(**run) for uid, run in run_info.get("model_runs", {}).items()
+            uid: ModelRunInfo(**run)
+            for uid, run in run_info.get("model_runs", {}).items()
         }
 
         run_info_obj = PilatesRunInfo(
@@ -291,7 +299,9 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
 
         # Upload the entire run_info structure to ensure all records exist
         db_manager.upload_run_data(run_info_obj)
-        logging.info(f"Successfully uploaded metadata for run {run_info.get('run_id')}.")
+        logging.info(
+            f"Successfully uploaded metadata for run {run_info.get('run_id')}."
+        )
 
         for record in run_info.get("file_records", {}).values():
             try:
@@ -332,7 +342,8 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
                     final_storage_location = "external"
 
                 logging.info(
-                    f"Processing {logical_table_name} from {os.path.basename(data_path)} -> storage: {final_storage_location}")
+                    f"Processing {logical_table_name} from {os.path.basename(data_path)} -> storage: {final_storage_location}"
+                )
 
                 # First, write the authoritative record for this file to the database.
                 # This ensures the state is correct *before* any data is moved.
@@ -350,13 +361,19 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
                         # === NATIVE UPLOAD (Parquet/CSV) ===
                         conn = db_manager._get_connection()
                         select_sql, sort_keys = build_smart_select(
-                            conn, data_path, table_name, record, run_info, year, iteration
+                            conn,
+                            data_path,
+                            table_name,
+                            record,
+                            run_info,
+                            year,
+                            iteration,
                         )
-                        
+
                         # Get the list of columns from the select statement to use in the insert
                         desc_rel = conn.execute(f"DESCRIBE ({select_sql})")
                         insert_cols = [row[0] for row in desc_rel.fetchall()]
-                        insert_cols_str = ', '.join([f'"{c}"' for c in insert_cols])
+                        insert_cols_str = ", ".join([f'"{c}"' for c in insert_cols])
 
                         conn.execute(
                             f"INSERT INTO uploaded_{table_name} ({insert_cols_str}) SELECT * FROM ({select_sql}) ORDER BY {', '.join(sort_keys)}"
@@ -367,7 +384,9 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
                         if record.get("h5_file_unique_id"):
                             df = pd.read_hdf(data_path, key=record["table_name"])
                         else:
-                            logging.warning(f"Unsupported format for direct upload: {data_path}")
+                            logging.warning(
+                                f"Unsupported format for direct upload: {data_path}"
+                            )
                             continue
 
                         df.columns = [sanitize_name(c) for c in df.columns]
@@ -380,10 +399,13 @@ def run_uploader(run_info_path: str, database_path: str, tables: list = None, no
                         logging.info(f"Pandas upload complete for {logical_table_name}")
 
             except Exception as e:
-                logging.error(f"Failed to process {logical_table_name}: {e}", exc_info=True)
+                logging.error(
+                    f"Failed to process {logical_table_name}: {e}", exc_info=True
+                )
                 print(f"Failed to process {logical_table_name}: {e}")
                 return False
     return True
+
 
 def main():
     """Main function to drive the selective data upload process."""
@@ -408,7 +430,7 @@ def main():
         run_info_path=args.run_info_path,
         database_path=args.database_path,
         tables=args.table,
-        no_upload_parquet=args.no_upload_parquet
+        no_upload_parquet=args.no_upload_parquet,
     )
 
 

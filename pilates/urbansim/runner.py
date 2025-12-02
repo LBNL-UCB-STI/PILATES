@@ -2,6 +2,7 @@ from typing import Tuple, Optional
 import logging
 import os
 
+from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
@@ -66,6 +67,7 @@ class UrbansimRunner(GenericRunner):
         )
         return usim_cmd
 
+    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -94,16 +96,6 @@ class UrbansimRunner(GenericRunner):
         forecast_year = self.state.forecast_year
         self.setup_container_cache_dirs(settings)
 
-        # Start provenance tracking for this run if no hash is provided
-        if model_run_hash is None:
-            model_run_hash = self.provenance_tracker.start_model_run(
-                self.model_name,
-                self.state.current_year,
-                self.state.current_inner_iter,
-                description="UrbanSim land use model run",
-                inputs=store,
-            )
-
         # Prepare output file path
         usim_output_store_name = settings.urbansim.output_file_template.format(
             year=forecast_year
@@ -128,9 +120,6 @@ class UrbansimRunner(GenericRunner):
                 client = self.initialize_docker_client(settings)
             except Exception as e:
                 logger.error(f"Failed to initialize Docker client: {e}")
-                self.provenance_tracker.complete_model_run(
-                    model_run_hash, status="failed"
-                )
                 raise
 
         # Execute container
@@ -147,33 +136,27 @@ class UrbansimRunner(GenericRunner):
 
             if not success:
                 logger.error("UrbanSim container execution failed")
-                self.provenance_tracker.complete_model_run(
-                    model_run_hash, status="failed"
-                )
-                run_info = self.provenance_tracker.run_info.model_runs.get(
-                    model_run_hash
-                )
-                return RecordStore(), run_info
+                raise RuntimeError("UrbanSim container execution failed")
 
         except Exception as e:
             logger.error(f"UrbanSim container execution error: {e}")
-            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-            run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
             raise
 
         # Collect outputs
         output_records = []
         if os.path.exists(usim_datastore_fpath):
-            output_rec = self.provenance_tracker.record_output_file(
-                self.model_name,
-                usim_datastore_fpath,
+            # Create a FileRecord for the output file
+            # Output file provenance is automatically tracked by @provenance_logging decorator
+            from pilates.generic.records import FileRecord
+
+            output_rec = FileRecord(
+                file_path=usim_datastore_fpath,
+                models=[self.model_name],
                 year=forecast_year,
+                short_name="usim_forecast_output",
                 description="UrbanSim forecast output data",
-                model_run_id=model_run_hash,
-                state=self.state,
             )
-            if output_rec:
-                output_records.append(output_rec)
+            output_records.append(output_rec)
             logger.info(
                 f"[UrbansimRunner] Recorded UrbanSim output file: {usim_datastore_fpath}"
             )
@@ -181,9 +164,8 @@ class UrbansimRunner(GenericRunner):
             logger.error(
                 f"[UrbansimRunner] UrbanSim output file not found at {usim_datastore_fpath}"
             )
-            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
-            return RecordStore(), ModelRunInfo(
-                model=self.model_name, year=self.state.current_year
+            raise RuntimeError(
+                f"UrbanSim output file not found at {usim_datastore_fpath}"
             )
 
         # Prepare runtime metadata
@@ -203,15 +185,6 @@ class UrbansimRunner(GenericRunner):
             "working_directory": settings.urbansim.client_base_folder,
         }
 
-        # Complete provenance tracking
-        self.provenance_tracker.complete_model_run(
-            model_run_hash,
-            status="completed",
-            output_records=output_records,
-            metadata=runtime_metadata,
+        return RecordStore(recordList=output_records), ModelRunInfo(
+            model=self.model_name, year=self.state.current_year
         )
-
-        # Get the model run info object to return
-        run_info = self.provenance_tracker.run_info.model_runs.get(model_run_hash)
-
-        return RecordStore(recordList=output_records), run_info

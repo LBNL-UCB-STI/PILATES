@@ -15,7 +15,9 @@ from typing import List, Dict, Optional, Any
 import xarray as xr
 import pandas as pd
 
-from pilates.utils.duckdb_manager import DuckDBManager # Assuming this is the correct path to DuckDBManager
+from pilates.utils.duckdb_manager import (
+    DuckDBManager,
+)  # Assuming this is the correct path to DuckDBManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,9 @@ class SnapshotAnalysisManager:
     Manages the creation of unified xarray Dataset views from archived data snapshots.
     """
 
-    def __init__(self, db_manager: DuckDBManager, archive_root_path: Optional[Path] = None):
+    def __init__(
+        self, db_manager: DuckDBManager, archive_root_path: Optional[Path] = None
+    ):
         """
         Initialize the SnapshotAnalysisManager.
 
@@ -39,7 +43,9 @@ class SnapshotAnalysisManager:
         """
         self.db_manager = db_manager
         self.archive_root_path = archive_root_path or DEFAULT_ARCHIVE_ROOT
-        logger.info(f"SnapshotAnalysisManager initialized with archive root: {self.archive_root_path}")
+        logger.info(
+            f"SnapshotAnalysisManager initialized with archive root: {self.archive_root_path}"
+        )
 
     def build_view(
         self,
@@ -48,8 +54,10 @@ class SnapshotAnalysisManager:
         iterations: Optional[List[int]] = None,
         models: Optional[List[str]] = None,
         snapshot_types: Optional[List[str]] = None,
-        formats: Optional[List[str]] = None, # Added to filter by artifact format
-        variables: Optional[List[str]] = None, # For filtering variables within each dataset
+        formats: Optional[List[str]] = None,  # Added to filter by artifact format
+        variables: Optional[
+            List[str]
+        ] = None,  # For filtering variables within each dataset
     ) -> xr.Dataset:
         """
         Builds a unified xarray.Dataset view from multiple archived snapshots matching specified criteria.
@@ -88,18 +96,25 @@ class SnapshotAnalysisManager:
             query_parts.append(f"model IN ({', '.join(['?'] * len(models))})")
             params.extend(models)
         if snapshot_types:
-            query_parts.append(f"snapshot_type IN ({', '.join(['?'] * len(snapshot_types))})")
+            query_parts.append(
+                f"snapshot_type IN ({', '.join(['?'] * len(snapshot_types))})"
+            )
             params.extend(snapshot_types)
         if formats:
             query_parts.append(f"format IN ({', '.join(['?'] * len(formats))})")
             params.extend(formats)
 
-        query = " AND ".join(query_parts) + " ORDER BY run_id, year, iteration, sub_iteration"
-        
+        query = (
+            " AND ".join(query_parts)
+            + " ORDER BY run_id, year, iteration, sub_iteration"
+        )
+
         # 2. Fetch snapshot metadata from the database
         try:
             # DuckDB connection.execute().fetchdf() returns a pandas DataFrame
-            snapshot_records_df = self.db_manager.connection.execute(query, params).fetchdf()
+            snapshot_records_df = self.db_manager.connection.execute(
+                query, params
+            ).fetchdf()
         except Exception as e:
             logger.error(f"Error querying database for snapshots: {e}")
             return xr.Dataset()
@@ -112,10 +127,12 @@ class SnapshotAnalysisManager:
         for _, record in snapshot_records_df.iterrows():
             snapshot_id = record["snapshot_id"]
             artifact_format = record["format"]
-            
+
             # Reconstruct the absolute path to the archived artifact
             relative_artifact_path = Path(record["artifact_path"])
-            archived_artifact_full_path = self.archive_root_path / relative_artifact_path
+            archived_artifact_full_path = (
+                self.archive_root_path / relative_artifact_path
+            )
 
             if not archived_artifact_full_path.exists():
                 logger.warning(
@@ -123,7 +140,7 @@ class SnapshotAnalysisManager:
                     f"{archived_artifact_full_path}. Skipping this snapshot."
                 )
                 continue
-            
+
             try:
                 # 3. Lazily open each artifact based on its format
                 if artifact_format.lower() == "zarr":
@@ -131,17 +148,21 @@ class SnapshotAnalysisManager:
                 elif artifact_format.lower() == "netcdf":
                     ds = xr.open_dataset(archived_artifact_full_path)
                 else:
-                    logger.warning(f"Unsupported artifact format '{artifact_format}' for snapshot {snapshot_id}. Skipping.")
+                    logger.warning(
+                        f"Unsupported artifact format '{artifact_format}' for snapshot {snapshot_id}. Skipping."
+                    )
                     continue
 
                 # Filter variables if requested
                 if variables:
                     available_vars = [v for v in variables if v in ds]
                     if not available_vars:
-                        logger.warning(f"None of the requested variables {variables} found in snapshot {snapshot_id}. Skipping.")
+                        logger.warning(
+                            f"None of the requested variables {variables} found in snapshot {snapshot_id}. Skipping."
+                        )
                         continue
                     ds = ds[available_vars]
-                
+
                 # 4. Assign metadata as new coordinates to each dataset
                 # The "snapshot" dimension will be used for concatenation
                 ds = ds.assign_coords(
@@ -151,12 +172,14 @@ class SnapshotAnalysisManager:
                     iteration=("snapshot", [record["iteration"]]),
                     model=("snapshot", [record["model"]]),
                     snapshot_type=("snapshot", [record["snapshot_type"]]),
-                    format=("snapshot", [record["format"]])
+                    format=("snapshot", [record["format"]]),
                 )
                 list_of_datasets.append(ds)
 
             except Exception as e:
-                logger.error(f"Failed to open or process snapshot ID {snapshot_id} from {archived_artifact_full_path}: {e}")
+                logger.error(
+                    f"Failed to open or process snapshot ID {snapshot_id} from {archived_artifact_full_path}: {e}"
+                )
                 continue
 
         if not list_of_datasets:
@@ -164,13 +187,16 @@ class SnapshotAnalysisManager:
             return xr.Dataset()
 
         # 5. Concatenate all datasets along the new 'snapshot' dimension
-        combined_view = xr.concat(list_of_datasets, dim="snapshot", combine_attrs="override", coords="minimal")
+        combined_view = xr.concat(
+            list_of_datasets, dim="snapshot", combine_attrs="override", coords="minimal"
+        )
 
         # 6. Apply a MultiIndex for powerful, ergonomic selection
         final_view = combined_view.set_index(
             snapshot=["run_id", "year", "iteration", "snapshot_id"]
         )
-        
-        logger.info(f"Successfully built xarray view with {len(list_of_datasets)} snapshots.")
-        return final_view
 
+        logger.info(
+            f"Successfully built xarray view with {len(list_of_datasets)} snapshots."
+        )
+        return final_view

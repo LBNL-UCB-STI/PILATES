@@ -11,6 +11,7 @@ import numpy as np
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
+from pilates.generic.model import provenance_logging
 from pilates.utils.provenance import FileProvenanceTracker
 
 if TYPE_CHECKING:
@@ -305,6 +306,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         )
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
+    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -321,14 +323,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
         os.makedirs(usim_mutable_data_dir, exist_ok=True)
 
         input_records = workspace.input_data.get("urbansim", RecordStore())
-
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "urbansim_preprocessor",
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="Preprocessing UrbanSim inputs",
-            inputs=input_records,
-        )
 
         processed_records = RecordStore()
 
@@ -351,12 +345,14 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
 
             # Record provenance for the generated mapping file
-            mapping_output_rec = self.provenance_tracker.record_output_file(
-                "urbansim_preprocessor",
-                block_to_zone_mapping_path,
+            # Output file provenance is automatically tracked by @provenance_logging decorator
+            from pilates.generic.records import FileRecord
+
+            mapping_output_rec = FileRecord(
+                file_path=block_to_zone_mapping_path,
+                models=["urbansim_preprocessor"],
                 description="Block to zone mapping for UrbanSim input",
                 short_name="block_to_zone_mapping",
-                model_run_id=model_run_hash,
             )
             processed_records.add_record(mapping_output_rec)
 
@@ -407,15 +403,19 @@ class UrbansimPreprocessor(GenericPreprocessor):
                             source_skims_path,
                             description="Updated BEAM skims for UrbanSim input",
                             short_name="updated_beam_skims_input",
-                            model_run_id=model_run_hash,
                         )
-                        skims_output_rec = self.provenance_tracker.record_output_file_with_inputs(
-                            "urbansim_preprocessor",
-                            dest_skims_path,
-                            input_records=[skims_input_rec],
+                        # Output file provenance is automatically tracked by @provenance_logging decorator
+                        from pilates.generic.records import FileRecord
+
+                        source_file_paths = (
+                            [skims_input_rec.file_path] if skims_input_rec else []
+                        )
+                        skims_output_rec = FileRecord(
+                            file_path=dest_skims_path,
+                            models=["urbansim_preprocessor"],
                             description="Copied updated skims for UrbanSim consumption",
                             short_name="usim_skims_input_updated",
-                            model_run_id=model_run_hash,
+                            source_file_paths=source_file_paths,
                         )
                         if skims_output_rec:
                             processed_records.add_record(skims_output_rec)
@@ -431,13 +431,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
         except Exception as e:
             logger.error(f"Error during UrbanSim preprocessing: {e}")
-            self.provenance_tracker.complete_model_run(model_run_hash, status="failed")
             raise
-
-        self.provenance_tracker.complete_model_run(
-            model_run_hash,
-            status="completed",
-            output_records=processed_records.all_records(),
-        )
 
         return processed_records
