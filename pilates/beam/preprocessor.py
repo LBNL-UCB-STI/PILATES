@@ -260,9 +260,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 ):
                     input_records.add_record(record)
 
-        model_run_hash = self.provenance_tracker.run_info.model_runs.get(
-            next(iter(self.provenance_tracker.run_info.model_runs), None), {}
-        ).get("run_id")
+        model_run_hash = self.provenance_tracker.current_model_run_id
 
         # Update BEAM config based on settings
         self._update_beam_config(

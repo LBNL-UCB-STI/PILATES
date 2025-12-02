@@ -201,7 +201,7 @@ class Model:
                 logger.debug(f"Logging start of model run {model_run_id} to database.")
 
                 # 1. Upsert the model run itself (status should be 'running')
-                db_manager.upsert_model_run(conn, model_run, self.state.run_id)
+                db_manager.upsert_model_run(conn, model_run, self.provenance_tracker.run_info.run_id)
 
                 # 2. Upsert its input file records
                 for record_hash in model_run.input_record_hashes:
@@ -210,7 +210,7 @@ class Model:
                     )
                     if file_record:
                         db_manager.upsert_file_record(
-                            conn, file_record, self.state.run_id
+                            conn, file_record, self.provenance_tracker.run_info.run_id
                         )
 
                 conn.commit()
@@ -259,7 +259,7 @@ class Model:
                 )
 
                 # 1. Upsert the model run itself (status should be 'completed' or 'failed')
-                db_manager.upsert_model_run(conn, model_run, self.state.run_id)
+                db_manager.upsert_model_run(conn, model_run, self.provenance_tracker.run_info.run_id)
 
                 # 2. Upsert its output file records
                 for record_hash in model_run.output_record_hashes:
@@ -268,7 +268,7 @@ class Model:
                     )
                     if file_record:
                         db_manager.upsert_file_record(
-                            conn, file_record, self.state.run_id
+                            conn, file_record, self.provenance_tracker.run_info.run_id
                         )
 
                 conn.commit()
