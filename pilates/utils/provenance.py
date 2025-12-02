@@ -305,7 +305,7 @@ class ProvenanceTracker:
             if metadata:
                 self.run_info.model_runs[run_hash].metadata.update(metadata)
             for dataset in output_records:
-                if isinstance(dataset, Record):
+                if isinstance(dataset, (FileRecord, H5FileRecord)):
                     if dataset.unique_id not in self.run_info.file_records:
                         self.run_info.file_records[dataset.unique_id] = dataset
                     # Ensure the record is linked to this run as a producer
@@ -314,15 +314,15 @@ class ProvenanceTracker:
                         dataset.models = []
                     if self.run_info.model_runs[run_hash].model not in dataset.models:
                         dataset.models.append(self.run_info.model_runs[run_hash].model)
+                elif isinstance(dataset, RepoRecord):
+                    if dataset.unique_id not in self.run_info.repo_records:
+                        self.run_info.repo_records[dataset.unique_id] = dataset
 
+                if isinstance(dataset, Record):
                     if (
                         dataset.unique_id
                         not in self.run_info.model_runs[run_hash].output_record_hashes
                     ):
-                        logger.info(
-                            f"Adding dataset {dataset.short_name} to model run {run_hash} outputs, despite it "
-                            f"not being flagged in the main model run."
-                        )
                         self.run_info.model_runs[run_hash].output_record_hashes.append(
                             dataset.unique_id
                         )
