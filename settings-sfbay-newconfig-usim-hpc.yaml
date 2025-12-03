@@ -17,7 +17,7 @@ run:
   supply_demand_iters: 1
   output_directory: /global/scratch/users/$USER/pilates-output
   output_run_name: new-asim-snapshots-usim
-  use_stubs: true
+  use_stubs: false
   models:
     land_use: urbansim
     travel: beam

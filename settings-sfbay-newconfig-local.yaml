@@ -17,7 +17,7 @@ run:
   supply_demand_iters: 6
   output_directory: /Users/zaneedell/git/PILATES/tmp
   output_run_name: new-asim-fast-beam-bigger-pool
-  use_stubs: true
+  use_stubs: false
   models:
     land_use: null
     travel: beam
