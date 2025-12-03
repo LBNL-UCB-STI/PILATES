@@ -2699,7 +2699,13 @@ def _merge_beam_skims_to_zarr(
 
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
 
-        skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
+        temp_path = f"{all_skims_path}_temp_merged"
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+        skims_ds.to_zarr(temp_path, mode="w", consolidated=True)
+        if os.path.exists(all_skims_path):
+            shutil.rmtree(all_skims_path)
+        os.rename(temp_path, all_skims_path)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (
             True  # Indicate merge/post-processing was attempted successfully

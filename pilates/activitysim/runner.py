@@ -281,6 +281,8 @@ class ActivitysimRunner(GenericRunner):
                     "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                     "XDG_CACHE_HOME": "/app/numba_cache",
                 },
+                provenance_tracker=self.provenance_tracker,
+                output_paths=[all_skims_path],
             )
 
             output_records = []
@@ -482,6 +484,8 @@ class ActivitysimRunner(GenericRunner):
                 "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                 "XDG_CACHE_HOME": "/app/numba_cache",
             },
+            provenance_tracker=self.provenance_tracker,
+            output_paths=[workspace.get_asim_output_dir()],
         )
 
         run_info = self.provenance_tracker.run_info.model_runs.get(new_asim_run_hash)

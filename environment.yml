@@ -36,6 +36,7 @@ dependencies:
   - decorator=5.0.9=pyhd8ed1ab_0
   - docker-py=4.2.2=py38h32f6830_0
   - docker-pycreds=0.4.0=py_0
+  - duckdb
   - expat=2.4.1=h9c3ff4c_0
   - fiona=1.8.20=py38hbb147eb_1
   - fontconfig=2.13.1=hba837de_1005
@@ -201,5 +202,6 @@ dependencies:
   - pip:
     - h5py==3.4.0
     - openmatrix==0.3.5.0
+    - -e /Users/zaneedell/git/consist  # Local consist library for provenance tracking
 prefix: /home/ubuntu/anaconda3/envs/pilates
 

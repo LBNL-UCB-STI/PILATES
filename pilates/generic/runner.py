@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import shlex
+from typing import TYPE_CHECKING, Optional, Tuple, List, Union, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -12,7 +13,6 @@ try:
 except ImportError:
     print("Warning: Unable to import Docker Module")
 from abc import ABC
-from typing import Optional, Tuple
 
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.utils.provenance import FileProvenanceTracker
@@ -20,6 +20,17 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.container_utils import to_singularity_volumes, to_singularity_env
 from pilates.utils.settings_helper import get as get_setting
+
+# Try to import consist container execution
+try:
+    from consist.integrations.containers import run_container as consist_run_container
+    CONSIST_AVAILABLE = True
+except ImportError:
+    CONSIST_AVAILABLE = False
+
+# Type checking import for ConsistProvenanceTracker
+if TYPE_CHECKING:
+    from pilates.utils.consist_adapter import ConsistProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -235,24 +246,96 @@ class GenericRunner(ABC, Model):
         working_dir=None,
         environment=None,
         args=None,
+        provenance_tracker=None,
+        input_artifacts: List[Union[str, Any]] = None,
+        output_paths: List[str] = None,
     ) -> bool:
         """
-        Executes container using docker or singularity
+        Executes container using docker or singularity, with optional Consist integration.
+
+        When a ConsistProvenanceTracker is provided and Consist is available, delegates to
+        consist.run_container() for automatic provenance tracking and caching. Otherwise,
+        falls back to direct Docker/Singularity execution.
 
         Args:
             client: the docker client. If it's provided then docker is used, otherwise singularity is used
             settings: settings to get docker configuration
             image: the image to run
-            volumes: a dictionary describing volume binding
+            volumes: a dictionary describing volume binding (Docker format: {host: {'bind': container, 'mode': 'rw'}})
             command: the command to run
             model_name: name of the model, used for stubs
             working_dir: the working directory inside the container
             environment: a dictionary that contains environment variables
             args: additional arguments to the command
+            provenance_tracker: optional ConsistProvenanceTracker instance for Consist integration
+            input_artifacts: optional list of input paths/artifacts for provenance tracking
+            output_paths: optional list of output paths to track for provenance
 
         Returns:
             bool: True if the container/stub ran successfully (exit code 0), False otherwise.
         """
+        # Check if we should delegate to Consist
+        should_use_consist = (
+            CONSIST_AVAILABLE
+            and provenance_tracker is not None
+            and hasattr(provenance_tracker, "_tracker")
+            and not settings.run.use_stubs  # Don't use consist for stub mode
+        )
+
+        if should_use_consist:
+            logger.info(
+                f"[Consist] Delegating container execution for {model_name} to Consist"
+            )
+            try:
+                # Convert PILATES volume format to Consist format
+                # PILATES: {host: {'bind': container, 'mode': 'rw'}}
+                # Consist: {host: container}
+                consist_volumes = {}
+                for host_path, mount_info in volumes.items():
+                    if isinstance(mount_info, dict):
+                        container_path = mount_info.get("bind", mount_info)
+                    else:
+                        container_path = mount_info
+                    consist_volumes[host_path] = container_path
+
+                # Combine command and args into single command string
+                full_command = command
+                if args:
+                    if isinstance(args, list):
+                        full_command = command + " " + " ".join(shlex.quote(a) for a in args)
+                    else:
+                        full_command = command + " " + str(args)
+
+                # Determine backend type
+                backend_type = (
+                    "docker"
+                    if settings.infrastructure.container_manager == "docker"
+                    else "singularity"
+                )
+
+                # Use consist's run_container
+                return consist_run_container(
+                    tracker=provenance_tracker._tracker,
+                    run_id=f"{model_name}_container",
+                    image=image,
+                    command=full_command,
+                    volumes=consist_volumes,
+                    inputs=input_artifacts or [],
+                    outputs=output_paths or [],
+                    environment=environment or {},
+                    working_dir=working_dir,
+                    backend_type=backend_type,
+                    pull_latest=get_setting(
+                        settings, "infrastructure.docker_config.pull_latest", False
+                    ),
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error delegating to Consist container execution: {e}. Falling back to native execution."
+                )
+                # Fall through to native execution
+
+        # Native execution (original code)
         if client:  # Docker client is available
             docker_stdout = get_setting(
                 settings, "infrastructure.docker_config.stdout", False

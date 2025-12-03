@@ -386,6 +386,8 @@ class AtlasRunner(GenericRunner):
                 command=atlas_cmd,
                 model_name=self.model_name,
                 working_dir="/",
+                provenance_tracker=self.provenance_tracker,
+                output_paths=[workspace.get_atlas_output_dir()],
             )
 
             if not success:

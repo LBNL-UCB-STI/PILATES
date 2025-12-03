@@ -141,6 +141,10 @@ class DatabaseConfig(BaseModel):
     type: str = Field("duckdb", description="Database type")
     path: str = Field(..., description="Database file path")
     shapshot_path: str = Field(None, description="Matrix snapshot file path")
+    use_consist: bool = Field(
+        False,
+        description="Use Consist library for provenance tracking instead of legacy FileProvenanceTracker",
+    )
 
     @field_validator("path")
     @classmethod

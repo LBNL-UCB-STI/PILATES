@@ -212,6 +212,8 @@ class BeamRunner(GenericRunner):
             model_name=self.model_name,
             working_dir="/app",
             environment={"JAVA_OPTS": java_opts},
+            provenance_tracker=self.provenance_tracker,
+            output_paths=[abs_beam_output],
         )
 
         # The decorator needs runtime metadata. We can pass it back via the run_info object.

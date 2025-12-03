@@ -132,6 +132,8 @@ class UrbansimRunner(GenericRunner):
                 command=usim_cmd,
                 model_name=self.model_name,
                 working_dir=settings.urbansim.client_base_folder,
+                provenance_tracker=self.provenance_tracker,
+                output_paths=[usim_datastore_fpath],
             )
 
             if not success:
