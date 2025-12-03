@@ -9,12 +9,12 @@
 run:
   region: sfbay
   scenario: base
-  start_year: 2018
+  start_year: 2017
   end_year: 2050
   land_use_freq: 1
-  travel_model_freq: 1
-  vehicle_ownership_freq: 1
-  supply_demand_iters: 6
+  travel_model_freq: 6
+  vehicle_ownership_freq: 6
+  supply_demand_iters: 1
   output_directory: /global/scratch/users/$USER/pilates-output
   output_run_name: new-asim-snapshots-usim
   use_stubs: true
