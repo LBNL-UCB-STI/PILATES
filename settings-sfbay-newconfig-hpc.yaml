@@ -46,7 +46,7 @@ shared:
     local_crs: EPSG:26910
     zones:
       zone_type: "taz"
-      source_file: "pilates/activitysim/data/sfbay/sfbay-taz.geojson"
+      source_file: "pilates/activitysim/data/sfbay/taz_sfbay.geojson"
       canonical_id_col: "taz1454"
       activitysim_index_col: "TAZ"
   skims:
@@ -230,7 +230,7 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.5
+    activitysim: docker://zaneedell/activitysim:0.2.7
     beam: docker://zaneedell/beam:1.1.beta
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
@@ -247,7 +247,7 @@ infrastructure:
 # Land use model settings
 # =============================================================================
 urbansim:
-  region_id: "53199100"
+  region_id: "06197001"
   local_data_input_folder: pilates/urbansim/data/
   local_mutable_data_folder: urbansim/data/
   client_base_folder: /base/demos_urbansim

@@ -46,7 +46,7 @@ shared:
     local_crs: EPSG:26910
     zones:
       zone_type: "taz"
-      source_file: "pilates/activitysim/data/sfbay/sfbay-taz.geojson"
+      source_file: "pilates/activitysim/data/sfbay/taz_sfbay.geojson"
       canonical_id_col: "taz1454"
       activitysim_index_col: "TAZ"
   skims:
@@ -230,7 +230,7 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.5
+    activitysim: docker://zaneedell/activitysim:0.2.7
     beam: docker://zaneedell/beam:1.1.beta
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
@@ -247,7 +247,7 @@ infrastructure:
 # Land use model settings
 # =============================================================================
 urbansim:
-  region_id: "53199100"
+  region_id: "06197001"
   local_data_input_folder: pilates/urbansim/data/
   local_mutable_data_folder: urbansim/data/
   client_base_folder: /base/demos_urbansim
@@ -261,6 +261,32 @@ urbansim:
       sfbay: "06197001"
       austin: "48197301"
       seattle: "53199100"
+
+# =============================================================================
+# ATLAS CONFIGURATION
+# Vehicle ownership model settings
+# =============================================================================
+
+atlas:
+  host_input_folder: pilates/atlas/atlas_input
+  warmstart_input_folder: pilates/atlas/atlas_input
+  host_mutable_input_folder: atlas/atlas_input
+  host_output_folder: atlas/atlas_output
+  container_input_folder: /atlas_input
+  container_output_folder: /atlas_output
+  basedir: /
+  codedir: /
+  sample_size: 0     # zero means no sampling, whole pop.
+  num_processes: 40  # suggested <9 for hima
+  beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
+  mod: 2 # 1 (static) or 2 (dynamic)
+  scenario: baseline # ess_cons; zev_mandate; baseline
+  adscen: baseline # ess_cons; zev_mandate; baseline
+  rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
+  taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
+  discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
+  formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
+
 
 # =============================================================================
 # ACTIVITYSIM CONFIGURATION
