@@ -219,7 +219,7 @@ shared:
   database:
     enabled: true
     type: duckdb
-    path: pilates/database/seattle_pilates_data.duckdb
+    path: pilates/database/sfbay_pilates_data.duckdb
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION
