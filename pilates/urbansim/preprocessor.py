@@ -336,12 +336,14 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
 
             # Save the mapping to a CSV file in the mutable data directory
-            block_to_zone_mapping_fname = "block_to_zone_mapping.csv"
-            block_to_zone_mapping_path = os.path.join(
-                workspace.get_usim_mutable_data_dir(), block_to_zone_mapping_fname
+            geoid_to_zone_fname = "geoid_to_zone.csv"
+            geoid_to_zone_path = os.path.join(
+                workspace.get_usim_mutable_data_dir(), geoid_to_zone_fname
             )
-            pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"]).to_csv(
-                block_to_zone_mapping_path, index_label="geoid"
+            (
+                pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
+                .rename_axis("GEOID")
+                .to_csv(geoid_to_zone_path)
             )
 
             # Record provenance for the generated mapping file
@@ -349,10 +351,10 @@ class UrbansimPreprocessor(GenericPreprocessor):
             from pilates.generic.records import FileRecord
 
             mapping_output_rec = FileRecord(
-                file_path=block_to_zone_mapping_path,
+                file_path=geoid_to_zone_path,
                 models=["urbansim_preprocessor"],
                 description="Block to zone mapping for UrbanSim input",
-                short_name="block_to_zone_mapping",
+                short_name="geoid_to_zone",
             )
             processed_records.add_record(mapping_output_rec)
 
