@@ -9,7 +9,7 @@
 run:
   region: sfbay
   scenario: base
-  start_year: 2017
+  start_year: 2018
   end_year: 2050
   land_use_freq: 1
   travel_model_freq: 1

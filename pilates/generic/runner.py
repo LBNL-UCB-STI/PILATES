@@ -2,6 +2,7 @@ import abc
 import logging
 import os
 import subprocess
+import shlex
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -270,7 +271,7 @@ class GenericRunner(ABC, Model):
                 run_kwargs["environment"] = environment
             if args:
                 # Append args to command string for docker
-                full_command = command + " " + " ".join(args)
+                full_command = command + " " + " ".join(shlex.quote(a) for a in args)
                 run_kwargs["command"] = full_command
                 logger.info("Full docker command: %s", full_command)
 
@@ -323,8 +324,8 @@ class GenericRunner(ABC, Model):
                 + (["--pwd", working_dir] if working_dir else [])
                 + ["-B", singularity_volumes, image]
                 + (args if args else [])
-                + command.split()
-            )  # Split command string into list
+                + shlex.split(command)
+            )
 
             logger.info("Running singularity command: %s", " ".join(proc))
 
@@ -347,7 +348,7 @@ class GenericRunner(ABC, Model):
                     "--cwd",
                     os.getcwd(),  # Pass current working directory of run.py
                     "--config_name",
-                    " ".join(command),  # Pass the original command string
+                    command,  # Pass the original command string
                 ]
                 logger.info(
                     f"Using stub for {model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
