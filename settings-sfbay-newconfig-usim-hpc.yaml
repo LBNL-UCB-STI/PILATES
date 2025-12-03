@@ -285,7 +285,7 @@ atlas:
   rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
   taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
   discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
-  formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
+  command_template: "--freq {0} --outyear {1} --npe {2} --nsample {3} --basedir {4} --codedir {5} --beamac {6} --mod {7} --adscen {8} --rebfactor {9} --taxfactor {10} --discIncent {11}"
 
 
 # =============================================================================
