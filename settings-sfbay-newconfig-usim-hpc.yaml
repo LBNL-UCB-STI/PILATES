@@ -372,7 +372,7 @@ beam:
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
-  router_directory: r5/r5-partially-simpilified-sfres
+  router_directory: r5/r5-partially-simplified-sfres
   skims_shapefile: shape/block-groups-32048.shp
   skim_zone_source_id_col: sk_zone
   skim_zone_geoid_col: geoid10
