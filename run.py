@@ -550,11 +550,30 @@ def main():
             if database_config.enabled and database_config.path:
                 try:
                     logger.info(
-                        f"Uploading config hashes to database: {database_config.path}"
+                        f"Initializing database and run record: {database_config.path}"
                     )
                     db = DuckDBManager(database_config.path)
                     db.initialize_database()
-                    db.upload_config_snapshot(config_snapshot)
+
+                    # Use a transaction to ensure atomic setup
+                    with db._get_connection() as conn:
+                        conn.begin()
+
+                        # 1. Upsert config snapshot
+                        snapshot_id = db.upsert_config_snapshot(conn, config_snapshot)
+                        logger.info(f"✓ Config snapshot {snapshot_id} upserted.")
+
+                        # 2. Upsert the main pilates run record
+                        db.upsert_pilates_run(
+                            conn, provenance_tracker.run_info, snapshot_id
+                        )
+                        logger.info(
+                            f"✓ Main run record {provenance_tracker.run_info.run_id} upserted."
+                        )
+
+                        conn.commit()
+
+                    # 3. Upload hierarchical hashes (manages its own connection)
                     db.upload_hierarchical_config_hashes(
                         config_snapshot["snapshot_id"], hierarchical_hashes
                     )
@@ -563,8 +582,9 @@ def main():
                     # Store hierarchical_hashes in provenance tracker for model run linking
                     provenance_tracker.hierarchical_hashes = hierarchical_hashes
                     logger.info("✓ Hierarchical hashes stored in provenance tracker")
+
                 except Exception as e:
-                    logger.warning(f"Could not upload config hashes to database: {e}")
+                    logger.warning(f"Could not initialize database records: {e}")
                     logger.info("Continuing without database config hash upload...")
         else:
             logger.warning(
