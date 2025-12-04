@@ -31,7 +31,7 @@ def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
         datastore_name = settings.urbansim.output_file_template.format(year=year)
     elif io == "input":
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_subdir"][region]
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
         usim_base_fname = settings.urbansim.input_file_template
         datastore_name = usim_base_fname.format(region_id=region_id)
     else:
