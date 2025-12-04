@@ -1,23 +1,66 @@
 #!/bin/bash
-module load python/3.10.12
-#python -m pip uninstall --user shapely
+
+# ==============================================================================
+# SETUP INSTRUCTIONS FOR NEW USERS
+# ==============================================================================
+# Before running this script for the first time, you must set up the environment
+# on a LOGIN NODE (do not run these setup steps inside a job).
+#
+# 1. Load Modules:
+#    module load python/3.11.6 gcc/11.4.0
+#
+# 2. Navigate to your source directory:
+#    cd /global/scratch/users/$USER/sources/PILATES
+#
+# 3. Create the Virtual Environment (named PILATES-env):
+#    python -m venv PILATES-env
+#
+# 4. Activate and Upgrade Pip:
+#    source PILATES-env/bin/activate
+#    python -m pip install --upgrade pip
+#
+# 5. Install Dependencies (Crucial: Pin Numpy < 2.0 for compatibility):
+#    python -m pip install "numpy<2.0"
+#    python -m pip install shapely openmatrix pygeos geopandas PyYAML dlt duckdb pyarrow pydantic rich sqlalchemy sqlmodel tables xarray zarr typer tqdm scipy
+#
+# 6. Install Custom 'consist' Library (Editable mode):
+#    # Assumes 'consist' folder is next to PILATES-env
+#    python -m pip install -e ./consist "numpy<2.0"
+#
+# ==============================================================================
+
+# --- 1. Load System Modules ---
+module load python/3.11.6
 module load gcc/11.4.0
 
+# --- 2. Configure System Libraries ---
 # Set LD_LIBRARY_PATH to use the GCC 11.4.0 libraries first
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
-
-# Print for debugging
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
-#python -m pip install --user shapely
-#python -m pip install --user openmatrix
-#python -m pip install --user pygeos
-#python -m pip install --user geopandas
-#python -m pip install --user table
-#python -m pip install --user PyYAML
-export PYTHONPATH=`python -m site --user-site`:$PYTHONPATH
-cd /global/scratch/users/$USER/sources/PILATES
-echo "$1"
+# --- 3. Activate Virtual Environment ---
+# Path to the virtual environment created in the setup steps
+ENV_PATH="/global/scratch/users/$USER/sources/PILATES/PILATES-env"
+
+if [ -f "$ENV_PATH/bin/activate" ]; then
+    source "$ENV_PATH/bin/activate"
+    echo "Activated virtual environment at: $ENV_PATH"
+else
+    echo "ERROR: Virtual environment not found at $ENV_PATH"
+    echo "Please follow the setup instructions at the top of this script."
+    exit 1
+fi
+
+# Note: We do NOT set PYTHONPATH here.
+# The venv handles imports automatically. Setting PYTHONPATH can
+# accidentally leak system packages into your environment.
+
+# --- 4. Move to Project Directory ---
+PROJECT_DIR="/global/scratch/users/$USER/sources/PILATES"
+cd "$PROJECT_DIR" || { echo "Directory not found: $PROJECT_DIR"; exit 1; }
+
+# --- 5. Debugging / Node Info ---
+echo "Script Arguments: $1 $2"
 
 echo "=== MEMORY INFORMATION ==="
 free -h
@@ -26,9 +69,11 @@ grep -i numa /proc/cpuinfo
 echo "=========================="
 
 echo "=== NODE USAGE INFORMATION ==="
-squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep $(hostname)
+# Check if hostname exists in queue (prevents grep error if empty)
+squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep "$(hostname)" || echo "Node info not found in squeue"
 echo "=========================="
 
-
+# --- 6. Run Python Script ---
+# 'python' now refers to the binary inside PILATES-env
 python run.py -c "$1" -S "$2"
 
