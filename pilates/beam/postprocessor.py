@@ -1135,8 +1135,8 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
         logger.info(
             f"For {path} previously had {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips"
         )
-        prev_completed = np.ceil(0.5 * prev_completed + completed).astype(int)
-        prev_failed = np.ceil(0.5 * prev_failed + failed).astype(int)
+        prev_completed = np.ceil(0.9 * prev_completed + completed).astype(int)
+        prev_failed = np.ceil(0.9 * prev_failed + failed).astype(int)
         allSkims[key_completed].data[
             :
         ] = prev_completed  # Use [:] to modify data in place
@@ -3515,49 +3515,55 @@ class BeamPostprocessor(GenericPostprocessor):
 
             skim_name = skim_name_found
 
-            raw_od_skims_path = os.path.join(
-                workspace.full_path,
-                next(
-                    record.file_path
+            all_skims_found = [record.file_path
                     for record in raw_outputs.all_records()
-                    if record.short_name == skim_name
-                ),
-            )
-            # Path to the main Zarr skims store, which is an ActivitySim data artifact.
+                    if record.short_name == skim_name]
+
+            logger.info("Here are all the skim files found")
+            logger.info(all_skims_found)
 
             beam_output_dir = workspace.get_beam_output_dir()
 
-            # Call the main merging and post-processing logic for Zarr skims
-            updated_skims_path = _merge_beam_skims_to_zarr(
-                all_skims_path=all_skims_path,
-                iteration_skims_path=raw_od_skims_path,
-                beam_output_dir=beam_output_dir,
-                settings=settings,
-                workspace=workspace,
-                override=raw_od_skims_path,
-                provenance_tracker=self.provenance_tracker,
-                model_run_hash=model_run_hash,
-                state=self.state,
-                run_id=(
-                    self.provenance_tracker.run_info.run_id
-                    if self.provenance_tracker
-                    else None
-                ),
-            )
+            for it, it_skim in enumerate(all_skims_found):
 
-            # The main output is the modified Zarr store. Record it.
-            if updated_skims_path:
-                # Record output file for this model run
-                from pilates.generic.records import FileRecord
-
-                output_rec = FileRecord(
-                    file_path=all_skims_path,
-                    models=["beam_postprocessor"],
-                    description="Zarr skims store updated with BEAM outputs.",
-                    short_name=f"zarr_skims_{self.state.current_year}_{self.state.current_inner_iter}",
-                    year=self.state.current_year,
+                raw_od_skims_path = os.path.join(
+                    workspace.full_path,
+                    it_skim,
                 )
-                processed_records.append(output_rec)
+
+                logger.info(f"Processing {raw_od_skims_path} for iteration {it}")
+
+                # Call the main merging and post-processing logic for Zarr skims
+                updated_skims_path = _merge_beam_skims_to_zarr(
+                    all_skims_path=all_skims_path,
+                    iteration_skims_path=raw_od_skims_path,
+                    beam_output_dir=beam_output_dir,
+                    settings=settings,
+                    workspace=workspace,
+                    override=raw_od_skims_path,
+                    provenance_tracker=self.provenance_tracker,
+                    model_run_hash=model_run_hash,
+                    state=self.state,
+                    run_id=(
+                        self.provenance_tracker.run_info.run_id
+                        if self.provenance_tracker
+                        else None
+                    ),
+                )
+
+                # The main output is the modified Zarr store. Record it.
+                if updated_skims_path:
+                    # Record output file for this model run
+                    from pilates.generic.records import FileRecord
+
+                    output_rec = FileRecord(
+                        file_path=all_skims_path,
+                        models=["beam_postprocessor"],
+                        description="Zarr skims store updated with BEAM outputs.",
+                        short_name=f"zarr_skims_{self.state.current_year}_{it}",
+                        year=self.state.current_year,
+                    )
+                    processed_records.append(output_rec)
 
         if (
             get_setting(settings, "write_skims_to_omx", False)
