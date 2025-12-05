@@ -536,11 +536,11 @@ def main():
             # Upload to database if enabled
             database_config = settings.shared.database
             if database_config.enabled and database_config.path:
+                logger.info(
+                    f"Initializing database and run record: {database_config.path}"
+                )
+                db = DuckDBManager(database_config.path)
                 try:
-                    logger.info(
-                        f"Initializing database and run record: {database_config.path}"
-                    )
-                    db = DuckDBManager(database_config.path)
                     db.initialize_database()
 
                     # Use a transaction to ensure atomic setup
@@ -574,6 +574,9 @@ def main():
                 except Exception as e:
                     logger.warning(f"Could not initialize database records: {e}")
                     logger.info("Continuing without database config hash upload...")
+                finally:
+                    db.close()
+
         else:
             logger.warning(
                 "Config snapshot not available, skipping hierarchical hash creation"

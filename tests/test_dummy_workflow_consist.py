@@ -332,45 +332,8 @@ class DummyModelAPreprocessor(GenericPreprocessor):
             input_h5_table2_record.unique_id,
         ]
 
-        # Record provenance for copied files (inputs)
-        input_csv_path = os.path.join(input_dir, "data.csv")
-        input_csv_record = FileRecord(
-            file_path=input_csv_path,
-            short_name="data.csv",
-            description="Dummy CSV input for Model A",
-            unique_id=make_unique_id(input_csv_path),
-        )
-        # Create H5FileRecord first to get its unique_id
-        input_h5_path = os.path.join(input_dir, "data.h5")
-        input_h5_file_record = H5FileRecord(
-            file_path=input_h5_path,
-            short_name="data.h5",
-            description="Dummy H5 input for Model A",
-            unique_id=make_unique_id(input_h5_path),
-        )
-        # Now create H5TableRecords using the H5FileRecord's unique_id
-        input_h5_table1_path = input_h5_path + "/table1"
-        input_h5_table1_record = H5TableRecord(
-            file_path=input_h5_table1_path,
-            h5_file_unique_id=input_h5_file_record.unique_id,
-            table_name="table1",
-            description="Table 1 from dummy H5",
-            unique_id=make_unique_id(input_h5_table1_path),
-        )
-        input_h5_table2_path = input_h5_path + "/table2"
-        input_h5_table2_record = H5TableRecord(
-            file_path=input_h5_table2_path,
-            h5_file_unique_id=input_h5_file_record.unique_id,
-            table_name="table2",
-            description="Table 2 from dummy H5",
-            unique_id=make_unique_id(input_h5_table2_path),
-        )
-        input_h5_file_record.table_record_ids = [
-            input_h5_table1_record.unique_id,
-            input_h5_table2_record.unique_id,
-        ]
-
         # Record provenance for copied files (outputs of this copy operation)
+        # NOTE: Inputs to the workflow don't typically have a 'year' unless associated with a run
         output_csv_path = os.path.join(output_dir, "data.csv")
         output_csv_record = FileRecord(
             file_path=output_csv_path,
@@ -522,6 +485,7 @@ class DummyModelARunner(GenericRunner):
             short_name=f"model_a_output_{year}.h5",
             description="Output H5 from Model A Runner",
             unique_id=make_unique_id(output_h5_path),
+            year=year,
         )
         output_h5_table_path = output_h5_path + "/table1_modified"
         output_h5_table_record = H5TableRecord(
@@ -531,6 +495,7 @@ class DummyModelARunner(GenericRunner):
             short_name="table1_modified",
             description="Modified Table 1 from Model A H5 output",
             unique_id=make_unique_id(output_h5_table_path),
+            year=year,
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
@@ -541,6 +506,7 @@ class DummyModelARunner(GenericRunner):
                         file_path=output_csv_path,
                         short_name=f"model_a_output_{year}.csv",
                         unique_id=make_unique_id(output_csv_path),
+                        year=year,
                     ),
                     output_h5_file_record,
                     output_h5_table_record,
@@ -624,6 +590,7 @@ class DummyModelAPostprocessor(GenericPostprocessor):
             short_name=f"model_a_final_output_{year}.h5",
             description="Final H5 from Model A Postprocessor",
             unique_id=make_unique_id(final_h5_path),
+            year=year,
         )
         final_h5_table_record = H5TableRecord(
             file_path=final_h5_path + "/table1_final",
@@ -631,6 +598,8 @@ class DummyModelAPostprocessor(GenericPostprocessor):
             table_name="table1_final",
             short_name="table1_final",
             description="Final Table from Model A H5 output",
+            # Note: unique_id should ideally be generated, H5TableRecord generates random if missing
+            year=year,
         )
         final_h5_file_record.table_record_ids = [final_h5_table_record.unique_id]
 
@@ -640,6 +609,7 @@ class DummyModelAPostprocessor(GenericPostprocessor):
                     file_path=final_csv_path,
                     short_name=f"model_a_final_output_{year}.csv",
                     unique_id=make_unique_id(final_csv_path),
+                    year=year,
                 ),
                 final_h5_file_record,
                 final_h5_table_record,
@@ -759,6 +729,7 @@ class DummyModelBRunner(GenericRunner):
             short_name=f"model_b_output_{year}.h5",
             description="Output H5 from Model B Runner",
             unique_id=make_unique_id(output_h5_path),
+            year=year,
         )
         output_h5_table_record = H5TableRecord(
             file_path=output_h5_path + "/table_b_modified",
@@ -766,6 +737,7 @@ class DummyModelBRunner(GenericRunner):
             table_name="table_b_modified",
             short_name="table_b_modified",
             description="Modified Table from Model B H5 output",
+            year=year,
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
@@ -776,6 +748,7 @@ class DummyModelBRunner(GenericRunner):
                         file_path=output_csv_path,
                         short_name=f"model_b_output_{year}.csv",
                         unique_id=make_unique_id(output_csv_path),
+                        year=year,
                     ),
                     output_h5_file_record,
                     output_h5_table_record,
@@ -844,11 +817,13 @@ class DummyModelBPostprocessor(GenericPostprocessor):
                     file_path=final_txt_path,
                     short_name=f"model_b_final_output_{year}.txt",
                     unique_id=make_unique_id(final_txt_path),
+                    year=year,
                 ),
                 FileRecord(
                     file_path=final_h5_summary_path,
                     short_name=f"model_b_final_output_summary_{year}.txt",
                     unique_id=make_unique_id(final_h5_summary_path),
+                    year=year,
                 ),
             ]
         )
@@ -966,6 +941,7 @@ class DummyContainerRunner(GenericRunner):
             file_path=output_csv_path,
             short_name=f"model_container_output_{year}.csv",
             unique_id=make_unique_id(output_csv_path),
+            year=year,
         )
 
         output_h5_file_record = H5FileRecord(
@@ -973,6 +949,7 @@ class DummyContainerRunner(GenericRunner):
             short_name=f"model_container_output_{year}.h5",
             description="Output H5 from DummyContainerRunner",
             unique_id=make_unique_id(output_h5_path),
+            year=year,
         )
 
         output_h5_table_path = output_h5_path + "/table1"
@@ -983,6 +960,7 @@ class DummyContainerRunner(GenericRunner):
             short_name="table1",
             description="Table 1 from container output",
             unique_id=make_unique_id(output_h5_table_path),
+            year=year,
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
@@ -1040,6 +1018,8 @@ class TestDummyWorkflowConsist:
             # Instantiate DuckDBManager and initialize the database
             duckdb_manager = DuckDBManager(database_path=str(db_path))
             duckdb_manager.initialize_database()
+
+            duckdb_manager.close()
 
             yield workflow_output_dir, provenance_tracker, db_path, duckdb_manager
 
@@ -1559,3 +1539,163 @@ class TestDummyWorkflowConsist:
         print(f"  - Volume format conversion verified")
         print(f"  - Output files created: {container_output_csv.name}, {container_output_h5.name}")
         print(f"  - {len(output_records)} output records created")
+
+    def test_json_persistence_structure(self, setup_workflow):
+        """
+        Verify the structure and content of the persisted run_info.json file.
+
+        This test ensures that:
+        1. The Consist adapter correctly maintains the legacy JSON file format required
+           by downstream PILATES tools.
+        2. All model runs, file records, and lineage links are serialized correctly.
+        3. Metadata specific to the workflow state (year, etc.) is preserved.
+        """
+        import json
+
+        # 1. Execute the workflow (reuse the logic from test_single_year_workflow)
+        # We perform a minimal run here just to populate the data
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
+
+        # 2. Locate and load the JSON file
+        json_path = workflow_output_dir / "run_info.json"
+        assert json_path.exists(), "run_info.json was not created"
+
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        # 3. Validation: Top-Level Metadata
+        assert data["run_id"] == "test_run"
+        assert "created_at" in data
+        assert "file_records" in data
+        assert "model_runs" in data
+
+        # 4. Validation: Model Runs
+        # We expect entries for ModelA and ModelB
+        model_runs = data["model_runs"]
+        assert len(model_runs) > 0
+
+        # Check for specific keys in a model run
+        sample_run = next(iter(model_runs.values()))
+        assert "unique_id" in sample_run
+        assert "model" in sample_run
+        assert "status" in sample_run
+        # The adapter should populate inputs/outputs
+        assert "input_record_hashes" in sample_run
+        assert "output_record_hashes" in sample_run
+
+        # 5. Validation: File Records
+        file_records = data["file_records"]
+        assert len(file_records) > 0
+
+        # Verify a specific known output exists
+        # Note: short_names in dummy workflow include the year
+        csv_outputs = [
+            r for r in file_records.values()
+            if "model_a_final_output" in r.get("short_name", "")
+        ]
+        assert len(csv_outputs) > 0, "Model A output CSV not found in JSON records"
+
+        sample_file = csv_outputs[0]
+        assert sample_file["year"] == 2025
+        assert "file_path" in sample_file
+        # Check that file path is relative or absolute as configured
+        assert str(sample_file["file_path"]).endswith(".csv")
+
+        print(f"✓ JSON persistence verified at: {json_path}")
+        print(f"  - Validated {len(model_runs)} model runs")
+        print(f"  - Validated {len(file_records)} file records")
+
+    def test_consist_query_integration(self, setup_workflow):
+        """
+        Verify that Consist query tools can read the database created by the workflow.
+
+        This replaces the CLI test to avoid DuckDB process-locking issues in the test runner.
+        It validates the same stack (Data Model -> DB -> Query Logic) without the Typer/Click overhead.
+        """
+        from sqlmodel import Session
+        from consist.tools import queries
+
+        # 1. Execute the workflow
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
+
+        # 2. Use the existing tracker's engine to query
+        # This replicates what the CLI does (get_tracker -> session -> queries)
+        # but reuses the open connection to avoid 'OperationalError'
+        tracker = provenance_tracker._tracker
+
+        with Session(tracker.engine) as session:
+            # Test get_runs (equivalent to 'consist runs')
+            runs = queries.get_runs(session)
+            assert len(runs) >= 2, "Expected at least 2 runs (ModelA, ModelB)"
+
+            model_names = {r.model_name for r in runs}
+            assert "modela" in model_names
+            assert "modelb" in model_names
+
+            for run in runs:
+                assert run.status == "completed"
+
+            # Test get_summary (equivalent to 'consist summary')
+            summary = queries.get_summary(session)
+            assert summary["total_runs"] >= 2
+            assert summary["total_artifacts"] > 0
+            assert summary["completed_runs"] >= 2
+
+        # 3. Test artifact lineage/retrieval (equivalent to 'consist artifacts')
+        # We need to find a specific run ID first
+        model_a_run_id = next(
+            run.unique_id for run in provenance_tracker.run_info.model_runs.values()
+            if run.model == "modela" and "postprocess" in (run.description or "").lower()
+        )
+
+        # Test get_artifacts_for_run (used by CLI 'artifacts' command)
+        artifacts = tracker.get_artifacts_for_run(model_a_run_id)
+        assert len(artifacts) > 0
+
+        # Verify inputs and outputs are distinct
+        inputs = [a for a, direction in artifacts if direction == "input"]
+        outputs = [a for a, direction in artifacts if direction == "output"]
+
+        assert len(inputs) > 0
+        assert len(outputs) > 0
+
+        # Verify specific artifact presence
+        output_keys = [a.key for a in outputs]
+        # Consist normalizes keys; check if our output is there
+        assert any("model_a_final_output" in k for k in output_keys), \
+            f"Expected 'model_a_final_output' in {output_keys}"
+
+        print("✓ Consist Query integration verified")
+        print("  - queries.get_runs returned correct models")
+        print("  - queries.get_summary matched expected counts")
+        print("  - tracker.get_artifacts_for_run returned inputs/outputs")
+
+    def _execute_minimal_workflow(self, output_dir, tracker, db_path):
+        """Helper to run a minimal version of the workflow for persistence tests."""
+        input_data_dir = Path("/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow")
+        year = 2025
+        state = DummyWorkflowState(current_year=year)
+        state.full_settings.shared.database.path = str(db_path)
+        workspace = DummyWorkspace(output_dir=str(output_dir))
+
+        # Run Model A Pre/Run/Post
+        config = {"input_dir": str(input_data_dir)}
+        prep = DummyModelAPreprocessor("ModelA", config, tracker, state)
+        runner = DummyModelARunner("ModelA", config, tracker, state)
+        post = DummyModelAPostprocessor("ModelA", config, tracker, state)
+
+        _, recs = prep.copy_data_to_mutable_location(config, str(output_dir))
+        recs = prep.preprocess(workspace, previous_records=recs)
+        recs, _ = runner.run(recs, workspace)
+        recs = post.postprocess(recs, workspace)
+
+        # Run Model B Pre/Run/Post
+        prep_b = DummyModelBPreprocessor("ModelB", {}, tracker, state)
+        runner_b = DummyModelBRunner("ModelB", {}, tracker, state)
+        post_b = DummyModelBPostprocessor("ModelB", {}, tracker, state)
+
+        recs = prep_b.preprocess(workspace, previous_records=recs)
+        recs, _ = runner_b.run(recs, workspace)
+        post_b.postprocess(recs, workspace)
