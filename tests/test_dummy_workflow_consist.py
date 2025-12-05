@@ -1380,7 +1380,6 @@ class TestDummyWorkflowConsist:
 
         # KNOWN GAP: input/output_record_hashes not populated by ConsistProvenanceTracker
         # TODO: Fix in Phase 5.2 - update adapter to populate record hashes
-        pytest.xfail("input/output_record_hashes not yet populated by ConsistProvenanceTracker")
         assert len(preprocess_run.output_record_hashes) > 0, "Preprocessor should record outputs"
         assert len(runner_run.input_record_hashes) > 0, "Runner should have inputs"
         assert len(runner_run.output_record_hashes) > 0, "Runner should have outputs"

@@ -2,7 +2,6 @@ from typing import Tuple, Optional
 import logging
 import os
 
-from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
@@ -298,7 +297,6 @@ class AtlasRunner(GenericRunner):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
 
-    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -372,6 +370,20 @@ class AtlasRunner(GenericRunner):
                 raise
 
         # Execute container
+        atlas_output_dir = workspace.get_atlas_output_dir()
+        output_year = self.state.forecast_year
+        expected_output_filenames = [
+            f"householdv_{output_year}.csv",
+            f"vehicles_{output_year}.csv",
+        ]
+        # Create full paths for Consist tracking
+        expected_output_paths = [
+            os.path.join(atlas_output_dir, f) for f in expected_output_filenames
+        ]
+
+        input_paths = [r.file_path for r in store.all_records()]
+
+        # Execute container
         try:
             logger.info(
                 "[AtlasRunner] Running Atlas vehicle ownership model container for year %s",
@@ -390,7 +402,10 @@ class AtlasRunner(GenericRunner):
                     model_name=self.model_name,
                     working_dir="/",
                     provenance_tracker=self.provenance_tracker,
-                    output_paths=[workspace.get_atlas_output_dir()],
+                    # PASS INPUTS HERE
+                    input_artifacts=input_paths,
+                    # PASS OUTPUTS HERE
+                    output_paths=expected_output_paths,
                 )
 
                 if not success:
@@ -406,55 +421,25 @@ class AtlasRunner(GenericRunner):
             logger.error(f"ATLAS container execution error: {e}")
             raise
 
-        # Collect outputs
+        # 1. Define Expected Outputs EARLY (so we can pass to Consist)
         output_records = []
-        atlas_output_dir = workspace.get_atlas_output_dir()
-        output_year = self.state.forecast_year
-
-        # TODO: Add comprehensive output file detection
-        # ATLAS generates multiple output files that should be recorded
-        expected_outputs = [
-            f"householdv_{output_year}.csv",
-            f"vehicles_{output_year}.csv",
-        ]
-
-        for output_file in expected_outputs:
-            output_path = os.path.join(atlas_output_dir, output_file)
+        for output_path in expected_output_paths:
             if os.path.exists(output_path):
-                # Output file provenance is automatically tracked by @provenance_logging decorator
                 from pilates.generic.records import FileRecord
+
+                # Extract filename for short_name
+                fname = os.path.basename(output_path)
 
                 output_record = FileRecord(
                     file_path=output_path,
                     models=[self.model_name],
                     year=output_year,
-                    description=f"ATLAS {output_file} output for year {output_year}",
-                    short_name=output_file.replace(".csv", ""),
+                    description=f"ATLAS {fname} output for year {output_year}",
+                    short_name=fname.replace(".csv", ""),
                 )
                 output_records.append(output_record)
-                logger.info(f"Recorded ATLAS output: {output_path}")
             else:
                 logger.warning(f"Expected ATLAS output file not found: {output_path}")
-
-        # Prepare runtime metadata
-        runtime_metadata = {
-            "container_command": atlas_cmd,
-            "runtime_parameters": {
-                "freq": freq,
-                "output_year": self.state.forecast_year,
-                "npe": npe,
-                "nsample": sample_size,
-                "beamac": beamac,
-                "mod": mod,
-                "adscen": adscen,
-                "rebfactor": rebfactor,
-                "taxfactor": taxfactor,
-                "discIncent": discIncent,
-            },
-            "container_image": atlas_image,
-            "container_manager": settings.infrastructure.container_manager,
-            "working_directory": "/",
-        }
 
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (outputs=%d)",
@@ -462,6 +447,8 @@ class AtlasRunner(GenericRunner):
             len(output_records),
         )
 
-        return RecordStore(recordList=output_records), ModelRunInfo(
-            model=self.model_name, year=self.state.current_year
-        )
+        # CRITICAL FIX: Explicitly set status to 'completed'
+        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
+        run_info.status = "completed"
+
+        return RecordStore(recordList=output_records), run_info

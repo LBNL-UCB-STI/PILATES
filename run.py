@@ -234,11 +234,11 @@ def warm_start_activities(
 
 
 def forecast_land_use(
-    settings: PilatesConfig,
-    year: int,
-    workflow_state: WorkflowState,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
+        settings: PilatesConfig,
+        year: int,
+        workflow_state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: OpenLineageTracker,
 ):
     """
     High-level wrapper to start an UrbanSim (land use) run and handle post-run checks.
@@ -257,14 +257,6 @@ def forecast_land_use(
         settings, "land_use_model"
     )
 
-    # Start UrbanSim run and get model_run_hash
-    usim_run_hash = provenance_tracker.start_model_run(
-        land_use_model,
-        workflow_state.current_year,
-        workflow_state.current_inner_iter,
-        description="UrbanSim run",
-    )
-
     run_land_use(
         year,
         workflow_state.forecast_year,
@@ -272,10 +264,9 @@ def forecast_land_use(
         workflow_state,
         workspace,
         provenance_tracker,
-        usim_run_hash,
     )
 
-    # Record UrbanSim run completion
+    # Record UrbanSim run completion check
     usim_output_store_name = usim_post.get_usim_datastore_fname(
         settings, io="output", year=workflow_state.forecast_year
     )
@@ -284,27 +275,23 @@ def forecast_land_use(
     )
 
     if os.path.exists(usim_datastore_fpath):
-        # The postprocessor now handles its own completion
         pass
     else:
-        # No output found: mark run as failed in provenance and exit early.
         logger.critical(
             "No UrbanSim output data found at {0}. It probably did not finish successfully.".format(
                 usim_datastore_fpath
             )
         )
-        provenance_tracker.complete_model_run(usim_run_hash, status="failed")
         sys.exit(1)
 
 
 def run_land_use(
-    year,
-    forecast_year,
-    land_use_model,
-    state: WorkflowState,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-    model_run_hash: str,
+        year,
+        forecast_year,
+        land_use_model,
+        state: WorkflowState,
+        workspace: Workspace,
+        provenance_tracker: OpenLineageTracker,
 ):
     """
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
@@ -316,7 +303,6 @@ def run_land_use(
         state (WorkflowState): Workflow state.
         workspace (Workspace): Workspace instance for data paths.
         provenance_tracker (OpenLineageTracker): Provenance tracker instance.
-        model_run_hash (str): Provenance model run identifier created before calling this function.
     """
     logger.info("Running land use")
 
@@ -333,22 +319,24 @@ def run_land_use(
         "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
     )
 
-    # 2. PREPARE URBANSIM DATA
+    # 1. PREPROCESS
     print_str = f"Preparing {year} input data for land use development simulation."
     formatted_print(print_str)
 
     input_data = preprocessor.preprocess(workspace)
 
-    # 3. RUN URBANSIM
+    # 2. RUN (Delegates to Container Runner -> Consist)
     print_str = f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
     formatted_print(print_str)
 
     raw_outputs, run_info = runner.run(input_data, workspace)
 
-    # 4. POSTPROCESS URBANSIM OUTPUTS
-    # Postprocessor will handle writing outputs and provenance via the provided model_run_hash.
+    # 3. POSTPROCESS (Delegates to Decorated Postprocessor)
+    # The decorator handles provenance start/stop automatically.
+
     postprocessor.postprocess(
-        raw_outputs, workspace, run_info, model_run_hash=model_run_hash
+        raw_outputs, workspace, run_info
+        # REMOVED: model_run_hash argument
     )
 
     logger.info("Done!")
@@ -656,7 +644,7 @@ def main():
             warm_start_atlas = state.is_start_year()
             forecast = True  # Always forecast for main loop
 
-            # Multi-year loop logic (as in run_atlas)
+            # Multi-year loop logic
             if forecast:
                 # For forecast, run for all years between state.year and state.forecast_year, step 2
                 # Also ensure the start year is processed to generate its inputs.
@@ -668,54 +656,51 @@ def main():
             else:
                 yrs = [state.year]
 
-            max_retries = settings.atlas.max_retries
             for atlas_year in yrs:
-                for i in range(max_retries):
-                    # Create a lightweight sub-state object for this ATLAS sub-run. It copies
-                    # the parent state's attributes and overrides the year/fiscal context used
-                    # by preprocessors/runners/postprocessors.
-                    class AtlasSubState:
-                        def __init__(self, parent_state, year):
-                            # Shallow copy parent state dict to inherit attributes
-                            self.__dict__ = parent_state.__dict__.copy()
-                            self.year = year
-                            self.current_year = year
-                            self.forecast_year = year
-                            self.main_forecast_year = parent_state.forecast_year
-                            self.start_year = parent_state.start_year
-                            self.full_settings = parent_state.full_settings
-                            # Provide an is_start_year method consistent with the parent
-                            self.is_start_year = lambda: (
-                                year == parent_state.start_year
-                            )
+                # Create a lightweight sub-state object for this ATLAS sub-run.
+                # It copies the parent state's attributes and overrides the year context.
+                class AtlasSubState:
+                    def __init__(self, parent_state, year):
+                        self.__dict__ = parent_state.__dict__.copy()
+                        self.year = year
+                        self.current_year = year
+                        self.forecast_year = year
+                        self.main_forecast_year = parent_state.forecast_year
+                        self.start_year = parent_state.start_year
+                        self.full_settings = parent_state.full_settings
+                        self.is_start_year = lambda: (year == parent_state.start_year)
 
-                        def set_sub_stage_progress(self, sub_stage_progress):
-                            state.set_sub_stage_progress(sub_stage_progress)
+                    def set_sub_stage_progress(self, sub_stage_progress):
+                        state.set_sub_stage_progress(sub_stage_progress)
 
-                    atlas_state = AtlasSubState(state, atlas_year)
+                atlas_state = AtlasSubState(state, atlas_year)
 
-                    logger.info(
-                        f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
-                    )
-                    # Preprocess
-                    preprocessor.update_state(atlas_state)
-                    input_data = preprocessor.preprocess(workspace)
-                    logger.info(
-                        f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
-                    )
+                # 1. Preprocess
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
+                )
+                preprocessor.update_state(atlas_state)
+                input_data = preprocessor.preprocess(workspace)
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
+                )
 
-                    logger.info(
-                        f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
-                    )
-                    # Run
-                    runner.update_state(atlas_state)
+                # 2. Run (Retries handled internally by AtlasRunner)
+                logger.info(
+                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
+                )
+                runner.update_state(atlas_state)
+
+                try:
                     raw_outputs, run_info = runner.run(input_data, workspace)
 
+                    # Check for explicit success status
                     if run_info and run_info.status == "completed":
                         logger.info(
-                            f"[run.py] [ATLAS] AtlasRunner successful for year {atlas_year} on attempt {i + 1}"
+                            f"[run.py] [ATLAS] AtlasRunner successful for year {atlas_year}"
                         )
-                        # Postprocess
+
+                        # 3. Postprocess
                         logger.info(
                             f"[run.py] [ATLAS] Postprocessing for year {atlas_year}"
                         )
@@ -738,16 +723,17 @@ def main():
                         logger.info(
                             f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
                         )
-                        break  # Exit retry loop on success
                     else:
-                        logger.warning(
-                            f"ATLAS run failed for year {atlas_year} on attempt {i + 1}. Retrying... ({max_retries - i - 1} retries left)"
+                        # Runner returned without exception but status wasn't completed
+                        raise RuntimeError(
+                            f"AtlasRunner returned incomplete status: {run_info.status if run_info else 'None'}"
                         )
-                else:  # This else belongs to the for loop, runs if the loop completes without break
+
+                except Exception as e:
                     logger.error(
-                        f"ATLAS run for year {atlas_year} failed after {max_retries} attempts. Aborting."
+                        f"ATLAS run execution failed for year {atlas_year}. Aborting simulation. Error: {e}"
                     )
-                    sys.exit(1)  # Exit the whole simulation
+                    sys.exit(1)
 
             logger.info(
                 "[run.py] [ATLAS] All ATLAS years complete for this major step."

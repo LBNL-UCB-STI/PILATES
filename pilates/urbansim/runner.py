@@ -67,7 +67,6 @@ class UrbansimRunner(GenericRunner):
         )
         return usim_cmd
 
-    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -122,6 +121,9 @@ class UrbansimRunner(GenericRunner):
                 logger.error(f"Failed to initialize Docker client: {e}")
                 raise
 
+        # 1. EXTRACT INPUTS FOR CONSIST TRACKING
+        input_paths = [r.file_path for r in store.all_records()]
+
         # Execute container
         try:
             success = self.run_container(
@@ -133,6 +135,9 @@ class UrbansimRunner(GenericRunner):
                 model_name=self.model_name,
                 working_dir=settings.urbansim.client_base_folder,
                 provenance_tracker=self.provenance_tracker,
+                # 2. PASS INPUTS
+                input_artifacts=input_paths,
+                # 3. OUTPUTS ALREADY CORRECT
                 output_paths=[usim_datastore_fpath],
             )
 
@@ -147,8 +152,6 @@ class UrbansimRunner(GenericRunner):
         # Collect outputs
         output_records = []
         if os.path.exists(usim_datastore_fpath):
-            # Create a FileRecord for the output file
-            # Output file provenance is automatically tracked by @provenance_logging decorator
             from pilates.generic.records import FileRecord
 
             output_rec = FileRecord(
@@ -170,23 +173,8 @@ class UrbansimRunner(GenericRunner):
                 f"UrbanSim output file not found at {usim_datastore_fpath}"
             )
 
-        # Prepare runtime metadata
-        runtime_metadata = {
-            "container_command": usim_cmd,
-            "runtime_parameters": {
-                "region_id": settings.urbansim.region_mappings["region_to_region_id"][
-                    settings.run.region
-                ],
-                "year": self.state.current_year,
-                "forecast_year": forecast_year,
-                "land_use_freq": settings.run.land_use_freq,
-                "skims_source": settings.run.models.travel,
-            },
-            "container_image": land_use_image,
-            "container_manager": settings.infrastructure.container_manager,
-            "working_directory": settings.urbansim.client_base_folder,
-        }
+        # 4. EXPLICIT STATUS UPDATE
+        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
+        run_info.status = "completed"
 
-        return RecordStore(recordList=output_records), ModelRunInfo(
-            model=self.model_name, year=self.state.current_year
-        )
+        return RecordStore(recordList=output_records), run_info

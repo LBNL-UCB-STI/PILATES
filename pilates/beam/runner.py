@@ -125,7 +125,6 @@ class BeamRunner(GenericRunner):
             },
         }
 
-    @provenance_logging
     def _run(
         self,
         store: RecordStore,
@@ -200,6 +199,8 @@ class BeamRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
+        input_paths = [r.file_path for r in store.all_records()]
+
         success = self.run_container(
             client=client,
             settings=settings,
@@ -213,29 +214,28 @@ class BeamRunner(GenericRunner):
             working_dir="/app",
             environment={"JAVA_OPTS": java_opts},
             provenance_tracker=self.provenance_tracker,
+            input_artifacts=input_paths,
             output_paths=[abs_beam_output],
         )
 
-        # The decorator needs runtime metadata. We can pass it back via the run_info object.
-        run_info = self.provenance_tracker.current_model_run()
-        if run_info:
-            run_info.metadata.update(
-                {
-                    "container_command": f"--config={path_to_beam_config}",
-                    "runtime_parameters": {
-                        "beam_config": beam_config,
-                        "path_to_beam_config": path_to_beam_config,
-                        "beam_memory": beam_memory,
-                        "region": region,
-                    },
-                    "container_image": travel_model_image,
-                    "container_manager": get_setting(
-                        settings, "infrastructure.container_manager", "docker"
-                    ),
-                    "working_directory": "/app",
-                    "java_opts": java_opts,
-                }
-            )
+        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
+        run_info.metadata.update(
+            {
+                "container_command": f"--config={path_to_beam_config}",
+                "runtime_parameters": {
+                    "beam_config": beam_config,
+                    "path_to_beam_config": path_to_beam_config,
+                    "beam_memory": beam_memory,
+                    "region": region,
+                },
+                "container_image": travel_model_image,
+                "container_manager": get_setting(
+                    settings, "infrastructure.container_manager", "docker"
+                ),
+                "working_directory": "/app",
+                "java_opts": java_opts,
+            }
+        )
 
         if not success:
             raise RuntimeError("BEAM run failed after container execution.")
@@ -276,4 +276,8 @@ class BeamRunner(GenericRunner):
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"
         )
+
+        # 5. EXPLICIT SUCCESS STATUS
+        run_info.status = "completed"
+
         return output_store, run_info
