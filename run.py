@@ -26,6 +26,7 @@ from pilates.generic.records import RecordStore
 
 # Helper import for model/image lookup and docker client
 from pilates.generic.runner import GenericRunner
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.workspace import Workspace
 from pilates.utils.provenance import OpenLineageTracker
 from pilates.generic.initialization import Initialization
@@ -507,8 +508,27 @@ def main():
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     run_id = str(uuid.uuid4())
 
-    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
-    provenance_tracker.initialize_from_settings(settings)
+    db_config = settings.shared.database
+    db_path = db_config.path if (db_config.enabled and db_config.path) else None
+
+    use_consist = settings.shared.database.use_consist
+
+    if use_consist:
+        logger.info("Initializing Consist Provenance Tracker (Migration Phase 5)")
+        provenance_tracker = ConsistProvenanceTracker(
+            run_id=run_id,
+            output_path=output_path,
+            folder_name=run_name,
+            db_path=db_path  # Essential: Consist needs to own the DB connection
+        )
+
+    else:
+        logger.info("Initializing Legacy OpenLineage Tracker")
+        provenance_tracker = OpenLineageTracker(
+            run_id,
+            output_path,
+            folder_name=run_name
+        )
 
     # NEW: Create hierarchical config hashes for intelligent caching
     hierarchical_hashes = None
