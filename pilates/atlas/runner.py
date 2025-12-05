@@ -378,21 +378,27 @@ class AtlasRunner(GenericRunner):
                 self.state.current_year,
             )
             # TODO: Verify the working directory and volume mappings are correct for ATLAS
-            success = self.run_container(
-                client=client,
-                settings=settings,
-                image=atlas_image,
-                volumes=atlas_docker_vols,
-                command=atlas_cmd,
-                model_name=self.model_name,
-                working_dir="/",
-                provenance_tracker=self.provenance_tracker,
-                output_paths=[workspace.get_atlas_output_dir()],
-            )
+            max_retries = settings.atlas.max_retries
+            for i in range(max_retries):
+                success = self.run_container(
+                    client=client,
+                    settings=settings,
+                    image=atlas_image,
+                    volumes=atlas_docker_vols,
+                    command=atlas_cmd,
+                    model_name=self.model_name,
+                    working_dir="/",
+                    provenance_tracker=self.provenance_tracker,
+                    output_paths=[workspace.get_atlas_output_dir()],
+                )
 
-            if not success:
-                logger.error("ATLAS container execution failed")
-                raise RuntimeError("ATLAS container execution failed")
+                if not success:
+                    logger.error(f"ATLAS container execution failed in attempt {i}")
+                else:
+                    logger.info(f"ATLAS container execution succeeded in attempt {i}")
+                    break
+
+            raise RuntimeError("ATLAS container execution failed")
 
         except Exception as e:
             logger.error(f"ATLAS container execution error: {e}")
