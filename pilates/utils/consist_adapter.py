@@ -104,6 +104,12 @@ class ConsistProvenanceTracker:
         self.run_id = run_id
         self.output_path = os.path.abspath(output_path) if output_path else None
         self.folder_name = folder_name
+
+        if self.folder_name:
+            self.run_info_path = os.path.join(self.output_path, self.folder_name, "run_info.json")
+        else:
+            self.run_info_path = os.path.join(self.output_path, "run_info.json")
+
         self.workspace_root = (
             os.path.join(self.output_path, self.folder_name)
             if self.folder_name and self.output_path
@@ -143,18 +149,12 @@ class ConsistProvenanceTracker:
         if not self.output_path:
             return
 
-        # Determine path (same logic as FileProvenanceTracker)
-        if self.folder_name:
-            run_info_path = os.path.join(self.output_path, self.folder_name, "run_info.json")
-        else:
-            run_info_path = os.path.join(self.output_path, "run_info.json")
-
-        os.makedirs(os.path.dirname(run_info_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.run_info_path), exist_ok=True)
         try:
-            with open(run_info_path, "w") as f:
+            with open(self.run_info_path, "w") as f:
                 json.dump(dataclasses.asdict(self.run_info), f, indent=2, default=str)
         except IOError as e:
-            logger.error(f"Could not save run_info.json to {run_info_path}: {e}")
+            logger.error(f"Could not save run_info.json to {self.run_info_path}: {e}")
 
     @property
     def data_manager(self) -> "ConsistDataManager":
