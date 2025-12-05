@@ -609,7 +609,7 @@ class ConsistProvenanceTracker:
 
         # Compute git hash if not provided
         if git_hash is None:
-            git_hash = self._get_git_hash(abs_path)
+            git_hash = self.get_git_hash(abs_path)
 
         # Log to Consist as a git artifact
         artifact = self._tracker.log_artifact(
@@ -765,7 +765,7 @@ class ConsistProvenanceTracker:
             table_record_ids=[],
         )
 
-    def _get_git_hash(self, repo_path: str) -> Optional[str]:
+    def get_git_hash(self, repo_path: str) -> Optional[str]:
         """Get the git commit hash for a repository."""
         import subprocess
         try:
