@@ -1,12 +1,13 @@
 import os
 import logging
-from typing import Dict
+from typing import Dict, Union
 
 from pilates.activitysim import preprocessor as asim_pre
 from pilates.generic.records import RecordStore
 from pilates.urbansim import preprocessor as usim_pre
 from pilates.beam import preprocessor as beam_pre
 from pilates.atlas import preprocessor as atlas_pre
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 
@@ -25,7 +26,7 @@ class Workspace:
         settings: dict,
         output_path: str,
         folder_name: str,
-        provenance_tracker: "FileProvenanceTracker",
+        provenance_tracker: Union["FileProvenanceTracker","ConsistProvenanceTracker"],
     ):
         self.settings = settings
         self.output_path = output_path

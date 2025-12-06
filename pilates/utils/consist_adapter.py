@@ -511,20 +511,24 @@ class ConsistProvenanceTracker:
         key = kwargs.get("short_name") or Path(file_path).stem
 
         # Log to Consist with H5 driver
-        artifact = self._tracker.log_artifact(
+        artifact, table_artifacts = self._tracker.log_h5_container(
             path=abs_path,
             key=key,
             direction="input",
-            driver="h5",
-            is_container=True,
-            model=model,
+            discover_tables=True,
+            model=model
         )
 
         # Track for parent-child linking
         self._h5_containers[abs_path] = artifact
 
-        # Create H5FileRecord for compatibility
+        # Create H5FileRecord
         h5_record = self._artifact_to_h5_file_record(artifact, model)
+
+        # Populate table IDs from discovered artifacts
+        # We need to ensure table artifacts have UUIDs compatible with PILATES records
+        h5_record.table_record_ids = [str(t.id) for t in table_artifacts]
+
         self.run_info.file_records[h5_record.unique_id] = h5_record
         self._save_run_info()
 
@@ -557,13 +561,12 @@ class ConsistProvenanceTracker:
         key = kwargs.get("short_name") or Path(file_path).stem
 
         # Log to Consist with H5 driver
-        artifact = self._tracker.log_artifact(
+        artifact, table_artifacts = self._tracker.log_h5_container(
             path=abs_path,
             key=key,
             direction="output",
-            driver="h5",
-            is_container=True,
-            model=model,
+            discover_tables=True,
+            model=model
         )
 
         # Track for parent-child linking
@@ -571,8 +574,7 @@ class ConsistProvenanceTracker:
 
         # Create H5FileRecord for compatibility
         h5_record = self._artifact_to_h5_file_record(artifact, model)
-        if table_records:
-            h5_record.table_record_ids = [tr.unique_id for tr in table_records]
+        h5_record.table_record_ids = [str(t.id) for t in table_artifacts]
 
         self.run_info.file_records[h5_record.unique_id] = h5_record
         self._save_run_info()

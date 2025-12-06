@@ -529,6 +529,7 @@ def main():
             output_path,
             folder_name=run_name
         )
+    assert(isinstance(provenance_tracker, ConsistProvenanceTracker))
 
     # NEW: Create hierarchical config hashes for intelligent caching
     hierarchical_hashes = None

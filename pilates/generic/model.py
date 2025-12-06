@@ -174,6 +174,10 @@ class Model:
         if not self.provenance_tracker or not self.provenance_tracker.run_info:
             return
 
+        if hasattr(self.provenance_tracker, "_tracker"):
+            logger.info("Consist should handle its own tagging now")
+            return
+
         database_path_str = self.state.full_settings.shared.database.path
         if not database_path_str:
             return
@@ -228,6 +232,10 @@ class Model:
         provenance_tracker.complete_model_run().
         """
         if not self.provenance_tracker or not self.provenance_tracker.run_info:
+            return
+
+        if hasattr(self.provenance_tracker, "_tracker"):
+            logger.info("Consist should handle its own tagging now")
             return
 
         database_path_str = self.state.full_settings.shared.database.path
