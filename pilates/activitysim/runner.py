@@ -260,12 +260,20 @@ class ActivitysimRunner(GenericRunner):
                 settings, asim_docker_vols, True
             )
 
+            # Consist: Force overwrite for compilation to ensure Numba caches are regenerated
+             # Legacy: Ignore this argument
+            start_kwargs = {}
+
+            if hasattr(self.provenance_tracker, "_tracker"):
+                start_kwargs["cache_mode"] = "overwrite"
+
             asim_compile_run_hash = self.provenance_tracker.start_model_run(
                 model=activity_demand_model,
                 year=self.state.current_year,
                 iteration=-1,
                 description="asim compilation",
                 inputs=filtered_store,
+                **start_kwargs,
             )
 
             success = self.run_container(

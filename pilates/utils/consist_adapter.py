@@ -233,6 +233,8 @@ class ConsistProvenanceTracker:
         description: str = None,
         inputs: RecordStore = None,
         state: Optional[ExecutionContext] = None,
+        cache_mode: str = "reuse",
+        ** kwargs,
     ) -> str:
         """
         Start tracking a new model run.
@@ -246,6 +248,7 @@ class ConsistProvenanceTracker:
             description: Human-friendly description
             inputs: RecordStore containing input records
             state: Execution context for workflow state
+            cache_mode: Caching strategy ("reuse", "overwrite", "readonly")
 
         Returns:
             The unique run ID assigned to this model run
@@ -285,7 +288,7 @@ class ConsistProvenanceTracker:
             inputs=consist_inputs,
             tags=None,
             description=description,
-            cache_mode="reuse",
+            cache_mode=cache_mode,
             year=year,
             iteration=iteration,
             **pilates_meta,
