@@ -42,7 +42,7 @@ def _inject_workflow_context(state: Optional[ExecutionContext]) -> Dict[str, Any
     Extract PILATES workflow context into Consist run metadata.
 
     This bridges the gap between PILATES's WorkflowState tracking and
-    Consist's generic metadata system.
+    Consist's generic metadata system. Handles Enum serialization.
 
     Args:
         state: PILATES execution context (WorkflowState or similar)
@@ -52,9 +52,20 @@ def _inject_workflow_context(state: Optional[ExecutionContext]) -> Dict[str, Any
     """
     if state is None:
         return {}
+
+    # Handle Enum serialization for stage
+    stage = getattr(state, "current_major_stage", None)
+    if stage is not None:
+        # If it's an Enum, get its name (e.g. "supply_demand_loop")
+        if hasattr(stage, "name"):
+            stage = stage.name
+        # Fallback for other non-primitive types
+        elif not isinstance(stage, (str, int, float, bool)):
+            stage = str(stage)
+
     return {
         "pilates_year": getattr(state, "current_year", None),
-        "pilates_stage": getattr(state, "current_major_stage", None),
+        "pilates_stage": stage,
         "pilates_iteration": getattr(state, "current_inner_iter", None),
     }
 
@@ -488,6 +499,44 @@ class ConsistProvenanceTracker:
         self._save_run_info()
 
         return file_record
+
+    def record_output_file_with_inputs(
+            self,
+            model: str,
+            file_path: str,
+            input_records: List[Optional[FileRecord]],
+            **kwargs,
+    ) -> Optional[FileRecord]:
+        """
+        Convenience wrapper to automatically extract file paths from input records
+        and pass them as source_file_paths to record_output_file.
+
+        This ensures compatibility with the FileProvenanceTracker interface.
+
+        Args:
+            model: Name of the model producing this output
+            file_path: Path to the output file
+            input_records: List of FileRecords that were inputs. None values are ignored.
+            **kwargs: Additional arguments passed to record_output_file
+
+        Returns:
+            FileRecord or None
+        """
+        # Extract file paths from input records, filtering out None values
+        source_file_paths = []
+        if input_records:
+            for rec in input_records:
+                if rec is not None and hasattr(rec, "file_path"):
+                    source_file_paths.append(rec.file_path)
+
+        # Add extracted source paths to kwargs, overriding if present
+        kwargs["source_file_paths"] = source_file_paths
+
+        return self.record_output_file(
+            model=model,
+            file_path=file_path,
+            **kwargs,
+        )
 
     def record_h5_input_container(
         self, model: str, file_path: str, **kwargs
