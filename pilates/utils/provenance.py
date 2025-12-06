@@ -239,6 +239,7 @@ class ProvenanceTracker:
         iteration: int = None,
         description: str = None,
         inputs: RecordStore = RecordStore(),
+        **kwargs
     ) -> str:
         """Start tracking a new model run.
 

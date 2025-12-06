@@ -69,6 +69,7 @@ def provenance_logging(func):
                 self.state.current_inner_iter,
                 description=description,
                 inputs=input_record_store,  # Use the extracted input RecordStore
+                state=self.state
             )
             # 2. Log the start event to the database
             self.start()
