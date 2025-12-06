@@ -227,7 +227,9 @@ class AtlasConfig(BaseModel):
     container_output_folder: str
     basedir: str
     codedir: str
-    max_retries: int = Field(3, description="Number of times ATLAS can re-run due to flakiness")
+    max_retries: int = Field(
+        3, description="Number of times ATLAS can re-run due to flakiness"
+    )
     sample_size: int = Field(0, description="Sample size (0 = full population)")
     num_processes: int = Field(40, description="Number of parallel processes")
     beamac: int = Field(0, description="BEAM accessibility mode")

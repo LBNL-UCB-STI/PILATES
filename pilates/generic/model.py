@@ -69,7 +69,7 @@ def provenance_logging(func):
                 self.state.current_inner_iter,
                 description=description,
                 inputs=input_record_store,  # Use the extracted input RecordStore
-                state=self.state
+                state=self.state,
             )
             # 2. Log the start event to the database
             self.start()
@@ -206,7 +206,9 @@ class Model:
                 logger.debug(f"Logging start of model run {model_run_id} to database.")
 
                 # 1. Upsert the model run itself (status should be 'running')
-                db_manager.upsert_model_run(conn, model_run, self.provenance_tracker.run_info.run_id)
+                db_manager.upsert_model_run(
+                    conn, model_run, self.provenance_tracker.run_info.run_id
+                )
 
                 # 2. Upsert its input file records
                 for record_hash in model_run.input_record_hashes:
@@ -268,7 +270,9 @@ class Model:
                 )
 
                 # 1. Upsert the model run itself (status should be 'completed' or 'failed')
-                db_manager.upsert_model_run(conn, model_run, self.provenance_tracker.run_info.run_id)
+                db_manager.upsert_model_run(
+                    conn, model_run, self.provenance_tracker.run_info.run_id
+                )
 
                 # 2. Upsert its output file records
                 for record_hash in model_run.output_record_hashes:

@@ -235,11 +235,11 @@ def warm_start_activities(
 
 
 def forecast_land_use(
-        settings: PilatesConfig,
-        year: int,
-        workflow_state: WorkflowState,
-        workspace: Workspace,
-        provenance_tracker: OpenLineageTracker,
+    settings: PilatesConfig,
+    year: int,
+    workflow_state: WorkflowState,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
 ):
     """
     High-level wrapper to start an UrbanSim (land use) run and handle post-run checks.
@@ -287,12 +287,12 @@ def forecast_land_use(
 
 
 def run_land_use(
-        year,
-        forecast_year,
-        land_use_model,
-        state: WorkflowState,
-        workspace: Workspace,
-        provenance_tracker: OpenLineageTracker,
+    year,
+    forecast_year,
+    land_use_model,
+    state: WorkflowState,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
 ):
     """
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
@@ -336,7 +336,9 @@ def run_land_use(
     # The decorator handles provenance start/stop automatically.
 
     postprocessor.postprocess(
-        raw_outputs, workspace, run_info
+        raw_outputs,
+        workspace,
+        run_info,
         # REMOVED: model_run_hash argument
     )
 
@@ -519,17 +521,15 @@ def main():
             run_id=run_id,
             output_path=output_path,
             folder_name=run_name,
-            db_path=db_path  # Essential: Consist needs to own the DB connection
+            db_path=db_path,  # Essential: Consist needs to own the DB connection
         )
 
     else:
         logger.info("Initializing Legacy OpenLineage Tracker")
         provenance_tracker = OpenLineageTracker(
-            run_id,
-            output_path,
-            folder_name=run_name
+            run_id, output_path, folder_name=run_name
         )
-    assert(isinstance(provenance_tracker, ConsistProvenanceTracker))
+    assert isinstance(provenance_tracker, ConsistProvenanceTracker)
 
     # NEW: Create hierarchical config hashes for intelligent caching
     hierarchical_hashes = None

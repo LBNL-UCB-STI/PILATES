@@ -3515,9 +3515,11 @@ class BeamPostprocessor(GenericPostprocessor):
 
             skim_name = skim_name_found
 
-            all_skims_found = [record.file_path
-                    for record in raw_outputs.all_records()
-                    if record.short_name == skim_name]
+            all_skims_found = [
+                record.file_path
+                for record in raw_outputs.all_records()
+                if record.short_name == skim_name
+            ]
 
             logger.info("Here are all the skim files found")
             logger.info(all_skims_found)

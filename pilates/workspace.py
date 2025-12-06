@@ -26,7 +26,7 @@ class Workspace:
         settings: dict,
         output_path: str,
         folder_name: str,
-        provenance_tracker: Union["FileProvenanceTracker","ConsistProvenanceTracker"],
+        provenance_tracker: Union["FileProvenanceTracker", "ConsistProvenanceTracker"],
     ):
         self.settings = settings
         self.output_path = output_path

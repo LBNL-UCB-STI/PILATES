@@ -184,7 +184,8 @@ def assert_provenance_chain(run_info, expected_stages: list):
     # Verify expected stages exist
     for model_name, stage_keyword in expected_stages:
         matching_runs = [
-            r for r in runs_by_model.get(model_name, [])
+            r
+            for r in runs_by_model.get(model_name, [])
             if stage_keyword.lower() in (r.description or "").lower()
         ]
         assert len(matching_runs) >= 1, (
@@ -879,9 +880,13 @@ class DummyContainerRunner(GenericRunner):
         h5_record = get_record_by_short_name(store, "data.h5")
 
         if not csv_record:
-            raise ValueError("data.csv record not found in RecordStore for DummyContainerRunner.")
+            raise ValueError(
+                "data.csv record not found in RecordStore for DummyContainerRunner."
+            )
         if not h5_record:
-            raise ValueError("data.h5 record not found in RecordStore for DummyContainerRunner.")
+            raise ValueError(
+                "data.h5 record not found in RecordStore for DummyContainerRunner."
+            )
 
         csv_path = csv_record.file_path
         h5_path = h5_record.file_path
@@ -1221,7 +1226,9 @@ class TestDummyWorkflowConsist:
         run_info = provenance_tracker.run_info
 
         # Verify basic run_info structure
-        assert run_info.run_id == "test_run", "run_id should match tracker initialization"
+        assert (
+            run_info.run_id == "test_run"
+        ), "run_id should match tracker initialization"
         assert run_info.created_at is not None, "created_at should be set"
 
         # Verify model runs were captured
@@ -1232,23 +1239,26 @@ class TestDummyWorkflowConsist:
 
         # Verify expected stages exist using helper
         # NOTE: Consist normalizes model names to lowercase
-        assert_provenance_chain(run_info, [
-            ("modela", "preprocess"),
-            ("modela", "run"),
-            ("modela", "postprocess"),
-            ("modelb", "preprocess"),
-            ("modelb", "run"),
-            ("modelb", "postprocess"),
-        ])
+        assert_provenance_chain(
+            run_info,
+            [
+                ("modela", "preprocess"),
+                ("modela", "run"),
+                ("modela", "postprocess"),
+                ("modelb", "preprocess"),
+                ("modelb", "run"),
+                ("modelb", "postprocess"),
+            ],
+        )
 
         # Verify all model runs completed successfully
         for run_id, model_run in run_info.model_runs.items():
-            assert model_run.status == "completed", (
-                f"Model run {run_id} ({model_run.model}) has status '{model_run.status}', expected 'completed'"
-            )
-            assert model_run.year == year, (
-                f"Model run {run_id} year mismatch: got {model_run.year}, expected {year}"
-            )
+            assert (
+                model_run.status == "completed"
+            ), f"Model run {run_id} ({model_run.model}) has status '{model_run.status}', expected 'completed'"
+            assert (
+                model_run.year == year
+            ), f"Model run {run_id} year mismatch: got {model_run.year}, expected {year}"
 
         # Verify file records were captured
         assert len(run_info.file_records) > 0, "Expected file records to be captured"
@@ -1256,17 +1266,19 @@ class TestDummyWorkflowConsist:
         # Verify output lineage: Model A runner should have outputs that become Model B inputs
         # NOTE: Consist normalizes model names to lowercase
         model_a_runner_runs = [
-            r for r in run_info.model_runs.values()
-            if r.model == "modela" and "run" in (r.description or "").lower()
+            r
+            for r in run_info.model_runs.values()
+            if r.model == "modela"
+            and "run" in (r.description or "").lower()
             and "preprocess" not in (r.description or "").lower()
             and "postprocess" not in (r.description or "").lower()
         ]
         if model_a_runner_runs:
             model_a_runner = model_a_runner_runs[0]
             # FIXED in Phase 5.2: output_record_hashes now populated by complete_model_run
-            assert len(model_a_runner.output_record_hashes) > 0, (
-                "Model A runner should have output records"
-            )
+            assert (
+                len(model_a_runner.output_record_hashes) > 0
+            ), "Model A runner should have output records"
 
         # Verify OpenLineage events were generated (START/COMPLETE pairs)
         # PLANNED: OpenLineage event generation in Consist
@@ -1280,12 +1292,16 @@ class TestDummyWorkflowConsist:
         # Verify we have both START and COMPLETE events
         event_types = [e.event_type for e in run_info.openlineage_event_metadata]
         assert "START" in event_types, "Expected START events in OpenLineage metadata"
-        assert "COMPLETE" in event_types, "Expected COMPLETE events in OpenLineage metadata"
+        assert (
+            "COMPLETE" in event_types
+        ), "Expected COMPLETE events in OpenLineage metadata"
 
         print(f"✓ Provenance verification complete:")
         print(f"  - {len(run_info.model_runs)} model runs captured")
         print(f"  - {len(run_info.file_records)} file records tracked")
-        print(f"  - {len(run_info.openlineage_event_metadata)} OpenLineage events generated")
+        print(
+            f"  - {len(run_info.openlineage_event_metadata)} OpenLineage events generated"
+        )
 
         print(f"✓ Workflow output in: {workflow_output_dir}")
         print(f"✓ Provenance DB in: {db_path}")
@@ -1305,9 +1321,13 @@ class TestDummyWorkflowConsist:
 
         This serves as documentation for how provenance works in PILATES.
         """
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
+            setup_workflow
+        )
 
-        input_data_dir = Path("/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow")
+        input_data_dir = Path(
+            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
+        )
         year = 2025
 
         # Initialize state and workspace
@@ -1317,13 +1337,23 @@ class TestDummyWorkflowConsist:
 
         # Run just Model A to keep the test focused
         model_a_config = {"input_dir": str(input_data_dir)}
-        preprocessor = DummyModelAPreprocessor("ModelA", model_a_config, provenance_tracker, workflow_state)
-        runner = DummyModelARunner("ModelA", model_a_config, provenance_tracker, workflow_state)
-        postprocessor = DummyModelAPostprocessor("ModelA", model_a_config, provenance_tracker, workflow_state)
+        preprocessor = DummyModelAPreprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        runner = DummyModelARunner(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        postprocessor = DummyModelAPostprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
 
         # Execute the pipeline
-        _, mutable_records = preprocessor.copy_data_to_mutable_location(model_a_config, str(workflow_output_dir))
-        preprocess_output = preprocessor.preprocess(workspace, previous_records=mutable_records)
+        _, mutable_records = preprocessor.copy_data_to_mutable_location(
+            model_a_config, str(workflow_output_dir)
+        )
+        preprocess_output = preprocessor.preprocess(
+            workspace, previous_records=mutable_records
+        )
         runner_output, _ = runner.run(preprocess_output, workspace)
         final_output = postprocessor.postprocess(runner_output, workspace)
 
@@ -1331,7 +1361,9 @@ class TestDummyWorkflowConsist:
         run_info = provenance_tracker.run_info
         model_runs = list(run_info.model_runs.values())
 
-        assert len(model_runs) == 3, f"Expected 3 model runs for Model A, got {len(model_runs)}"
+        assert (
+            len(model_runs) == 3
+        ), f"Expected 3 model runs for Model A, got {len(model_runs)}"
 
         # Each run should have proper metadata
         # NOTE: Consist normalizes model names to lowercase
@@ -1360,10 +1392,14 @@ class TestDummyWorkflowConsist:
 
         # KNOWN GAP: input/output_record_hashes not populated by ConsistProvenanceTracker
         # TODO: Fix in Phase 5.2 - update adapter to populate record hashes
-        assert len(preprocess_run.output_record_hashes) > 0, "Preprocessor should record outputs"
+        assert (
+            len(preprocess_run.output_record_hashes) > 0
+        ), "Preprocessor should record outputs"
         assert len(runner_run.input_record_hashes) > 0, "Runner should have inputs"
         assert len(runner_run.output_record_hashes) > 0, "Runner should have outputs"
-        assert len(postprocess_run.input_record_hashes) > 0, "Postprocessor should have inputs"
+        assert (
+            len(postprocess_run.input_record_hashes) > 0
+        ), "Postprocessor should have inputs"
 
         # === Verify File Records ===
         file_records = run_info.file_records
@@ -1380,12 +1416,18 @@ class TestDummyWorkflowConsist:
         # TODO: Implement in Consist core, then remove xfail
         pytest.xfail("OpenLineage event generation not yet implemented in Consist")
         ol_events = run_info.openlineage_event_metadata
-        assert len(ol_events) == 6, f"Expected 6 OL events (3 START + 3 COMPLETE), got {len(ol_events)}"
+        assert (
+            len(ol_events) == 6
+        ), f"Expected 6 OL events (3 START + 3 COMPLETE), got {len(ol_events)}"
 
         start_events = [e for e in ol_events if e.event_type == "START"]
         complete_events = [e for e in ol_events if e.event_type == "COMPLETE"]
-        assert len(start_events) == 3, f"Expected 3 START events, got {len(start_events)}"
-        assert len(complete_events) == 3, f"Expected 3 COMPLETE events, got {len(complete_events)}"
+        assert (
+            len(start_events) == 3
+        ), f"Expected 3 START events, got {len(start_events)}"
+        assert (
+            len(complete_events) == 3
+        ), f"Expected 3 COMPLETE events, got {len(complete_events)}"
 
         # Each event should have required fields
         for event in ol_events:
@@ -1507,8 +1549,12 @@ class TestDummyWorkflowConsist:
         assert call_kwargs["backend_type"] == "docker", "Backend type should be docker"
 
         # Check that inputs and outputs were passed
-        assert "inputs" in call_kwargs, "Inputs should be passed to consist_run_container"
-        assert "outputs" in call_kwargs, "Outputs should be passed to consist_run_container"
+        assert (
+            "inputs" in call_kwargs
+        ), "Inputs should be passed to consist_run_container"
+        assert (
+            "outputs" in call_kwargs
+        ), "Outputs should be passed to consist_run_container"
 
         # Verify output records were created
         assert runner_output is not None, "Runner should return output records"
@@ -1525,19 +1571,19 @@ class TestDummyWorkflowConsist:
         assert (
             container_output_csv.exists()
         ), "Container runner should create CSV output"
-        assert (
-            container_output_h5.exists()
-        ), "Container runner should create H5 output"
+        assert container_output_h5.exists(), "Container runner should create H5 output"
 
         # Verify provenance was tracked
-        assert runner_info is not None, (
-            "Runner should return ModelRunInfo for provenance tracking"
-        )
+        assert (
+            runner_info is not None
+        ), "Runner should return ModelRunInfo for provenance tracking"
 
         print("✓ Container runner with Consist integration test passed:")
         print(f"  - consist_run_container was called with correct parameters")
         print(f"  - Volume format conversion verified")
-        print(f"  - Output files created: {container_output_csv.name}, {container_output_h5.name}")
+        print(
+            f"  - Output files created: {container_output_csv.name}, {container_output_h5.name}"
+        )
         print(f"  - {len(output_records)} output records created")
 
     def test_json_persistence_structure(self, setup_workflow):
@@ -1554,7 +1600,9 @@ class TestDummyWorkflowConsist:
 
         # 1. Execute the workflow (reuse the logic from test_single_year_workflow)
         # We perform a minimal run here just to populate the data
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
+            setup_workflow
+        )
         self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
 
         # 2. Locate and load the JSON file
@@ -1591,7 +1639,8 @@ class TestDummyWorkflowConsist:
         # Verify a specific known output exists
         # Note: short_names in dummy workflow include the year
         csv_outputs = [
-            r for r in file_records.values()
+            r
+            for r in file_records.values()
             if "model_a_final_output" in r.get("short_name", "")
         ]
         assert len(csv_outputs) > 0, "Model A output CSV not found in JSON records"
@@ -1617,7 +1666,9 @@ class TestDummyWorkflowConsist:
         from consist.tools import queries
 
         # 1. Execute the workflow
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
+            setup_workflow
+        )
         self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
 
         # 2. Use the existing tracker's engine to query
@@ -1646,8 +1697,10 @@ class TestDummyWorkflowConsist:
         # 3. Test artifact lineage/retrieval (equivalent to 'consist artifacts')
         # We need to find a specific run ID first
         model_a_run_id = next(
-            run.unique_id for run in provenance_tracker.run_info.model_runs.values()
-            if run.model == "modela" and "postprocess" in (run.description or "").lower()
+            run.unique_id
+            for run in provenance_tracker.run_info.model_runs.values()
+            if run.model == "modela"
+            and "postprocess" in (run.description or "").lower()
         )
 
         # Test get_artifacts_for_run (used by CLI 'artifacts' command)
@@ -1664,8 +1717,9 @@ class TestDummyWorkflowConsist:
         # Verify specific artifact presence
         output_keys = [a.key for a in outputs]
         # Consist normalizes keys; check if our output is there
-        assert any("model_a_final_output" in k for k in output_keys), \
-            f"Expected 'model_a_final_output' in {output_keys}"
+        assert any(
+            "model_a_final_output" in k for k in output_keys
+        ), f"Expected 'model_a_final_output' in {output_keys}"
 
         print("✓ Consist Query integration verified")
         print("  - queries.get_runs returned correct models")
@@ -1674,7 +1728,9 @@ class TestDummyWorkflowConsist:
 
     def _execute_minimal_workflow(self, output_dir, tracker, db_path):
         """Helper to run a minimal version of the workflow for persistence tests."""
-        input_data_dir = Path("/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow")
+        input_data_dir = Path(
+            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
+        )
         year = 2025
         state = DummyWorkflowState(current_year=year)
         state.full_settings.shared.database.path = str(db_path)

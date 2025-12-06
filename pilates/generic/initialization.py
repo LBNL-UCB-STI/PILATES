@@ -27,7 +27,9 @@ class Initialization(Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: Union[FileProvenanceTracker, ConsistProvenanceTracker, None],
+        provenance_tracker: Union[
+            FileProvenanceTracker, ConsistProvenanceTracker, None
+        ],
     ):
         super().__init__(model_name, state, provenance_tracker)
 
@@ -47,7 +49,7 @@ class Initialization(Model):
                 iteration=0,
                 description="Initialization: copying all mutable data",
                 inputs=RecordStore(),  # Inputs are discovered dynamically during copy
-                state=self.state
+                state=self.state,
             )
 
         initialization_records_in = RecordStore()
@@ -158,8 +160,7 @@ class Initialization(Model):
             if self.provenance_tracker is not None and init_run_hash:
                 logger.error(f"Initialization failed: {e}")
                 self.provenance_tracker.complete_model_run(
-                    run_hash=init_run_hash,
-                    status="failed"
+                    run_hash=init_run_hash, status="failed"
                 )
             raise e
 

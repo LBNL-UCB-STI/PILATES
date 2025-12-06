@@ -181,7 +181,8 @@ def assert_provenance_chain(run_info, expected_stages: list):
     # Verify expected stages exist
     for model_name, stage_keyword in expected_stages:
         matching_runs = [
-            r for r in runs_by_model.get(model_name, [])
+            r
+            for r in runs_by_model.get(model_name, [])
             if stage_keyword.lower() in (r.description or "").lower()
         ]
         assert len(matching_runs) >= 1, (
@@ -1091,7 +1092,9 @@ class TestDummyWorkflow:
         run_info = provenance_tracker.run_info
 
         # Verify basic run_info structure
-        assert run_info.run_id == "test_run", "run_id should match tracker initialization"
+        assert (
+            run_info.run_id == "test_run"
+        ), "run_id should match tracker initialization"
         assert run_info.created_at is not None, "created_at should be set"
 
         # Verify model runs were captured
@@ -1101,39 +1104,44 @@ class TestDummyWorkflow:
         )
 
         # Verify expected stages exist using helper
-        assert_provenance_chain(run_info, [
-            ("ModelA", "preprocess"),
-            ("ModelA", "run"),
-            ("ModelA", "postprocess"),
-            ("ModelB", "preprocess"),
-            ("ModelB", "run"),
-            ("ModelB", "postprocess"),
-        ])
+        assert_provenance_chain(
+            run_info,
+            [
+                ("ModelA", "preprocess"),
+                ("ModelA", "run"),
+                ("ModelA", "postprocess"),
+                ("ModelB", "preprocess"),
+                ("ModelB", "run"),
+                ("ModelB", "postprocess"),
+            ],
+        )
 
         # Verify all model runs completed successfully
         for run_id, model_run in run_info.model_runs.items():
-            assert model_run.status == "completed", (
-                f"Model run {run_id} ({model_run.model}) has status '{model_run.status}', expected 'completed'"
-            )
-            assert model_run.year == year, (
-                f"Model run {run_id} year mismatch: got {model_run.year}, expected {year}"
-            )
+            assert (
+                model_run.status == "completed"
+            ), f"Model run {run_id} ({model_run.model}) has status '{model_run.status}', expected 'completed'"
+            assert (
+                model_run.year == year
+            ), f"Model run {run_id} year mismatch: got {model_run.year}, expected {year}"
 
         # Verify file records were captured
         assert len(run_info.file_records) > 0, "Expected file records to be captured"
 
         # Verify output lineage: Model A runner should have outputs that become Model B inputs
         model_a_runner_runs = [
-            r for r in run_info.model_runs.values()
-            if r.model == "ModelA" and "run" in (r.description or "").lower()
+            r
+            for r in run_info.model_runs.values()
+            if r.model == "ModelA"
+            and "run" in (r.description or "").lower()
             and "preprocess" not in (r.description or "").lower()
             and "postprocess" not in (r.description or "").lower()
         ]
         if model_a_runner_runs:
             model_a_runner = model_a_runner_runs[0]
-            assert len(model_a_runner.output_record_hashes) > 0, (
-                "Model A runner should have output records"
-            )
+            assert (
+                len(model_a_runner.output_record_hashes) > 0
+            ), "Model A runner should have output records"
 
         # Verify OpenLineage events were generated (START/COMPLETE pairs)
         assert len(run_info.openlineage_event_metadata) >= 12, (
@@ -1144,12 +1152,16 @@ class TestDummyWorkflow:
         # Verify we have both START and COMPLETE events
         event_types = [e.event_type for e in run_info.openlineage_event_metadata]
         assert "START" in event_types, "Expected START events in OpenLineage metadata"
-        assert "COMPLETE" in event_types, "Expected COMPLETE events in OpenLineage metadata"
+        assert (
+            "COMPLETE" in event_types
+        ), "Expected COMPLETE events in OpenLineage metadata"
 
         print(f"✓ Provenance verification complete:")
         print(f"  - {len(run_info.model_runs)} model runs captured")
         print(f"  - {len(run_info.file_records)} file records tracked")
-        print(f"  - {len(run_info.openlineage_event_metadata)} OpenLineage events generated")
+        print(
+            f"  - {len(run_info.openlineage_event_metadata)} OpenLineage events generated"
+        )
 
         print(f"✓ Workflow output in: {workflow_output_dir}")
         print(f"✓ Provenance DB in: {db_path}")
@@ -1169,9 +1181,13 @@ class TestDummyWorkflow:
 
         This serves as documentation for how provenance works in PILATES.
         """
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
+            setup_workflow
+        )
 
-        input_data_dir = Path("/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow")
+        input_data_dir = Path(
+            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
+        )
         year = 2025
 
         # Initialize state and workspace
@@ -1181,13 +1197,23 @@ class TestDummyWorkflow:
 
         # Run just Model A to keep the test focused
         model_a_config = {"input_dir": str(input_data_dir)}
-        preprocessor = DummyModelAPreprocessor("ModelA", model_a_config, provenance_tracker, workflow_state)
-        runner = DummyModelARunner("ModelA", model_a_config, provenance_tracker, workflow_state)
-        postprocessor = DummyModelAPostprocessor("ModelA", model_a_config, provenance_tracker, workflow_state)
+        preprocessor = DummyModelAPreprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        runner = DummyModelARunner(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        postprocessor = DummyModelAPostprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
 
         # Execute the pipeline
-        _, mutable_records = preprocessor.copy_data_to_mutable_location(model_a_config, str(workflow_output_dir))
-        preprocess_output = preprocessor.preprocess(workspace, previous_records=mutable_records)
+        _, mutable_records = preprocessor.copy_data_to_mutable_location(
+            model_a_config, str(workflow_output_dir)
+        )
+        preprocess_output = preprocessor.preprocess(
+            workspace, previous_records=mutable_records
+        )
         runner_output, _ = runner.run(preprocess_output, workspace)
         final_output = postprocessor.postprocess(runner_output, workspace)
 
@@ -1195,7 +1221,9 @@ class TestDummyWorkflow:
         run_info = provenance_tracker.run_info
         model_runs = list(run_info.model_runs.values())
 
-        assert len(model_runs) == 3, f"Expected 3 model runs for Model A, got {len(model_runs)}"
+        assert (
+            len(model_runs) == 3
+        ), f"Expected 3 model runs for Model A, got {len(model_runs)}"
 
         # Each run should have proper metadata
         for run in model_runs:
@@ -1212,7 +1240,9 @@ class TestDummyWorkflow:
         # Preprocessor should have outputs
         preprocess_run = sorted_runs[0]
         assert "preprocess" in preprocess_run.description.lower()
-        assert len(preprocess_run.output_record_hashes) > 0, "Preprocessor should record outputs"
+        assert (
+            len(preprocess_run.output_record_hashes) > 0
+        ), "Preprocessor should record outputs"
 
         # Runner inputs should include preprocessor outputs
         runner_run = sorted_runs[1]
@@ -1223,7 +1253,9 @@ class TestDummyWorkflow:
         # Postprocessor inputs should include runner outputs
         postprocess_run = sorted_runs[2]
         assert "postprocess" in postprocess_run.description.lower()
-        assert len(postprocess_run.input_record_hashes) > 0, "Postprocessor should have inputs"
+        assert (
+            len(postprocess_run.input_record_hashes) > 0
+        ), "Postprocessor should have inputs"
 
         # === Verify File Records ===
         file_records = run_info.file_records
@@ -1237,12 +1269,18 @@ class TestDummyWorkflow:
 
         # === Verify OpenLineage Events ===
         ol_events = run_info.openlineage_event_metadata
-        assert len(ol_events) == 6, f"Expected 6 OL events (3 START + 3 COMPLETE), got {len(ol_events)}"
+        assert (
+            len(ol_events) == 6
+        ), f"Expected 6 OL events (3 START + 3 COMPLETE), got {len(ol_events)}"
 
         start_events = [e for e in ol_events if e.event_type == "START"]
         complete_events = [e for e in ol_events if e.event_type == "COMPLETE"]
-        assert len(start_events) == 3, f"Expected 3 START events, got {len(start_events)}"
-        assert len(complete_events) == 3, f"Expected 3 COMPLETE events, got {len(complete_events)}"
+        assert (
+            len(start_events) == 3
+        ), f"Expected 3 START events, got {len(start_events)}"
+        assert (
+            len(complete_events) == 3
+        ), f"Expected 3 COMPLETE events, got {len(complete_events)}"
 
         # Each event should have required fields
         for event in ol_events:

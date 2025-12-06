@@ -146,7 +146,7 @@ class TestRunContainerCommandCombination:
             else:
                 full_command = command + " " + str(args)
 
-        expected = 'python /script.py --input /data/input.csv --output /data/output.csv'
+        expected = "python /script.py --input /data/input.csv --output /data/output.csv"
         assert full_command == expected
 
     def test_command_with_list_args_special_chars(self):
@@ -355,7 +355,10 @@ class TestRunContainerConsistDelegation:
         # Call run_container using the GenericRunner static method
         # We need to patch the import check and call the method directly
         with patch("pilates.generic.runner.CONSIST_AVAILABLE", True):
-            with patch("pilates.generic.runner.consist_run_container", mock_consist_run_container):
+            with patch(
+                "pilates.generic.runner.consist_run_container",
+                mock_consist_run_container,
+            ):
                 with patch("pilates.generic.runner.get_setting") as mock_get_setting:
                     mock_get_setting.return_value = False
 
@@ -411,7 +414,10 @@ class TestRunContainerConsistDelegation:
         provenance_tracker._tracker = Mock()
 
         with patch("pilates.generic.runner.CONSIST_AVAILABLE", True):
-            with patch("pilates.generic.runner.consist_run_container", mock_consist_run_container):
+            with patch(
+                "pilates.generic.runner.consist_run_container",
+                mock_consist_run_container,
+            ):
                 with patch("pilates.generic.runner.get_setting") as mock_get_setting:
                     mock_get_setting.return_value = True
 
@@ -450,7 +456,10 @@ class TestRunContainerConsistDelegation:
         provenance_tracker._tracker = Mock()
 
         with patch("pilates.generic.runner.CONSIST_AVAILABLE", True):
-            with patch("pilates.generic.runner.consist_run_container", mock_consist_run_container):
+            with patch(
+                "pilates.generic.runner.consist_run_container",
+                mock_consist_run_container,
+            ):
                 with patch("pilates.generic.runner.get_setting") as mock_get_setting:
                     mock_get_setting.return_value = False
 
@@ -489,7 +498,10 @@ class TestRunContainerConsistDelegation:
         provenance_tracker._tracker = Mock()
 
         with patch("pilates.generic.runner.CONSIST_AVAILABLE", True):
-            with patch("pilates.generic.runner.consist_run_container", mock_consist_run_container):
+            with patch(
+                "pilates.generic.runner.consist_run_container",
+                mock_consist_run_container,
+            ):
                 with patch("pilates.generic.runner.get_setting") as mock_get_setting:
                     mock_get_setting.return_value = False
 

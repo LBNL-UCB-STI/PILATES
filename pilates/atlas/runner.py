@@ -411,11 +411,15 @@ class AtlasRunner(GenericRunner):
                 if not success:
                     logger.error(f"ATLAS container execution failed in attempt {i + 1}")
                 else:
-                    logger.info(f"ATLAS container execution succeeded in attempt {i + 1}")
+                    logger.info(
+                        f"ATLAS container execution succeeded in attempt {i + 1}"
+                    )
                     break
 
             if not success:
-                raise RuntimeError("ATLAS container execution failed after all retry attempts")
+                raise RuntimeError(
+                    "ATLAS container execution failed after all retry attempts"
+                )
 
         except Exception as e:
             logger.error(f"ATLAS container execution error: {e}")

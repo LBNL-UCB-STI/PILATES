@@ -239,7 +239,7 @@ class ProvenanceTracker:
         iteration: int = None,
         description: str = None,
         inputs: RecordStore = RecordStore(),
-        **kwargs
+        **kwargs,
     ) -> str:
         """Start tracking a new model run.
 
@@ -1818,7 +1818,7 @@ class OpenLineageTracker(FileProvenanceTracker):
         iteration: int = None,
         description: str = None,
         inputs: RecordStore = RecordStore(),
-        **kwargs
+        **kwargs,
     ) -> str:
         """
         Starts tracking a new model run and emits an OpenLineage START event.

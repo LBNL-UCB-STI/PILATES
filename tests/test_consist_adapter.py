@@ -251,11 +251,11 @@ def test_run_info_structure(consist_tracker):
     run_info = consist_tracker.run_info
 
     # Check required attributes
-    assert hasattr(run_info, 'run_id')
-    assert hasattr(run_info, 'created_at')
-    assert hasattr(run_info, 'file_records')
-    assert hasattr(run_info, 'model_runs')
-    assert hasattr(run_info, 'repo_records')
+    assert hasattr(run_info, "run_id")
+    assert hasattr(run_info, "created_at")
+    assert hasattr(run_info, "file_records")
+    assert hasattr(run_info, "model_runs")
+    assert hasattr(run_info, "repo_records")
 
     # Check types
     assert isinstance(run_info.file_records, dict)
@@ -320,7 +320,9 @@ def test_record_output_file_missing_file_skip(consist_tracker, execution_context
     assert file_record is None
 
 
-def test_record_input_file_missing_warns_when_not_skipped(consist_tracker, execution_context):
+def test_record_input_file_missing_warns_when_not_skipped(
+    consist_tracker, execution_context
+):
     """Test that missing files are handled correctly when skip_missing=False."""
     non_existent_file = "/tmp/non_existent_file_12345_test.txt"
 
@@ -449,7 +451,9 @@ def test_consist_tracker_with_multiple_instances(tmp_workspace, tmp_path):
 # ============================================================================
 
 
-def test_state_parameter_accepted(consist_tracker, sample_input_file, execution_context):
+def test_state_parameter_accepted(
+    consist_tracker, sample_input_file, execution_context
+):
     """Test that deprecated 'state' parameter is still accepted."""
     # The method signature accepts 'state' for backward compatibility
     # Even if it fails due to Consist context, it should accept the parameter
@@ -467,7 +471,9 @@ def test_state_parameter_accepted(consist_tracker, sample_input_file, execution_
             raise
 
 
-def test_context_parameter_accepted(consist_tracker, sample_input_file, execution_context):
+def test_context_parameter_accepted(
+    consist_tracker, sample_input_file, execution_context
+):
     """Test that new 'context' parameter is accepted."""
     try:
         file_record = consist_tracker.record_input_file(
@@ -589,7 +595,9 @@ def test_start_and_complete_model_run_success(consist_tracker):
 
         # Verify status updated
         assert consist_tracker.run_info.model_runs[model_run_id].status == "completed"
-        assert consist_tracker.run_info.model_runs[model_run_id].completed_at is not None
+        assert (
+            consist_tracker.run_info.model_runs[model_run_id].completed_at is not None
+        )
 
         # Verify current_model_run_id is cleared
         assert consist_tracker.current_model_run_id is None
@@ -667,7 +675,9 @@ def test_current_model_run_during_active_run(consist_tracker):
 # ============================================================================
 
 
-def test_record_input_file_within_active_run(consist_tracker, sample_input_file, execution_context):
+def test_record_input_file_within_active_run(
+    consist_tracker, sample_input_file, execution_context
+):
     """Test recording input files when there IS an active run."""
     try:
         # Start a run first
@@ -702,7 +712,9 @@ def test_record_input_file_within_active_run(consist_tracker, sample_input_file,
         raise
 
 
-def test_record_output_file_within_active_run(consist_tracker, sample_output_file, execution_context):
+def test_record_output_file_within_active_run(
+    consist_tracker, sample_output_file, execution_context
+):
     """Test recording output files when there IS an active run."""
     try:
         # Start a run first
@@ -738,7 +750,9 @@ def test_record_output_file_within_active_run(consist_tracker, sample_output_fil
         raise
 
 
-def test_file_records_appear_in_run_info(consist_tracker, sample_input_file, execution_context):
+def test_file_records_appear_in_run_info(
+    consist_tracker, sample_input_file, execution_context
+):
     """Test that recorded files appear in run_info.file_records."""
     # Create a FileRecord directly and add to run_info
     file_record = FileRecord(
@@ -968,7 +982,7 @@ def test_initialize_from_settings_basic(tmp_workspace):
                 vehicle_ownership="atlas",
                 activity_demand="activitysim",
                 travel="beam",
-            )
+            ),
         ),
         model_dump_json=lambda: '{"test": "config"}',
     )
@@ -1002,7 +1016,7 @@ def test_initialize_from_settings_with_partial_models(tmp_workspace):
                 vehicle_ownership=None,
                 activity_demand="activitysim",
                 travel=None,
-            )
+            ),
         ),
         model_dump_json=lambda: '{"test": "partial"}',
     )
@@ -1035,9 +1049,9 @@ def test_register_openlineage_hooks(consist_tracker):
     consist_tracker.register_openlineage_hooks(mock_ol_tracker)
 
     # Verify hooks are registered by checking internal state
-    assert hasattr(consist_tracker._tracker, 'on_run_start')
-    assert hasattr(consist_tracker._tracker, 'on_run_complete')
-    assert hasattr(consist_tracker._tracker, 'on_run_failed')
+    assert hasattr(consist_tracker._tracker, "on_run_start")
+    assert hasattr(consist_tracker._tracker, "on_run_complete")
+    assert hasattr(consist_tracker._tracker, "on_run_failed")
 
 
 # ============================================================================
@@ -1045,7 +1059,9 @@ def test_register_openlineage_hooks(consist_tracker):
 # ============================================================================
 
 
-def test_adapter_uses_log_input_convenience_method(consist_tracker, sample_input_file, tmp_workspace):
+def test_adapter_uses_log_input_convenience_method(
+    consist_tracker, sample_input_file, tmp_workspace
+):
     """Test that adapter can use log_input() convenience method from Consist."""
     # This test verifies the adapter can call tracker.log_input() if needed
     # by checking the _tracker has this method available
@@ -1058,8 +1074,9 @@ def test_adapter_uses_log_input_convenience_method(consist_tracker, sample_input
 
         # The adapter should be able to call log_input() convenience method
         # This is an internal implementation detail test
-        assert hasattr(consist_tracker._tracker, 'log_input'), \
-            "Consist Tracker should have log_input() method"
+        assert hasattr(
+            consist_tracker._tracker, "log_input"
+        ), "Consist Tracker should have log_input() method"
 
         # Complete the run
         consist_tracker.complete_model_run(model_run_id, status="completed")
@@ -1069,7 +1086,9 @@ def test_adapter_uses_log_input_convenience_method(consist_tracker, sample_input
         raise
 
 
-def test_adapter_uses_log_output_convenience_method(consist_tracker, sample_output_file, tmp_workspace):
+def test_adapter_uses_log_output_convenience_method(
+    consist_tracker, sample_output_file, tmp_workspace
+):
     """Test that adapter can use log_output() convenience method from Consist."""
     try:
         # Start a run first
@@ -1079,8 +1098,9 @@ def test_adapter_uses_log_output_convenience_method(consist_tracker, sample_outp
         )
 
         # The adapter should be able to call log_output() convenience method
-        assert hasattr(consist_tracker._tracker, 'log_output'), \
-            "Consist Tracker should have log_output() method"
+        assert hasattr(
+            consist_tracker._tracker, "log_output"
+        ), "Consist Tracker should have log_output() method"
 
         # Complete the run
         consist_tracker.complete_model_run(model_run_id, status="completed")
@@ -1098,15 +1118,17 @@ def test_adapter_uses_log_output_convenience_method(consist_tracker, sample_outp
 def test_adapter_supports_get_artifact_by_uri_method(consist_tracker):
     """Test that adapter's underlying Tracker has get_artifact_by_uri method."""
     # Verify the method exists
-    assert hasattr(consist_tracker._tracker, 'get_artifact_by_uri'), \
-        "Consist Tracker should have get_artifact_by_uri() method"
+    assert hasattr(
+        consist_tracker._tracker, "get_artifact_by_uri"
+    ), "Consist Tracker should have get_artifact_by_uri() method"
 
 
 def test_get_artifact_by_uri_method_signature(consist_tracker):
     """Test that get_artifact_by_uri accepts URI parameter."""
     # Verify method is callable
-    assert callable(getattr(consist_tracker._tracker, 'get_artifact_by_uri')), \
-        "get_artifact_by_uri should be callable"
+    assert callable(
+        getattr(consist_tracker._tracker, "get_artifact_by_uri")
+    ), "get_artifact_by_uri should be callable"
 
 
 def test_get_artifact_by_uri_returns_none_for_missing_uri(consist_tracker):
@@ -1116,7 +1138,9 @@ def test_get_artifact_by_uri_returns_none_for_missing_uri(consist_tracker):
         result = consist_tracker._tracker.get_artifact_by_uri("nonexistent://fake_uri")
         # Should return None if not found (or be available for debugging)
         # At minimum, the method should be callable without error
-        assert result is None or result is not None  # This is always true; it's testing callability
+        assert (
+            result is None or result is not None
+        )  # This is always true; it's testing callability
     except Exception as e:
         # If no artifacts exist yet, method might raise; that's also acceptable
         # The important thing is that the method exists
@@ -1146,10 +1170,12 @@ def test_artifact_created_at_iso_property_exists(consist_tracker, sample_input_f
         # The file_record should have been created from an artifact
         # and should have created_at timestamp
         if file_record is not None:
-            assert hasattr(file_record, 'created_at'), \
-                "FileRecord should have created_at attribute"
-            assert isinstance(file_record.created_at, str), \
-                "created_at should be an ISO format string"
+            assert hasattr(
+                file_record, "created_at"
+            ), "FileRecord should have created_at attribute"
+            assert isinstance(
+                file_record.created_at, str
+            ), "created_at should be an ISO format string"
 
         consist_tracker.complete_model_run(model_run_id, status="completed")
     except TypeError as e:
@@ -1176,14 +1202,18 @@ def test_artifact_created_at_iso_format(consist_tracker, sample_input_file):
             # Verify it's a valid ISO format string
             # ISO format looks like: 2025-12-03T15:30:45.123456
             # or: 2025-12-03T15:30:45.123456+00:00
-            assert 'T' in file_record.created_at, \
-                "created_at should be in ISO format with T separator"
+            assert (
+                "T" in file_record.created_at
+            ), "created_at should be in ISO format with T separator"
             # Try to parse it
             from datetime import datetime
+
             try:
-                datetime.fromisoformat(file_record.created_at.replace('Z', '+00:00'))
+                datetime.fromisoformat(file_record.created_at.replace("Z", "+00:00"))
             except ValueError:
-                pytest.fail(f"created_at '{file_record.created_at}' is not valid ISO format")
+                pytest.fail(
+                    f"created_at '{file_record.created_at}' is not valid ISO format"
+                )
 
         consist_tracker.complete_model_run(model_run_id, status="completed")
     except TypeError as e:
@@ -1199,8 +1229,9 @@ def test_artifact_created_at_iso_format(consist_tracker, sample_input_file):
 
 def test_log_h5_container_method_exists(consist_tracker):
     """Test that Consist Tracker has log_h5_container method."""
-    assert hasattr(consist_tracker._tracker, 'log_h5_container'), \
-        "Consist Tracker should have log_h5_container() method"
+    assert hasattr(
+        consist_tracker._tracker, "log_h5_container"
+    ), "Consist Tracker should have log_h5_container() method"
 
 
 def test_log_h5_container_returns_tuple(tmp_workspace):
@@ -1225,7 +1256,7 @@ def test_log_h5_container_returns_tuple(tmp_workspace):
         )
 
         # Use the new API method if available
-        if hasattr(tracker._tracker, 'log_h5_container'):
+        if hasattr(tracker._tracker, "log_h5_container"):
             result = tracker._tracker.log_h5_container(
                 str(h5_file),
                 key="usim_data",
@@ -1233,10 +1264,10 @@ def test_log_h5_container_returns_tuple(tmp_workspace):
             )
 
             # Should return a tuple of (container, tables)
-            assert isinstance(result, tuple), \
-                "log_h5_container() should return a tuple"
-            assert len(result) == 2, \
-                "log_h5_container() should return (container, tables) tuple"
+            assert isinstance(result, tuple), "log_h5_container() should return a tuple"
+            assert (
+                len(result) == 2
+            ), "log_h5_container() should return (container, tables) tuple"
 
             container, tables = result
             assert container is not None, "Container should not be None"
@@ -1276,7 +1307,7 @@ def test_log_h5_container_with_table_filter(tmp_workspace):
         )
 
         # Use table_filter if method supports it
-        if hasattr(tracker._tracker, 'log_h5_container'):
+        if hasattr(tracker._tracker, "log_h5_container"):
             # Filter for specific tables
             result = tracker._tracker.log_h5_container(
                 str(h5_file),
@@ -1287,7 +1318,7 @@ def test_log_h5_container_with_table_filter(tmp_workspace):
 
             container, tables = result
             # Should only have filtered tables
-            table_keys = [t.key if hasattr(t, 'key') else str(t) for t in tables]
+            table_keys = [t.key if hasattr(t, "key") else str(t) for t in tables]
             # At minimum, the method should accept table_filter parameter
             assert container is not None
 
@@ -1319,7 +1350,7 @@ def test_log_h5_container_without_table_discovery(tmp_workspace):
             year=2020,
         )
 
-        if hasattr(tracker._tracker, 'log_h5_container'):
+        if hasattr(tracker._tracker, "log_h5_container"):
             result = tracker._tracker.log_h5_container(
                 str(h5_file),
                 key="no_discover",
@@ -1330,7 +1361,9 @@ def test_log_h5_container_without_table_discovery(tmp_workspace):
             container, tables = result
             # With discover_tables=False, should return empty list
             assert isinstance(tables, list), "Tables should be a list"
-            assert len(tables) == 0, "Tables list should be empty when discover_tables=False"
+            assert (
+                len(tables) == 0
+            ), "Tables list should be empty when discover_tables=False"
 
         tracker.complete_model_run(model_run_id, status="completed")
     except TypeError as e:
@@ -1382,7 +1415,10 @@ def test_start_model_run_with_record_store_inputs(consist_tracker):
         # Verify input_record_hashes are set
         run_info = consist_tracker.run_info.model_runs[model_run_id]
         assert len(run_info.input_record_hashes) > 0
-        assert "input_1" in run_info.input_record_hashes or "input_2" in run_info.input_record_hashes
+        assert (
+            "input_1" in run_info.input_record_hashes
+            or "input_2" in run_info.input_record_hashes
+        )
 
         # Clean up
         consist_tracker.complete_model_run(model_run_id, status="completed")

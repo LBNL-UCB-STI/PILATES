@@ -24,6 +24,7 @@ from pilates.utils.settings_helper import get as get_setting
 # Try to import consist container execution
 try:
     from consist.integrations.containers import run_container as consist_run_container
+
     CONSIST_AVAILABLE = True
 except ImportError:
     CONSIST_AVAILABLE = False
@@ -302,7 +303,9 @@ class GenericRunner(ABC, Model):
                 full_command = command
                 if args:
                     if isinstance(args, list):
-                        full_command = command + " " + " ".join(shlex.quote(a) for a in args)
+                        full_command = (
+                            command + " " + " ".join(shlex.quote(a) for a in args)
+                        )
                     else:
                         full_command = command + " " + str(args)
 
