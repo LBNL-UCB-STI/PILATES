@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.data_artifact_utils import (
     compute_zarr_chunk_manifest,
@@ -70,6 +71,9 @@ class SnapshotManager:
         """
         if not source_path.exists():
             raise FileNotFoundError(f"Source artifact not found at {source_path}")
+
+        if isinstance(provenance_tracker, ConsistProvenanceTracker):
+            return "Skipped!"
 
         snapshot_id = str(uuid.uuid4())
         relative_artifact_dir = Path(snapshot_id)
