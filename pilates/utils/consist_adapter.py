@@ -119,8 +119,10 @@ class ConsistProvenanceTracker:
 
         if self.folder_name:
             self.run_info_path = os.path.join(self.output_path, self.folder_name, "run_info.json")
-        else:
+        elif self.output_path:
             self.run_info_path = os.path.join(self.output_path, "run_info.json")
+        else:
+            self.run_info_path = ""
 
         self.workspace_root = (
             os.path.join(self.output_path, self.folder_name)
@@ -133,13 +135,14 @@ class ConsistProvenanceTracker:
         # This ensures that artifact URIs are stored as "workspace://file.csv"
         # regardless of the physical folder name.
         mounts = mounts or {}
-        mounts["workspace"] = self.workspace_root
+        if self.workspace_root:
+            mounts["workspace"] = self.workspace_root
 
         self._tracker = Tracker(
-            run_dir=Path(self.workspace_root),
+            run_dir=Path(self.workspace_root or "."),
             db_path=db_path,
             mounts=mounts,
-            project_root=str(Path(self.workspace_root)),
+            project_root=str(Path(self.workspace_root or ".")),
             hashing_strategy="fast"  # Use metadata (size/mtime) for speed, or "full" for safety
         )
 
