@@ -15,6 +15,7 @@ See: /Users/zaneedell/git/consist/docs/02_ARCHITECTURE_DESIGN.md for integration
 import hashlib
 import logging
 import os
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -127,13 +128,19 @@ class ConsistProvenanceTracker:
             else self.output_path
         )
 
-        # Initialize Consist Tracker
-        run_dir = Path(self.workspace_root) if self.workspace_root else Path(".")
+        # DEFINE MOUNTS
+        # Map the portable scheme "workspace://" to the current specific run directory
+        # This ensures that artifact URIs are stored as "workspace://file.csv"
+        # regardless of the physical folder name.
+        mounts = mounts or {}
+        mounts["workspace"] = self.workspace_root
+
         self._tracker = Tracker(
-            run_dir=run_dir,
+            run_dir=Path(self.workspace_root),
             db_path=db_path,
-            mounts=mounts or {},
-            project_root=str(run_dir),
+            mounts=mounts,
+            project_root=str(Path(self.workspace_root)),
+            hashing_strategy="fast"  # Use metadata (size/mtime) for speed, or "full" for safety
         )
 
         # Track H5 containers for parent-child linking
@@ -269,9 +276,11 @@ class ConsistProvenanceTracker:
             model=model,
             config=config,
             inputs=consist_inputs,
-            year=year,
-            iteration=iteration,
+            tags = None,
             description=description,
+            cache_mode="reuse",
+            year = year,
+            iteration = iteration,
             **pilates_meta,
         )
         self._current_model_run_id = model_run_id
@@ -290,8 +299,41 @@ class ConsistProvenanceTracker:
         self.run_info.model_runs[model_run_id] = run_record
         self._save_run_info()
 
-        logger.info(f"Started Consist run: {model_run_id}")
+        if self._tracker.is_cached:
+            logger.info(f"⚡️ Consist Cache Hit for {model}. Hydrating workspace...")
+            self._hydrate_outputs()
+        else:
+            logger.info(f"Started Consist run: {model_run_id}")
         return model_run_id
+
+    def _hydrate_outputs(self):
+        cached_run = self._tracker.current_consist.cached_run
+
+        for artifact in self._tracker.current_consist.outputs:
+
+            # 1. Where was it? (Using FS logic via Tracker)
+            source_path = self._tracker.resolve_historical_path(artifact, cached_run)
+
+            # 2. Where should it go? (Current FS resolution)
+            dest_path = Path(self._tracker.resolve_uri(artifact.uri))
+
+            if not source_path.exists():
+                logger.warning(f"⚠️ Cache hit source missing: {source_path}")
+                continue
+
+            if source_path == dest_path:
+                continue
+
+            # 3. Copy
+            if source_path.is_dir():
+                if dest_path.exists(): shutil.rmtree(dest_path)
+                shutil.copytree(source_path, dest_path)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, dest_path)
+
+            # 4. Update memory so downstream sees new path
+            artifact.abs_path = str(dest_path)
 
     def complete_model_run(
         self,
