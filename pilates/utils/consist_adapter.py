@@ -15,6 +15,7 @@ See: /Users/zaneedell/git/consist/docs/02_ARCHITECTURE_DESIGN.md for integration
 import hashlib
 import logging
 import os
+import re
 import shutil
 import uuid
 from datetime import datetime
@@ -595,6 +596,69 @@ class ConsistProvenanceTracker:
             file_path=file_path,
             **kwargs,
         )
+
+    def move_file(
+            self,
+            record: Any,
+            source_path: str,
+            destination_path: str,
+            model: str,
+            state: Optional[ExecutionContext] = None,
+    ) -> Optional[FileRecord]:
+        """
+        Physically moves a file and records the lineage in Consist.
+
+        CRITICAL: We must log the INPUT before moving the file so Consist
+        can compute the hash of the source before it disappears.
+        """
+
+        model = self._normalize_model_name(model)
+
+        # 1. Log the Source as an INPUT (while it still exists at source_path)
+        # We explicitly link this input to the run that produced the temp file
+        producing_run_id = getattr(record, "producing_run_id", None)
+
+        self.record_input_file(
+            model=model,
+            file_path=source_path,
+            source_run_id=producing_run_id,
+            description=getattr(record, "description", None),
+            state=state,
+            # Important: Ensure we don't skip if missing, because we are about to move it
+            skip_missing=False
+        )
+
+        # 2. Perform the Physical Move
+        # Ensure destination directory exists
+        os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+        try:
+            # We use move, not copy, to match the behavior of the 'else' block
+            # in postprocessor.py and keep disk usage low.
+            if source_path != destination_path:
+                shutil.move(source_path, destination_path)
+        except OSError as e:
+            logger.error(f"Failed to move file from {source_path} to {destination_path}: {e}")
+            raise
+
+        # 3. Clean up the short_name
+        # Legacy behavior: remove temporary suffixes for the final record
+        short_name = getattr(record, "short_name", Path(destination_path).stem)
+        if short_name:
+            short_name = re.sub(r"_asim_out_temp$", "", short_name)
+            short_name = re.sub(r"_temp$", "", short_name)
+
+        # 4. Log the Destination as an OUTPUT
+        output_record = self.record_output_file(
+            model=model,
+            file_path=destination_path,
+            description=getattr(record, "description", None),
+            short_name=short_name,
+            state=state,
+            # Explicitly link lineage: This output is derived from that source path
+            source_file_paths=[source_path]
+        )
+
+        return output_record
 
     def record_h5_input_container(
         self, model: str, file_path: str, **kwargs
