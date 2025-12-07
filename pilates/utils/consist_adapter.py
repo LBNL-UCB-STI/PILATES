@@ -597,6 +597,72 @@ class ConsistProvenanceTracker:
             **kwargs,
         )
 
+    def record_input_record(self, record: Any, model_run_id: str = None):
+        """
+        Attach an existing `Record` as an input to the given model run.
+        Required for compatibility with beam/preprocessor.py.
+        """
+        if record is None:
+            return
+
+        # 1. Update Legacy Run Info (Backward Compatibility)
+        # This ensures the run_info.json structure remains valid for PILATES logic
+        if model_run_id is None:
+            model_run_id = self.current_model_run_id
+
+        if model_run_id and model_run_id in self.run_info.model_runs:
+            # Ensure the record has a unique_id
+            if hasattr(record, "unique_id"):
+                # Add to input hashes if not already present
+                if record.unique_id not in self.run_info.model_runs[model_run_id].input_record_hashes:
+                    self.run_info.model_runs[model_run_id].input_record_hashes.append(record.unique_id)
+
+            # Ensure the file record itself is tracked in the main dictionary
+            if hasattr(record, "unique_id") and record.unique_id not in self.run_info.file_records:
+                self.run_info.file_records[record.unique_id] = record
+
+        self._save_run_info()
+
+        # 2. Update Consist (The new system)
+        # We effectively re-log the file as an input to create the lineage edge in Consist
+        if hasattr(record, "file_path") and record.file_path:
+            abs_path = self._resolve_record_path(record)
+
+            # Only log to Consist if the file actually exists on disk
+            if abs_path and os.path.exists(abs_path):
+                self._tracker.log_input(
+                    path=abs_path,
+                    key=getattr(record, "short_name", None),
+                    description=getattr(record, "description", None),
+                    # Pass extra meta to help link back to PILATES ID if needed
+                    pilates_unique_id=getattr(record, "unique_id", None)
+                )
+
+    def rename_directory(self, old_directory_name: str, new_directory_name: str):
+        """
+        Renames a directory in the run_info.file_records.
+        Required for BeamRunner to update paths after renaming output folders.
+        """
+        # 1. Update Legacy Run Info
+        # This ensures downstream PILATES components reading run_info.json find the files
+        updated_count = 0
+        for record in self.run_info.file_records.values():
+            # Check if file_path is available and starts with the old directory
+            if record.file_path and record.file_path.startswith(old_directory_name):
+                # Replace the start of the path
+                new_path = record.file_path.replace(old_directory_name, new_directory_name, 1)
+                record.file_path = new_path
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(
+                f"Renamed {updated_count} records in run_info from {old_directory_name} to {new_directory_name}")
+            self._save_run_info()
+
+        # Note: We do NOT update Consist artifacts here because Consist Artifacts
+        # represent the file at the time of creation (and are often content-addressed).
+        # Updating the legacy path is sufficient for the workflow to proceed.
+
     def move_file(
             self,
             record: Any,
