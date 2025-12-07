@@ -61,17 +61,17 @@ class ActivitysimRunner(GenericRunner):
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
                     additional_args.append("-d")
-                    additional_args.append('"{0}"'.format(d["bind"]))
+                    additional_args.append(d["bind"])
                 elif "output" in d["bind"]:
                     additional_args.append("-o")
-                    additional_args.append('"{0}"'.format(d["bind"]))
+                    additional_args.append(d["bind"])
                 elif "compile" in d["bind"]:
                     if compile:
                         additional_args.append("-c")
-                        additional_args.append('"{0}"'.format(d["bind"]))
+                        additional_args.append(d["bind"])
                 elif "configs" in d["bind"]:
                     additional_args.append("-c")
-                    additional_args.append('"{0}"'.format(d["bind"]))
+                    additional_args.append(d["bind"])
         return additional_args
 
     @staticmethod
