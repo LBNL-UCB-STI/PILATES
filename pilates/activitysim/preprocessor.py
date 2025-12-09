@@ -2757,7 +2757,7 @@ def _copy_data_to_mutable_location(
             "activitysim_preprocessor",
             asim_zones_path,
             [input_rec],
-            short_name="canonical_zones_mutable",
+            short_name="canonical_zones",
         )
         input_records.add_record(input_rec)
         output_records.add_record(output_rec)
@@ -2791,7 +2791,7 @@ def _copy_data_to_mutable_location(
                 "activitysim_preprocessor",
                 asim_clipped_path,
                 [input_rec],
-                short_name="clipped_geoms_mutable",
+                short_name="clipped_geoms",
             )
             input_records.add_record(input_rec)
             output_records.add_record(output_rec)

@@ -296,6 +296,9 @@ def test_record_input_file_missing_file_skip(consist_tracker, execution_context)
     """Test that missing files are skipped by default."""
     non_existent_file = "/tmp/non_existent_file_12345_test.txt"
 
+    # Must start run to log artifacts
+    run_id = consist_tracker.start_model_run("test_model")
+
     file_record = consist_tracker.record_input_file(
         model="urbansim",
         file_path=non_existent_file,
@@ -304,11 +307,15 @@ def test_record_input_file_missing_file_skip(consist_tracker, execution_context)
     )
 
     assert file_record is None
+    consist_tracker.complete_model_run(run_id)
 
 
 def test_record_output_file_missing_file_skip(consist_tracker, execution_context):
     """Test that missing output files are skipped."""
     non_existent_file = "/tmp/missing_output_file_12345_test.csv"
+
+    # Must start run to log artifacts
+    run_id = consist_tracker.start_model_run("test_model")
 
     file_record = consist_tracker.record_output_file(
         model="urbansim",
@@ -318,29 +325,42 @@ def test_record_output_file_missing_file_skip(consist_tracker, execution_context
     )
 
     assert file_record is None
+    consist_tracker.complete_model_run(run_id)
 
 
 def test_record_input_file_missing_warns_when_not_skipped(
-    consist_tracker, execution_context
+        consist_tracker, execution_context
 ):
     """Test that missing files are handled correctly when skip_missing=False."""
     non_existent_file = "/tmp/non_existent_file_12345_test.txt"
 
-    # When skip_missing=False, the code tries to log even if file missing,
-    # but Consist requires an active run context to log artifacts.
-    # This should handle the error gracefully.
-    try:
-        file_record = consist_tracker.record_input_file(
+    # Case 1: No active run (Expect RuntimeError from Consist)
+    # Consist enforces that all artifacts must belong to a run context.
+    with pytest.raises(RuntimeError, match="Cannot log artifact: no active run"):
+        consist_tracker.record_input_file(
             model="urbansim",
             file_path=non_existent_file,
             skip_missing=False,
             context=execution_context,
         )
-        # If it doesn't raise, file_record should be None
-        assert file_record is None
-    except RuntimeError as e:
-        # Expected if trying to log without active Consist context
-        assert "run context" in str(e)
+
+    # Case 2: Active run
+    # Legacy behavior: Log warning, return None (failure to hash).
+    # Consist behavior: Log warning, return Record (successful provenance of missing file).
+    run_id = consist_tracker.start_model_run("test_model")
+    file_record = consist_tracker.record_input_file(
+        model="urbansim",
+        file_path=non_existent_file,
+        skip_missing=False,
+        context=execution_context,
+    )
+
+    # UPDATE: We expect a record now. Consist tracks the *intent* to use the file.
+    assert file_record is not None
+    assert file_record.file_path is not None
+    # Note: verify that downstream code checks os.path.exists() before opening
+
+    consist_tracker.complete_model_run(run_id)
 
 
 # ============================================================================
@@ -452,41 +472,37 @@ def test_consist_tracker_with_multiple_instances(tmp_workspace, tmp_path):
 
 
 def test_state_parameter_accepted(
-    consist_tracker, sample_input_file, execution_context
+        consist_tracker, sample_input_file, execution_context
 ):
     """Test that deprecated 'state' parameter is still accepted."""
-    # The method signature accepts 'state' for backward compatibility
-    # Even if it fails due to Consist context, it should accept the parameter
-    try:
-        file_record = consist_tracker.record_input_file(
-            model="urbansim",
-            file_path=str(sample_input_file),
-            state=execution_context,  # Deprecated parameter
-            skip_missing=False,
-        )
-        # If it works, that's good; if it fails due to context, that's also fine
-    except RuntimeError as e:
-        # Expected if Consist requires active context
-        if "run context" not in str(e):
-            raise
+    run_id = consist_tracker.start_model_run("test_model")
+
+    file_record = consist_tracker.record_input_file(
+        model="urbansim",
+        file_path=str(sample_input_file),
+        state=execution_context,  # Deprecated parameter
+        skip_missing=False,
+    )
+
+    assert file_record is not None
+    consist_tracker.complete_model_run(run_id)
 
 
 def test_context_parameter_accepted(
-    consist_tracker, sample_input_file, execution_context
+        consist_tracker, sample_input_file, execution_context
 ):
     """Test that new 'context' parameter is accepted."""
-    try:
-        file_record = consist_tracker.record_input_file(
-            model="urbansim",
-            file_path=str(sample_input_file),
-            context=execution_context,  # New parameter
-            skip_missing=False,
-        )
-        # If it works, that's good; if it fails due to context, that's also fine
-    except RuntimeError as e:
-        # Expected if Consist requires active context
-        if "run context" not in str(e):
-            raise
+    run_id = consist_tracker.start_model_run("test_model")
+
+    file_record = consist_tracker.record_input_file(
+        model="urbansim",
+        file_path=str(sample_input_file),
+        context=execution_context,  # New parameter
+        skip_missing=False,
+    )
+
+    assert file_record is not None
+    consist_tracker.complete_model_run(run_id)
 
 
 # ============================================================================
@@ -875,71 +891,58 @@ def test_h5_input_container_with_nonexistent_file(tmp_workspace):
 
 def test_record_repo_input_with_git_hash(tmp_workspace, tmp_path):
     """Test recording a directory as repo input with explicit git_hash."""
-    try:
-        tracker = ConsistProvenanceTracker(
-            run_id="test_repo",
-            output_path=str(tmp_workspace),
-        )
+    tracker = ConsistProvenanceTracker(
+        run_id="test_repo",
+        output_path=str(tmp_workspace),
+    )
+    run_id = tracker.start_model_run("test_model")
 
-        # Create a fake repo directory
-        repo_dir = tmp_path / "test_repo"
-        repo_dir.mkdir()
-        (repo_dir / "README.md").write_text("Test repository")
+    # Create a fake repo directory
+    repo_dir = tmp_path / "test_repo"
+    repo_dir.mkdir()
+    (repo_dir / "README.md").write_text("Test repository")
 
-        # Record it with explicit git hash
-        repo_record = tracker.record_repo_input(
-            model="urbansim",
-            repo_path=str(repo_dir),
-            short_name="test_code",
-            description="Test code repository",
-            git_hash="abcd1234",
-        )
+    # Record it with explicit git hash
+    repo_record = tracker.record_repo_input(
+        model="urbansim",
+        repo_path=str(repo_dir),
+        short_name="test_code",
+        description="Test code repository",
+        git_hash="abcd1234",
+    )
 
-        # Should return a RepoRecord
-        if repo_record is not None:
-            assert isinstance(repo_record, RepoRecord)
-            assert repo_record.short_name == "test_code"
-            assert repo_record.description == "Test code repository"
+    if repo_record is not None:
+        assert isinstance(repo_record, RepoRecord)
+        assert repo_record.short_name == "test_code"
+        assert repo_record.unique_id in tracker.run_info.repo_records
 
-            # Verify it's in run_info
-            assert repo_record.unique_id in tracker.run_info.repo_records
-    except RuntimeError as e:
-        # Consist may require active context
-        if "run context" in str(e):
-            pytest.skip(f"Consist context issue: {e}")
-        raise
+    tracker.complete_model_run(run_id)
 
 
 def test_record_repo_input_without_git_hash(tmp_workspace, tmp_path):
     """Test recording a directory as repo input without explicit git_hash."""
-    try:
-        tracker = ConsistProvenanceTracker(
-            run_id="test_repo_no_hash",
-            output_path=str(tmp_workspace),
-        )
+    tracker = ConsistProvenanceTracker(
+        run_id="test_repo_no_hash",
+        output_path=str(tmp_workspace),
+    )
+    run_id = tracker.start_model_run("test_model")
 
-        # Create a fake repo directory (not a real git repo)
-        repo_dir = tmp_path / "fake_repo"
-        repo_dir.mkdir()
-        (repo_dir / "code.py").write_text("print('hello')")
+    # Create a fake repo directory (not a real git repo)
+    repo_dir = tmp_path / "fake_repo"
+    repo_dir.mkdir()
+    (repo_dir / "code.py").write_text("print('hello')")
 
-        # Record it without explicit git hash
-        # This will attempt to get git hash but will return None
-        repo_record = tracker.record_repo_input(
-            model="activitysim",
-            repo_path=str(repo_dir),
-            short_name="act_sim_code",
-        )
+    # Record it without explicit git hash
+    repo_record = tracker.record_repo_input(
+        model="activitysim",
+        repo_path=str(repo_dir),
+        short_name="act_sim_code",
+    )
 
-        # May or may not return a record (depends on whether git hash retrieval succeeds)
-        # But if it returns something, it should be a RepoRecord
-        if repo_record is not None:
-            assert isinstance(repo_record, RepoRecord)
-    except RuntimeError as e:
-        # Consist may require active context
-        if "run context" in str(e):
-            pytest.skip(f"Consist context issue: {e}")
-        raise
+    if repo_record is not None:
+        assert isinstance(repo_record, RepoRecord)
+
+    tracker.complete_model_run(run_id)
 
 
 def test_record_repo_input_nonexistent_path(tmp_workspace):
@@ -948,6 +951,7 @@ def test_record_repo_input_nonexistent_path(tmp_workspace):
         run_id="test_repo_missing",
         output_path=str(tmp_workspace),
     )
+    run_id = tracker.start_model_run("test_model")
 
     # Try to record a nonexistent repo
     repo_record = tracker.record_repo_input(
@@ -956,8 +960,8 @@ def test_record_repo_input_nonexistent_path(tmp_workspace):
         short_name="missing_repo",
     )
 
-    # Should return None
     assert repo_record is None
+    tracker.complete_model_run(run_id)
 
 
 # ============================================================================

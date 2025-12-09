@@ -412,6 +412,45 @@ class PilatesConfig(BaseModel):
             enabled.append(self.run.models.travel)
         return enabled
 
+    def get_initialization_signature(self) -> Dict[str, Any]:
+        """
+        Extracts configuration strictly required for model initialization.
+
+        This dictionary is used by Consist to hash the 'Input/Init' step.
+        It defines the 'Logical World' (Space, Time, Topology).
+        """
+        return {
+            # 1. Context: The boundaries of the simulation
+            "context": {
+                "region": self.run.region,
+                "scenario": self.run.scenario,
+                "start_year": self.run.start_year,
+            },
+
+            # 2. Geography: The spatial resolution and zone system
+            # IdentityManager will auto-serialize this Pydantic model
+            "geography": self.shared.geography,
+
+            # 3. Initial Conditions: Baseline costs/impedances (filenames)
+            # Note: Content hashing of these files happens via input_artifacts=[...],
+            # this only hashes the *pointer* to the file.
+            "initial_conditions": self.shared.skims,
+
+            # 4. Orchestration: The DAG topology
+            # Changes here alter the workflow state machine construction
+            "orchestration": {
+                "use_stubs": self.run.use_stubs,
+                "supply_demand_iters": self.run.supply_demand_iters,
+                "frequencies": {
+                    "land_use": self.run.land_use_freq,
+                    "travel": self.run.travel_model_freq,
+                    "vehicle": self.run.vehicle_ownership_freq,
+                },
+                # Determines which sub-models are active
+                "enabled_models": self.run.models,
+            }
+        }
+
 
 # =============================================================================
 # UTILITY FUNCTIONS

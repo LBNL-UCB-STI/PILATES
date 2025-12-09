@@ -1,15 +1,9 @@
 """
+pilates/utils/consist_adapter.py
+
 Consist Adapter for PILATES Provenance Tracking.
-
-This module provides a compatibility layer between PILATES and the Consist library,
-allowing gradual migration from the legacy FileProvenanceTracker to Consist's
-more mature provenance tracking and caching capabilities.
-
-The ConsistProvenanceTracker class implements the same interface as FileProvenanceTracker,
-delegating to Consist's Tracker internally. This enables drop-in replacement when
-the `use_consist` feature flag is enabled.
-
-See: /Users/zaneedell/git/consist/docs/02_ARCHITECTURE_DESIGN.md for integration details.
+Provides compatibility between PILATES and Consist, allowing gradual migration.
+Includes support for 'Attach Mode' when running inside Consist Scenarios.
 """
 
 import hashlib
@@ -42,15 +36,6 @@ logger = logging.getLogger(__name__)
 def _inject_workflow_context(state: Optional[ExecutionContext]) -> Dict[str, Any]:
     """
     Extract PILATES workflow context into Consist run metadata.
-
-    This bridges the gap between PILATES's WorkflowState tracking and
-    Consist's generic metadata system. Handles Enum serialization.
-
-    Args:
-        state: PILATES execution context (WorkflowState or similar)
-
-    Returns:
-        Dict suitable for Consist Run.meta
     """
     if state is None:
         return {}
@@ -58,10 +43,8 @@ def _inject_workflow_context(state: Optional[ExecutionContext]) -> Dict[str, Any
     # Handle Enum serialization for stage
     stage = getattr(state, "current_major_stage", None)
     if stage is not None:
-        # If it's an Enum, get its name (e.g. "supply_demand_loop")
         if hasattr(stage, "name"):
             stage = stage.name
-        # Fallback for other non-primitive types
         elif not isinstance(stage, (str, int, float, bool)):
             stage = str(stage)
 
@@ -75,25 +58,6 @@ def _inject_workflow_context(state: Optional[ExecutionContext]) -> Dict[str, Any
 class ConsistProvenanceTracker:
     """
     Adapter that provides FileProvenanceTracker interface backed by Consist.
-
-    This class wraps consist.Tracker to provide compatibility with PILATES's
-    existing provenance tracking interface. It maps PILATES record types to
-    Consist Artifacts and injects PILATES-specific context (year/iteration/stage)
-    into Consist run metadata.
-
-    Key mappings:
-    - FileRecord -> Artifact(driver=auto)
-    - H5FileRecord -> Artifact(driver="h5", meta={"is_container": True})
-    - H5TableRecord -> Artifact(driver="h5_table", meta={"parent_id", "table_path"})
-    - ModelRunInfo -> Run with PILATES context in meta
-
-    Attributes:
-        run_id: Unique identifier for the PILATES run session
-        output_path: Base directory for run outputs
-        folder_name: Optional subfolder within output_path
-        workspace_root: Computed path (output_path/folder_name)
-        _tracker: Underlying Consist Tracker instance
-        _h5_containers: Mapping of H5 file paths to their Artifact objects
     """
 
     def __init__(
@@ -103,17 +67,8 @@ class ConsistProvenanceTracker:
         folder_name: str = None,
         db_path: str = None,
         mounts: Dict[str, str] = None,
+        tracker: Optional[Tracker] = None  # Added for Attach Mode
     ):
-        """
-        Initialize the ConsistProvenanceTracker.
-
-        Args:
-            run_id: Unique identifier for the current run
-            output_path: Base directory for storing run outputs
-            folder_name: Optional subfolder name within output_path
-            db_path: Path to DuckDB database (optional, enables database features)
-            mounts: Path virtualization mounts for Consist
-        """
         self.run_id = run_id
         self.output_path = os.path.abspath(output_path) if output_path else None
         self.folder_name = folder_name
@@ -133,26 +88,29 @@ class ConsistProvenanceTracker:
             else self.output_path
         )
 
-        # DEFINE MOUNTS
-        # Map the portable scheme "workspace://" to the current specific run directory
-        # This ensures that artifact URIs are stored as "workspace://file.csv"
-        # regardless of the physical folder name.
-        mounts = mounts or {}
-        if self.workspace_root:
-            mounts["workspace"] = self.workspace_root
+        # Internal flag to track if we own the run lifecycle (Attach Mode)
+        self._attached_mode = False
 
-        self._tracker = Tracker(
-            run_dir=Path(self.workspace_root or "."),
-            db_path=db_path,
-            mounts=mounts,
-            project_root=str(Path(self.workspace_root or ".")),
-            hashing_strategy="fast",  # Use metadata (size/mtime) for speed, or "full" for safety
-        )
+        if tracker:
+            self._tracker = tracker
+        else:
+            # DEFINE MOUNTS (Standalone Mode)
+            mounts = mounts or {}
+            if self.workspace_root:
+                mounts["workspace"] = self.workspace_root
+
+            self._tracker = Tracker(
+                run_dir=Path(self.workspace_root or "."),
+                db_path=db_path,
+                mounts=mounts,
+                project_root=str(Path(self.workspace_root or ".")),
+                hashing_strategy="fast",
+            )
 
         # Track H5 containers for parent-child linking
         self._h5_containers: Dict[str, Artifact] = {}
 
-        # Current model run context (set by start_model_run)
+        # Current model run context
         self._current_model_run_id: Optional[str] = None
         self._current_run: Optional[Any] = None
 
@@ -161,7 +119,7 @@ class ConsistProvenanceTracker:
             run_id=run_id,
             created_at=datetime.now().isoformat(),
         )
-        self._save_run_info()  # Initial save
+        self._save_run_info()
 
         logger.info(f"ConsistProvenanceTracker initialized for run ID: {self.run_id}")
 
@@ -182,47 +140,31 @@ class ConsistProvenanceTracker:
 
     @property
     def data_manager(self) -> "ConsistDataManager":
-        """Get the ConsistDataManager for database operations."""
         if not hasattr(self, "_data_manager"):
             self._data_manager = ConsistDataManager(self._tracker)
         return self._data_manager
 
     @property
     def current_model_run_id(self) -> Optional[str]:
-        """Get the current model run ID."""
         return self._current_model_run_id
 
     def _normalize_model_name(self, model: str) -> str:
-        """Normalize a model name to lowercase."""
         return model.lower() if model else model
 
     def initialize_from_settings(self, settings: PilatesConfig):
-        """
-        Initialize the tracker with settings from a PilatesConfig object.
-
-        Args:
-            settings: The Pilates configuration object
-        """
         self.run_info.start_year = settings.run.start_year
         self.run_info.end_year = settings.run.end_year
         self.run_info.settings_hash = self._calculate_settings_hash(settings)
         self._save_run_info()
 
         models_used = []
-        if settings.run.models.land_use:
-            models_used.append(settings.run.models.land_use)
-        if settings.run.models.vehicle_ownership:
-            models_used.append(settings.run.models.vehicle_ownership)
-        if settings.run.models.activity_demand:
-            models_used.append(settings.run.models.activity_demand)
-        if settings.run.models.travel:
-            models_used.append(settings.run.models.travel)
+        if settings.run.models.land_use: models_used.append(settings.run.models.land_use)
+        if settings.run.models.vehicle_ownership: models_used.append(settings.run.models.vehicle_ownership)
+        if settings.run.models.activity_demand: models_used.append(settings.run.models.activity_demand)
+        if settings.run.models.travel: models_used.append(settings.run.models.travel)
         self.run_info.models_used = list(set(models_used))
 
-        logger.info("ConsistProvenanceTracker initialized with settings.")
-
     def _calculate_settings_hash(self, settings: PilatesConfig) -> str:
-        """Compute SHA256 hash of settings for cache key."""
         settings_str = settings.model_dump_json()
         return hashlib.sha256(settings_str.encode("utf-8")).hexdigest()
 
@@ -235,45 +177,47 @@ class ConsistProvenanceTracker:
         inputs: RecordStore = None,
         state: Optional[ExecutionContext] = None,
         cache_mode: str = "reuse",
-        ** kwargs,
+        **kwargs,
     ) -> str:
         """
         Start tracking a new model run.
-
-        Creates a Consist Run with PILATES-specific metadata injected.
-
-        Args:
-            model: The model name
-            year: Optional year associated with the run
-            iteration: Optional iteration index
-            description: Human-friendly description
-            inputs: RecordStore containing input records
-            state: Execution context for workflow state
-            cache_mode: Caching strategy ("reuse", "overwrite", "readonly")
-
-        Returns:
-            The unique run ID assigned to this model run
+        If a Consist run is already active (via scenario.step), attaches to it.
         """
+        model = self._normalize_model_name(model)
+
+        # 1. Check for Active Run (Attach Mode)
+        if self._tracker.current_consist is not None:
+            self._attached_mode = True
+            current_id = self._tracker.current_consist.run.id
+            logger.info(f"ConsistAdapter: Attaching to active run '{current_id}' for '{model}'")
+
+            # Log inputs immediately since we are active
+            if inputs:
+                for rec in inputs.all_records():
+                    if isinstance(rec, (FileRecord, H5FileRecord)):
+                        self.record_input_file(model, rec.file_path, description=getattr(rec, 'description', None))
+
+            self._current_model_run_id = current_id
+            return current_id
+
+        # 2. Start New Run (Legacy/Standalone Mode)
+        self._attached_mode = False
+
         if inputs is None:
             inputs = RecordStore()
 
-        model = self._normalize_model_name(model)
         model_run_id = (
             f"{model}_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
         )
 
-        # Build config from inputs for Consist
         config = {
             "model": model,
             "year": year,
             "iteration": iteration,
         }
 
-        # Inject PILATES workflow context
         pilates_meta = _inject_workflow_context(state)
-        # Note: description is passed explicitly to begin_run(), not via pilates_meta
 
-        # Convert PILATES inputs to Consist inputs
         consist_inputs = []
         for record in inputs.all_records():
             if isinstance(record, (FileRecord, H5FileRecord)):
@@ -281,7 +225,6 @@ class ConsistProvenanceTracker:
                 if abs_path and os.path.exists(abs_path):
                     consist_inputs.append(abs_path)
 
-        # Start Consist run using new imperative API
         self._current_run = self._tracker.begin_run(
             run_id=model_run_id,
             model=model,
@@ -319,23 +262,15 @@ class ConsistProvenanceTracker:
 
     def _hydrate_outputs(self):
         cached_run = self._tracker.current_consist.cached_run
-
         for artifact in self._tracker.current_consist.outputs:
-
-            # 1. Where was it? (Using FS logic via Tracker)
             source_path = self._tracker.resolve_historical_path(artifact, cached_run)
-
-            # 2. Where should it go? (Current FS resolution)
             dest_path = Path(self._tracker.resolve_uri(artifact.uri))
 
             if not source_path.exists():
-                logger.warning(f"⚠️ Cache hit source missing: {source_path}")
                 continue
-
             if source_path == dest_path:
                 continue
 
-            # 3. Copy
             if source_path.is_dir():
                 if dest_path.exists():
                     shutil.rmtree(dest_path)
@@ -344,7 +279,6 @@ class ConsistProvenanceTracker:
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, dest_path)
 
-            # 4. Update memory so downstream sees new path
             artifact.abs_path = str(dest_path)
 
     def complete_model_run(
@@ -356,12 +290,7 @@ class ConsistProvenanceTracker:
     ):
         """
         Mark a model run as complete.
-
-        Args:
-            run_hash: The unique ID of the model run
-            status: Final status ('completed' or 'failed')
-            output_records: List of output records produced
-            metadata: Optional runtime metadata
+        If in Attach Mode, only logs outputs; does NOT close the run.
         """
         if output_records is None:
             output_records = []
@@ -378,7 +307,6 @@ class ConsistProvenanceTracker:
             if metadata:
                 self.run_info.model_runs[run_hash].metadata.update(metadata)
 
-            # Populate output_record_hashes from output_records
             for record in output_records:
                 if hasattr(record, "unique_id") and record.unique_id:
                     if (
@@ -388,14 +316,18 @@ class ConsistProvenanceTracker:
                         self.run_info.model_runs[run_hash].output_record_hashes.append(
                             record.unique_id
                         )
-
-                # Set producing_run_id on the record if it has the attribute
                 if hasattr(record, "producing_run_id"):
                     record.producing_run_id = run_hash
 
         self._save_run_info()
 
-        # End Consist run using new imperative API
+        # Handle Attach Mode
+        if self._attached_mode:
+            logger.debug(f"ConsistAdapter: Detaching from run '{run_hash}' (lifecycle managed externally)")
+            self._attached_mode = False
+            return
+
+        # End Consist run (Legacy Mode)
         try:
             if status == "failed":
                 self._tracker.end_run(status="failed")
@@ -404,7 +336,6 @@ class ConsistProvenanceTracker:
         except Exception as e:
             logger.warning(f"Error ending Consist run: {e}")
         self._current_run = None
-
         self._current_model_run_id = None
         logger.info(f"Completed Consist run: {run_hash} with status: {status}")
 
@@ -421,46 +352,19 @@ class ConsistProvenanceTracker:
         state: Optional[ExecutionContext] = None,
         context: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
-        """
-        Record an input file.
-
-        Args:
-            model: Name of the model consuming this input
-            file_path: Path to the input file
-            source_run_id: ID of the run that produced this file
-            description: Human-readable description
-            short_name: Short identifier for the file
-            source_file_paths: Paths to source files
-            skip_missing: If True, skip files that don't exist
-            model_run_id: ID of the model run consuming this input
-            state: Deprecated, use context instead
-            context: Execution context
-
-        Returns:
-            FileRecord or None if file doesn't exist and skip_missing=True
-        """
         ctx = context if context is not None else state
         model = self._normalize_model_name(model)
-
         abs_path = os.path.abspath(file_path)
+
         if not os.path.exists(abs_path):
-            if skip_missing:
-                logger.debug(f"Skipping missing input file: {file_path}")
-                return None
-            else:
-                logger.warning(f"Input file does not exist: {file_path}")
+            if skip_missing: return None
+            else: logger.warning(f"Input file does not exist: {file_path}")
 
-        # Log to Consist using convenience method
         key = short_name or Path(file_path).stem
-
-        # Build metadata from optional parameters
         input_meta = {}
-        if source_run_id:
-            input_meta["source_run_id"] = source_run_id
-        if source_file_paths:
-            input_meta["source_file_paths"] = source_file_paths
-        if model_run_id:
-            input_meta["model_run_id"] = model_run_id
+        if source_run_id: input_meta["source_run_id"] = source_run_id
+        if source_file_paths: input_meta["source_file_paths"] = source_file_paths
+        if model_run_id: input_meta["model_run_id"] = model_run_id
 
         artifact = self._tracker.log_input(
             path=abs_path,
@@ -471,16 +375,12 @@ class ConsistProvenanceTracker:
             **_inject_workflow_context(ctx),
         )
 
-        # Create FileRecord for compatibility
         file_record = self._artifact_to_file_record(artifact, model, ctx)
         file_record.models = [model]
-        if description:
-            file_record.description = description
+        if description: file_record.description = description
 
-        # Track in run info
         self.run_info.file_records[file_record.unique_id] = file_record
         self._save_run_info()
-
         return file_record
 
     def record_output_file(
@@ -497,43 +397,18 @@ class ConsistProvenanceTracker:
         context: Optional[ExecutionContext] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[FileRecord]:
-        """
-        Record an output file.
-
-        Args:
-            model: Name of the model producing this output
-            file_path: Path to the output file
-            year: Year associated with this output
-            description: Human-readable description
-            skip_missing: If True, skip files that don't exist
-            model_run_id: ID of the model run producing this output
-            short_name: Short identifier for the file
-            source_file_paths: Paths to source files
-            state: Deprecated, use context instead
-            context: Execution context
-            metadata: Additional metadata
-
-        Returns:
-            FileRecord or None if file doesn't exist and skip_missing=True
-        """
         ctx = context if context is not None else state
         model = self._normalize_model_name(model)
-
         abs_path = os.path.abspath(file_path)
-        if not os.path.exists(abs_path):
-            if skip_missing:
-                logger.debug(f"Skipping missing output file: {file_path}")
-                return None
-            else:
-                logger.warning(f"Output file does not exist: {file_path}")
 
-        # Log to Consist using convenience method
+        if not os.path.exists(abs_path):
+            if skip_missing: return None
+            else: logger.warning(f"Output file does not exist: {file_path}")
+
         key = short_name or Path(file_path).stem
         meta = metadata or {}
-        if source_file_paths:
-            meta["source_file_paths"] = source_file_paths
-        if model_run_id:
-            meta["model_run_id"] = model_run_id
+        if source_file_paths: meta["source_file_paths"] = source_file_paths
+        if model_run_id: meta["model_run_id"] = model_run_id
 
         artifact = self._tracker.log_output(
             path=abs_path,
@@ -545,143 +420,64 @@ class ConsistProvenanceTracker:
             **_inject_workflow_context(ctx),
         )
 
-        # Create FileRecord for compatibility
         file_record = self._artifact_to_file_record(artifact, model, ctx)
         file_record.models = [model]
-        if description:
-            file_record.description = description
-        if year:
-            file_record.year = year
+        if description: file_record.description = description
+        if year: file_record.year = year
 
-        # Track in run info
         self.run_info.file_records[file_record.unique_id] = file_record
         self._save_run_info()
-
         return file_record
 
     def record_output_file_with_inputs(
-        self,
-        model: str,
-        file_path: str,
-        input_records: List[Optional[FileRecord]],
-        **kwargs,
+        self, model: str, file_path: str, input_records: List[Optional[FileRecord]], **kwargs
     ) -> Optional[FileRecord]:
-        """
-        Convenience wrapper to automatically extract file paths from input records
-        and pass them as source_file_paths to record_output_file.
-
-        This ensures compatibility with the FileProvenanceTracker interface.
-
-        Args:
-            model: Name of the model producing this output
-            file_path: Path to the output file
-            input_records: List of FileRecords that were inputs. None values are ignored.
-            **kwargs: Additional arguments passed to record_output_file
-
-        Returns:
-            FileRecord or None
-        """
-        # Extract file paths from input records, filtering out None values
         source_file_paths = []
         if input_records:
             for rec in input_records:
                 if rec is not None and hasattr(rec, "file_path"):
                     source_file_paths.append(rec.file_path)
-
-        # Add extracted source paths to kwargs, overriding if present
         kwargs["source_file_paths"] = source_file_paths
-
-        return self.record_output_file(
-            model=model,
-            file_path=file_path,
-            **kwargs,
-        )
+        return self.record_output_file(model=model, file_path=file_path, **kwargs)
 
     def record_input_record(self, record: Any, model_run_id: str = None):
-        """
-        Attach an existing `Record` as an input to the given model run.
-        Required for compatibility with beam/preprocessor.py.
-        """
-        if record is None:
-            return
-
-        # 1. Update Legacy Run Info (Backward Compatibility)
-        # This ensures the run_info.json structure remains valid for PILATES logic
-        if model_run_id is None:
-            model_run_id = self.current_model_run_id
+        if record is None: return
+        if model_run_id is None: model_run_id = self.current_model_run_id
 
         if model_run_id and model_run_id in self.run_info.model_runs:
-            # Ensure the record has a unique_id
             if hasattr(record, "unique_id"):
-                # Add to input hashes if not already present
                 if record.unique_id not in self.run_info.model_runs[model_run_id].input_record_hashes:
                     self.run_info.model_runs[model_run_id].input_record_hashes.append(record.unique_id)
-
-            # Ensure the file record itself is tracked in the main dictionary
             if hasattr(record, "unique_id") and record.unique_id not in self.run_info.file_records:
                 self.run_info.file_records[record.unique_id] = record
 
         self._save_run_info()
 
-        # 2. Update Consist (The new system)
-        # We effectively re-log the file as an input to create the lineage edge in Consist
         if hasattr(record, "file_path") and record.file_path:
             abs_path = self._resolve_record_path(record)
-
-            # Only log to Consist if the file actually exists on disk
             if abs_path and os.path.exists(abs_path):
                 self._tracker.log_input(
                     path=abs_path,
                     key=getattr(record, "short_name", None),
                     description=getattr(record, "description", None),
-                    # Pass extra meta to help link back to PILATES ID if needed
                     pilates_unique_id=getattr(record, "unique_id", None)
                 )
 
     def rename_directory(self, old_directory_name: str, new_directory_name: str):
-        """
-        Renames a directory in the run_info.file_records.
-        Required for BeamRunner to update paths after renaming output folders.
-        """
-        # 1. Update Legacy Run Info
-        # This ensures downstream PILATES components reading run_info.json find the files
         updated_count = 0
         for record in self.run_info.file_records.values():
-            # Check if file_path is available and starts with the old directory
             if record.file_path and record.file_path.startswith(old_directory_name):
-                # Replace the start of the path
                 new_path = record.file_path.replace(old_directory_name, new_directory_name, 1)
                 record.file_path = new_path
                 updated_count += 1
-
         if updated_count > 0:
-            logger.info(
-                f"Renamed {updated_count} records in run_info from {old_directory_name} to {new_directory_name}")
+            logger.info(f"Renamed {updated_count} records in run_info from {old_directory_name} to {new_directory_name}")
             self._save_run_info()
 
-        # Note: We do NOT update Consist artifacts here because Consist Artifacts
-        # represent the file at the time of creation (and are often content-addressed).
-        # Updating the legacy path is sufficient for the workflow to proceed.
-
     def move_file(
-            self,
-            record: Any,
-            source_path: str,
-            destination_path: str,
-            model: str,
-            state: Optional[ExecutionContext] = None,
+            self, record: Any, source_path: str, destination_path: str, model: str, state: Optional[ExecutionContext] = None,
     ) -> Optional[FileRecord]:
-        """
-        Physically moves a file and records the lineage in Consist.
-
-        CRITICAL: We must log the INPUT before moving the file so Consist
-        can compute the hash of the source before it disappears.
-        """
-
         model = self._normalize_model_name(model)
-
-        # 1. Log the Source as an INPUT (while it still exists at source_path)
-        # We explicitly link this input to the run that produced the temp file
         producing_run_id = getattr(record, "producing_run_id", None)
 
         self.record_input_file(
@@ -690,163 +486,79 @@ class ConsistProvenanceTracker:
             source_run_id=producing_run_id,
             description=getattr(record, "description", None),
             state=state,
-            # Important: Ensure we don't skip if missing, because we are about to move it
             skip_missing=False
         )
 
-        # 2. Perform the Physical Move
-        # Ensure destination directory exists
         os.makedirs(os.path.dirname(destination_path), exist_ok=True)
         try:
-            # We use move, not copy, to match the behavior of the 'else' block
-            # in postprocessor.py and keep disk usage low.
             if source_path != destination_path:
                 shutil.move(source_path, destination_path)
         except OSError as e:
             logger.error(f"Failed to move file from {source_path} to {destination_path}: {e}")
             raise
 
-        # 3. Clean up the short_name
-        # Legacy behavior: remove temporary suffixes for the final record
         short_name = getattr(record, "short_name", Path(destination_path).stem)
         if short_name:
             short_name = re.sub(r"_asim_out_temp$", "", short_name)
             short_name = re.sub(r"_temp$", "", short_name)
 
-        # 4. Log the Destination as an OUTPUT
         output_record = self.record_output_file(
             model=model,
             file_path=destination_path,
             description=getattr(record, "description", None),
             short_name=short_name,
             state=state,
-            # Explicitly link lineage: This output is derived from that source path
             source_file_paths=[source_path]
         )
-
         return output_record
 
-    def record_h5_input_container(
-        self, model: str, file_path: str, **kwargs
-    ) -> Optional[H5FileRecord]:
-        """
-        Record an HDF5 file as an input container.
-
-        Args:
-            model: Name of the model consuming this input
-            file_path: Path to the HDF5 file
-            **kwargs: Additional arguments
-
-        Returns:
-            H5FileRecord or None
-        """
+    def record_h5_input_container(self, model: str, file_path: str, **kwargs) -> Optional[H5FileRecord]:
         abs_path = os.path.abspath(file_path)
         if not os.path.exists(abs_path):
             logger.warning(f"H5 input container does not exist: {file_path}")
             return None
 
         key = kwargs.get("short_name") or Path(file_path).stem
-
-        # Log to Consist with H5 driver
         artifact, table_artifacts = self._tracker.log_h5_container(
             path=abs_path, key=key, direction="input", discover_tables=True, model=model
         )
-
-        # Track for parent-child linking
         self._h5_containers[abs_path] = artifact
-
-        # Create H5FileRecord
         h5_record = self._artifact_to_h5_file_record(artifact, model)
-
-        # Populate table IDs from discovered artifacts
-        # We need to ensure table artifacts have UUIDs compatible with PILATES records
         h5_record.table_record_ids = [str(t.id) for t in table_artifacts]
-
         self.run_info.file_records[h5_record.unique_id] = h5_record
         self._save_run_info()
-
         return h5_record
 
     def record_h5_output_container(
-        self,
-        model: str,
-        file_path: str,
-        table_records: List[H5TableRecord] = None,
-        **kwargs,
+        self, model: str, file_path: str, table_records: List[H5TableRecord] = None, **kwargs,
     ) -> Optional[H5FileRecord]:
-        """
-        Record an HDF5 file as an output container.
-
-        Args:
-            model: Name of the model producing this output
-            file_path: Path to the HDF5 file
-            table_records: Optional pre-created table records
-            **kwargs: Additional arguments
-
-        Returns:
-            H5FileRecord or None
-        """
         abs_path = os.path.abspath(file_path)
         if not os.path.exists(abs_path):
             logger.warning(f"H5 output container does not exist: {file_path}")
             return None
 
         key = kwargs.get("short_name") or Path(file_path).stem
-
-        # Log to Consist with H5 driver
         artifact, table_artifacts = self._tracker.log_h5_container(
-            path=abs_path,
-            key=key,
-            direction="output",
-            discover_tables=True,
-            model=model,
+            path=abs_path, key=key, direction="output", discover_tables=True, model=model,
         )
-
-        # Track for parent-child linking
         self._h5_containers[abs_path] = artifact
-
-        # Create H5FileRecord for compatibility
         h5_record = self._artifact_to_h5_file_record(artifact, model)
         h5_record.table_record_ids = [str(t.id) for t in table_artifacts]
-
         self.run_info.file_records[h5_record.unique_id] = h5_record
         self._save_run_info()
-
         return h5_record
 
     def record_repo_input(
-        self,
-        model: str,
-        repo_path: str,
-        short_name: str = None,
-        description: str = None,
-        git_hash: str = None,
+        self, model: str, repo_path: str, short_name: str = None, description: str = None, git_hash: str = None,
     ) -> Optional[RepoRecord]:
-        """
-        Record a repository as an input.
-
-        Args:
-            model: Name of the model consuming this input
-            repo_path: Path to the repository
-            short_name: Short identifier
-            description: Human-readable description
-            git_hash: Git commit hash
-
-        Returns:
-            RepoRecord or None
-        """
         model = self._normalize_model_name(model)
         abs_path = os.path.abspath(repo_path)
-
         if not os.path.exists(abs_path):
             logger.warning(f"Repository does not exist: {repo_path}")
             return None
 
-        # Compute git hash if not provided
-        if git_hash is None:
-            git_hash = self.get_git_hash(abs_path)
+        if git_hash is None: git_hash = self.get_git_hash(abs_path)
 
-        # Log to Consist as a git artifact
         artifact = self._tracker.log_artifact(
             path=abs_path,
             key=short_name or Path(repo_path).name,
@@ -857,7 +569,6 @@ class ConsistProvenanceTracker:
             model=model,
         )
 
-        # Create RepoRecord for compatibility
         relative_path = self.get_path_relative_to_workspace_root(abs_path)
         repo_record = RepoRecord(
             unique_id=git_hash or str(artifact.id),
@@ -866,93 +577,50 @@ class ConsistProvenanceTracker:
             description=description,
             short_name=short_name,
         )
-
         self.run_info.repo_records[repo_record.unique_id] = repo_record
         self._save_run_info()
         return repo_record
 
     def get_path_relative_to_workspace_root(self, file_path: str) -> str:
-        """Compute a path relative to the workspace root."""
         abs_path = os.path.abspath(file_path)
         if self.workspace_root:
-            try:
-                return os.path.relpath(abs_path, self.workspace_root)
-            except ValueError:
-                return abs_path
+            try: return os.path.relpath(abs_path, self.workspace_root)
+            except ValueError: return abs_path
         return abs_path
 
     def get_run_info(self) -> Dict[str, Any]:
-        """Return the current run info as a dict."""
         import dataclasses
-
         return dataclasses.asdict(self.run_info)
 
     def current_model_run(self) -> Optional[ModelRunInfo]:
-        """Get the current model run info if available."""
-        if (
-            self._current_model_run_id
-            and self._current_model_run_id in self.run_info.model_runs
-        ):
+        if self._current_model_run_id and self._current_model_run_id in self.run_info.model_runs:
             return self.run_info.model_runs[self._current_model_run_id]
         return None
 
-    def get_latest_completed_model_run(
-        self, model_name: str, year: int, iteration: int
-    ) -> Optional[ModelRunInfo]:
-        """
-        Find the latest completed model run for a given model name, year, and iteration.
-
-        Args:
-            model_name (str): The name of the model (will be normalized to lowercase).
-            year (int): The year of the model run.
-            iteration (int): The iteration of the model run.
-
-        Returns:
-            Optional[ModelRunInfo]: The latest completed model run, or None if not found.
-        """
+    def get_latest_completed_model_run(self, model_name: str, year: int, iteration: int) -> Optional[ModelRunInfo]:
         model_name = self._normalize_model_name(model_name)
         latest_run = None
         latest_time = None
-
         for run in self.run_info.model_runs.values():
-            if (
-                run.model == model_name
-                and run.year == year
-                and run.iteration == iteration
-                and run.status == "completed"
-            ):
+            if run.model == model_name and run.year == year and run.iteration == iteration and run.status == "completed":
                 completed_at = datetime.fromisoformat(run.completed_at)
                 if latest_time is None or completed_at > latest_time:
                     latest_time = completed_at
                     latest_run = run
-
         return latest_run
 
-    # --- Helper Methods ---
-
-    def _resolve_record_path(
-        self, record: Union[FileRecord, H5FileRecord]
-    ) -> Optional[str]:
-        """Resolve a record's file path to an absolute path."""
-        if not record.file_path:
-            return None
-        if os.path.isabs(record.file_path):
-            return record.file_path
-        if self.workspace_root:
-            return os.path.join(self.workspace_root, record.file_path)
+    def _resolve_record_path(self, record: Union[FileRecord, H5FileRecord]) -> Optional[str]:
+        if not record.file_path: return None
+        if os.path.isabs(record.file_path): return record.file_path
+        if self.workspace_root: return os.path.join(self.workspace_root, record.file_path)
         return os.path.abspath(record.file_path)
 
-    def _log_record_as_artifact(
-        self, record: Union[FileRecord, H5FileRecord], direction: str
-    ) -> Optional[Artifact]:
-        """Log a PILATES record as a Consist artifact."""
+    def _log_record_as_artifact(self, record: Union[FileRecord, H5FileRecord], direction: str) -> Optional[Artifact]:
         abs_path = self._resolve_record_path(record)
-        if not abs_path or not os.path.exists(abs_path):
-            return None
+        if not abs_path or not os.path.exists(abs_path): return None
 
         driver = None
         meta = {}
-
         if isinstance(record, H5FileRecord):
             driver = "h5"
             meta["is_container"] = True
@@ -969,17 +637,11 @@ class ConsistProvenanceTracker:
             **meta,
         )
 
-    def _artifact_to_file_record(
-        self, artifact: Artifact, model: str, ctx: Optional[ExecutionContext] = None
-    ) -> FileRecord:
-        """Convert a Consist Artifact to a PILATES FileRecord."""
+    def _artifact_to_file_record(self, artifact: Artifact, model: str, ctx: Optional[ExecutionContext] = None) -> FileRecord:
         abs_path = artifact.abs_path or self._tracker.resolve_uri(artifact.uri)
         relative_path = self.get_path_relative_to_workspace_root(abs_path)
-
-        # Build metadata dict, including hash if available
         meta = dict(artifact.meta) if artifact.meta else {}
-        if artifact.hash:
-            meta["file_hash"] = artifact.hash
+        if artifact.hash: meta["file_hash"] = artifact.hash
 
         return FileRecord(
             unique_id=str(artifact.id),
@@ -991,13 +653,9 @@ class ConsistProvenanceTracker:
             metadata=meta,
         )
 
-    def _artifact_to_h5_file_record(
-        self, artifact: Artifact, model: str
-    ) -> H5FileRecord:
-        """Convert a Consist Artifact to a PILATES H5FileRecord."""
+    def _artifact_to_h5_file_record(self, artifact: Artifact, model: str) -> H5FileRecord:
         abs_path = artifact.abs_path or self._tracker.resolve_uri(artifact.uri)
         relative_path = self.get_path_relative_to_workspace_root(abs_path)
-
         return H5FileRecord(
             unique_id=str(artifact.id),
             file_path=relative_path,
@@ -1009,44 +667,36 @@ class ConsistProvenanceTracker:
         )
 
     def get_git_hash(self, repo_path: str) -> Optional[str]:
-        """Get the git commit hash for a repository."""
         import subprocess
-
         try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=repo_path,
-                timeout=5,
-            )
+            result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True, cwd=repo_path, timeout=5)
             return result.stdout.strip()
         except Exception as e:
             logger.warning(f"Could not get git hash for {repo_path}: {e}")
             return None
 
     # --- Schema Mapping Conversions (Phase 5.3.1) ---
+    def recordToArtifact(self, record) -> Optional[Artifact]:
+        if isinstance(record, H5FileRecord):
+            return self._h5_file_record_to_artifact(record)
+        elif isinstance(record, H5TableRecord):
+            return self._h5_table_record_to_artifact(record)
+        elif isinstance(record, FileRecord):
+            return self._file_record_to_artifact(record)
+        else:
+            logger.warning(f"Unrecognized record type {type(record)}")
+            return None
 
     @staticmethod
     def _file_record_to_artifact(record: FileRecord) -> Artifact:
-        """Convert PILATES FileRecord to Consist Artifact."""
         import uuid as uuid_mod
-
-        # Infer driver from file extension
         path = record.file_path or ""
-        if path.endswith(".parquet"):
-            driver = "parquet"
-        elif path.endswith(".csv"):
-            driver = "csv"
-        elif path.endswith((".h5", ".hdf5")):
-            driver = "h5"
-        elif path.endswith(".zarr"):
-            driver = "zarr"
-        else:
-            driver = "auto"
+        if path.endswith(".parquet"): driver = "parquet"
+        elif path.endswith(".csv"): driver = "csv"
+        elif path.endswith((".h5", ".hdf5")): driver = "h5"
+        elif path.endswith(".zarr"): driver = "zarr"
+        else: driver = "auto"
 
-        # Build meta dict
         meta = dict(record.metadata) if record.metadata else {}
         meta["models"] = record.models
         meta["year"] = record.year
@@ -1056,11 +706,8 @@ class ConsistProvenanceTracker:
         meta["producing_run_id"] = record.producing_run_id
         meta["pilates_unique_id"] = record.unique_id
 
-        # Convert unique_id to UUID
-        try:
-            artifact_id = uuid_mod.UUID(record.unique_id)
-        except (ValueError, TypeError):
-            artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
+        try: artifact_id = uuid_mod.UUID(record.unique_id)
+        except (ValueError, TypeError): artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
 
         return Artifact(
             id=artifact_id,
@@ -1073,9 +720,7 @@ class ConsistProvenanceTracker:
 
     @staticmethod
     def _h5_file_record_to_artifact(record: H5FileRecord) -> Artifact:
-        """Convert PILATES H5FileRecord to Consist Artifact."""
         import uuid as uuid_mod
-
         meta = dict(record.metadata) if record.metadata else {}
         meta["is_container"] = True
         meta["table_ids"] = record.table_record_ids
@@ -1084,10 +729,8 @@ class ConsistProvenanceTracker:
         meta["iteration"] = record.iteration
         meta["pilates_unique_id"] = record.unique_id
 
-        try:
-            artifact_id = uuid_mod.UUID(record.unique_id)
-        except (ValueError, TypeError):
-            artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
+        try: artifact_id = uuid_mod.UUID(record.unique_id)
+        except (ValueError, TypeError): artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
 
         return Artifact(
             id=artifact_id,
@@ -1098,29 +741,20 @@ class ConsistProvenanceTracker:
         )
 
     @staticmethod
-    def _h5_table_record_to_artifact(
-        record: H5TableRecord, parent_artifact_id: str = None
-    ) -> Artifact:
-        """Convert PILATES H5TableRecord to Consist Artifact."""
+    def _h5_table_record_to_artifact(record: H5TableRecord, parent_artifact_id: str = None) -> Artifact:
         import uuid as uuid_mod
-
         meta = dict(record.metadata) if record.metadata else {}
         meta["table_path"] = record.table_name
         meta["parent_id"] = record.h5_file_unique_id
-        if parent_artifact_id:
-            meta["parent_artifact_id"] = parent_artifact_id
+        if parent_artifact_id: meta["parent_artifact_id"] = parent_artifact_id
         meta["models"] = record.models
         meta["year"] = record.year
         meta["pilates_unique_id"] = record.unique_id
 
-        try:
-            artifact_id = uuid_mod.UUID(record.unique_id)
-        except (ValueError, TypeError):
-            artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
+        try: artifact_id = uuid_mod.UUID(record.unique_id)
+        except (ValueError, TypeError): artifact_id = uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, record.unique_id or "")
 
-        # URI format: path#table_name
         uri = f"{record.file_path}#{record.table_name}"
-
         return Artifact(
             id=artifact_id,
             key=record.short_name or record.table_name,
@@ -1131,19 +765,8 @@ class ConsistProvenanceTracker:
 
     @staticmethod
     def _model_run_to_consist_run(model_run: ModelRunInfo) -> Run:
-        """Convert PILATES ModelRunInfo to Consist Run."""
-
-        # Parse timestamps
-        started_at = (
-            datetime.fromisoformat(model_run.created_at)
-            if model_run.created_at
-            else datetime.now()
-        )
-        ended_at = (
-            datetime.fromisoformat(model_run.completed_at)
-            if model_run.completed_at
-            else None
-        )
+        started_at = datetime.fromisoformat(model_run.created_at) if model_run.created_at else datetime.now()
+        ended_at = datetime.fromisoformat(model_run.completed_at) if model_run.completed_at else None
 
         meta = dict(model_run.metadata) if model_run.metadata else {}
         meta["input_record_hashes"] = model_run.input_record_hashes
@@ -1164,14 +787,8 @@ class ConsistProvenanceTracker:
 
     @staticmethod
     def _pilates_run_to_consist_run(run_info: PilatesRunInfo) -> Run:
-        """Convert top-level PilatesRunInfo to Consist Run."""
         import socket
-
-        started_at = (
-            datetime.fromisoformat(run_info.created_at)
-            if run_info.created_at
-            else datetime.now()
-        )
+        started_at = datetime.fromisoformat(run_info.created_at) if run_info.created_at else datetime.now()
 
         meta = {
             "start_year": run_info.start_year,
@@ -1179,8 +796,7 @@ class ConsistProvenanceTracker:
             "hostname": run_info.hostname or socket.gethostname(),
             "is_pilates_run": True,
         }
-        if run_info.config_snapshot:
-            meta["config_snapshot"] = run_info.config_snapshot
+        if run_info.config_snapshot: meta["config_snapshot"] = run_info.config_snapshot
 
         return Run(
             id=run_info.run_id,
@@ -1194,7 +810,6 @@ class ConsistProvenanceTracker:
 
     @staticmethod
     def _consist_run_to_model_run_info(run: Run) -> ModelRunInfo:
-        """Convert Consist Run back to PILATES ModelRunInfo."""
         return ModelRunInfo(
             unique_id=run.id,
             model=run.model_name,
@@ -1204,82 +819,33 @@ class ConsistProvenanceTracker:
             status=run.status,
             created_at=run.started_at.isoformat() if run.started_at else None,
             completed_at=run.ended_at.isoformat() if run.ended_at else None,
-            input_record_hashes=(
-                run.meta.get("input_record_hashes", []) if run.meta else []
-            ),
-            output_record_hashes=(
-                run.meta.get("output_record_hashes", []) if run.meta else []
-            ),
+            input_record_hashes=(run.meta.get("input_record_hashes", []) if run.meta else []),
+            output_record_hashes=(run.meta.get("output_record_hashes", []) if run.meta else []),
             metadata=dict(run.meta) if run.meta else {},
         )
 
-    # --- Consist Event Hooks for OpenLineage ---
-
     def register_openlineage_hooks(self, openlineage_tracker):
-        """
-        Register OpenLineage event emission via Consist hooks.
-
-        This allows the existing OpenLineageTracker to receive events from
-        Consist runs and emit OpenLineage events accordingly.
-
-        Args:
-            openlineage_tracker: An OpenLineageTracker instance to receive events
-        """
-
         @self._tracker.on_run_start
-        def emit_start(run: Run):
-            logger.debug(f"Consist run started: {run.id}")
-            # OpenLineage START event could be emitted here
-
+        def emit_start(run: Run): logger.debug(f"Consist run started: {run.id}")
         @self._tracker.on_run_complete
-        def emit_complete(run: Run, outputs: List[Artifact]):
-            logger.debug(f"Consist run completed: {run.id} with {len(outputs)} outputs")
-            # OpenLineage COMPLETE event could be emitted here
-
+        def emit_complete(run: Run, outputs: List[Artifact]): logger.debug(f"Consist run completed: {run.id} with {len(outputs)} outputs")
         @self._tracker.on_run_failed
-        def emit_failed(run: Run, error: Exception):
-            logger.debug(f"Consist run failed: {run.id} with error: {error}")
-            # OpenLineage FAIL event could be emitted here
+        def emit_failed(run: Run, error: Exception): logger.debug(f"Consist run failed: {run.id} with error: {error}")
+
+    def add_openlineage_event(self, *args, **kwargs): pass
+    def save(self): pass
 
 
 class ConsistDataManager:
-    """
-    Database manager backed by Consist for data ingestion and queries.
-
-    Provides a compatible interface with DuckDBManager for gradual migration.
-    """
-
     def __init__(self, tracker: Tracker, db_path: str = None):
         self.tracker = tracker
         self.db_path = db_path or tracker.db_path
         self._engine = tracker.engine
 
     def store_dataframe(
-        self,
-        table_name: str,
-        df,  # pd.DataFrame
-        run_id: str,
-        year: int,
-        iteration: int = None,
-        model: str = None,
-        **kwargs,
+        self, table_name: str, df, run_id: str, year: int, iteration: int = None, model: str = None, **kwargs,
     ) -> bool:
-        """
-        Store a DataFrame using Consist ingestion.
-
-        Args:
-            table_name: Target table name (becomes Consist concept key)
-            df: pandas DataFrame to store
-            run_id: PILATES run ID
-            year: Simulation year
-            iteration: Optional iteration number
-            model: Optional model name
-
-        Returns:
-            True if successful
-        """
         try:
-            # Log as artifact first
             artifact = self.tracker.log_artifact(
                 path=f"memory://{table_name}",
                 key=table_name,
@@ -1290,8 +856,6 @@ class ConsistDataManager:
                 model=model or "pilates",
                 run_id=run_id,
             )
-
-            # Ingest the data
             self.tracker.ingest(artifact, data=df)
             logger.info(f"Ingested {len(df)} rows to {table_name}")
             return True
@@ -1299,48 +863,12 @@ class ConsistDataManager:
             logger.error(f"Failed to ingest {table_name}: {e}")
             return False
 
-    def store_urbansim_raw_data(
-        self,
-        table_name: str,
-        df,
-        run_id: str,
-        year: int,
-        iteration: int = None,
-        **kwargs,
-    ) -> bool:
-        """Store raw UrbanSim data."""
-        return self.store_dataframe(
-            table_name=f"urbansim_{table_name}_raw",
-            df=df,
-            run_id=run_id,
-            year=year,
-            iteration=iteration,
-            model="urbansim",
-            **kwargs,
-        )
+    def store_urbansim_raw_data(self, table_name: str, df, run_id: str, year: int, iteration: int = None, **kwargs) -> bool:
+        return self.store_dataframe(table_name=f"urbansim_{table_name}_raw", df=df, run_id=run_id, year=year, iteration=iteration, model="urbansim", **kwargs)
 
-    def store_activitysim_data(
-        self,
-        table_name: str,
-        df,
-        run_id: str,
-        year: int,
-        iteration: int = None,
-        **kwargs,
-    ) -> bool:
-        """Store processed ActivitySim data."""
-        return self.store_dataframe(
-            table_name=f"activitysim_{table_name}",
-            df=df,
-            run_id=run_id,
-            year=year,
-            iteration=iteration,
-            model="activitysim",
-            **kwargs,
-        )
+    def store_activitysim_data(self, table_name: str, df, run_id: str, year: int, iteration: int = None, **kwargs) -> bool:
+        return self.store_dataframe(table_name=f"activitysim_{table_name}", df=df, run_id=run_id, year=year, iteration=iteration, model="activitysim", **kwargs)
 
     def query(self, sql: str):
-        """Execute a SQL query against the Consist database."""
         import pandas as pd
-
         return pd.read_sql(sql, self._engine)

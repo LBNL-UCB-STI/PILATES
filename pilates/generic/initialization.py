@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -33,7 +33,7 @@ class Initialization(Model):
     ):
         super().__init__(model_name, state, provenance_tracker)
 
-    def run(self, settings: PilatesConfig, workspace: Workspace) -> None:
+    def run(self, settings: PilatesConfig, workspace: Workspace) -> Tuple[RecordStore, RecordStore]:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
@@ -170,4 +170,6 @@ class Initialization(Model):
                 run_hash=init_run_hash,
                 output_records=initialization_records_out.all_records(),
             )
+
+        return initialization_records_in, initialization_records_out
         # If no provenance tracker is supplied, we simply skip provenance logging.
