@@ -39,10 +39,11 @@ class Initialization(Model):
           - Copy all necessary input data from production directories to mutable locations.
           - Record the input and output file locations as provenance for the initialization job.
         """
-        # Start the run context immediately.
-        # Consist requires an active run before any artifacts (inputs/outputs) can be logged.
+        # Legacy-only run lifecycle. In Consist-backed mode, run.py owns the step context.
         init_run_hash = None
-        if self.provenance_tracker is not None:
+        if self.provenance_tracker is not None and not hasattr(
+            self.provenance_tracker, "_tracker"
+        ):
             init_run_hash = self.provenance_tracker.start_model_run(
                 "initialization",
                 year=get_setting(settings, "run.start_year"),
@@ -157,7 +158,11 @@ class Initialization(Model):
 
         except Exception as e:
             # If an error occurs, ensure we mark the run as failed in the tracker
-            if self.provenance_tracker is not None and init_run_hash:
+            if (
+                self.provenance_tracker is not None
+                and init_run_hash
+                and not hasattr(self.provenance_tracker, "_tracker")
+            ):
                 logger.error(f"Initialization failed: {e}")
                 self.provenance_tracker.complete_model_run(
                     run_hash=init_run_hash, status="failed"
@@ -165,7 +170,11 @@ class Initialization(Model):
             raise e
 
         # Record the combined initialization provenance as a single job.
-        if self.provenance_tracker is not None and init_run_hash:
+        if (
+            self.provenance_tracker is not None
+            and init_run_hash
+            and not hasattr(self.provenance_tracker, "_tracker")
+        ):
             self.provenance_tracker.complete_model_run(
                 run_hash=init_run_hash,
                 output_records=initialization_records_out.all_records(),

@@ -287,6 +287,21 @@ class WorkflowState:
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
 
+        # If restarting from a saved state whose major stage is now disabled
+        # (common during config/migration changes), reset to the first enabled stage.
+        if (
+            out.current_major_stage is not None
+            and out.current_major_stage not in out.enabled_stages
+        ):
+            logger.info(
+                "Persisted major stage %s is disabled in current settings; "
+                "resetting to first enabled stage.",
+                out.current_major_stage.name,
+            )
+            out.current_major_stage = None
+            out.current_sub_stage = None
+            out.current_inner_iter = 0
+
         if year:
             # Calculate forecast_year based on current_year and frequency
             # Ensure forecast_year does not exceed end_year
@@ -363,12 +378,11 @@ class WorkflowState:
 
         # For major stages (not substages)
         if target_sub_stage is None:
-            # Check if the target major stage is the current one or comes after it
+            # Only run the current major stage.
             try:
                 current_idx = self.major_stage_order.index(self.current_major_stage)
                 target_idx = self.major_stage_order.index(target_major)
-                result = current_idx <= target_idx
-                return result
+                return current_idx == target_idx
             except ValueError:
                 logger.warning(
                     f"Target major stage {target_major.name} not found in order, allowing run"

@@ -64,7 +64,7 @@ def warm_start_activities(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    tracker: Tracker,
+    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     TODO: THIS IS BROKEN
@@ -97,8 +97,8 @@ def warm_start_activities(
         logger.info("POLARIS module is not activated due to missing polarisruntime library")
 
     elif activity_demand_model == "activitysim":
-        runner = factory.get_runner("activitysim", state, tracker)
-        preprocessor = factory.get_preprocessor("activitysim", state, tracker)
+        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
 
         # Preprocess
         inputData = preprocessor.preprocess(workspace)
@@ -114,7 +114,7 @@ def warm_start_activities(
             runInfo,
             usim_data_dir=workspace.get_usim_mutable_data_dir(),
             warm_start_dir=workspace.get_asim_output_dir(),
-            provenance_tracker=tracker,
+            provenance_tracker=provenance_tracker,
             model_run_hash=None,
         )
 
@@ -126,7 +126,7 @@ def forecast_land_use(
     year: int,
     workflow_state: WorkflowState,
     workspace: Workspace,
-    tracker: Tracker,
+    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     High-level wrapper to start an UrbanSim (land use) run.
@@ -141,7 +141,7 @@ def forecast_land_use(
         land_use_model,
         workflow_state,
         workspace,
-        tracker,
+        provenance_tracker,
     )
 
     # Verify Output
@@ -165,7 +165,7 @@ def run_land_use(
     land_use_model,
     state: WorkflowState,
     workspace: Workspace,
-    tracker: Tracker,
+    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
@@ -183,13 +183,13 @@ def run_land_use(
     factory = ModelFactory()
 
     preprocessor = factory.get_preprocessor(
-        "urbansim", state, tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
     )
     runner = factory.get_runner(
-        "urbansim", state, tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
     )
     postprocessor = factory.get_postprocessor(
-        "urbansim", state, tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
     )
 
     # 1. PREPROCESS
@@ -210,7 +210,7 @@ def run_activity_demand(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    tracker: Tracker,
+    provenance_tracker: ConsistProvenanceTracker,
 ) -> RecordStore:
     """
     Generate activity plans for the current year using the configured activity demand model.
@@ -237,13 +237,13 @@ def run_activity_demand(
 
     elif activity_demand_model == "activitysim":
         preprocessor = factory.get_preprocessor(
-            "activitysim", state, tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
         )
         runner = factory.get_runner(
-            "activitysim", state, tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
         )
         postprocessor = factory.get_postprocessor(
-            "activitysim", state, tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
         )
 
         input_data = preprocessor.preprocess(workspace)
@@ -261,7 +261,7 @@ def run_traffic_assignment(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    tracker: Tracker,
+    provenance_tracker: ConsistProvenanceTracker,
     activity_demand_outputs: RecordStore = None,
 ):
     """
@@ -285,13 +285,13 @@ def run_traffic_assignment(
         logger.info("POLARIS module is not activated")
     elif travel_model == "beam":
         preprocessor = factory.get_preprocessor(
-            "beam", state, tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
         )
         runner = factory.get_runner(
-            "beam", state, tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
         )
         postprocessor = factory.get_postprocessor(
-            "beam", state, tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
         )
 
         input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
@@ -351,7 +351,7 @@ def main():
         run_id="placeholder_id",  # Will be overwritten by attach mode
         output_path=full_run_dir,
         folder_name=run_name,
-        tracker=tracker  # <--- CRITICAL: Pass native tracker instance
+        tracker=tracker
     )
 
     workspace = Workspace(
@@ -379,7 +379,12 @@ def main():
             # We use 'initialization' as the step name.
             # Initialization.py calls `adapter.start_model_run("initialization")` internally.
             # The Adapter will see this active step and ATTACH to it, rather than creating a new one.
-            with scenario.step("initialization"):
+            with scenario.step(
+                "initialization",
+                model="initialization",
+                year=state.start_year,
+                iteration=0,
+            ):
 
                 init_model = Initialization("initialization", state, provenance_tracker=adapter)
 
@@ -405,9 +410,9 @@ def main():
                 with scenario.step(step_name, model="urbansim", year=year, iteration=0):
                     if state.is_start_year() and settings.activitysim.warm_start_activities:
                         logger.info("[Main] Running warm start activities for ActivitySim.")
-                        warm_start_activities(settings, state, workspace, tracker)
+                        warm_start_activities(settings, state, workspace, adapter)
 
-                    forecast_land_use(settings, year, state, workspace, tracker)
+                    forecast_land_use(settings, year, state, workspace, adapter)
 
                 state.complete_step(WorkflowState.Stage.land_use)
 
@@ -418,9 +423,9 @@ def main():
 
                 # ATLAS Logic extraction
                 factory = ModelFactory()
-                preprocessor = factory.get_preprocessor("atlas", state, tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
-                runner = factory.get_runner("atlas", state, tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
-                postprocessor = factory.get_postprocessor("atlas", state, tracker, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+                preprocessor = factory.get_preprocessor("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+                runner = factory.get_runner("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+                postprocessor = factory.get_postprocessor("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
 
                 warm_start_atlas = state.is_start_year()
                 forecast = True
@@ -483,7 +488,7 @@ def main():
                         step_name = f"activitysim_{year}_iter{i}"
 
                         with scenario.step(step_name, model="activitysim", year=year, iteration=i):
-                            activity_demand_outputs = run_activity_demand(settings, state, workspace, tracker)
+                            activity_demand_outputs = run_activity_demand(settings, state, workspace, adapter)
 
                         state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.activity_demand)
 
@@ -493,7 +498,7 @@ def main():
                         step_name = f"beam_{year}_iter{i}"
 
                         with scenario.step(step_name, model="beam", year=year, iteration=i):
-                            run_traffic_assignment(settings, state, workspace, tracker, activity_demand_outputs)
+                            run_traffic_assignment(settings, state, workspace, adapter, activity_demand_outputs)
 
                         state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.traffic_assignment)
 

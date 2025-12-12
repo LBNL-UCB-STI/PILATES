@@ -134,15 +134,7 @@ class BeamRunner(GenericRunner):
         region = settings.run.region
         beam_memory = settings.beam.memory
 
-        self.setup_container_cache_dirs(settings)
-
-        # start docker client
-        client = None
-        if settings.infrastructure.container_manager == "docker":
-            try:
-                client = self.initialize_docker_client(settings)
-            except Exception as e:
-                logger.error(f"Failed to initialize Docker client: {e}")
+        client = None  # Handled by Consist
 
         travel_model, travel_model_image = self.get_model_and_image(
             settings, "travel_model"
@@ -216,6 +208,7 @@ class BeamRunner(GenericRunner):
             provenance_tracker=self.provenance_tracker,
             input_artifacts=input_paths,
             output_paths=[abs_beam_output],
+            lineage_mode="none",
         )
 
         run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)

@@ -3449,15 +3449,6 @@ class BeamPostprocessor(GenericPostprocessor):
             raw_outputs.add_record(zarr_record)
             logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
 
-        if model_run_hash is None:
-            model_run_hash = self.provenance_tracker.start_model_run(
-                "beam_postprocessor",
-                self.state.current_year,
-                self.state.current_inner_iter,
-                description="Post-processing BEAM outputs",
-                inputs=raw_outputs,
-            )
-
         raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
 
@@ -3588,7 +3579,6 @@ class BeamPostprocessor(GenericPostprocessor):
                         all_skims_path,
                         description="Final Zarr skims store before OMX conversion",
                         short_name="zarr_skims_for_omx",
-                        model_run_id=model_run_hash,
                     )
 
                     # Exclude intermediate trip/failure tables from the final OMX
@@ -3629,10 +3619,4 @@ class BeamPostprocessor(GenericPostprocessor):
                     logger.error(f"Failed to write skims to OMX: {e}")
 
         output_store = RecordStore(recordList=processed_records)
-        self.provenance_tracker.complete_model_run(
-            model_run_hash,
-            status="completed",
-            output_records=output_store.all_records(),
-        )
-
         return output_store

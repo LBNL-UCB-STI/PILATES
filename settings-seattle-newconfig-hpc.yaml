@@ -212,8 +212,8 @@ shared:
   database:
     enabled: true
     type: duckdb
-    path: pilates/database/seattle_pilates_data.duckdb
-    snapshot_path: pilates/database/snapshots
+    path: /clusterfs/beam-core-data-nfs/db/seattle/consist-seattle.duckdb
+    snapshot_path: /clusterfs/beam-core-data-nfs/db/seattle/snapshots
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION

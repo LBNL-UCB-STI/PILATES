@@ -7,6 +7,7 @@ from typing import Tuple, Optional, TYPE_CHECKING
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model, provenance_logging
 from pilates.generic.records import RecordStore
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils.provenance import FileProvenanceTracker
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ class GenericPreprocessor(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
+        provenance_tracker: ConsistProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)  # new

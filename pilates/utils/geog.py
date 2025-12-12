@@ -27,6 +27,44 @@ from pilates.utils.settings_helper import get as get_setting
 logger = logging.getLogger(__name__)
 
 
+def _ensure_geoid_column(blocks_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Normalize block GEOID column naming.
+
+    Older cached shapefiles or regional sources may use alternate names like
+    'geoid', 'GEOID10', or similar. This helper ensures a canonical 'GEOID'
+    column exists and is string-typed.
+    """
+    if "GEOID" in blocks_gdf.columns:
+        blocks_gdf["GEOID"] = blocks_gdf["GEOID"].astype(str)
+        return blocks_gdf
+
+    # Heuristic search for common variants
+    lowered = {c.lower(): c for c in blocks_gdf.columns}
+    candidates = [
+        "geoid",
+        "geoid10",
+        "geoid20",
+        "block_geoid",
+        "blockid",
+        "block_id",
+    ]
+    for cand in candidates:
+        if cand in lowered:
+            src = lowered[cand]
+            blocks_gdf = blocks_gdf.rename(columns={src: "GEOID"})
+            blocks_gdf["GEOID"] = blocks_gdf["GEOID"].astype(str)
+            logger.info(
+                f"Normalized block GEOID column from '{src}' to 'GEOID'."
+            )
+            return blocks_gdf
+
+    raise KeyError(
+        "Block geometries are missing a GEOID column. "
+        f"Available columns: {blocks_gdf.columns.tolist()}"
+    )
+
+
 def get_county_block_geoms(
     state_fips: str,
     county_fips: str,
@@ -113,7 +151,7 @@ def get_county_block_geoms(
                 f"Error parsing features: {e}. Geometry: {feature['geometry']}"
             )
     gdf = gpd.GeoDataFrame(df, crs="EPSG:4326")
-    return gdf
+    return _ensure_geoid_column(gdf)
 
 
 def get_block_geoms(
@@ -172,6 +210,7 @@ def get_block_geoms(
     if os.path.exists(os.path.join(data_dir, file_name)):
         logger.info("Loading block geoms from disk!")
         blocks_gdf = gpd.read_file(os.path.join(data_dir, file_name))
+        blocks_gdf = _ensure_geoid_column(blocks_gdf)
 
     else:
         logger.info(
@@ -191,6 +230,8 @@ def get_block_geoms(
         blocks_gdf = gpd.GeoDataFrame(
             pd.concat(all_block_geoms, ignore_index=True), crs="EPSG:4326"
         )
+
+        blocks_gdf = _ensure_geoid_column(blocks_gdf)
 
         # # make sure geometries match with geometries in blocks table
 

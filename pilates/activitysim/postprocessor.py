@@ -577,15 +577,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             forecast_year,
         )
 
-        # Postprocess
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "activitysim_postprocessor",
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="Post-processing ASIM outputs",
-            inputs=raw_outputs,
-        )
-
         iteration_folder_name = "year-{0}-iteration-{1}".format(
             year, replanning_iteration_number
         )
@@ -633,7 +624,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
                         source_file_paths=[source_path],
                         state=self.state,
-                        model_run_id=model_run_hash,
                     )
                     if archived_record:
                         archived_record.file_path = (
@@ -666,7 +656,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     short_name=f"asim_input_skims_zarr_archived",
                     source_file_paths=[zarr_source_path],
                     state=self.state,
-                    model_run_id=model_run_hash,
                 )
                 if zarr_record:
                     zarr_record.file_path = (
@@ -750,7 +739,4 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)
-        self.provenance_tracker.complete_model_run(
-            model_run_hash, output_records=processed_store.all_records()
-        )
         return processed_store

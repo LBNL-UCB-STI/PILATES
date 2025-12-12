@@ -6,6 +6,8 @@ import shutil
 from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
+
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
@@ -207,7 +209,7 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
+        provenance_tracker: ConsistProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
@@ -338,8 +340,9 @@ class BeamPreprocessor(GenericPreprocessor):
                 git_hash=git_hash,
             )
         )
+
         output_records.append(
-            self.provenance_tracker.record_repo_input(
+            self.provenance_tracker.record_repo_output(
                 "beam",
                 repo_path=dest_region,
                 short_name="beam_prod",
@@ -369,7 +372,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 )
             )
             output_records.append(
-                self.provenance_tracker.record_repo_input(
+                self.provenance_tracker.record_repo_output(
                     "beam",
                     repo_path=dest_common,
                     short_name="beam_common",

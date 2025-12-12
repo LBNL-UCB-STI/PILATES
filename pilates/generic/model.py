@@ -4,6 +4,7 @@ import functools
 import logging
 from typing import Optional, TYPE_CHECKING
 
+from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils.duckdb_manager import DuckDBManager
 
 if TYPE_CHECKING:
@@ -17,16 +18,24 @@ logger = logging.getLogger(__name__)
 
 def provenance_logging(func):
     """
-    A decorator that wraps a model's execution method (_run, _preprocess, _postprocess)
-    to handle boilerplate for provenance tracking and database logging.
+    Thin PILATES-specific provenance bridge.
 
-    It performs the following actions:
-    1. Starts the in-memory provenance tracker for the model run.
-    2. Logs the start of the run to the database.
-    3. Executes the wrapped method.
-    4. Catches any exceptions, marks the run as 'failed', and re-raises.
-    5. If successful, marks the run as 'completed'.
-    6. In all cases, calls the stop method to log the final state to the database.
+    Consist-only mode assumptions:
+    - Run lifecycle and caching are owned by Consist Scenario/Step contexts
+      (i.e., this decorator must execute inside `with scenario.step(...):`).
+    - PILATES continues to pass `RecordStore` inputs/outputs between stages.
+
+    Responsibilities:
+    1. Extract a `RecordStore` from args/kwargs and log it as inputs.
+    2. Attach PILATES workflow metadata to the active Consist run.
+    3. Execute the wrapped method.
+    4. Log any returned `RecordStore` as outputs.
+    5. Update legacy in-memory `run_info` for PILATES compatibility.
+
+    Non-responsibilities (handled elsewhere):
+    - Starting/ending Consist runs.
+    - Cache hydration / auto-skip (stubbed for later).
+    - Legacy DuckDB provenance upserts.
     """
 
     @functools.wraps(func)
@@ -62,7 +71,34 @@ def provenance_logging(func):
                 input_record_store = kwargs["raw_outputs"]
 
         try:
-            # 1. Start provenance tracking in memory
+            if not self.provenance_tracker:
+                logger.warning(
+                    f"[{self.model_name}] No provenance tracker configured; executing without provenance."
+                )
+                return func(self, *args, **kwargs)
+
+            is_consist_backed = hasattr(self.provenance_tracker, "_tracker")
+            if is_consist_backed:
+                tracker = self.provenance_tracker._tracker
+                if not getattr(tracker, "current_consist", None):
+                    raise RuntimeError(
+                        f"[{self.model_name}] Consist-backed provenance requires an active step run. "
+                        "Ensure this method is called within `with scenario.step(...):`."
+                    )
+
+                # Best-effort cache hit visibility; we still execute user code.
+                if getattr(tracker, "is_cached", False):
+                    cached_run = getattr(tracker.current_consist, "cached_run", None)
+                    cache_source = cached_run.id if cached_run else None
+                    msg = (
+                        f"[{self.model_name}] Consist cache hit for step '{tracker.current_consist.run.id}'"
+                    )
+                    if cache_source:
+                        msg += f" (source={cache_source})"
+                    msg += "; proceeding with execution (hydration not yet implemented)."
+                    logger.info(msg)
+
+            # 1. Bridge into active run: log inputs + metadata, update in-memory run_info
             model_run_id = self.provenance_tracker.start_model_run(
                 self.model_name,
                 self.state.current_year,
@@ -71,8 +107,9 @@ def provenance_logging(func):
                 inputs=input_record_store,  # Use the extracted input RecordStore
                 state=self.state,
             )
-            # 2. Log the start event to the database
-            self.start()
+            # 2. Legacy DB logging only when not Consist-backed (should disappear over time).
+            if not is_consist_backed:
+                self.start()
 
             # 3. Execute the actual model logic
             func_result = func(self, *args, **kwargs)  # Pass all original args/kwargs
@@ -142,9 +179,13 @@ def provenance_logging(func):
             raise e
 
         finally:
-            # 5. Persist the final state (completed/failed) to the database
-            if model_run_id:
-                logger.debug(f"Persisting final state for model run {model_run_id}.")
+            # 5. Persist legacy DB state only when not Consist-backed.
+            if model_run_id and self.provenance_tracker and not hasattr(
+                self.provenance_tracker, "_tracker"
+            ):
+                logger.debug(
+                    f"Persisting final state for legacy model run {model_run_id}."
+                )
                 self.stop()
 
     return wrapper
@@ -155,7 +196,7 @@ class Model:
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: Optional[FileProvenanceTracker],
+        provenance_tracker: Optional[ConsistProvenanceTracker],
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
         self.model_name = model_name

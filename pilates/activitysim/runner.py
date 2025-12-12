@@ -177,7 +177,7 @@ class ActivitysimRunner(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
-        self.setup_container_cache_dirs(settings)
+        # self.setup_container_cache_dirs(settings) # Handled by Consist
 
         # Get from your config
         output_directory = (
@@ -195,16 +195,7 @@ class ActivitysimRunner(GenericRunner):
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
         os.makedirs(shared_tmp_dir, exist_ok=True)
 
-        # start docker client
-        client = None  # Initialize client to None
-        if settings.infrastructure.container_manager == "docker":
-            try:
-                client = self.initialize_docker_client(settings)
-            except Exception as e:
-                logger.error(f"Failed to initialize Docker client: {e}")
-                # Decide how to handle failure - maybe exit?
-                # For now, log and continue, assuming Singularity might be used or stubs.
-                # If no client and no singularity, container runs will fail later.
+        client = None  # Handled by Consist
 
         asim_docker_vols = self.get_asim_docker_vols(
             settings, working_dir=workspace.full_path
@@ -247,7 +238,6 @@ class ActivitysimRunner(GenericRunner):
 
         compiled_asim_this_year = False
 
-        # Record ActivitySim run start (Compilation if needed)
         if not self.state.asim_compiled:
 
             compiled_asim_this_year = True
@@ -258,22 +248,6 @@ class ActivitysimRunner(GenericRunner):
 
             additional_args = self.get_asim_additional_args(
                 settings, asim_docker_vols, True
-            )
-
-            # Consist: Force overwrite for compilation to ensure Numba caches are regenerated
-             # Legacy: Ignore this argument
-            start_kwargs = {}
-
-            if hasattr(self.provenance_tracker, "_tracker"):
-                start_kwargs["cache_mode"] = "overwrite"
-
-            asim_compile_run_hash = self.provenance_tracker.start_model_run(
-                model=activity_demand_model,
-                year=self.state.current_year,
-                iteration=-1,
-                description="asim compilation",
-                inputs=filtered_store,
-                **start_kwargs,
             )
 
             success = self.run_container(
@@ -291,6 +265,7 @@ class ActivitysimRunner(GenericRunner):
                 },
                 provenance_tracker=self.provenance_tracker,
                 output_paths=[all_skims_path],
+                lineage_mode="none",
             )
 
             output_records = []
@@ -349,27 +324,6 @@ class ActivitysimRunner(GenericRunner):
                         f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.",
                         exc_info=True,
                     )
-
-            # Prepare runtime metadata for compilation run
-            compile_metadata = {
-                "container_command": asim_cmd,
-                "runtime_parameters": {
-                    "household_sample_size": 2500,
-                    "num_processes": 1,
-                    "chunk_size": settings.activitysim.chunk_size,
-                    "additional_args": additional_args,
-                },
-                "container_image": activity_demand_image,
-                "container_manager": settings.infrastructure.container_manager,
-                "working_directory": asim_workdir,
-            }
-
-            self.provenance_tracker.complete_model_run(
-                asim_compile_run_hash,
-                status="completed" if success else "failed",
-                output_records=output_records,
-                metadata=compile_metadata,
-            )
 
             logger.info("ASIM Compilation success: {0}".format(success))
             if not success:
@@ -465,14 +419,6 @@ class ActivitysimRunner(GenericRunner):
                 )
             )
 
-        new_asim_run_hash = self.provenance_tracker.start_model_run(
-            model=activity_demand_model,
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
-            description="asim full run",
-            inputs=filtered_store,
-        )
-
         asim_cmd = self.get_base_asim_cmd(settings)
 
         additional_args = self.get_asim_additional_args(
@@ -494,9 +440,10 @@ class ActivitysimRunner(GenericRunner):
             },
             provenance_tracker=self.provenance_tracker,
             output_paths=[workspace.get_asim_output_dir()],
+            lineage_mode="none",
         )
 
-        run_info = self.provenance_tracker.run_info.model_runs.get(new_asim_run_hash)
+        run_info = None
         if not success:
             logger.error(
                 "ASIM run failed for year {0} iteration {1}".format(
@@ -539,25 +486,17 @@ class ActivitysimRunner(GenericRunner):
             "working_directory": asim_workdir,
         }
 
-        # Record ActivitySim run completion (Main run)
-        self.provenance_tracker.complete_model_run(
-            new_asim_run_hash,
-            status="completed" if success else "failed",
-            output_records=output_records,
-            metadata=runtime_metadata,
-        )
-
         output_store = RecordStore(recordList=output_records)
 
-        # Get the ModelRunInfo for this run
+        # Provide minimal ModelRunInfo for downstream consumers.
         if run_info is None:
-            # Fallback: create a minimal ModelRunInfo
             run_info = ModelRunInfo(
                 model="activitysim",
                 year=self.state.forecast_year,
                 iteration=self.state.current_inner_iter,
                 description="ActivitySim run",
-                status="completed",
+                status="completed" if success else "failed",
+                metadata=runtime_metadata,
             )
 
         return output_store, run_info

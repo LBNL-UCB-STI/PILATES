@@ -2,7 +2,6 @@ from typing import Tuple, Optional
 import logging
 import os
 
-from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.workspace import Workspace
@@ -93,7 +92,6 @@ class UrbansimRunner(GenericRunner):
         )
         settings = self.state.full_settings
         forecast_year = self.state.forecast_year
-        self.setup_container_cache_dirs(settings)
 
         # Prepare output file path
         usim_output_store_name = settings.urbansim.output_file_template.format(
@@ -114,12 +112,6 @@ class UrbansimRunner(GenericRunner):
 
         # Initialize container client
         client = None
-        if settings.infrastructure.container_manager == "docker":
-            try:
-                client = self.initialize_docker_client(settings)
-            except Exception as e:
-                logger.error(f"Failed to initialize Docker client: {e}")
-                raise
 
         # 1. EXTRACT INPUTS FOR CONSIST TRACKING
         input_paths = [r.file_path for r in store.all_records()]

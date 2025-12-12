@@ -1,33 +1,27 @@
 import abc
 import logging
-import os
-import subprocess
 import shlex
 from typing import TYPE_CHECKING, Optional, Tuple, List, Union, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 
+# Try to import consist container execution
 try:
-    import docker
+    from consist.integrations.containers import run_container as consist_run_container
+    CONSIST_AVAILABLE = True
 except ImportError:
-    print("Warning: Unable to import Docker Module")
+    raise ImportError("Consist library is required for PILATES container execution.")
+    CONSIST_AVAILABLE = False
+
 from abc import ABC
 
 from pilates.generic.records import RecordStore, ModelRunInfo
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.container_utils import to_singularity_volumes, to_singularity_env
 from pilates.utils.settings_helper import get as get_setting
 
-# Try to import consist container execution
-try:
-    from consist.integrations.containers import run_container as consist_run_container
-
-    CONSIST_AVAILABLE = True
-except ImportError:
-    CONSIST_AVAILABLE = False
 
 # Type checking import for ConsistProvenanceTracker
 if TYPE_CHECKING:
@@ -54,75 +48,10 @@ class GenericRunner(ABC, Model):
 
     def setup_container_cache_dirs(self, settings: PilatesConfig):
         """
-        Set up Apptainer/Singularity cache directories.
-
-        Uses local node storage (/local) for cache when available for faster
-        extraction, while keeping outputs on scratch for large file I/O.
-
-        Args:
-            settings: PilatesConfig object containing run configuration
+        Deprecated: Consist backends handle cache directory setup internally.
+        Kept for backward compatibility with subclasses.
         """
-        # Try to use fast local storage for cache (in order of preference)
-        cache_base = None
-        local_options = [
-            "/local",  # Prioritize /local (853GB available)
-            os.environ.get("TMPDIR", ""),
-            "/tmp",  # Last resort - only 7.4GB
-        ]
-
-        for option in local_options:
-            if option and os.path.exists(option) and os.access(option, os.W_OK):
-                # Check if there's enough space (require at least 20GB free)
-                try:
-                    stat = os.statvfs(option)
-                    free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
-                    if free_gb >= 20:
-                        cache_base = option
-                        logger.info(
-                            f"[{self.model_name}] Using local storage for cache: {cache_base} ({free_gb:.1f}GB free)"
-                        )
-                        break
-                    else:
-                        logger.debug(
-                            f"[{self.model_name}] Skipping {option} - only {free_gb:.1f}GB free"
-                        )
-                except Exception as e:
-                    logger.debug(
-                        f"[{self.model_name}] Could not check space on {option}: {e}"
-                    )
-                    continue
-
-        if not cache_base:
-            # Fall back to scratch if no local storage available
-            output_base = os.path.expandvars(settings.run.output_directory)
-            cache_base = output_base
-            logger.warning(
-                f"[{self.model_name}] No suitable local storage found, using scratch for cache (may be slow)"
-            )
-
-        # Define cache directory paths
-        apptainer_cache = os.path.join(cache_base, ".apptainer", "cache")
-        apptainer_tmp = os.path.join(cache_base, ".apptainer", "tmp")
-        singularity_cache = os.path.join(cache_base, ".singularity", "cache")
-        singularity_tmp = os.path.join(cache_base, ".singularity", "tmp")
-
-        # Set environment variables for Singularity/Apptainer
-        os.environ["APPTAINER_CACHEDIR"] = apptainer_cache
-        os.environ["APPTAINER_TMPDIR"] = apptainer_tmp
-        os.environ["SINGULARITY_CACHEDIR"] = singularity_cache
-        os.environ["SINGULARITY_TMPDIR"] = singularity_tmp
-
-        # Create directories
-        for cache_dir in [
-            apptainer_cache,
-            apptainer_tmp,
-            singularity_cache,
-            singularity_tmp,
-        ]:
-            os.makedirs(cache_dir, exist_ok=True)
-
-        logger.info(f"[{self.model_name}] Set Apptainer cache to: {apptainer_cache}")
-        logger.info(f"[{self.model_name}] Set Apptainer tmp to: {apptainer_tmp}")
+        pass
 
     def check_required_input_files(self, inputStore: RecordStore) -> bool:
         # TODO: Implement a check for required input files. Requires Record.simple_name
@@ -238,280 +167,80 @@ class GenericRunner(ABC, Model):
 
     @staticmethod
     def run_container(
-        client,
-        settings: PilatesConfig,
-        image: str,
-        volumes: dict,
-        command: str,
-        model_name: str,
-        working_dir=None,
-        environment=None,
-        args=None,
-        provenance_tracker=None,
-        input_artifacts: List[Union[str, Any]] = None,
-        output_paths: List[str] = None,
+            client,
+            settings: PilatesConfig,
+            image: str,
+            volumes: dict,
+            command: str,
+            model_name: str,
+            working_dir=None,
+            environment=None,
+            args=None,
+            provenance_tracker=None,
+            input_artifacts: List[Union[str, Any]] = None,
+            output_paths: List[str] = None,
+            lineage_mode: str = None,
     ) -> bool:
         """
-        Executes container using docker or singularity, with optional Consist integration.
+        Executes container using Consist integration.
 
-        When a ConsistProvenanceTracker is provided and Consist is available, delegates to
-        consist.run_container() for automatic provenance tracking and caching. Otherwise,
-        falls back to direct Docker/Singularity execution.
-
-        Args:
-            client: the docker client. If it's provided then docker is used, otherwise singularity is used
-            settings: settings to get docker configuration
-            image: the image to run
-            volumes: a dictionary describing volume binding (Docker format: {host: {'bind': container, 'mode': 'rw'}})
-            command: the command to run
-            model_name: name of the model, used for stubs
-            working_dir: the working directory inside the container
-            environment: a dictionary that contains environment variables
-            args: additional arguments to the command
-            provenance_tracker: optional ConsistProvenanceTracker instance for Consist integration
-            input_artifacts: optional list of input paths/artifacts for provenance tracking
-            output_paths: optional list of output paths to track for provenance
-
-        Returns:
-            bool: True if the container/stub ran successfully (exit code 0), False otherwise.
+        Acts as a bridge to `consist.integrations.containers.run_container`, ensuring
+        proper provenance tracking and caching for all model runs. Adapts PILATES-style
+        arguments (like nested volume dictionaries) to the format expected by Consist.
         """
-        # Check if we should delegate to Consist
-        should_use_consist = (
-            CONSIST_AVAILABLE
-            and provenance_tracker is not None
-            and hasattr(provenance_tracker, "_tracker")
-            and not settings.run.use_stubs  # Don't use consist for stub mode
+        if not provenance_tracker or not hasattr(provenance_tracker, "_tracker"):
+            raise RuntimeError(
+                "A valid Consist-backed provenance_tracker is required for container execution."
+            )
+
+        logger.info(f"[{model_name}] Delegating container execution to Consist")
+
+        # Adapt volumes from PILATES format {host: {'bind': cont, 'mode': 'rw'}} or {host: cont}
+        # to Consist format {host: cont}
+        consist_volumes = {}
+        for host_path, mount_info in volumes.items():
+            if isinstance(mount_info, dict):
+                container_path = mount_info.get("bind", mount_info)
+            else:
+                container_path = mount_info
+            consist_volumes[host_path] = container_path
+
+        # Handle command + args: Split if string, combine with args
+        full_command_list = shlex.split(command)
+        if args:
+            if isinstance(args, list):
+                full_command_list.extend(args)
+            else:
+                full_command_list.extend(shlex.split(str(args)))
+
+        # Determine settings from config
+        backend_type = get_setting(
+            settings, "infrastructure.container_manager", "docker"
         )
-
-        if should_use_consist:
-            logger.info(
-                f"[Consist] Delegating container execution for {model_name} to Consist"
-            )
-            try:
-                # Convert PILATES volume format to Consist format
-                # PILATES: {host: {'bind': container, 'mode': 'rw'}}
-                # Consist: {host: container}
-                consist_volumes = {}
-                for host_path, mount_info in volumes.items():
-                    if isinstance(mount_info, dict):
-                        container_path = mount_info.get("bind", mount_info)
-                    else:
-                        container_path = mount_info
-                    consist_volumes[host_path] = container_path
-
-                # Combine command and args into single command string
-                full_command = command
-                if args:
-                    if isinstance(args, list):
-                        full_command = (
-                            command + " " + " ".join(shlex.quote(a) for a in args)
-                        )
-                    else:
-                        full_command = command + " " + str(args)
-
-                # Determine backend type
-                backend_type = (
-                    "docker"
-                    if settings.infrastructure.container_manager == "docker"
-                    else "singularity"
-                )
-
-                # Use consist's run_container
-                return consist_run_container(
-                    tracker=provenance_tracker._tracker,
-                    run_id=f"{model_name}_container",
-                    image=image,
-                    command=full_command,
-                    volumes=consist_volumes,
-                    inputs=input_artifacts or [],
-                    outputs=output_paths or [],
-                    environment=environment or {},
-                    working_dir=working_dir,
-                    backend_type=backend_type,
-                    pull_latest=get_setting(
-                        settings, "infrastructure.docker_config.pull_latest", False
-                    ),
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error delegating to Consist container execution: {e}. Falling back to native execution."
-                )
-                # Fall through to native execution
-
-        # Native execution (original code)
-        if client:  # Docker client is available
-            docker_stdout = get_setting(
-                settings, "infrastructure.docker_config.stdout", False
-            )
-            logger.info("Running docker container: %s, command: %s", image, command)
-            run_kwargs = {
-                "volumes": volumes,
-                "command": command,
-                "stdout": docker_stdout,
-                "stderr": True,  # Always capture stderr
-                "detach": True,  # Run in detached mode to stream logs
-            }
-            if working_dir:
-                run_kwargs["working_dir"] = working_dir
-            if environment:
-                run_kwargs["environment"] = environment
-            if args:
-                # Append args to command string for docker
-                full_command = command + " " + " ".join(shlex.quote(a) for a in args)
-                run_kwargs["command"] = full_command
-                logger.info("Full docker command: %s", full_command)
-
-            container = None
-            try:
-                container = client.containers.run(image, **run_kwargs)
-                # Stream logs
-                for line in container.logs(
-                    stream=True, stderr=True, stdout=docker_stdout
-                ):
-                    # Decode bytes and print
-                    try:
-                        print(line.decode("utf-8").strip())
-                    except UnicodeDecodeError:
-                        print(line.strip())  # Print raw bytes if decoding fails
-
-                # Wait for container to finish and get exit code
-                result = container.wait()
-                exit_code = result["StatusCode"]
-                logger.info(
-                    f"Docker container {image} finished with exit code: {exit_code}"
-                )
-                return exit_code == 0
-
-            except Exception as e:
-                logger.error(f"Unexpected error running docker container {image}: {e}")
-                return False
-            finally:
-                if container:
-                    try:
-                        container.remove()
-                        logger.debug(f"Removed container {container.id}")
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not remove container {container.id}: {e}"
-                        )
-
-        else:  # Singularity
-            import os
-
-            for local_folder in volumes:
-                # Ensure local directories exist for singularity binds
-                os.makedirs(local_folder, exist_ok=True)
-
-            singularity_volumes = to_singularity_volumes(volumes)
-            # Construct the singularity command
-            proc = (
-                ["singularity", "run", "--cleanenv", "--writable-tmpfs"]
-                + (["--env", to_singularity_env(environment)] if environment else [])
-                + (["--pwd", working_dir] if working_dir else [])
-                + ["-B", singularity_volumes, image]
-                + (args if args else [])
-                + shlex.split(command)
-            )
-
-            logger.info("Running singularity command: %s", " ".join(proc))
-
-            # Check if using stubs
-            if (
-                settings.run.use_stubs
-            ):  # Pass the full command string as config_name to the stub
-                stub_cmd = [
-                    "python",
-                    os.path.join(
-                        os.path.dirname(__file__),
-                        "..",
-                        "..",
-                        "tests",
-                        "stubs",
-                        "run_stub.py",
-                    ),  # Use relative path for stub
-                    "--model_name",
-                    model_name,
-                    "--cwd",
-                    os.getcwd(),  # Pass current working directory of run.py
-                    "--config_name",
-                    command,  # Pass the original command string
-                ]
-                logger.info(
-                    f"Using stub for {model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
-                )
-                try:
-                    result = subprocess.run(
-                        stub_cmd, check=True, capture_output=True, text=True
-                    )
-                    print("Stub stdout:\n", result.stdout)
-                    print("Stub stderr:\n", result.stderr)
-                    logger.info(f"Stub for {model_name} finished successfully.")
-                except subprocess.CalledProcessError as e:
-                    logger.error(
-                        f"Stub for {model_name} failed with exit code {e.returncode}."
-                    )
-                    print("Stub stdout:\n", e.stdout)
-                    print("Stub stderr:\n", e.stderr)
-                except FileNotFoundError:
-                    logger.error(f"Stub script not found at {stub_cmd[2]}.")
-                except Exception as e:
-                    logger.error(f"Unexpected error running stub for {model_name}: {e}")
-                finally:
-                    return True
-
-            else:  # Run actual singularity container
-                try:
-                    # Use subprocess.run to execute singularity command
-                    result = subprocess.run(
-                        proc, check=False
-                    )  # Don't raise exception on non-zero exit code
-                    logger.info(
-                        f"Singularity container {image} finished with exit code: {result.returncode}"
-                    )
-                    return result.returncode == 0
-                except FileNotFoundError:
-                    logger.error(
-                        "Singularity command not found. Is Singularity installed and in your PATH?"
-                    )
-                    return False
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error running singularity container {image}: {e}"
-                    )
-                    return False
-
-    @staticmethod
-    def initialize_docker_client(settings):
-        land_use_model = get_setting(settings, "run.models.land_use", False)
-        vehicle_ownership_model = get_setting(
-            settings, "run.models.vehicle_ownership", False
-        )  ## ATLAS
-        activity_demand_model = get_setting(
-            settings, "run.models.activity_demand", False
-        )
-        travel_model = get_setting(settings, "run.models.travel", False)
-        models = [
-            land_use_model,
-            vehicle_ownership_model,
-            activity_demand_model,
-            travel_model,
-        ]
-        image_names = get_setting(settings, "infrastructure.docker_images")
         pull_latest = get_setting(
             settings, "infrastructure.docker_config.pull_latest", False
         )
 
-        client = docker.from_env()
-        if pull_latest:
-            logger.info("Pulling from docker...")
-            for model in models:
-                if model:
-                    image = image_names.get(model)  # Use .get for safety
-                    if image is not None:
-                        print("Pulling latest image for {0}".format(image))
-                        try:
-                            client.images.pull(image)
-                        except Exception as e:
-                            logger.error(f"Error pulling docker image {image}: {e}")
+        try:
+            return consist_run_container(
+                tracker=provenance_tracker._tracker,
+                run_id=f"{model_name}_container",
+                image=image,
+                command=full_command_list,
+                volumes=consist_volumes,
+                inputs=input_artifacts or [],
+                outputs=output_paths or [],
+                environment=environment or {},
+                working_dir=working_dir,
+                backend_type=backend_type,
+                pull_latest=pull_latest,
+                lineage_mode=lineage_mode,
+            )
+        except Exception as e:
+            logger.error(f"Consist container execution failed: {e}", exc_info=True)
+            return False
 
-        return client
+    @staticmethod
+    def initialize_docker_client(settings):
+        # Deprecated: Consist handles backend initialization
+        return None

@@ -19,7 +19,7 @@ Purpose:
    - Generic base classes (GenericPreprocessor, GenericRunner, GenericPostprocessor)
    - Record management (FileRecord, H5FileRecord, H5TableRecord, RecordStore)
    - Provenance tracking (ConsistProvenanceTracker)
-   - Database integration (DuckDBManager, schema initialization, data upload)
+   - Database integration (Consist DuckDB backend)
    - Workspace management
 
 See: /Users/zaneedell/git/consist/docs/01_MASTER_ROADMAP.md for migration plan.
@@ -88,6 +88,8 @@ import tempfile
 from typing import Tuple
 from types import SimpleNamespace
 
+from consist import Tracker
+
 from pilates.generic.model import provenance_logging
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.runner import GenericRunner
@@ -100,8 +102,8 @@ from pilates.generic.records import (
     ModelRunInfo,
 )
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
-from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.workspace import Workspace
+from tests.test_consist_adapter import consist_tracker
 
 
 def get_record_by_short_name(store: RecordStore, short_name: str):
@@ -1013,71 +1015,47 @@ class TestDummyWorkflowConsist:
             # Create a temporary directory for the provenance database
             db_path = Path(tmpdir) / "provenance.duckdb"
 
-            # KEY DIFFERENCE: Use ConsistProvenanceTracker instead of OpenLineageTracker
-            provenance_tracker = ConsistProvenanceTracker(
-                run_id="test_run",
-                output_path=str(workflow_output_dir),
+            # Match run.py initialization pattern: mounts + project_root.
+            project_root_abs = os.getcwd()
+            consist_lib_tracker = Tracker(
+                run_dir=workflow_output_dir,
                 db_path=str(db_path),
+                mounts={
+                    "inputs": project_root_abs,
+                    "workspace": str(workflow_output_dir),
+                },
+                project_root=project_root_abs,
             )
 
-            # Instantiate DuckDBManager and initialize the database
-            duckdb_manager = DuckDBManager(database_path=str(db_path))
-            duckdb_manager.initialize_database()
+            # KEY DIFFERENCE: Use ConsistProvenanceTracker instead of OpenLineageTracker
+            provenance_tracker = ConsistProvenanceTracker(
+                run_id="placeholder_id",  # Active step run will override
+                output_path=str(workflow_output_dir),
+                tracker=consist_lib_tracker,
+            )
 
-            duckdb_manager.close()
-
-            yield workflow_output_dir, provenance_tracker, db_path, duckdb_manager
+            yield workflow_output_dir, provenance_tracker, db_path, consist_lib_tracker
 
     def test_single_year_workflow(self, setup_workflow):
         """
         Test a complete two-model workflow for a single simulation year.
 
-        This test executes a full PILATES workflow demonstrating:
-
-        1. **Model A Pipeline**:
-           - Preprocessor: Copies CSV and H5 files to workspace, creates FileRecords
-           - Runner: Doubles CSV column, adds 1 to H5 values
-           - Postprocessor: Filters CSV (a_doubled > 10), multiplies H5 by 2
-
-        2. **Model B Pipeline** (consumes Model A outputs):
-           - Preprocessor: Validates Model A outputs are available
-           - Runner: Adds new CSV column, subtracts 1 from H5 values
-           - Postprocessor: Generates summary statistics (row count, sum)
-
-        3. **Validation**:
-           - Verifies all expected output files exist
-           - Validates data transformations were applied correctly
-           - Confirms provenance tracking captured all operations
-
-        4. **Database Integration**:
-           - Uploads complete run data to DuckDB
-           - Validates model runs and file records were stored
-           - Demonstrates how to persist results for later querying and analysis
-
-        The test uses temporary directories and databases that are automatically
-        cleaned up, making it safe to run repeatedly without side effects.
-
-        Args:
-            setup_workflow: Pytest fixture providing workspace, provenance tracker, and database
+        Migrated to use Consist's scenario/step API matching the pattern in run.py.
+        The test explicitly manages scenario structure while models remain unaware.
         """
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
-            setup_workflow
-        )
+        workflow_output_dir, provenance_tracker, db_path, tracker = setup_workflow
 
-        input_data_dir = Path(
-            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
-        )
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
         year = 2025
         scenario_name = "test_scenario"
 
         # Initialize DummyWorkflowState and DummyWorkspace
         workflow_state = DummyWorkflowState(current_year=year)
-        # Set the database path for the dummy state to allow provenance logging
         workflow_state.full_settings.shared.database.path = str(db_path)
         workspace = DummyWorkspace(output_dir=str(workflow_output_dir))
 
         # --- Run Model A ---
-        model_a_config = {"input_dir": str(input_data_dir)}  # Pass input_dir in config
+        model_a_config = {"input_dir": str(input_data_dir)}
         model_a_preprocessor = DummyModelAPreprocessor(
             "ModelA", model_a_config, provenance_tracker, workflow_state
         )
@@ -1088,247 +1066,203 @@ class TestDummyWorkflowConsist:
             "ModelA", model_a_config, provenance_tracker, workflow_state
         )
 
-        # Call copy_data_to_mutable_location first
-        _, mutable_location_records_a = (
-            model_a_preprocessor.copy_data_to_mutable_location(
-                model_a_config, str(workflow_output_dir)
+        # START SCENARIO - matches run.py pattern
+        with tracker.scenario(
+                name=scenario_name,
+                config={"year": year},  # Scenario-level config
+                tags=["test_workflow"],
+                model="test_orchestrator"
+        ) as scenario:
+
+            # INITIALIZATION STEP - copy immutable data to workspace
+            with scenario.step("initialization"):
+                input_records_a, mutable_location_records_a = (
+                    model_a_preprocessor.copy_data_to_mutable_location(
+                        model_a_config, str(workflow_output_dir)
+                    )
+                )
+                # Auto-log RecordStores (adapter helper)
+                provenance_tracker.log_record_store(input_records_a, direction="input")
+                provenance_tracker.log_record_store(mutable_location_records_a, direction="output")
+
+            # MODEL A PIPELINE
+            with scenario.step("preprocess_a"):
+                preprocessor_a_output_records = model_a_preprocessor.preprocess(
+                    workspace, previous_records=mutable_location_records_a
+                )
+
+            with scenario.step("run_a"):
+                runner_a_output_records, _ = model_a_runner.run(
+                    preprocessor_a_output_records, workspace
+                )
+
+            with scenario.step("postprocess_a"):
+                postprocessor_a_output_records = model_a_postprocessor.postprocess(
+                    runner_a_output_records, workspace
+                )
+
+            # Validate Model A outputs
+            model_a_csv_path = workflow_output_dir / f"model_a_final_output_{year}.csv"
+            model_a_h5_path = workflow_output_dir / f"model_a_final_output_{year}.h5"
+            assert model_a_csv_path.exists()
+            assert model_a_h5_path.exists()
+
+            # Validate Model A CSV content
+            df_a_final = pd.read_csv(model_a_csv_path)
+            assert "a_doubled" in df_a_final.columns
+            assert (df_a_final["a_doubled"] > 10).all()
+
+            # Validate Model A H5 content
+            with h5py.File(model_a_h5_path, "r") as f:
+                assert "table1_final" in f
+
+            # --- Run Model B (consumes Model A outputs) ---
+            model_b_config = {}
+            model_b_preprocessor = DummyModelBPreprocessor(
+                "ModelB", model_b_config, provenance_tracker, workflow_state
             )
-        )
-
-        # Call public methods, passing the records from mutable_location
-        preprocessor_a_output_records = model_a_preprocessor.preprocess(
-            workspace, previous_records=mutable_location_records_a
-        )
-        runner_a_output_records, _ = model_a_runner.run(
-            preprocessor_a_output_records, workspace
-        )
-        postprocessor_a_output_records = model_a_postprocessor.postprocess(
-            runner_a_output_records, workspace
-        )
-
-        # Assert Model A outputs exist and validate content
-        model_a_csv_path = workflow_output_dir / f"model_a_final_output_{year}.csv"
-        model_a_h5_path = workflow_output_dir / f"model_a_final_output_{year}.h5"
-        assert model_a_csv_path.exists()
-        assert model_a_h5_path.exists()
-
-        # Validate Model A CSV content: should be filtered (a_doubled > 10) and have a_doubled column
-        df_a_final = pd.read_csv(model_a_csv_path)
-        assert (
-            "a_doubled" in df_a_final.columns
-        ), "Model A output should have 'a_doubled' column"
-        assert (
-            df_a_final["a_doubled"] > 10
-        ).all(), "Model A output should only contain rows where a_doubled > 10"
-
-        # Validate Model A H5 content: should have table1_final
-        with h5py.File(model_a_h5_path, "r") as f:
-            assert "table1_final" in f, "Model A H5 should contain 'table1_final' table"
-
-        # --- Run Model B ---
-        model_b_config = {}  # Dummy config
-        model_b_preprocessor = DummyModelBPreprocessor(
-            "ModelB", model_b_config, provenance_tracker, workflow_state
-        )
-        model_b_runner = DummyModelBRunner(
-            "ModelB", model_b_config, provenance_tracker, workflow_state
-        )
-        model_b_postprocessor = DummyModelBPostprocessor(
-            "ModelB", model_b_config, provenance_tracker, workflow_state
-        )
-
-        # Call copy_data_to_mutable_location for Model B (returns empty RecordStores)
-        _, mutable_location_records_b = (
-            model_b_preprocessor.copy_data_to_mutable_location(
-                model_b_config, str(workflow_output_dir)
+            model_b_runner = DummyModelBRunner(
+                "ModelB", model_b_config, provenance_tracker, workflow_state
             )
-        )
+            model_b_postprocessor = DummyModelBPostprocessor(
+                "ModelB", model_b_config, provenance_tracker, workflow_state
+            )
 
-        # Call public methods, passing output from Model A's postprocessor as input
-        preprocessor_b_output_records = model_b_preprocessor.preprocess(
-            workspace,
-            previous_records=postprocessor_a_output_records
-            + mutable_location_records_b,
-        )
-        runner_b_output_records, _ = model_b_runner.run(
-            preprocessor_b_output_records, workspace
-        )
-        postprocessor_b_output_records = model_b_postprocessor.postprocess(
-            runner_b_output_records, workspace
-        )
+            # MODEL B PIPELINE
+            with scenario.step("preprocess_b"):
+                preprocessor_b_output_records = model_b_preprocessor.preprocess(
+                    workspace, previous_records=postprocessor_a_output_records
+                )
 
-        # Assert Model B outputs exist and validate content
-        model_b_txt_path = workflow_output_dir / f"model_b_final_output_{year}.txt"
-        model_b_summary_path = (
-            workflow_output_dir / f"model_b_final_output_summary_{year}.txt"
-        )
-        assert model_b_txt_path.exists()
-        assert model_b_summary_path.exists()
+            with scenario.step("run_b"):
+                runner_b_output_records, _ = model_b_runner.run(
+                    preprocessor_b_output_records, workspace
+                )
 
-        # Validate Model B text outputs contain expected content
-        with open(model_b_txt_path, "r") as f:
-            row_count_content = f.read()
-            assert (
-                "Row count from Model B CSV:" in row_count_content
-            ), "Model B output should contain row count"
+            with scenario.step("postprocess_b"):
+                postprocessor_b_output_records = model_b_postprocessor.postprocess(
+                    runner_b_output_records, workspace
+                )
 
-        with open(model_b_summary_path, "r") as f:
-            sum_content = f.read()
-            assert (
-                "Total sum from Model B H5:" in sum_content
-            ), "Model B summary should contain H5 sum"
+            # Validate Model B outputs
+            model_b_txt_path = workflow_output_dir / f"model_b_final_output_{year}.txt"
+            model_b_summary_path = workflow_output_dir / f"model_b_final_output_summary_{year}.txt"
+            assert model_b_txt_path.exists()
+            assert model_b_summary_path.exists()
 
-        # Save the provenance data (the tracker automatically saves run_info.json)
-        # The run_info is saved incrementally as operations complete
+            # Validate Model B text outputs
+            with open(model_b_txt_path, "r") as f:
+                row_count_content = f.read()
+                assert "Row count from Model B CSV:" in row_count_content
+
+            with open(model_b_summary_path, "r") as f:
+                sum_content = f.read()
+                assert "Total sum from Model B H5:" in sum_content
+
+        # SCENARIO CLOSED - Consist has automatically persisted everything to DB
 
         # ========================================================================
-        # DATABASE INTEGRATION: Upload results to DuckDB
+        # CONSIST VALIDATION: Query the database to verify provenance
         # ========================================================================
 
-        # Upload the complete run data to the database
-        upload_success = duckdb_manager.upload_run_data(provenance_tracker.run_info)
-        assert upload_success, "Failed to upload run data to DuckDB"
+        # Query using Consist's native API (no DuckDBManager needed)
+        runs = tracker.find_runs(tags=["test_workflow"])
+        assert len(runs) > 0, "Expected to find test workflow run in database"
 
-        # Validate database content
-        conn = duckdb_manager._get_connection()
+        scenario_run = runs[0]
+        assert scenario_run.id == scenario_name
+        assert scenario_run.status == "completed"
 
-        # Check that we have file records (the core provenance data)
-        file_record_count = conn.execute(
-            "SELECT COUNT(*) FROM file_records"
-        ).fetchone()[0]
-        assert (
-            file_record_count > 0
-        ), "No file records found in database (expected records from CSV and H5 files)"
+        # Verify scenario metadata contains step information
+        assert "steps" in scenario_run.meta, "Scenario should have steps metadata"
+        steps = scenario_run.meta["steps"]
 
-        # Check that we have runs table entry
-        run_count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
-        assert run_count > 0, "No runs found in database"
+        print(f"\nDEBUG: Querying artifacts for scenario run: {scenario_run.id}")
 
-        # Verify file records include both models' outputs
-        # Query for file records to see what was uploaded
-        records = conn.execute(
-            "SELECT short_name, description FROM file_records ORDER BY short_name"
-        ).fetchall()
-        short_names = [r[0] for r in records]
+        scenario_artifacts = tracker.get_artifacts_for_run(scenario_run.id)
 
-        # We should have at least some of our output files
-        print(f"✓ Database contains {file_record_count} file records")
-        print(
-            f"  Sample records: {short_names[:5] if len(short_names) > 5 else short_names}"
-        )
+        print(f"DEBUG: scenario_artifacts.inputs = {scenario_artifacts.inputs}")
+        print(f"DEBUG: scenario_artifacts.outputs = {scenario_artifacts.outputs}")
 
-        conn.close()
+        # Check artifacts for step runs
+        print(f"\nDEBUG: Checking artifacts for each step:")
+        for step in steps:
+            step_id = step["id"]
+            step_artifacts = tracker.get_artifacts_for_run(step_id)
+            print(f"  Step {step_id}:")
+            print(f"    - Inputs: {len(step_artifacts.inputs)}")
+            print(f"    - Outputs: {len(step_artifacts.outputs)}")
 
-        # ========================================================================
-        # PROVENANCE VERIFICATION: Validate run_info structure
-        # ========================================================================
+        # Also query the database directly to see what's there
+        if tracker.db:
+            from sqlalchemy import text
+            with tracker.db.engine.connect() as conn:
+                # Check all artifact links
+                all_links = conn.execute(
+                    text("SELECT run_id, artifact_id, direction FROM run_artifact_link")
+                ).fetchall()
+                print(f"\nDEBUG: Total run_artifact_links in DB: {len(all_links)}")
+                print(f"DEBUG: First 20 links:")
+                for link in all_links[:20]:
+                    print(f"  - run_id={link[0]}, artifact_id={link[1]}, direction={link[2]}")
 
-        run_info = provenance_tracker.run_info
+        assert len(scenario_artifacts.inputs) > 0, "Expected scenario to have input artifacts"
 
-        # Verify basic run_info structure
-        assert (
-            run_info.run_id == "test_run"
-        ), "run_id should match tracker initialization"
-        assert run_info.created_at is not None, "created_at should be set"
-
-        # Verify model runs were captured
-        assert len(run_info.model_runs) >= 6, (
-            f"Expected at least 6 model runs (3 per model × 2 models), got {len(run_info.model_runs)}. "
-            f"Runs: {list(run_info.model_runs.keys())}"
-        )
-
-        # Verify expected stages exist using helper
-        # NOTE: Consist normalizes model names to lowercase
-        assert_provenance_chain(
-            run_info,
-            [
-                ("modela", "preprocess"),
-                ("modela", "run"),
-                ("modela", "postprocess"),
-                ("modelb", "preprocess"),
-                ("modelb", "run"),
-                ("modelb", "postprocess"),
-            ],
-        )
-
-        # Verify all model runs completed successfully
-        for run_id, model_run in run_info.model_runs.items():
-            assert (
-                model_run.status == "completed"
-            ), f"Model run {run_id} ({model_run.model}) has status '{model_run.status}', expected 'completed'"
-            assert (
-                model_run.year == year
-            ), f"Model run {run_id} year mismatch: got {model_run.year}, expected {year}"
-
-        # Verify file records were captured
-        assert len(run_info.file_records) > 0, "Expected file records to be captured"
-
-        # Verify output lineage: Model A runner should have outputs that become Model B inputs
-        # NOTE: Consist normalizes model names to lowercase
-        model_a_runner_runs = [
-            r
-            for r in run_info.model_runs.values()
-            if r.model == "modela"
-            and "run" in (r.description or "").lower()
-            and "preprocess" not in (r.description or "").lower()
-            and "postprocess" not in (r.description or "").lower()
+        # Verify expected steps exist
+        step_names = [s["id"] for s in steps]
+        expected_steps = [
+            "initialization",
+            "preprocess_a", "run_a", "postprocess_a",
+            "preprocess_b", "run_b", "postprocess_b"
         ]
-        if model_a_runner_runs:
-            model_a_runner = model_a_runner_runs[0]
-            # FIXED in Phase 5.2: output_record_hashes now populated by complete_model_run
-            assert (
-                len(model_a_runner.output_record_hashes) > 0
-            ), "Model A runner should have output records"
+        for expected_step in expected_steps:
+            assert any(expected_step in name for name in step_names), \
+                f"Expected step containing '{expected_step}' in {step_names}"
 
-        # Verify OpenLineage events were generated (START/COMPLETE pairs)
-        # PLANNED: OpenLineage event generation in Consist
-        # TODO: Implement in Consist core, then remove xfail
-        pytest.xfail("OpenLineage event generation not yet implemented in Consist")
-        assert len(run_info.openlineage_event_metadata) >= 12, (
-            f"Expected at least 12 OL events (START+COMPLETE for 6 stages), "
-            f"got {len(run_info.openlineage_event_metadata)}"
-        )
+        # Verify all steps completed successfully
+        for step in steps:
+            assert step["status"] == "completed", \
+                f"Step {step['id']} failed with status: {step['status']}"
 
-        # Verify we have both START and COMPLETE events
-        event_types = [e.event_type for e in run_info.openlineage_event_metadata]
-        assert "START" in event_types, "Expected START events in OpenLineage metadata"
-        assert (
-            "COMPLETE" in event_types
-        ), "Expected COMPLETE events in OpenLineage metadata"
+        # Verify artifacts were tracked
+        scenario_artifacts = tracker.get_artifacts_for_run(scenario_run.id)
+        assert len(scenario_artifacts.inputs) > 0, "Expected scenario to have input artifacts"
+        assert len(scenario_artifacts.outputs) > 0, "Expected scenario to have output artifacts"
 
-        print(f"✓ Provenance verification complete:")
-        print(f"  - {len(run_info.model_runs)} model runs captured")
-        print(f"  - {len(run_info.file_records)} file records tracked")
-        print(
-            f"  - {len(run_info.openlineage_event_metadata)} OpenLineage events generated"
-        )
+        # Verify specific artifacts exist
+        output_keys = set(scenario_artifacts.outputs.keys())
+        expected_outputs = [
+            f"model_a_final_output_{year}.csv",
+            f"model_a_final_output_{year}.h5",
+            f"model_b_final_output_{year}.txt",
+            f"model_b_final_output_summary_{year}.txt"
+        ]
+        for expected_output in expected_outputs:
+            assert expected_output in output_keys, \
+                f"Expected output '{expected_output}' in {output_keys}"
 
-        print(f"✓ Workflow output in: {workflow_output_dir}")
-        print(f"✓ Provenance DB in: {db_path}")
-        print(
-            f"✓ Database integration complete: {file_record_count} file records uploaded"
-        )
+        print(f"✓ Workflow completed successfully")
+        print(f"✓ Scenario: {scenario_run.id}")
+        print(f"✓ Steps executed: {len(steps)}")
+        print(f"✓ Inputs tracked: {len(scenario_artifacts.inputs)}")
+        print(f"✓ Outputs tracked: {len(scenario_artifacts.outputs)}")
+        print(f"✓ Database: {db_path}")
 
     def test_provenance_tracking_details(self, setup_workflow):
         """
-        Test that provenance tracking captures complete lineage details.
+        Test that Consist captures complete provenance lineage.
 
-        This test focuses specifically on verifying the provenance system:
-        - Model run metadata is correctly structured
-        - Input/output relationships are captured
-        - OpenLineage events are properly formed
-        - File records have required fields
-
-        This serves as documentation for how provenance works in PILATES.
+        This test documents the Consist provenance pattern:
+        - Orchestrator manages scenario/step structure
+        - Models remain unaware of provenance
+        - Adapter auto-logs artifacts during model execution
+        - Database queries reveal full lineage
         """
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
-            setup_workflow
-        )
+        workflow_output_dir, provenance_tracker, db_path, tracker = setup_workflow
 
-        input_data_dir = Path(
-            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
-        )
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
         year = 2025
+        scenario_name = "provenance_test"
 
         # Initialize state and workspace
         workflow_state = DummyWorkflowState(current_year=year)
@@ -1347,100 +1281,183 @@ class TestDummyWorkflowConsist:
             "ModelA", model_a_config, provenance_tracker, workflow_state
         )
 
-        # Execute the pipeline
-        _, mutable_records = preprocessor.copy_data_to_mutable_location(
-            model_a_config, str(workflow_output_dir)
+        # === ERGONOMIC PATTERN: Orchestrator manages scenario/steps ===
+        with tracker.scenario(
+                name=scenario_name,
+                config={"year": year, "model": "ModelA"},
+                tags=["provenance_test"],
+                model="test_orchestrator"
+        ) as scenario:
+            # Register immutable exogenous inputs against the scenario header.
+            # Scenario headers are suspended during steps; inputs must be added via add_input.
+            scenario.add_input(input_data_dir / "data.csv", key="data.csv")
+            scenario.add_input(input_data_dir / "data.h5", key="data.h5")
+
+            with scenario.step("initialization"):
+                _, mutable_records = preprocessor.copy_data_to_mutable_location(
+                    model_a_config, str(workflow_output_dir)
+                )
+                provenance_tracker.log_record_store(mutable_records, direction="output")
+
+            with scenario.step("preprocess"):
+                preprocess_output = preprocessor.preprocess(
+                    workspace, previous_records=mutable_records
+                )
+
+            with scenario.step("run"):
+                runner_output, _ = runner.run(preprocess_output, workspace)
+
+            with scenario.step("postprocess"):
+                final_output = postprocessor.postprocess(runner_output, workspace)
+
+        # === VERIFY SCENARIO STRUCTURE ===
+        runs = tracker.find_runs(tags=["provenance_test"])
+        assert len(runs) == 1, f"Expected 1 scenario run, got {len(runs)}"
+
+        scenario_run = runs[0]
+        assert scenario_run.id == scenario_name
+        assert scenario_run.model_name == "test_orchestrator"
+        # Scenario-level run doesn't have a year (it's the orchestrator)
+        # Year is stored in config and in the step runs
+
+        # Verify year is in config
+        # Verify steps metadata
+        assert "steps" in scenario_run.meta
+        steps = scenario_run.meta["steps"]
+
+        # === VERIFY STEP RUNS ===
+        # Each step should be a separate run in the database
+        step_runs = tracker.find_runs(parent_id=scenario_name)
+        assert len(step_runs) == 4, f"Expected 4 step runs, got {len(step_runs)}"
+
+
+        # === VERIFY ARTIFACT LINEAGE ===
+        # Get artifacts for each step
+        initialization_step = [r for r in step_runs if "initialization" in r.id][0]
+        preprocess_step = [r for r in step_runs if "preprocess" in r.id][0]
+        run_step = [r for r in step_runs if "run" in r.id and "preprocess" not in r.id][0]
+        postprocess_step = [r for r in step_runs if "postprocess" in r.id][0]
+
+        # Initialization should have outputs (copied files)
+        init_artifacts = tracker.get_artifacts_for_run(initialization_step.id)
+        assert len(init_artifacts.outputs) > 0, "Initialization should produce outputs"
+
+        # Preprocess should have inputs and outputs
+        preprocess_artifacts = tracker.get_artifacts_for_run(preprocess_step.id)
+        assert len(preprocess_artifacts.inputs) > 0, "Preprocess should consume inputs"
+        assert len(preprocess_artifacts.outputs) > 0, "Preprocess should produce outputs"
+
+        # Run should have inputs and outputs
+        run_artifacts = tracker.get_artifacts_for_run(run_step.id)
+        assert len(run_artifacts.inputs) > 0, "Run should consume inputs"
+        assert len(run_artifacts.outputs) > 0, "Run should produce outputs"
+
+        # Postprocess should have inputs and outputs
+        postprocess_artifacts = tracker.get_artifacts_for_run(postprocess_step.id)
+        assert len(postprocess_artifacts.inputs) > 0, "Postprocess should consume inputs"
+        assert len(postprocess_artifacts.outputs) > 0, "Postprocess should produce outputs"
+
+        # === VERIFY LINEAGE: Outputs → Inputs ===
+        # Preprocess inputs should include initialization outputs
+        init_output_ids = set(init_artifacts.outputs.keys())
+        preprocess_input_ids = set(preprocess_artifacts.inputs.keys())
+        assert init_output_ids.issubset(preprocess_input_ids), \
+            "Initialization outputs should be inputs to preprocess"
+
+        # Run inputs should include preprocess outputs
+        preprocess_output_ids = set(preprocess_artifacts.outputs.keys())
+        run_input_ids = set(run_artifacts.inputs.keys())
+        assert preprocess_output_ids.issubset(run_input_ids), \
+            "Preprocess outputs should be inputs to run"
+
+        # Postprocess inputs should include run outputs
+        run_output_ids = set(run_artifacts.outputs.keys())
+        postprocess_input_ids = set(postprocess_artifacts.inputs.keys())
+        assert run_output_ids.issubset(postprocess_input_ids), \
+            "Run outputs should be inputs to postprocess"
+
+        # === VERIFY SCENARIO-LEVEL ARTIFACTS ===
+        # Scenario should have all artifacts from all steps
+        scenario_artifacts = tracker.get_artifacts_for_run(scenario_name)
+        assert len(scenario_artifacts.inputs) > 0, "Scenario should have inputs"
+        assert len(scenario_artifacts.outputs) > 0, "Scenario should have outputs"
+
+        # === VERIFY ARTIFACT METADATA ===
+        # Check a sample artifact has proper metadata
+        sample_artifact_id = list(postprocess_artifacts.outputs.keys())[0]
+        sample_artifact = tracker.get_artifact(sample_artifact_id)
+
+        assert sample_artifact is not None
+        assert sample_artifact.key is not None, "Artifact should have a key (filename)"
+        assert sample_artifact.uri is not None, "Artifact should have a URI"
+        assert sample_artifact.created_at is not None, "Artifact should have timestamp"
+
+        print("\n✓ Provenance tracking verified:")
+        print(f"  - Scenario: {scenario_name}")
+        print(f"  - Steps: {len(steps)}")
+        print(f"  - Step runs in DB: {len(step_runs)}")
+        print(f"  - Scenario inputs: {len(scenario_artifacts.inputs)}")
+        print(f"  - Scenario outputs: {len(scenario_artifacts.outputs)}")
+        print(f"  - Lineage verified: outputs → inputs through all steps")
+
+    @pytest.mark.xfail(
+        reason=(
+            "Adapter restart lookups are still in-memory only. "
+            "Should query Consist persistence once Phase 5.2/5.3 caching is complete."
+        ),
+        strict=False,
+    )
+    def test_restart_lookup_uses_consist_persistence(self, setup_workflow):
+        """
+        Progress test: after a completed workflow, a fresh adapter instance should be
+        able to locate prior runs via Consist persistence.
+
+        Expected end state:
+        - New ConsistProvenanceTracker can find latest completed model runs from DB/JSON.
+        - Enables PILATES-level restart/skip semantics.
+        """
+        workflow_output_dir, provenance_tracker, db_path, tracker = setup_workflow
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
+        year = 2025
+
+        workflow_state = DummyWorkflowState(current_year=year)
+        workspace = DummyWorkspace(output_dir=str(workflow_output_dir))
+
+        model_a_config = {"input_dir": str(input_data_dir)}
+        preprocessor = DummyModelAPreprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
         )
-        preprocess_output = preprocessor.preprocess(
-            workspace, previous_records=mutable_records
+        runner = DummyModelARunner(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
         )
-        runner_output, _ = runner.run(preprocess_output, workspace)
-        final_output = postprocessor.postprocess(runner_output, workspace)
 
-        # === Verify Model Run Structure ===
-        run_info = provenance_tracker.run_info
-        model_runs = list(run_info.model_runs.values())
+        with tracker.scenario(
+            name="restart_lookup",
+            config={"year": year},
+            tags=["restart_lookup"],
+            model="test_orchestrator",
+        ) as scenario:
+            with scenario.step("initialization"):
+                _, mutable_records = preprocessor.copy_data_to_mutable_location(
+                    model_a_config, str(workflow_output_dir)
+                )
+                provenance_tracker.log_record_store(mutable_records, direction="output")
 
-        assert (
-            len(model_runs) == 3
-        ), f"Expected 3 model runs for Model A, got {len(model_runs)}"
+            with scenario.step("run"):
+                # Force one decorated run so adapter records a completed ModelRunInfo
+                runner.run(mutable_records, workspace)
 
-        # Each run should have proper metadata
-        # NOTE: Consist normalizes model names to lowercase
-        for run in model_runs:
-            assert run.model == "modela", f"Unexpected model: {run.model}"
-            assert run.year == year
-            assert run.unique_id is not None
-            assert run.status == "completed"
-            assert run.description is not None
+        # Fresh adapter instance simulating a restart in a new process
+        fresh_adapter = ConsistProvenanceTracker(
+            run_id="placeholder_id",
+            output_path=str(workflow_output_dir),
+            tracker=tracker,
+        )
 
-        # === Verify Input/Output Chaining ===
-        # Sort runs by creation time to get execution order
-        sorted_runs = sorted(model_runs, key=lambda r: r.created_at or "")
-
-        # Preprocessor should have outputs
-        preprocess_run = sorted_runs[0]
-        assert "preprocess" in preprocess_run.description.lower()
-
-        # Runner inputs should include preprocessor outputs
-        runner_run = sorted_runs[1]
-        assert "run" in runner_run.description.lower()
-
-        # Postprocessor inputs should include runner outputs
-        postprocess_run = sorted_runs[2]
-        assert "postprocess" in postprocess_run.description.lower()
-
-        # KNOWN GAP: input/output_record_hashes not populated by ConsistProvenanceTracker
-        # TODO: Fix in Phase 5.2 - update adapter to populate record hashes
-        assert (
-            len(preprocess_run.output_record_hashes) > 0
-        ), "Preprocessor should record outputs"
-        assert len(runner_run.input_record_hashes) > 0, "Runner should have inputs"
-        assert len(runner_run.output_record_hashes) > 0, "Runner should have outputs"
-        assert (
-            len(postprocess_run.input_record_hashes) > 0
-        ), "Postprocessor should have inputs"
-
-        # === Verify File Records ===
-        file_records = run_info.file_records
-        assert len(file_records) > 0, "Should have file records"
-
-        # Check that file records have required fields
-        for unique_id, record in file_records.items():
-            assert record.unique_id == unique_id
-            assert record.file_path is not None
-            assert record.short_name is not None
-
-        # === Verify OpenLineage Events ===
-        # PLANNED: OpenLineage event generation in Consist
-        # TODO: Implement in Consist core, then remove xfail
-        pytest.xfail("OpenLineage event generation not yet implemented in Consist")
-        ol_events = run_info.openlineage_event_metadata
-        assert (
-            len(ol_events) == 6
-        ), f"Expected 6 OL events (3 START + 3 COMPLETE), got {len(ol_events)}"
-
-        start_events = [e for e in ol_events if e.event_type == "START"]
-        complete_events = [e for e in ol_events if e.event_type == "COMPLETE"]
-        assert (
-            len(start_events) == 3
-        ), f"Expected 3 START events, got {len(start_events)}"
-        assert (
-            len(complete_events) == 3
-        ), f"Expected 3 COMPLETE events, got {len(complete_events)}"
-
-        # Each event should have required fields
-        for event in ol_events:
-            assert event.event_time is not None
-            assert event.run_uuid is not None
-            assert event.job_name is not None
-            assert event.model_run_id is not None
-
-        print("✓ Provenance tracking details verified:")
-        print(f"  - 3 model runs with proper metadata")
-        print(f"  - Input/output chaining validated")
-        print(f"  - {len(file_records)} file records with required fields")
-        print(f"  - 6 OpenLineage events (START/COMPLETE pairs)")
+        latest = fresh_adapter.get_latest_completed_model_run(
+            "modela", year=year, iteration=0
+        )
+        assert latest is not None, "Expected restart lookup to find prior completed run"
 
     def test_container_runner_with_consist_integration(self, setup_workflow):
         """
@@ -1454,13 +1471,9 @@ class TestDummyWorkflowConsist:
 
         This is the core test for the Consist container integration feature.
         """
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
-            setup_workflow
-        )
+        workflow_output_dir, provenance_tracker, db_path, tracker = setup_workflow
 
-        input_data_dir = Path(
-            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
-        )
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
         year = 2025
 
         # Initialize state and workspace
@@ -1485,9 +1498,17 @@ class TestDummyWorkflowConsist:
         _, mutable_records = preprocessor.copy_data_to_mutable_location(
             model_config, str(workflow_output_dir)
         )
-        preprocess_output = preprocessor.preprocess(
-            workspace, previous_records=mutable_records
-        )
+        # Decorated preprocessors require an active Consist step.
+        with tracker.scenario(
+            name="container_test",
+            config={"year": year},
+            tags=["container_test"],
+            model="test_orchestrator",
+        ) as scenario:
+            with scenario.step("preprocess_container", model="modelcontainer", year=year):
+                preprocess_output = preprocessor.preprocess(
+                    workspace, previous_records=mutable_records
+                )
 
         # Create container runner
         container_runner = DummyContainerRunner(
@@ -1504,10 +1525,17 @@ class TestDummyWorkflowConsist:
             mock_consist_run_container.return_value = True
 
             with patch("pilates.generic.runner.CONSIST_AVAILABLE", True):
-                # Run the container-based model
-                runner_output, runner_info = container_runner.run(
-                    preprocess_output, workspace
-                )
+                # Run the container-based model inside an active step.
+                with tracker.scenario(
+                    name="container_test_run",
+                    config={"year": year},
+                    tags=["container_test_run"],
+                    model="test_orchestrator",
+                ) as scenario:
+                    with scenario.step("run_container", model="modelcontainer", year=year):
+                        runner_output, runner_info = container_runner.run(
+                            preprocess_output, workspace
+                        )
 
         # Verify that consist_run_container was called
         assert (
@@ -1588,72 +1616,37 @@ class TestDummyWorkflowConsist:
 
     def test_json_persistence_structure(self, setup_workflow):
         """
-        Verify the structure and content of the persisted run_info.json file.
+        Verify the structure and content of the persisted consist.json file.
 
         This test ensures that:
-        1. The Consist adapter correctly maintains the legacy JSON file format required
-           by downstream PILATES tools.
-        2. All model runs, file records, and lineage links are serialized correctly.
-        3. Metadata specific to the workflow state (year, etc.) is preserved.
+        1. Consist dual-write JSON exists for the active run directory.
+        2. The JSON includes a run header plus inputs/outputs lists.
+        3. Scenario/step metadata is preserved.
         """
         import json
 
         # 1. Execute the workflow (reuse the logic from test_single_year_workflow)
         # We perform a minimal run here just to populate the data
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
-            setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, consist_tracker = setup_workflow
+        self._execute_minimal_workflow(
+            workflow_output_dir, provenance_tracker, consist_tracker, db_path
         )
-        self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
 
         # 2. Locate and load the JSON file
-        json_path = workflow_output_dir / "run_info.json"
-        assert json_path.exists(), "run_info.json was not created"
+        json_path = workflow_output_dir / "consist.json"
+        assert json_path.exists(), "consist.json was not created"
 
         with open(json_path, "r") as f:
             data = json.load(f)
 
-        # 3. Validation: Top-Level Metadata
-        assert data["run_id"] == "test_run"
-        assert "created_at" in data
-        assert "file_records" in data
-        assert "model_runs" in data
+        # 3. Validation: ConsistRecord shape (keep loose to avoid brittleness).
+        assert "run" in data, "ConsistRecord should include a run header"
+        assert "inputs" in data and isinstance(data["inputs"], list)
+        assert "outputs" in data and isinstance(data["outputs"], list)
+        assert data["run"].get("status") == "completed"
+        assert "config" in data, "ConsistRecord should include config"
 
-        # 4. Validation: Model Runs
-        # We expect entries for ModelA and ModelB
-        model_runs = data["model_runs"]
-        assert len(model_runs) > 0
-
-        # Check for specific keys in a model run
-        sample_run = next(iter(model_runs.values()))
-        assert "unique_id" in sample_run
-        assert "model" in sample_run
-        assert "status" in sample_run
-        # The adapter should populate inputs/outputs
-        assert "input_record_hashes" in sample_run
-        assert "output_record_hashes" in sample_run
-
-        # 5. Validation: File Records
-        file_records = data["file_records"]
-        assert len(file_records) > 0
-
-        # Verify a specific known output exists
-        # Note: short_names in dummy workflow include the year
-        csv_outputs = [
-            r
-            for r in file_records.values()
-            if "model_a_final_output" in r.get("short_name", "")
-        ]
-        assert len(csv_outputs) > 0, "Model A output CSV not found in JSON records"
-
-        sample_file = csv_outputs[0]
-        assert sample_file["year"] == 2025
-        assert "file_path" in sample_file
-        # Check that file path is relative or absolute as configured
-        assert str(sample_file["file_path"]).endswith(".csv")
-
-        print(f"✓ JSON persistence verified at: {json_path}")
-        print(f"  - Validated {len(model_runs)} model runs")
-        print(f"  - Validated {len(file_records)} file records")
+        print(f"✓ Consist JSON persistence verified at: {json_path}")
 
     def test_consist_query_integration(self, setup_workflow):
         """
@@ -1666,10 +1659,10 @@ class TestDummyWorkflowConsist:
         from consist.tools import queries
 
         # 1. Execute the workflow
-        workflow_output_dir, provenance_tracker, db_path, duckdb_manager = (
-            setup_workflow
+        workflow_output_dir, provenance_tracker, db_path, consist_tracker = setup_workflow
+        self._execute_minimal_workflow(
+            workflow_output_dir, provenance_tracker, consist_tracker, db_path
         )
-        self._execute_minimal_workflow(workflow_output_dir, provenance_tracker, db_path)
 
         # 2. Use the existing tracker's engine to query
         # This replicates what the CLI does (get_tracker -> session -> queries)
@@ -1695,27 +1688,27 @@ class TestDummyWorkflowConsist:
             assert summary["completed_runs"] >= 2
 
         # 3. Test artifact lineage/retrieval (equivalent to 'consist artifacts')
-        # We need to find a specific run ID first
-        model_a_run_id = next(
-            run.unique_id
-            for run in provenance_tracker.run_info.model_runs.values()
-            if run.model == "modela"
-            and "postprocess" in (run.description or "").lower()
+        # Prefer Consist DB runs over legacy in-memory adapter state.
+        model_a_post = next(
+            (
+                r
+                for r in runs
+                if r.model_name == "modela" and "postprocess_a" in r.id
+            ),
+            None,
         )
+        if model_a_post is None:
+            model_a_post = next((r for r in runs if r.model_name == "modela"), None)
+        assert model_a_post is not None, "Expected a ModelA step run in Consist runs"
+        model_a_run_id = model_a_post.id
 
         # Test get_artifacts_for_run (used by CLI 'artifacts' command)
         artifacts = tracker.get_artifacts_for_run(model_a_run_id)
-        assert len(artifacts) > 0
-
-        # Verify inputs and outputs are distinct
-        inputs = [a for a, direction in artifacts if direction == "input"]
-        outputs = [a for a, direction in artifacts if direction == "output"]
-
-        assert len(inputs) > 0
-        assert len(outputs) > 0
+        assert len(artifacts.inputs) > 0
+        assert len(artifacts.outputs) > 0
 
         # Verify specific artifact presence
-        output_keys = [a.key for a in outputs]
+        output_keys = [a.key for a in artifacts.outputs.values()]
         # Consist normalizes keys; check if our output is there
         assert any(
             "model_a_final_output" in k for k in output_keys
@@ -1726,11 +1719,11 @@ class TestDummyWorkflowConsist:
         print("  - queries.get_summary matched expected counts")
         print("  - tracker.get_artifacts_for_run returned inputs/outputs")
 
-    def _execute_minimal_workflow(self, output_dir, tracker, db_path):
+    def _execute_minimal_workflow(
+        self, output_dir, provenance_tracker, consist_tracker, db_path
+    ):
         """Helper to run a minimal version of the workflow for persistence tests."""
-        input_data_dir = Path(
-            "/Users/zaneedell/git/PILATES/tests/fixtures/dummy_workflow"
-        )
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
         year = 2025
         state = DummyWorkflowState(current_year=year)
         state.full_settings.shared.database.path = str(db_path)
@@ -1738,20 +1731,38 @@ class TestDummyWorkflowConsist:
 
         # Run Model A Pre/Run/Post
         config = {"input_dir": str(input_data_dir)}
-        prep = DummyModelAPreprocessor("ModelA", config, tracker, state)
-        runner = DummyModelARunner("ModelA", config, tracker, state)
-        post = DummyModelAPostprocessor("ModelA", config, tracker, state)
+        prep = DummyModelAPreprocessor("ModelA", config, provenance_tracker, state)
+        runner = DummyModelARunner("ModelA", config, provenance_tracker, state)
+        post = DummyModelAPostprocessor("ModelA", config, provenance_tracker, state)
 
-        _, recs = prep.copy_data_to_mutable_location(config, str(output_dir))
-        recs = prep.preprocess(workspace, previous_records=recs)
-        recs, _ = runner.run(recs, workspace)
-        recs = post.postprocess(recs, workspace)
+        prep_b = DummyModelBPreprocessor("ModelB", {}, provenance_tracker, state)
+        runner_b = DummyModelBRunner("ModelB", {}, provenance_tracker, state)
+        post_b = DummyModelBPostprocessor("ModelB", {}, provenance_tracker, state)
 
-        # Run Model B Pre/Run/Post
-        prep_b = DummyModelBPreprocessor("ModelB", {}, tracker, state)
-        runner_b = DummyModelBRunner("ModelB", {}, tracker, state)
-        post_b = DummyModelBPostprocessor("ModelB", {}, tracker, state)
+        with consist_tracker.scenario(
+            name="minimal_workflow",
+            config={"year": year},
+            tags=["minimal_workflow"],
+            model="test_orchestrator",
+        ) as scenario:
+            with scenario.step("initialization"):
+                _, recs = prep.copy_data_to_mutable_location(config, str(output_dir))
+                provenance_tracker.log_record_store(recs, direction="output")
 
-        recs = prep_b.preprocess(workspace, previous_records=recs)
-        recs, _ = runner_b.run(recs, workspace)
-        post_b.postprocess(recs, workspace)
+            with scenario.step("preprocess_a", model="modela", year=year):
+                recs = prep.preprocess(workspace, previous_records=recs)
+
+            with scenario.step("run_a", model="modela", year=year):
+                recs, _ = runner.run(recs, workspace)
+
+            with scenario.step("postprocess_a", model="modela", year=year):
+                recs = post.postprocess(recs, workspace)
+
+            with scenario.step("preprocess_b", model="modelb", year=year):
+                recs = prep_b.preprocess(workspace, previous_records=recs)
+
+            with scenario.step("run_b", model="modelb", year=year):
+                recs, _ = runner_b.run(recs, workspace)
+
+            with scenario.step("postprocess_b", model="modelb", year=year):
+                post_b.postprocess(recs, workspace)

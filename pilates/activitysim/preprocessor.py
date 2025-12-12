@@ -2041,6 +2041,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         logger.info("Starting ActivitysimPreprocessor.preprocess()")
 
+        # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
+        output_records = RecordStore()
+
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
         skims_fname = settings.shared.skims.fname
@@ -2096,15 +2099,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 if rec.short_name in self.required_input_data
             ]
         )
-        output_records = RecordStore()
-
-        pre_run_hash = self.provenance_tracker.start_model_run(
-            "activitysim_preprocessor",
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
-            description="Preprocessing for ActivitySim warm start",
-            inputs=input_records_filtered,
-        )
 
         if os.path.exists(
             path_to_beam_skims_in_current_run_workspace
@@ -2113,7 +2107,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 "activitysim_preprocessor",
                 path_to_beam_skims_in_current_run_workspace,
                 short_name="omx_skims",
-                model_run_id=pre_run_hash,
                 description="Raw BEAM OD skims",
             )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
@@ -2171,7 +2164,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     self.state,
                     workspace,
                     self.provenance_tracker,
-                    model_run_hash=pre_run_hash,
                 )
             else:
                 logger.info("Using H5 input mode for ActivitySim")
@@ -2180,7 +2172,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     self.state,
                     workspace,
                     self.provenance_tracker,
-                    model_run_hash=pre_run_hash,
                 )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
@@ -2191,9 +2182,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             + list(output_records.records.values())
         )
 
-        self.provenance_tracker.complete_model_run(
-            run_hash=pre_run_hash, output_records=all_outputs
-        )
         return RecordStore(recordList=all_outputs)
 
 
@@ -2833,7 +2821,7 @@ def _copy_data_to_mutable_location(
         )
     )
     output_records.add_record(
-        provenance_tracker.record_repo_input(
+        provenance_tracker.record_repo_output(
             "activitysim_preprocessor",
             repo_path=configs_dest_dir,
             short_name="asim_configs",
