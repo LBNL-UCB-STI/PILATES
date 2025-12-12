@@ -10,8 +10,11 @@ from pilates.utils.provenance import FileProvenanceTracker
 
 try:
     import xarray as xr
-except:
-    print("FAILED TO LOAD XARRAY")
+except ImportError as e:
+    raise ImportError(
+        "xarray is required for BEAM postprocessing. "
+        "Please install it with: pip install xarray zarr"
+    ) from e
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor

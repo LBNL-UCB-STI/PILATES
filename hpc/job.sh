@@ -159,6 +159,8 @@ install_if_missing "sortedcontainers"
 # Data format packages
 install_if_missing "pyarrow==10.0.1" "pyarrow"
 install_if_missing "fastparquet==0.8.3" "fastparquet"
+install_if_missing "xarray" "xarray"
+install_if_missing "zarr" "zarr"
 
 # Provenance tracking
 install_if_missing "openlineage-python" "openlineage"

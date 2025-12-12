@@ -455,7 +455,7 @@ def main():
     )
     run_id = str(uuid.uuid4())
 
-    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
+    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name, use_marquez=False)
     provenance_tracker.initialize_from_settings(settings)
 
     workspace = Workspace(

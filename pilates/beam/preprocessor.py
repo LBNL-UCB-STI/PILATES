@@ -911,9 +911,13 @@ class BeamPreprocessor(GenericPreprocessor):
                     short_name="linkstats",
                     state=self.state,
                 )
+                logger.info(
+                    "[BEAM Preprocessor] Found linkstats file at %s",
+                    linkstats_path,
+                )
             else:
-                logger.warning(
-                    "[BEAM Preprocessor] Could not find initlinkstats file at %s",
+                logger.info(
+                    "[BEAM Preprocessor] Linkstats file not found at %s, skipping",
                     linkstats_path,
                 )
 
