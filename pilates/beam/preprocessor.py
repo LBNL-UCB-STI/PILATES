@@ -823,10 +823,12 @@ class BeamPreprocessor(GenericPreprocessor):
         input_records = workspace.output_data.get("beam", RecordStore())
         output_records = RecordStore()
 
-        asim_post_records = previous_records.all_records()
-        for record in asim_post_records:
-            if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
-                input_records.add_record(record)
+        # Only process ActivitySim records if ActivitySim was run
+        if previous_records is not None:
+            asim_post_records = previous_records.all_records()
+            for record in asim_post_records:
+                if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
+                    input_records.add_record(record)
 
         previous_beam_records = (
             self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
