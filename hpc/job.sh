@@ -62,8 +62,8 @@ install_geos_package() {
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
     free -h
-    grep MemTotal /proc/meminfo
-    grep -i numa /proc/cpuinfo
+    grep MemTotal /proc/meminfo || true
+    grep -i numa /proc/cpuinfo || true
     echo "=========================="
 
     echo "=== NODE USAGE INFORMATION ==="
