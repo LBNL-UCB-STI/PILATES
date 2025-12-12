@@ -2152,26 +2152,66 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
 
         if self.state.current_inner_iter > 0:
-            # 2: Re-use existing persons/households/skim cache
-            last_asim_hash = self.provenance_tracker.run_info.get_latest_model_run(
-                "activitysim"
-            )
-            record_hashes = self.provenance_tracker.run_info.model_runs[
-                last_asim_hash
-            ].input_record_hashes
-            data_from_usim = [
-                self.provenance_tracker.run_info.file_records.get(h)
-                for h in record_hashes
-                if h in self.provenance_tracker.run_info.file_records
-            ]
-            data_from_usim = [
-                r
-                for r in data_from_usim
-                if r.short_name in ["households_asim_in", "persons_asim_in"]
-            ]
-            logger.info(
-                f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
-            )
+            # 2: Re-use existing persons/households/land_use inputs when possible
+            run_info = self.provenance_tracker.run_info
+            last_asim_hash = run_info.get_latest_model_run("activitysim")
+            last_asim_run = run_info.model_runs.get(last_asim_hash) if last_asim_hash else None
+
+            if last_asim_run:
+                record_hashes = last_asim_run.input_record_hashes or []
+                data_from_usim = [
+                    run_info.file_records.get(h)
+                    for h in record_hashes
+                    if h in run_info.file_records
+                ]
+                required = {"households_asim_in", "persons_asim_in", "land_use_asim_in"}
+                data_from_usim = [r for r in data_from_usim if r and r.short_name in required]
+                logger.info(
+                    f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
+                )
+            else:
+                # If ActivitySim runner provenance isn't available (e.g., older runs or undecorated runners),
+                # fall back to the most recent preprocessor-created inputs; if those are missing, regenerate.
+                required_short_names = [
+                    "households_asim_in",
+                    "persons_asim_in",
+                    "land_use_asim_in",
+                ]
+                data_from_usim = []
+                missing = []
+                for short_name in required_short_names:
+                    rec = run_info.get_most_recent_record(short_name)
+                    if rec:
+                        data_from_usim.append(rec)
+                    else:
+                        missing.append(short_name)
+
+                if missing:
+                    logger.warning(
+                        "No previous ActivitySim run provenance available and missing cached inputs "
+                        f"{missing}; regenerating ActivitySim inputs."
+                    )
+                    if self._should_use_database_input(settings):
+                        logger.info("Using database input mode for ActivitySim")
+                        data_from_usim = create_asim_data_from_database(
+                            settings,
+                            self.state,
+                            workspace,
+                            self.provenance_tracker,
+                        )
+                    else:
+                        logger.info("Using H5 input mode for ActivitySim")
+                        data_from_usim = create_asim_data_from_h5(
+                            settings,
+                            self.state,
+                            workspace,
+                            self.provenance_tracker,
+                        )
+                else:
+                    logger.warning(
+                        "No previous ActivitySim run provenance available; using most recent cached "
+                        "ActivitySim input records (households/persons/land_use)."
+                    )
         else:
             # 2. Create ActivitySim input data from database or UrbanSim H5
             # Check if database input mode is configured

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING, Tuple
 import pandas as pd
 import numpy as np
 
@@ -136,6 +136,55 @@ class DuckDBManager(DatabaseManager):
             self.connection = duckdb.connect(self.database_path)
             logger.info(f"Connected to DuckDB database at {self.database_path}")
         return self.connection
+
+    @staticmethod
+    def _table_exists(conn: duckdb.DuckDBPyConnection, table_name: str) -> bool:
+        try:
+            res = conn.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'main'
+                  AND table_name = ?
+                LIMIT 1
+                """,
+                [table_name],
+            ).fetchone()
+            return res is not None
+        except Exception:
+            # If information_schema is unavailable, fail closed.
+            return False
+
+    def _resolve_table_name(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        preferred: str,
+        fallbacks: Tuple[str, ...] = (),
+    ) -> str:
+        """Return a safely-quoted table name, tolerating older schema variants.
+
+        Some production DuckDBs were created with singular names (e.g. `run`)
+        instead of newer pluralized names (e.g. `runs`). This helper detects the
+        available table and returns a quoted identifier for SQL interpolation.
+        """
+
+        def quote_identifier(name: str) -> str:
+            safe = name.replace('"', '""')
+            return f'"{safe}"'
+
+        for candidate in (preferred,) + fallbacks:
+            if self._table_exists(conn, candidate):
+                if candidate != preferred:
+                    logger.warning(
+                        f"Detected legacy DuckDB schema: using table '{candidate}' instead of '{preferred}'."
+                    )
+                return quote_identifier(candidate)
+
+        logger.warning(
+            f"Could not find DuckDB table '{preferred}' (fallbacks={fallbacks}); proceeding with '{preferred}'."
+        )
+        return quote_identifier(preferred)
 
     def execute_sql(self, sql_text: str, values_to_insert: Optional[list] = None):
         """
@@ -422,9 +471,10 @@ class DuckDBManager(DatabaseManager):
             config_snapshot_id: The foreign key to the config_snapshots table.
         """
         try:
+            runs_table = self._resolve_table_name(conn, preferred="runs", fallbacks=("run",))
             conn.execute(
-                """
-                INSERT INTO runs (
+                f"""
+                INSERT INTO {runs_table} (
                     run_id, created_at, start_year, end_year, models_used,
                     settings_hash, code_version, hostname, config_snapshot_id,
                     config_content_hash

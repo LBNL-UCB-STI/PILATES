@@ -32,6 +32,10 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.io import parse_args_and_settings
 from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
+from pilates.utils.consist_config import (
+    build_scenario_consist_kwargs,
+    build_step_consist_kwargs,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -365,10 +369,10 @@ def main():
 
     # 5. START SCENARIO
     with tracker.scenario(
-            name=run_name,
-            config=settings.get_initialization_signature(),
-            tags=["pilates_simulation"],
-            model="pilates_orchestrator"
+        name=run_name,
+        tags=["pilates_simulation"],
+        model="pilates_orchestrator",
+        **build_scenario_consist_kwargs(settings),
     ) as scenario:
 
 
@@ -385,6 +389,9 @@ def main():
                 year=state.start_year,
                 iteration=0,
                 tags=["init"],
+                **build_step_consist_kwargs(
+                    "initialization", settings, workspace_path=workspace.full_path
+                ),
             ):
 
                 init_model = Initialization("initialization", state, provenance_tracker=adapter)
@@ -408,7 +415,13 @@ def main():
 
                 step_name = f"urbansim_{year}"
 
-                with scenario.step(step_name, model="urbansim", year=year, iteration=0):
+                with scenario.step(
+                    step_name,
+                    model="urbansim",
+                    year=year,
+                    iteration=0,
+                    **build_step_consist_kwargs("urbansim", settings),
+                ):
                     if state.is_start_year() and settings.activitysim.warm_start_activities:
                         logger.info("[Main] Running warm start activities for ActivitySim.")
                         warm_start_activities(settings, state, workspace, adapter)
@@ -453,7 +466,13 @@ def main():
                     step_name = f"atlas_{atlas_year}"
 
                     # Run ATLAS Step
-                    with scenario.step(step_name, model="atlas", year=atlas_year, iteration=0):
+                    with scenario.step(
+                        step_name,
+                        model="atlas",
+                        year=atlas_year,
+                        iteration=0,
+                        **build_step_consist_kwargs("atlas", settings),
+                    ):
                         # 1. Preprocess
                         preprocessor.update_state(atlas_state)
                         input_data = preprocessor.preprocess(workspace)
@@ -488,8 +507,20 @@ def main():
                         formatted_print("ACTIVITY DEMAND MODEL")
                         step_name = f"activitysim_{year}_iter{i}"
 
-                        with scenario.step(step_name, model="activitysim", year=year, iteration=i):
-                            activity_demand_outputs = run_activity_demand(settings, state, workspace, adapter)
+                        with scenario.step(
+                            step_name,
+                            model="activitysim",
+                            year=year,
+                            iteration=i,
+                            **build_step_consist_kwargs(
+                                "activitysim",
+                                settings,
+                                workspace_path=workspace.full_path,
+                            ),
+                        ):
+                            activity_demand_outputs = run_activity_demand(
+                                settings, state, workspace, adapter
+                            )
 
                         state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.activity_demand)
 
@@ -498,8 +529,18 @@ def main():
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
                         step_name = f"beam_{year}_iter{i}"
 
-                        with scenario.step(step_name, model="beam", year=year, iteration=i):
-                            run_traffic_assignment(settings, state, workspace, adapter, activity_demand_outputs)
+                        with scenario.step(
+                            step_name,
+                            model="beam",
+                            year=year,
+                            iteration=i,
+                            **build_step_consist_kwargs(
+                                "beam", settings, workspace_path=workspace.full_path
+                            ),
+                        ):
+                            run_traffic_assignment(
+                                settings, state, workspace, adapter, activity_demand_outputs
+                            )
 
                         state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.traffic_assignment)
 
@@ -508,7 +549,12 @@ def main():
             # D. POST-PROCESSING
             if state.should_run(WorkflowState.Stage.postprocessing):
                 formatted_print("POST-PROCESSING")
-                with scenario.step(f"postprocessing_{year}", model="postprocessing", year=year):
+                with scenario.step(
+                    f"postprocessing_{year}",
+                    model="postprocessing",
+                    year=year,
+                    **build_step_consist_kwargs("postprocessing", settings),
+                ):
                     if "postprocessing" in settings:
                         process_event_file(settings, state, workspace, tracker)
                         copy_outputs_to_mep(settings, state, workspace, tracker)

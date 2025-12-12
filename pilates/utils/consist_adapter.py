@@ -418,14 +418,30 @@ class ConsistProvenanceTracker:
         """
         model = self._normalize_model_name(model)
 
-        # Log Source as Input (if not already)
-        self.record_input_file(
-            model=model,
-            file_path=source_path,
-            description=getattr(record, "description", None),
-            state=state,
-            skip_missing=False
-        )
+        # Avoid logging the raw ActivitySim parquet pipeline outputs as separate inputs.
+        # These files are commonly named `final.parquet`, which collapses many distinct
+        # artifacts under the same key ("final") and creates very noisy Consist graphs.
+        # We still record lineage via `source_file_paths` on the output artifact.
+        should_log_source_as_input = True
+        try:
+            short_name = getattr(record, "short_name", None)
+            if (
+                short_name
+                and str(short_name).endswith("_asim_out_temp")
+                and Path(source_path).name == "final.parquet"
+            ):
+                should_log_source_as_input = False
+        except Exception:
+            should_log_source_as_input = True
+
+        if should_log_source_as_input:
+            self.record_input_file(
+                model=model,
+                file_path=source_path,
+                description=getattr(record, "description", None),
+                state=state,
+                skip_missing=False,
+            )
 
         # Perform Move
         os.makedirs(os.path.dirname(destination_path), exist_ok=True)

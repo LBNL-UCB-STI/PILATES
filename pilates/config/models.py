@@ -85,6 +85,9 @@ class RunConfig(BaseModel):
             )
         return v
 
+    def to_consist_facet(self) -> Dict[str, Any]:
+        return self.model_dump()
+
 
 # =============================================================================
 # SHARED CONFIGURATION
@@ -315,6 +318,20 @@ class ActivitySimConfig(BaseModel):
     )
     final_plans_folder: str = Field(..., description="Final plans output folder")
 
+    def to_consist_facet(self) -> Dict[str, Any]:
+        return {
+            "household_sample_size": self.household_sample_size,
+            "chunk_size": self.chunk_size,
+            "num_processes": self.num_processes,
+            "file_format": self.file_format,
+            "warm_start_activities": self.warm_start_activities,
+            "replan_iters": self.replan_iters,
+            "replan_hh_samp_size": self.replan_hh_samp_size,
+            "replan_after": self.replan_after,
+            "random_seed": self.random_seed,
+            "database": self.database.model_dump() if self.database else None,
+        }
+
 
 class BeamConfig(BaseModel):
     """BEAM transportation network simulation configuration."""
@@ -366,6 +383,17 @@ class PostprocessingConfig(BaseModel):
     mep_output_folder: str
     scenario_definitions: Dict[str, Any] = Field(default_factory=dict)
     validation_metrics: Dict[str, Any] = Field(default_factory=dict)
+
+    def to_consist_facet(self) -> Dict[str, Any]:
+        return {
+            "config": self.config,
+            "sample": self.sample,
+            "replanning_portion": self.replanning_portion,
+            "memory": self.memory,
+            "discard_plans_every_year": self.discard_plans_every_year,
+            "max_plans_memory": self.max_plans_memory,
+            "simulated_hwy_paths": list(self.simulated_hwy_paths or []),
+        }
 
 
 # =============================================================================
