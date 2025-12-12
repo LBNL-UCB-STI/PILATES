@@ -8,9 +8,9 @@ def validate_skim(path, dry_run):
     sk = omx.open_file(path, method)
     tables = sk.list_matrices()
 
-    distSOV = np.array(sk['SOV_DIST__AM'])
+    distSOV = np.array(sk["SOV_DIST__AM"])
 
-    distRaw = np.array(sk['DIST'])
+    distRaw = np.array(sk["DIST"])
 
     dist = distRaw.copy()
 
@@ -20,37 +20,60 @@ def validate_skim(path, dry_run):
     sz = dist.size
 
     for table in tables:
-        if ('TOTIVT' in table) | ('WLK_TRN_WLK_IVT' in table):
+        if ("TOTIVT" in table) | ("WLK_TRN_WLK_IVT" in table):
             if ("HVY" in table) or ("COM" in table):
-                modeMaxSpeed = 75.
+                modeMaxSpeed = 75.0
             elif "LOC" in table:
-                modeMaxSpeed = 50.
+                modeMaxSpeed = 50.0
             else:
-                modeMaxSpeed = 60.
+                modeMaxSpeed = 60.0
             print("------------------")
             print("Looking at skim {0}".format(table))
             metric = table.split("_")[-3]
             completedTable = table.replace(metric, "TRIPS")
-            nTrips = np.array(sk[completedTable])
+            try:
+                nTrips = np.array(sk[completedTable])
+            except:
+                print("Skipping " + table)
+                continue
             ivt_minutes = np.array(sk[table]) / 100.0
             spd_raw = dist / (ivt_minutes / 60.0)
             ignore = ivt_minutes <= 0
             nonzero = (ivt_minutes > 0) & (nTrips > 0)
             sz_valid = sz - ignore.sum().sum()
-            print("Finding {:0.2%} of speeds are 0, leaving them alone".format(ignore.sum().sum() / sz))
-            print("Finding {:0.2%} of ODs have valid observations, leaving them alone".format(nonzero.sum().sum() / sz))
-            print("Finding {:0.2%} of remaining {:} speeds are nan, replacing them with 30 mph".format(
-                np.isnan(spd_raw[~ignore]).sum() / sz_valid, sz_valid))
+            print(
+                "Finding {:0.2%} of speeds are 0, leaving them alone".format(
+                    ignore.sum().sum() / sz
+                )
+            )
+            print(
+                "Finding {:0.2%} of ODs have valid observations, leaving them alone".format(
+                    nonzero.sum().sum() / sz
+                )
+            )
+            print(
+                "Finding {:0.2%} of remaining {:} speeds are nan, replacing them with 30 mph".format(
+                    np.isnan(spd_raw[~ignore]).sum() / sz_valid, sz_valid
+                )
+            )
             spd_raw[np.isnan(spd_raw)] = 30.0
-            print("Finding {0:0.2%} of remaining speeds are too fast, replacing them with {1} mph".format(
-                (spd_raw[~ignore] > modeMaxSpeed).sum() / sz_valid, modeMaxSpeed))
+            print(
+                "Finding {0:0.2%} of remaining speeds are too fast, replacing them with {1} mph".format(
+                    (spd_raw[~ignore] > modeMaxSpeed).sum() / sz_valid, modeMaxSpeed
+                )
+            )
             spd_raw[(spd_raw > modeMaxSpeed) & ~ignore] = modeMaxSpeed
-            print("Finding {:0.2%} of remaining speeds are too slow, replacing them with 3 mph".format(
-                (spd_raw[~ignore] < 3).sum() / sz_valid))
+            print(
+                "Finding {:0.2%} of remaining speeds are too slow, replacing them with 3 mph".format(
+                    (spd_raw[~ignore] < 3).sum() / sz_valid
+                )
+            )
             spd_raw[(spd_raw < 3) & ~ignore] = 3.0
             print("New mean speed {0}".format(spd_raw[~ignore].mean()))
             new_tt_minutes = dist / spd_raw * 60.0
-            weighted_speed = (dist[nonzero] * nTrips[nonzero]).sum() / (ivt_minutes[nonzero] * nTrips[nonzero] / 60.0).sum()
+            weighted_speed = (dist[nonzero] * nTrips[nonzero]).sum() / (
+                ivt_minutes[nonzero] * nTrips[nonzero] / 60.0
+            ).sum()
             print("Weighted speed of {0} for observed ODs".format(weighted_speed))
             if not dry_run:
                 print("Updating table!!")
@@ -62,13 +85,23 @@ def validate_skim(path, dry_run):
             ivt_minutes = np.array(sk[table])
             spd_raw = dist / (ivt_minutes / 60.0)
             bad = ~(ivt_minutes >= 0)
-            print("Finding {:0.2%} of speeds are 0, replacing them with 30".format(bad.sum() / sz))
+            print(
+                "Finding {:0.2%} of speeds are 0, replacing them with 30".format(
+                    bad.sum() / sz
+                )
+            )
             spd_raw[bad] = 35.0
-            print("Finding {:0.2%} of remaining speeds are too fast, replacing them with 75 mph".format(
-                (spd_raw[~bad] > 75).sum() / sz))
+            print(
+                "Finding {:0.2%} of remaining speeds are too fast, replacing them with 75 mph".format(
+                    (spd_raw[~bad] > 75).sum() / sz
+                )
+            )
             spd_raw[(spd_raw > 75)] = 75.0
-            print("Finding {:0.2%} of remaining speeds are too slow, replacing them with 5 mph".format(
-                (spd_raw[~bad] < 5).sum() / sz))
+            print(
+                "Finding {:0.2%} of remaining speeds are too slow, replacing them with 5 mph".format(
+                    (spd_raw[~bad] < 5).sum() / sz
+                )
+            )
             spd_raw[(spd_raw < 5)] = 5.0
             print("New mean speed {0}".format(spd_raw[~bad].mean()))
             new_tt_minutes = dist / spd_raw * 60.0
@@ -89,21 +122,21 @@ def validate_skim(path, dry_run):
     sk.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if len(sys.argv) == 1:
         path = "pilates/activitysim/sfbay/data/skims.omx"
         dry_run = True
     else:
         path = sys.argv[1]
         if len(sys.argv) >= 3:
-            dry_run = (sys.argv[2].lower() == 'true')
+            dry_run = sys.argv[2].lower() == "true"
         else:
             print("Doing a try run. Add another argument of `false` to do a real run.")
             dry_run = True
 
     if dry_run:
-        method = 'r'
+        method = "r"
     else:
-        method = 'a'
+        method = "a"
 
     validate_skim(path, dry_run)

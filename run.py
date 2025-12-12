@@ -1,24 +1,28 @@
-import argparse
-import random
 import warnings
 from datetime import datetime
+import uuid
 
 import pandas as pd
 import tables
 from tables import HDF5ExtError
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
+from pilates.generic.model_factory import ModelFactory
+from pilates.generic.records import RecordStore
+
+# Helper import for model/image lookup and docker client
+from pilates.generic.runner import GenericRunner
+from pilates.workspace import Workspace
+from pilates.utils.provenance import OpenLineageTracker
+from pilates.generic.initialization import Initialization
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-import shutil
-import subprocess
-import multiprocessing
-import psutil
 
 try:
     import docker
 except ImportError:
-    print('Warning: Unable to import Docker Module')
+    print("Warning: Unable to import Docker Module")
 
 import os
 import logging
@@ -40,38 +44,18 @@ from pilates.postprocessing.postprocessor import process_event_file, copy_output
 # from pilates.polaris.travel_model import run_polaris
 
 logging.basicConfig(
-    stream=sys.stdout, level=logging.INFO,
-    format='%(asctime)s %(name)s - %(levelname)s - %(message)s')
+    stream=sys.stdout,
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
-def clean_and_init_data():
-    usim_path = os.path.abspath('pilates/urbansim/data')
-    if os.path.isdir(Path(usim_path) / 'backup'):
-        clean_data(usim_path, '*.h5')
-        clean_data(usim_path, '*.txt')
-        init_data(usim_path, '*.h5')
-
-    polaris_path = os.path.abspath('pilates/polaris/data')
-    if os.path.isdir(Path(polaris_path) / 'backup'):
-        clean_data(polaris_path, '*.hdf5')
-        init_data(polaris_path, '*.hdf5')
-
-
-def clean_data(path, wildcard):
-    search_path = Path(path) / wildcard
-    filelist = glob.glob(str(search_path))
-    for filepath in filelist:
-        try:
-            os.remove(filepath)
-        except:
-            logger.error("Error whie deleting file : {0}".format(filepath))
-
-
 def is_already_opened_in_write_mode(filename):
+    """Check if a file is already opened in write mode."""
     if os.path.exists(filename):
         try:
-            f = pd.HDFStore(filename, 'a')
+            f = pd.HDFStore(filename, "a")
             f.close()
         except HDF5ExtError:
             return True
@@ -81,1070 +65,584 @@ def is_already_opened_in_write_mode(filename):
     return False
 
 
-def init_data(dest, wildcard):
-    backup_dir = Path(dest) / 'backup' / wildcard
-    for filepath in glob.glob(str(backup_dir)):
-        shutil.copy(filepath, dest)
+def record_inputs_and_outputs(
+    provenance_tracker, model, inputs=None, outputs=None, year=None, model_run_id=None
+):
+    """Helper function to record inputs and outputs for provenance tracking."""
+    if inputs:
+        for file_path, description in inputs:
+            if os.path.exists(file_path):
+                provenance_tracker.record_input_file(
+                    model, file_path, description=description, model_run_id=model_run_id
+                )
+            else:
+                logger.warning(f"Input file not found: {file_path}")
+
+    if outputs:
+        for file_path, description in outputs:
+            if os.path.exists(file_path):
+                provenance_tracker.record_output_file(
+                    model,
+                    file_path,
+                    year=year,
+                    description=description,
+                    model_run_id=model_run_id,
+                )
+            else:
+                logger.warning(f"Output file not found: {file_path}")
 
 
-def formatted_print(string, width=50, fill_char='#'):
-    print('\n')
+def formatted_print(string, width=50, fill_char="#"):
+    """
+    Print a formatted banner for major workflow steps.
+    """
+    print("\n")
     if len(string) + 2 > width:
         width = len(string) + 4
     string = string.upper()
     print(fill_char * width)
-    print('{:#^{width}}'.format(' ' + string + ' ', width=width))
-    print(fill_char * width, '\n')
+    print("{:#^{width}}".format(" " + string + " ", width=width))
+    print(fill_char * width, "\n")
 
 
 def find_latest_beam_iteration(beam_output_dir):
+    """
+    Find the latest BEAM iteration directory (if any).
+    """
     iter_dirs = []
     for root, dirs, files in os.walk(beam_output_dir):
         for dir in dirs:
             if dir == "ITER":
-                iter_dirs += os.path.join(root, dir)
-    print(iter_dirs)
-
-
-def get_base_asim_cmd(settings, household_sample_size=None, num_processes=None):
-    formattable_asim_cmd = settings['asim_formattable_command']
-    if not household_sample_size:
-        household_sample_size = settings.get('household_sample_size', 0)
-    num_processes = num_processes or settings.get('num_processes', multiprocessing.cpu_count() - 1)
-    chunk_size = settings.get('chunk_size', 0)  # default no chunking
-    base_asim_cmd = formattable_asim_cmd.format(
-        household_sample_size, num_processes, chunk_size)
-    return base_asim_cmd
-
-def get_asim_additional_args(asim_docker_vols, compile):
-    additional_args = []
-    if settings.get("file_format", "parquet") == "parquet":
-        additional_args.append("--persist-sharrow-cache")
-        for local, d in asim_docker_vols.items():
-            if "data" in d['bind']:
-                additional_args.append('-d')
-                additional_args.append('"{0}"'.format(d['bind']))
-            elif "output" in d['bind']:
-                additional_args.append('-o')
-                additional_args.append('"{0}"'.format(d['bind']))
-            elif "compile" in d['bind']:
-                if compile:
-                    additional_args.append('-c')
-                    additional_args.append('"{0}"'.format(d['bind']))
-            elif "configs" in d['bind']:
-                additional_args.append('-c')
-                additional_args.append('"{0}"'.format(d['bind']))
-    return additional_args
-
-def get_asim_docker_vols(settings, working_dir=None):
-    region = settings['region']
-    asim_subdir = settings['region_to_asim_subdir'][region]
-    asim_remote_workdir = os.path.join('/activitysim', asim_subdir)
-    if working_dir is not None:
-        asim_local_mutable_data_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_data_folder']))
-        asim_local_output_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_output_folder']))
-        asim_local_configs_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], settings.get('asim_main_configs_dir', "configs")))
-        asim_local_configs_compile_folder = os.path.abspath(
-            os.path.join(working_dir, settings['asim_local_mutable_configs_folder'], "configs_sh_compile"))
+                iter_dirs.append(os.path.join(root, dir))
+    if iter_dirs:
+        logger.info(f"Found BEAM iteration directories: {iter_dirs}")
     else:
-        asim_local_mutable_data_folder = os.path.abspath(
-            settings['asim_local_mutable_data_folder'])
-        asim_local_output_folder = os.path.abspath(
-            settings['asim_local_output_folder'])
-        asim_local_configs_folder = os.path.abspath(
-            os.path.join(settings['asim_local_configs_folder'], region, "configs"))
-        asim_local_configs_compile_folder = os.path.abspath(
-            os.path.join(settings['asim_local_configs_folder'], region, "configs_sh_compile"))
-    asim_remote_input_folder = os.path.join(
-        asim_remote_workdir, 'data')
-    asim_remote_output_folder = os.path.join(
-        asim_remote_workdir, 'output')
-    asim_remote_configs_folder = os.path.join(
-        asim_remote_workdir, 'configs')
-    asim_remote_configs_compile_folder = os.path.join(
-        asim_remote_workdir, 'configs_sh_compile')
-    asim_docker_vols = {
-        asim_local_mutable_data_folder: {
-            'bind': asim_remote_input_folder,
-            'mode': 'rw'},
-        asim_local_output_folder: {
-            'bind': asim_remote_output_folder,
-            'mode': 'rw'},
-        asim_local_configs_compile_folder: {
-            'bind': asim_remote_configs_compile_folder,
-            'mode': 'rw'},
-        asim_local_configs_folder: {
-            'bind': asim_remote_configs_folder,
-            'mode': 'rw'}
-    }
-    return asim_docker_vols
+        logger.info("No BEAM iteration directories found.")
+    return iter_dirs
 
 
 def get_usim_docker_vols(settings, output_dir=None):
-    usim_remote_data_folder = settings['usim_client_data_folder']
+    usim_remote_data_folder = settings["usim_client_data_folder"]
     if output_dir is None:
-        output_dir = settings['usim_local_data_input_folder']
-    usim_local_mutable_data_folder = os.path.abspath(
-        output_dir)
+        output_dir = settings[
+            "usim_local_data_input_folder"
+        ]  # This seems wrong, should be mutable output dir
+        logger.warning(
+            "get_usim_docker_vols called without output_dir, using usim_local_data_input_folder. Check logic."
+        )
+    usim_local_mutable_data_folder = os.path.abspath(output_dir)
     usim_docker_vols = {
-        usim_local_mutable_data_folder: {
-            'bind': usim_remote_data_folder,
-            'mode': 'rw'}}
+        usim_local_mutable_data_folder: {"bind": usim_remote_data_folder, "mode": "rw"}
+    }
     return usim_docker_vols
 
 
 def get_usim_cmd(settings, year, forecast_year):
-    region = settings['region']
-    region_id = settings['region_to_region_id'][region]
-    land_use_freq = settings['land_use_freq']
-    skims_source = settings['travel_model']
-    formattable_usim_cmd = settings['usim_formattable_command']
+    region = settings["region"]
+    region_id = settings["region_to_region_id"][region]
+    land_use_freq = settings["land_use_freq"]
+    skims_source = settings["travel_model"]
+    formattable_usim_cmd = settings["usim_formattable_command"]
     usim_cmd = formattable_usim_cmd.format(
-        region_id, year, forecast_year, land_use_freq, skims_source)
+        region_id, year, forecast_year, land_use_freq, skims_source
+    )
     return usim_cmd
 
 
-## Atlas vehicle ownership model volume mount defintion, equivalent to
-## docker run -v atlas_host_input_folder:atlas_container_input_folder
-def get_atlas_docker_vols(settings, working_dir=None):
-    if working_dir is None:
-        atlas_host_input_folder = os.path.abspath(settings['atlas_host_input_folder'])
-    else:
-        atlas_host_input_folder = os.path.abspath(
-            os.path.join(working_dir, settings['atlas_host_mutable_input_folder']))
-    atlas_host_output_folder = os.path.abspath(os.path.join(working_dir or "", settings['atlas_host_output_folder']))
-    atlas_container_input_folder = os.path.abspath(settings['atlas_container_input_folder'])
-    atlas_container_output_folder = os.path.abspath(settings['atlas_container_output_folder'])
-    atlas_docker_vols = {
-        atlas_host_input_folder: {  ## source location, aka "local"
-            'bind': atlas_container_input_folder,  ## destination loc, aka "remote", "client"
-            'mode': 'rw'},
-        atlas_host_output_folder: {
-            'bind': atlas_container_output_folder,
-            'mode': 'rw'}}
-    return atlas_docker_vols
-
-
-## For Atlas container command
-def get_atlas_cmd(settings, freq, output_year, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor, discIncent):
-    basedir = settings.get('basedir', '/')
-    codedir = settings.get('codedir', '/')
-    formattable_atlas_cmd = settings['atlas_formattable_command']
-    atlas_cmd = formattable_atlas_cmd.format(freq, output_year, npe, nsample, basedir, codedir, beamac, mod, adscen,
-                                             rebfactor, taxfactor, discIncent)
-    return atlas_cmd
-
-
-def warm_start_activities(settings, year, client):
+def warm_start_activities(
+    settings,
+    state: WorkflowState,
+    client,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
+):
     """
     Run activity demand models to update UrbanSim inputs with long-term
     choices it needs: workplace location, school location, and
     auto ownership.
+    This runs only in the first year as part of the Land Use stage.
     """
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
+    # Use ModelFactory for all model/image lookups
+    factory = ModelFactory()
+    activity_demand_model, activity_demand_image = GenericRunner.get_model_and_image(
+        settings, "activity_demand_model"
+    )
 
-    if activity_demand_model == 'polaris':
+    if activity_demand_model == "polaris":
         # run_polaris(None, settings, warm_start=True)
-        logger.info("POLARIS module is not activated due to missing polarisruntime library")
+        logger.info(
+            "POLARIS module is not activated due to missing polarisruntime library"
+        )
 
-    elif activity_demand_model == 'activitysim':
-        # 1. PARSE SETTINGS
-        land_use_model = settings['land_use_model']
-        travel_model = settings['travel_model']
-        region = settings['region']
-        asim_subdir = settings['region_to_asim_subdir'][region]
-        asim_workdir = os.path.join('/activitysim', asim_subdir)
-        asim_docker_vols = get_asim_docker_vols(settings)
-        base_asim_cmd = get_base_asim_cmd(settings)
+    elif activity_demand_model == "activitysim":
+        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
 
-        print_str = "Initializing {0} warm start sequence".format(
-            activity_demand_model)
-        formatted_print(print_str)
+        # Preprocess
+        inputData = preprocessor.preprocess(workspace)
 
-        # 2. CREATE DATA FROM BASE YEAR SKIMS AND URBANSIM INPUTS
+        # Run
+        rawOutputs, runInfo = runner.run(
+            inputData, workspace
+        )
 
-        # # skims ## now moved to warm start atlas stage
-        # logger.info("Creating {0} skims from {1}".format(
-        #     activity_demand_model,
-        #     travel_model).upper())
-        # asim_pre.create_skims_from_beam(settings, year)
+        logger.info(
+            "Appending warm start activities/choices to UrbanSim base year input data"
+        )
 
-        # data tables
-        logger.info("Creating {0} input data from {1} outputs".format(
-            activity_demand_model,
-            land_use_model).upper())
-        if not os.path.exists(os.path.join(settings['asim_local_mutable_data_folder'], 'skims.omx')):
-            asim_pre.create_skims_from_beam(settings, state, overwrite=False)
-        asim_pre.create_asim_data_from_h5(settings, state, warm_start=True)
+        # The post-processing step for warm start is just updating the UrbanSim H5 file.
+        # We call the specific function for this, not the full postprocessor.
+        post_run_hash = provenance_tracker.start_model_run(
+            "activitysim_postprocessor",
+            state.current_year,
+            state.current_inner_iter,
+            description="Post-processing for ActivitySim warm start",
+        )
+        asim_post.update_usim_inputs_after_warm_start(
+            settings,
+            state,
+            runInfo,
+            usim_data_dir=workspace.get_usim_mutable_data_dir(),
+            warm_start_dir=workspace.get_asim_output_dir(),
+            provenance_tracker=provenance_tracker,
+            model_run_hash=post_run_hash,
+        )
+        provenance_tracker.complete_model_run(post_run_hash)
 
-        # 3. RUN ACTIVITYSIM IN WARM START MODE
-        logger.info("Running {0} in warm start mode".format(
-            activity_demand_model).upper())
-        ws_asim_cmd = base_asim_cmd + ' -w'  # warm start flag
-
-        run_container(client, settings, activity_demand_image, asim_docker_vols, ws_asim_cmd, working_dir=asim_workdir)
-
-        # 4. UPDATE URBANSIM BASE YEAR INPUT DATA
-        logger.info((
-                        "Appending warm start activities/choices to "
-                        " {0} base year input data").format(land_use_model).upper())
-        asim_post.update_usim_inputs_after_warm_start(settings)
-    logger.info('Done!')
+    logger.info("Done!")
 
     return
 
 
-def forecast_land_use(settings, year, workflow_state: WorkflowState, client, container_manager):
-    run_land_use(settings, year, workflow_state, client)
+def forecast_land_use(
+    settings,
+    year,
+    workflow_state: WorkflowState,
+    client,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
+):
+    land_use_model, land_use_image = GenericRunner.get_model_and_image(
+        settings, "land_use_model"
+    )
 
-    # check for outputs, exit if none
-    usim_output_store = settings['usim_formattable_output_file_name'].format(
-        year=workflow_state.forecast_year)
-    output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
-                              settings['usim_local_mutable_data_folder'])
-    usim_datastore_fpath = os.path.join(output_dir, usim_output_store)
-    if not os.path.exists(usim_datastore_fpath):
+    # Start UrbanSim run and get model_run_hash
+    usim_run_hash = provenance_tracker.start_model_run(
+        land_use_model,
+        workflow_state.current_year,
+        workflow_state.current_inner_iter,
+        description="UrbanSim run",
+    )
+
+    run_land_use(
+        settings,
+        year,
+        workflow_state,
+        client,
+        workspace,
+        provenance_tracker,
+        usim_run_hash,
+    )
+
+    # Record UrbanSim run completion
+    usim_output_store_name = usim_post.get_usim_datastore_fname(
+        settings, io="output", year=workflow_state.forecast_year
+    )
+    usim_datastore_fpath = os.path.join(
+        workspace.get_usim_mutable_data_dir(), usim_output_store_name
+    )
+
+    if os.path.exists(usim_datastore_fpath):
+        provenance_tracker.complete_model_run(usim_run_hash, status="completed")
+        # Record UrbanSim output file
+        provenance_tracker.record_output_file(
+            land_use_model,
+            usim_datastore_fpath,
+            year=workflow_state.forecast_year,
+            description="UrbanSim forecast output data",
+            model_run_id=usim_run_hash,
+        )
+    else:
         logger.critical(
             "No UrbanSim output data found at {0}. It probably did not finish successfully.".format(
-                usim_datastore_fpath))
+                usim_datastore_fpath
+            )
+        )
+        provenance_tracker.complete_model_run(usim_run_hash, status="failed")
         sys.exit(1)
 
 
-def run_land_use(settings, year, workflow_state: WorkflowState, client):
+def run_land_use(
+    settings,
+    year,
+    workflow_state: WorkflowState,
+    client,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
+    model_run_hash: str,
+):
     logger.info("Running land use")
 
     # 1. PARSE SETTINGS
-    output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
-                              settings['usim_local_mutable_data_folder'])
-    os.makedirs(output_dir, exist_ok=True)
-    land_use_model, land_use_image = get_model_and_image(settings, "land_use_model")
-    usim_docker_vols = get_usim_docker_vols(settings, output_dir)
+    land_use_model, land_use_image = GenericRunner.get_model_and_image(
+        settings, "land_use_model"
+    )
+    usim_docker_vols = get_usim_docker_vols(
+        settings, workspace.get_usim_mutable_data_dir()
+    )
     forecast_year = workflow_state.forecast_year
     usim_cmd = get_usim_cmd(settings, year, forecast_year)
 
     # 2. PREPARE URBANSIM DATA
-    print_str = (
-        "Preparing {0} input data for land use development simulation.".format(
-            year))
+    print_str = "Preparing {0} input data for land use development simulation.".format(
+        year
+    )
     formatted_print(print_str)
 
-    # usim_pre.copy_data_to_mutable_location(settings, output_dir)
-    asim_output_dir = os.path.join(workflow_state.output_path, workflow_state.folder_name,
-                                   settings['asim_local_mutable_data_folder'])
-    usim_pre.add_skims_to_model_data(settings, output_dir, asim_output_dir)
+    # Record inputs to UrbanSim preprocessing (skims from ASim output)
+    asim_skims_path = os.path.join(
+        workspace.get_asim_mutable_data_dir(), settings["skims_fname"]
+    )
 
-    if is_already_opened_in_write_mode(usim_data_path):
+    provenance_tracker.record_input_file(
+        land_use_model,
+        asim_skims_path,
+        description="ActivitySim skims for UrbanSim input",
+        model_run_id=model_run_hash,
+    )
+
+    usim_pre.add_skims_to_model_data(
+        settings,
+        workspace.get_usim_mutable_data_dir(),
+        workspace.get_asim_mutable_data_dir(),
+    )
+
+    usim_input_in_run_dir = os.path.join(
+        workspace.get_usim_mutable_data_dir(),
+        usim_post.get_usim_datastore_fname(settings, io="input"),
+    )
+    provenance_tracker.record_input_file(
+        land_use_model,
+        usim_input_in_run_dir,
+        description="UrbanSim input data for forecast",
+        model_run_id=model_run_hash,
+    )
+
+    if is_already_opened_in_write_mode(usim_input_in_run_dir):
         logger.warning(
             "Closing h5 files {0} because they were left open. You should really "
-            "figure out where this happened".format(tables.file._open_files.filenames))
+            "figure out where this happened".format(tables.file._open_files.filenames)
+        )
         tables.file._open_files.close_all()
 
     # 3. RUN URBANSIM
-    print_str = (
-        "Simulating land use development from {0} "
-        "to {1} with {2}.".format(
-            year, forecast_year, land_use_model))
+    print_str = "Simulating land use development from {0} " "to {1} with {2}.".format(
+        year, forecast_year, land_use_model
+    )
     formatted_print(print_str)
-    run_container(client, settings, land_use_image, usim_docker_vols, usim_cmd,
-                  working_dir=settings['usim_client_base_folder'])
-    logger.info('Done!')
+    provenance_tracker.start_model_run(model_run_hash)
+
+    GenericRunner.run_container(
+        client=client,
+        settings=settings,
+        image=land_use_image,
+        volumes=usim_docker_vols,
+        command=usim_cmd,
+        model_name=land_use_model,
+        working_dir=settings["usim_client_base_folder"],
+    )
+    logger.info("Done!")
+    # Completion is recorded in forecast_land_use
 
     return
 
 
-## Atlas: evolve household vehicle ownership
-def run_atlas(settings, state: WorkflowState, client, warm_start_atlas, forecast=False, atlas_run_count=1):
-    # warm_start: warm_start_atlas = True, output_year = year = start_year
-    # asim_no_usim: warm_start_atlas = True, output_year = year (should  = start_year)
-    # normal: warm_start_atlas = False, output_year = forecast_year
+def run_activity_demand(
+    settings,
+    state: WorkflowState,
+    client,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
+) -> RecordStore:
+    """
+    Generate activity plans for the current year.
+    """
+    factory = ModelFactory()
+    activity_demand_model = settings.get("activity_demand_model")
 
-    if forecast:
-        yr = state.forecast_year
-    else:
-        yr = state.start_year
-
-    # 1. PARSE SETTINGS
-    vehicle_ownership_model, atlas_image = get_model_and_image(settings, "vehicle_ownership_model")
-    freq = settings.get('vehicle_ownership_freq', False)
-    npe = settings.get('atlas_num_processes', False)
-    nsample = settings.get('atlas_sample_size', False)
-    beamac = settings.get('atlas_beamac', 0)
-    mod = settings.get('atlas_mod', 1)
-    adscen = settings.get('atlas_adscen', False)
-    rebfactor = settings.get('atlas_rebfactor', 0)
-    taxfactor = settings.get('atlas_taxfactor', 0)
-    discIncent = settings.get('atlas_discIncent', 0)
-    atlas_docker_vols = get_atlas_docker_vols(settings, state.full_path)
-    atlas_cmd = get_atlas_cmd(settings, freq, yr, npe, nsample, beamac, mod, adscen, rebfactor, taxfactor,
-                              discIncent)
-    docker_stdout = settings.get('docker_stdout', False)
-
-    # 2. PREPARE ATLAS DATA
-    if warm_start_atlas:
-        print_str = (
-            "Preparing input data for warm start vehicle ownership simulation for {0}.".format(yr))
-    else:
-        print_str = (
-            "Preparing input data for vehicle ownership simulation for {0}.".format(yr))
-    formatted_print(print_str)
-
-    # create skims.omx (lines moved from warm_start_activities)
-    # if warm_start_atlas == True & atlas_run_count == 1:
-    #     logger.info("Creating {0} skims from {1}".format(
-    #         activity_demand_model,
-    #         travel_model).upper())
-    #     asim_pre.create_skims_from_beam(settings, year)
-
-    # prepare atlas inputs from urbansim h5 output
-    # preprocessed csv input files saved in "atlas/atlas_inputs/year{}/"
-    if forecast:
-        yrs = [y + 2 for y in range(state.year, yr, 2)]
-    else:
-        yrs = [yr]
-    for yr_it in yrs:
-        atlas_pre.prepare_atlas_inputs(settings, yr_it, state, warm_start=warm_start_atlas)
-
-    # calculate accessibility if atlas_beamac != 0
-    if beamac > 0:
-        # if No Driving
-        path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK']
-        measure_list = ['WACC', 'IWAIT', 'XWAIT', 'TOTIVT', 'WEGR']
-        # if Allow Driving for access/egress
-        # path_list = ['WLK_COM_WLK', 'WLK_EXP_WLK', 'WLK_HVY_WLK', 'WLK_LOC_WLK', 'WLK_LRF_WLK',
-        #             'DRV_COM_DRV', 'DRV_EXP_DRV', 'DRV_HVY_DRV', 'DRV_LOC_DRV', 'DRV_LRF_DRV',
-        #             'WLK_COM_DRV', 'WLK_EXP_DRV', 'WLK_HVY_DRV', 'WLK_LOC_DRV', 'WLK_LRF_DRV',
-        #             'DRV_COM_WLK', 'DRV_EXP_WLK', 'DRV_HVY_WLK', 'DRV_LOC_WLK', 'DRV_LRF_WLK']
-        # measure_list = ['WACC','IWAIT','XWAIT','TOTIVT','WEGR','DTIM']
-        atlas_pre.compute_accessibility(path_list, measure_list, settings, state.forecast_year)
-
-    # 3. RUN ATLAS via docker container client
-    print_str = (
-        "Simulating vehicle ownership for {0} "
-        "with frequency {1}, npe {2} nsample {3} beamac {4}".format(
-            yr, freq, npe, nsample, beamac))
-    formatted_print(print_str)
-    run_container(client, settings, atlas_image, atlas_docker_vols, atlas_cmd, working_dir='/')
-
-    # 4. ATLAS OUTPUT -> UPDATE USIM OUTPUT CARS & HH_CARS
-    atlas_post.atlas_update_h5_vehicle(settings, yr, state, warm_start=warm_start_atlas)
-
-    # 5. ATLAS OUTPUT -> ADD A VEHICLETYPEID COL FOR BEAM
-    atlas_post.atlas_add_vehileTypeId(settings, yr, state)
-    atlas_post.build_beam_vehicles_input(settings, yr, state)
-
-    logger.info('Atlas Done!')
-
-    return
-
-
-## Atlas: evolve household vehicle ownership
-# run_atlas_auto is a run_atlas upgraded version, which will run_atlas again if
-# outputs are not generated. This is mainly for preventing crash due to parellel
-# computiing errors that can be resolved by a simple resubmission
-def run_atlas_auto(settings, state: WorkflowState, client, warm_start_atlas, forecast=False):
-    if forecast:
-        yr = state.forecast_year
-    else:
-        yr = state.start_year
-    atlas_output_path = os.path.join(state.full_path, settings['atlas_host_output_folder'])
-    fname = 'vehicles_{}.csv'.format(yr)
-    if os.path.exists(os.path.join(atlas_output_path, fname)) & warm_start_atlas:
+    if activity_demand_model == "polaris":
+        # run_polaris(state, settings)
         logger.info(
-            "Running in warm start mode but warm started files for year {0} already exist. Assuming we can skip this "
-            "step and move on to the forecast year".format(
-                yr))
-        return
+            "POLARIS module is not activated due to missing polarisruntime library"
+        )
+        return RecordStore()
+    elif activity_demand_model == "activitysim":
+        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
+        runner = factory.get_runner("activitysim", state, provenance_tracker)
+        postprocessor = factory.get_postprocessor("activitysim", state, provenance_tracker)
 
-    # run atlas
-    atlas_run_count = 1
-    # try:
-    run_atlas(settings, state, client, warm_start_atlas, forecast, atlas_run_count)
-    # except:
-    #     logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
+        # Preprocess
+        input_data = preprocessor.preprocess(workspace)
 
-    # rerun atlas if outputs not found and run count <= 3
-    while atlas_run_count < 3:
-        atlas_run_count = atlas_run_count + 1
-        if not os.path.exists(os.path.join(atlas_output_path, fname)):
-            logger.error('LAST ATLAS RUN FAILED -> RE-LAUNCHING ATLAS RUN #{} BELOW'.format(atlas_run_count))
-            try:
-                run_atlas(settings, state, client, warm_start_atlas, forecast, atlas_run_count)
-            except:
-                logger.error('ATLAS RUN #{} FAILED'.format(atlas_run_count))
+        # Run
+        raw_outputs, run_info = runner.run(
+            input_data, workspace
+        )
 
-    return
+        # Postprocess
+        processed_outputs = postprocessor.postprocess(
+            raw_outputs, run_info, workspace
+        )
 
+        return processed_outputs
 
-def generate_activity_plans(
-        settings, year, state: WorkflowState, client,
-        resume_after=None,
-        warm_start=False,
-        overwrite_skims=True,
-        demand_model=None):
-    """
-    Parameters
-
-    year : int
-        Start year for the simulation iteration.
-    forecast_year : int
-        Simulation year for which activities are generated. If `forecast_year`
-        is the start year of the whole simulation, then we are probably
-        generating warm start activities based on the base year input data in
-        order to generate "warm start" skims.
-    """
-
-    if settings.get('regenerate_seed', True):
-        new_seed = random.randint(0, int(1e9))
-        logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-        asim_pre.update_asim_config(settings, state.full_path, "random_seed", new_seed)
-
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
-
-    if activity_demand_model == 'polaris':
-        # run_polaris(state.forecast_year, settings, warm_start=True)
-        logger.info("POLARIS module is not activated due to missing polarisruntime library")
-
-    elif activity_demand_model == 'activitysim':
-
-        # 1. PARSE SETTINGS
-
-        land_use_model = settings['land_use_model']
-        region = settings['region']
-        asim_subdir = settings['region_to_asim_subdir'][region]
-        asim_workdir = os.path.join('activitysim', asim_subdir)
-        asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-
-        docker_stdout = settings.get('docker_stdout', False)
-
-        # If this is the first iteration, skims should only exist because
-        # they were created during the warm start activities step. The skims
-        # haven't been updated since then so we don't need to re-create them.
-        # if year == settings['start_year']:
-        #     overwrite_skims = False
-        overwrite_skims = False
-
-        # 2. PREPROCESS DATA FOR ACTIVITY DEMAND MODEL
-        print_str = "Creating {0} input data from {1} outputs".format(
-            activity_demand_model,
-            land_use_model)
-        formatted_print(print_str)
-        asim_pre.create_skims_from_beam(
-            settings, state=state, overwrite=overwrite_skims)
-        asim_pre.create_asim_data_from_h5(settings, state=state, warm_start=warm_start)
-
-        # 3. GENERATE ACTIVITY PLANS
-        print_str = (
-            "Generating activity plans for the year "
-            "{0} with {1}".format(
-                state.forecast_year, activity_demand_model))
-
-        if not state.asim_compiled:
-            asim_cmd = get_base_asim_cmd(settings, household_sample_size=2500, num_processes=1)
-            if resume_after:
-                asim_cmd += ' -r {0}'.format(resume_after)
-
-            additional_args = get_asim_additional_args(asim_docker_vols, True)
-            success = run_container(client, settings,
-                          activity_demand_image,
-                          working_dir=asim_workdir,
-                          volumes=asim_docker_vols,
-                          command=asim_cmd,
-                          args=additional_args)
-            logger.info("ASIM Compilation success: {0}".format(success))
-            # if not success:
-            #     raise RuntimeError("ASim Compilation failed")
-            state.compile_asim()
-        asim_cmd = get_base_asim_cmd(settings)
-        if resume_after:
-            asim_cmd += ' -r {0}'.format(resume_after)
-            print_str += ". Picking up after {0}".format(resume_after)
-        formatted_print(print_str)
-
-        additional_args = get_asim_additional_args(asim_docker_vols, False)
-
-        run_container(client, settings,
-                      activity_demand_image,
-                      working_dir=asim_workdir,
-                      volumes=asim_docker_vols,
-                      command=asim_cmd,
-                      args=additional_args)
-
-        # 4. COPY ACTIVITY DEMAND OUTPUTS --> LAND USE INPUTS
-        # If generating activities for the base year (i.e. warm start),
-        # then we don't want to overwrite urbansim input data. Otherwise
-        # we want to set up urbansim for the next simulation iteration
-        if (settings['land_use_enabled']) and (not warm_start):
-            print_str = (
-                "Generating {0} {1} input data from "
-                "{2} outputs".format(
-                    state.forecast_year, land_use_model, activity_demand_model))
-            formatted_print(print_str)
-            asim_post.create_next_iter_inputs(settings, year, state)
-
-    logger.info('Done!')
-
-    return
+    else:
+        logger.warning(
+            f"Unknown or disabled activity demand model: {activity_demand_model}"
+        )
+        return RecordStore()
 
 
 def run_traffic_assignment(
-        settings, year, state: WorkflowState, client, replanning_iteration_number=0):
+    settings,
+    state: WorkflowState,
+    client,
+    workspace: Workspace,
+    provenance_tracker: OpenLineageTracker,
+    activity_demand_outputs: RecordStore = None,
+):
     """
-    This step will run the traffic simulation platform and
-    generate new skims with updated congested travel times.
+    Run traffic assignment for the current year.
     """
-    logger.info("===== STARTING TRAFFIC ASSIGNMENT =====")
-    travel_model, travel_model_image = get_model_and_image(settings, 'travel_model')
-    logger.info(f"Travel model: {travel_model}, Image: {travel_model_image}")
+    factory = ModelFactory()
+    travel_model = settings.get("travel_model")
 
-    if travel_model == 'polaris':
-        # run_polaris(state.forecast_year, settings, warm_start=False)
-        logger.info("POLARIS module is not activated due to missing polarisruntime library")
+    if travel_model == "polaris":
+        # run_polaris(state, settings)
+        logger.info(
+            "POLARIS module is not activated due to missing polarisruntime library"
+        )
+    elif travel_model == "beam":
+        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker)
+        runner = factory.get_runner("beam", state, provenance_tracker)
+        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker)
 
-    elif travel_model == 'beam':
-        # 1. PARSE SETTINGS
-        beam_config = settings['beam_config']
-        region = settings['region']
-        path_to_beam_config = '/app/input/{0}/{1}'.format(region, beam_config)
-        run_path = state.full_path
-        beam_local_mutable_data_folder = os.path.join(run_path, settings['beam_local_mutable_data_folder'])
-        abs_beam_input = os.path.abspath(str(beam_local_mutable_data_folder))
-        logger.info(f"Absolute path to BEAM input: {abs_beam_input} -> Container: /app/input (rw)")
+        # Preprocess
+        input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
 
-        beam_local_output_folder = os.path.join(run_path, settings['beam_local_output_folder'])
-        abs_beam_output = os.path.abspath(str(beam_local_output_folder))
-        logger.info(f"Absolute path to BEAM output: {abs_beam_output} -> Container: /app/output (rw)")
-
-        activity_demand_model = settings.get('activity_demand_model', False)
-        logger.info(f"Activity demand model: {activity_demand_model}")
-
-        docker_stdout = settings['docker_stdout']
-        skims_fname = settings['skims_fname']
-        origin_skims_fname = settings['origin_skims_fname']
-        beam_memory = settings.get('beam_memory', str(int(psutil.virtual_memory().total / (1024. ** 3)) - 2) + 'g')
-        logger.info(f"BEAM memory allocation: {beam_memory}")
-
-        # remember the last produced skims in order to detect that
-        # beam didn't work properly during this run
-        if skims_fname.endswith(".csv.gz"):
-            skimFormat = "csv.gz"
-        elif skims_fname.endswith(".omx"):
-            skimFormat = "omx"
-        else:
-            logger.error("Invalid skim format {0}".format(skims_fname))
-        previous_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, skimFormat)
-        previous_origin_skims = beam_post.find_produced_origin_skims(beam_local_output_folder)
-        if previous_origin_skims:
-            logger.info(f"Found skims from the previous BEAM run: {previous_od_skims}")
-
-        # 2. COPY ACTIVITY DEMAND OUTPUTS --> TRAFFIC ASSIGNMENT INPUTS
-        if settings['traffic_assignment_enabled']:
-            print_str = (
-                "Generating {0} {1} input data from "
-                "{2} outputs".format(
-                    year, travel_model, activity_demand_model))
-            formatted_print(print_str)
-            logger.info("Copying plans from ActivitySim to BEAM")
-            beam_pre.copy_plans_from_asim(
-                settings, state, replanning_iteration_number)
-
-        # 3. RUN BEAM
-        logger.info("Starting BEAM container, input: %s, output: %s, config: %s", abs_beam_input, abs_beam_output,
-                    beam_config)
-
-        # Check if the beam config file exists
-        expected_config_path = os.path.join(abs_beam_input, region, beam_config)
-        if os.path.exists(expected_config_path):
-            logger.info(f"BEAM config file exists at host path: {expected_config_path}")
-        else:
-            logger.warning(f"BEAM config file NOT FOUND at expected host path: {expected_config_path}")
-
-        run_container(
-            client,
-            settings,
-            travel_model_image,
-            volumes={
-                abs_beam_input: {
-                    'bind': '/app/input',
-                    'mode': 'rw'},
-                abs_beam_output: {
-                    'bind': '/app/output',
-                    'mode': 'rw'}},
-            environment={
-                'JAVA_OPTS': (
-                    '-Xmx{0}'.format(beam_memory))},
-            working_dir='/app',
-            command="--config={0}".format(path_to_beam_config)
+        # Run
+        raw_outputs, run_info = runner.run(
+            input_data, workspace
         )
 
-        # 4. POSTPROCESS
-        path_to_mutable_od_skims = os.path.join(abs_beam_output, skims_fname)
-        path_to_origin_skims = os.path.join(abs_beam_output, origin_skims_fname)
-        logger.info(f"Path to mutable OD skims: {path_to_mutable_od_skims}")
-        logger.info(f"Path to origin skims: {path_to_origin_skims}")
+        processed_outputs = postprocessor.postprocess(
+            raw_outputs, run_info, workspace
+        )
 
-        if skimFormat == "csv.gz":
-            logger.info("Processing CSV.GZ format skims")
-            current_od_skims = beam_post.merge_current_od_skims(
-                path_to_mutable_od_skims, previous_od_skims, beam_local_output_folder)
-            if current_od_skims == previous_od_skims:
-                logger.error(
-                    "BEAM hasn't produced the new skims at {0} for some reason. "
-                    "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
-                )
-                sys.exit(1)
-
-            beam_post.merge_current_origin_skims(
-                path_to_origin_skims, previous_origin_skims, beam_local_output_folder)
-        else:
-            logger.info("Processing OMX format skims")
-
-            # Check if ActivitySim is enabled - only proceed with ActivitySim integration if it's enabled
-            asim_enabled = activity_demand_model and activity_demand_model == 'activitysim'
-            beam_asim_ridehail_measure_map = settings['beam_asim_ridehail_measure_map']
-            if not asim_enabled:
-                logger.info("ActivitySim is not enabled, skipping skim merging for ActivitySim")
-                # Still check if BEAM produced skims
-                current_od_skims = beam_post.find_produced_od_skims(beam_local_output_folder, "omx")
-                if current_od_skims == previous_od_skims and replanning_iteration_number > 0:
-                    logger.error(
-                        "BEAM hasn't produced the new skims at {0} for some reason. "
-                        "Please check beamLog.out for errors in the directory {1}".format(current_od_skims,
-                                                                                          abs_beam_output)
-                    )
-                return
-            elif settings["file_format"] == "parquet":
-                asim_data_dir = os.path.join(run_path, settings['asim_local_output_folder'], "cache")
-                asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
-                current_od_skims = beam_post.merge_current_zarr_od_skims(asim_skims_path,
-                                                                         beam_local_output_folder, settings)
-                logger.warning("RIDEHAIL SKIM MERGING NOT YET IMPLEMENTED FOR PARQUET FILES")
-            else:
-                asim_data_dir = os.path.join(state.full_path, settings['asim_local_mutable_data_folder'])
-                asim_skims_path = os.path.join(asim_data_dir, 'skims.omx')
-                current_od_skims = beam_post.merge_current_omx_od_skims(asim_skims_path, previous_od_skims,
-                                                                        beam_local_output_folder, settings)
-                beam_post.merge_current_omx_origin_skims(
-                    asim_skims_path, previous_origin_skims, beam_local_output_folder,
-                    beam_asim_ridehail_measure_map)
-            logger.info(f"ActivitySim data directory: {asim_data_dir}")
-            logger.info(f"ActivitySim skims path: {asim_skims_path}")
-
-            if current_od_skims == previous_od_skims:
-                logger.error(
-                    "BEAM hasn't produced the new skims at {0} for some reason. "
-                    "Please check beamLog.out for errors in the directory {1}".format(current_od_skims, abs_beam_output)
-                )
-                sys.exit(1)
-
-        logger.info(f"Renaming BEAM output directory for year {year}, iteration {replanning_iteration_number}")
-        beam_post.rename_beam_output_directory(abs_beam_output, settings, year, replanning_iteration_number)
-        logger.info("===== COMPLETED TRAFFIC ASSIGNMENT =====")
-
-    return
-
-
-def initialize_docker_client(settings):
-    land_use_model = settings.get('land_use_model', False)
-    vehicle_ownership_model = settings.get('vehicle_ownership_model', False)  ## ATLAS
-    activity_demand_model = settings.get('activity_demand_model', False)
-    travel_model = settings.get('travel_model', False)
-    models = [land_use_model, vehicle_ownership_model, activity_demand_model, travel_model]
-    image_names = settings['docker_images']
-    pull_latest = settings.get('pull_latest', False)
-
-    client = docker.from_env()
-    if pull_latest:
-        logger.info("Pulling from docker...")
-        for model in models:
-            if model:
-                image = image_names[model]
-                if image is not None:
-                    print('Pulling latest image for {0}'.format(image))
-                    client.images.pull(image)
-
-    return client
-
-
-def initialize_asim_for_replanning(settings, forecast_year):
-    replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
-    region = settings['region']
-    asim_subdir = settings['region_to_asim_subdir'][region]
-    asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-    base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
-    docker_stdout = settings.get('docker_stdout', False)
-
-    if replan_hh_samp_size > 0:
-        print_str = (
-            "Re-running ActivitySim on smaller sample size to "
-            "prepare cache for re-planning with BEAM.")
-        formatted_print(print_str)
-        run_container(client, settings,
-                      activity_demand_image, working_dir=asim_workdir,
-                      volumes=asim_docker_vols,
-                      command=base_asim_cmd)
-
-
-def run_replanning_loop(state: WorkflowState):
-    replan_iters = settings['replan_iters']
-    replan_hh_samp_size = settings['replan_hh_samp_size']
-    activity_demand_model, activity_demand_image = get_model_and_image(settings, 'activity_demand_model')
-    region = settings['region']
-    asim_subdir = settings['region_to_asim_subdir'][region]
-    asim_workdir = os.path.join('/activitysim', asim_subdir)
-    asim_docker_vols = get_asim_docker_vols(settings, state.full_path)
-    base_asim_cmd = get_base_asim_cmd(settings, replan_hh_samp_size)
-    docker_stdout = settings.get('docker_stdout', False)
-    last_asim_step = settings['replan_after']
-
-    for i in range(state.iteration, replan_iters):
-        replanning_iteration_number = i + 1
-        print_str = (
-            'Replanning Iteration {0}'.format(replanning_iteration_number))
-        formatted_print(print_str)
-
-        if settings.get('regenerate_seed', True):
-            new_seed = random.randint(0, int(1e9))
-            logger.info("Re-seeding asim with new seed {0}".format(new_seed))
-            asim_pre.update_asim_config(settings, state.full_path,"random_seed", new_seed)
-
-        # a) format new skims for asim
-        asim_pre.create_skims_from_beam(settings, state, overwrite=False)
-
-        # b) replan with asim
-        print_str = (
-            "Replanning {0} households with ActivitySim".format(
-                replan_hh_samp_size))
-        formatted_print(print_str)
-        run_container(
-            client,
-            settings,
-            activity_demand_image, working_dir=asim_workdir,
-            volumes=asim_docker_vols,
-            command=base_asim_cmd + ' -r ' + last_asim_step)
-
-        # e) run BEAM
-        if replanning_iteration_number < replan_iters:
-            beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion')
-            beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-        # else:
-        #    beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
-        run_traffic_assignment(
-            settings, year, state, client, replanning_iteration_number)
-
-    return
-
-
-def postprocess_all(settings):
-    beam_output_dir = settings['beam_local_output_folder']
-    region = settings['region']
-    output_path = os.path.join(beam_output_dir, region, "year*")
-    outputDirs = glob.glob(output_path)
-    yearsAndIters = [(loc.split('-', 3)[-3], loc.split('-', 3)[-1]) for loc in outputDirs]
-    yrs = dict()
-    # Only do this for the latest available iteration in each year
-    for year, iter in yearsAndIters:
-        if year in yrs:
-            if int(iter) > int(yrs[year]):
-                yrs[year] = iter
-        else:
-            yrs[year] = iter
-    for year, iter in yrs.items():
-        process_event_file(settings, year, iter)
-
-
-def to_singularity_volumes(volumes):
-    bindings = [f"{local_folder}:{binding['bind']}:{binding['mode']}" for local_folder, binding in volumes.items()]
-    result_str = ','.join(bindings)
-    return result_str
-
-
-def to_singularity_env(env):
-    bindings = [f"{env_var}={value}" for env_var, value in env.items()]
-    result_str = ','.join(bindings)
-    return '"' + result_str + '"'
-
-
-def run_container(client, settings: dict, image: str, volumes: dict, command: str,
-                  working_dir=None, environment=None, args=None) -> bool:
-    """
-    Executes container using docker or singularity
-    :param client: the docker client. If it's provided then docker is used, otherwise singularity is used
-    :param settings: settings to get docker configuration
-    :param image: the image to run
-    :param volumes: a dictionary describing volume binding
-    :param command: the command to run
-    :param working_dir: the working directory inside the container. It's not necessary for docker because
-    docker file may have an instruction WORKDIR. In this case that directory is used. Singularity don't take this
-    instruction into account and the container working dir is the host working dir. Because of that most of the time
-     singularity requires working dir. One can get the work dir from a docker image by looking at the Dockerfile
-     (or image layers at the docker hub) and find the last WORKDIR instruction or by issuing a command:
-      docker run -it --entrypoint /bin/bash ghcr.io/lbnl-science-it/atlas:v1.0.7 -c "env | grep PWD"
-    :param environment: a dictionary that contains environment variables that needs to be set to the container
-    :param args: additional arguments to the command
-    """
-    if client:
-        docker_stdout = settings.get('docker_stdout', False)
-        logger.info("Running docker container: %s, command: %s", image, command)
-        run_kwargs = {
-            'volumes': volumes,
-            'command': command,
-            'stdout': docker_stdout,
-            'stderr': True,
-            'detach': True
-        }
-        if working_dir:
-            run_kwargs['working_dir'] = working_dir
-        if environment:
-            run_kwargs['environment'] = environment
-        container = client.containers.run(image, **run_kwargs)
-        for log in container.logs(
-                stream=True, stderr=True, stdout=docker_stdout):
-            print(log)
-        container.remove()
-        logger.info("Finished docker container: %s, command: %s", image, command)
-        return True
     else:
-        for local_folder in volumes:
-            os.makedirs(local_folder, exist_ok=True)
-        singularity_volumes = to_singularity_volumes(volumes)
-        proc = ["singularity", "run", "--cleanenv", "--writable-tmpfs"] \
-               + (["--env", to_singularity_env(environment)] if environment else []) \
-               + (["--pwd", working_dir] if working_dir else [])   \
-               + ["-B", singularity_volumes, image] + (args if args else []) \
-               + command.split()
-        logger.info("Running command: %s", " ".join(proc))
-        result = subprocess.run(proc)
-        logger.info("Finished command: %s with exit code %s", " ".join(proc), result.returncode)
-        return str(result) == "0"
+        logger.warning(f"Unknown or disabled travel model: {travel_model}")
 
 
-def get_model_and_image(settings: dict, model_type: str):
-    manager = settings['container_manager']
-    if manager == "docker":
-        image_names = settings['docker_images']
-    elif manager == "singularity":
-        image_names = settings['singularity_images']
-    else:
-        raise ValueError("Container Manager not specified (container_manager param in settings.yaml)")
-    model_name = settings.get(model_type)
-    if not model_name:
-        raise ValueError(f"No model {model_type} specified")
-    image_name = image_names[model_name]
-    if not model_name:
-        raise ValueError(f"No {manager} image specified for model {model_name}")
-    return model_name, image_name
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--config", help="Path to the config file to be used",
-                        action="store_true")
-    parser.add_argument("-s", "--state", help="Path to the current_state file to be used",
-                        action="store_true")
-
-    logger = logging.getLogger(__name__)
-
-    logger.info("Initializing data...")
-    clean_and_init_data()
-
-    logger.info("Preparing runtime environment...")
-
-    #########################################
-    #  PREPARE PILATES RUNTIME ENVIRONMENT  #
-    #########################################
-
-    # load args and settings
+def main():
+    # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
-
-    logger.info("Using config file {}".format(settings['settings_file']))
-
-    # parse scenario settings
-    start_year = settings['start_year']
-    end_year = settings['end_year']
-    travel_model = settings.get('travel_model', False)
-    formatted_print(
-        'RUNNING PILATES FROM {0} TO {1}'.format(start_year, end_year))
-    travel_model_freq = settings.get('travel_model_freq', 1)
-    warm_start_skims = settings['warm_start_skims']
-    warm_start_activities_enabled = settings['warm_start_activities']
-    static_skims = settings['static_skims']
-    land_use_enabled = settings['land_use_enabled']
-    land_use_freq = settings['land_use_freq']
-    vehicle_ownership_model_enabled = settings['vehicle_ownership_model_enabled']  # Atlas
-    activity_demand_enabled = settings['activity_demand_enabled']
-    traffic_assignment_enabled = settings['traffic_assignment_enabled']
-    replanning_enabled = settings['replanning_enabled']
-    container_manager = settings['container_manager']
-
     state = WorkflowState.from_settings(settings)
-    working_dir = state.full_path
 
-    if not land_use_enabled:
-        print("LAND USE MODEL DISABLED")
-    if not activity_demand_enabled:
-        print("ACTIVITY DEMAND MODEL DISABLED")
-    if not traffic_assignment_enabled:
-        print("TRAFFIC ASSIGNMENT MODEL DISABLED")
+    # Set up provenance tracking and workspace
+    output_path = os.path.expandvars(settings.get("output_directory"))
+    run_name = settings.get(
+        "run_name", f"pilates-run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    run_id = str(uuid.uuid4())
 
-    if traffic_assignment_enabled:
-        beam_pre.update_beam_config(settings, state.full_path, 'beam_sample')
+    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name)
+    provenance_tracker.initialize_from_settings(settings)
 
-    if warm_start_skims:
-        formatted_print('"WARM START SKIMS" MODE ENABLED')
-        logger.info('Generating activity plans for the base year only.')
-    elif static_skims:
-        formatted_print('"STATIC SKIMS" MODE ENABLED')
-        logger.info('Using the same set of skims for every iteration.')
+    workspace = Workspace(
+        settings,
+        output_path,
+        folder_name=run_name,
+        provenance_tracker=provenance_tracker,
+    )
+    state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
 
-    # start docker client
-    if container_manager == 'docker':
-        client = initialize_docker_client(settings)
-    else:
-        client = None
+    initialization = Initialization("initialization",state,provenance_tracker)
+    initialization.run(settings, workspace)
 
-    #################################
-    #  RUN THE SIMULATION WORKFLOW  #
-    #################################
+    # Initialize Docker/Singularity client if needed
+    client = None
+    if settings.get("container_manager") == "docker":
+        try:
+            client = GenericRunner.initialize_docker_client(settings)
+        except Exception as e:
+            logger.error(f"Failed to initialize Docker client: {e}")
 
+    # 2. MAIN WORKFLOW LOOP
     for year in state:
-        # 1. FORECAST LAND USE
-        if state.should_do(WorkflowState.Stage.land_use):
-            # Skip if land use model is not enabled
-            if not land_use_enabled:
-                logger.info("Skipping land use stage: land use model not enabled")
-                state.complete(WorkflowState.Stage.land_use)
+        formatted_print(f"STARTING YEAR {year}")
+
+        # A. LAND USE FORECASTING
+        if state.should_run(WorkflowState.Stage.land_use):
+            formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
+            if state.is_start_year() and settings.get("warm_start_activities"):
+                logger.info("[Main] Running warm start activities for ActivitySim.")
+                warm_start_activities(
+                    settings, state, client, workspace, provenance_tracker
+                )
+            forecast_land_use(
+                settings, year, state, client, workspace, provenance_tracker
+            )
+            state.complete_step(WorkflowState.Stage.land_use)
+
+        # B. VEHICLE OWNERSHIP MODEL (ATLAS)
+        if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
+            formatted_print(
+                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+            )
+            logger.info("[Main] Running ATLAS vehicle ownership model.")
+
+            # Use ModelFactory for all model/image lookups
+            factory = ModelFactory()
+            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker)
+            runner = factory.get_runner("atlas", state, provenance_tracker)
+            postprocessor = factory.get_postprocessor("atlas", state, provenance_tracker)
+
+            # Determine if this is a warm start for ATLAS
+            warm_start_atlas = state.is_start_year()
+            forecast = True  # Always forecast for main loop
+
+            # Multi-year loop logic (as in run_atlas)
+            if forecast:
+                # For forecast, run for all years between state.year and state.forecast_year, step 2
+                yrs = [y + 2 for y in range(state.year, state.forecast_year, 2)]
+                if not yrs:
+                    yrs = [state.forecast_year]
             else:
-                # hack: make sure that the usim datastore isn't open
-                usim_data_path = os.path.join(settings['usim_local_data_input_folder'],
-                                              settings['usim_formattable_input_file_name'].format(
-                                                  region_id=settings['region_to_region_id'][settings['region']]))
-                if is_already_opened_in_write_mode(usim_data_path):
-                    logger.warning(
-                        "Closing h5 files {0} because they were left open. You should really "
-                        "figure out where this happened".format(tables.file._open_files.filenames))
-                    tables.file._open_files.close_all()
+                yrs = [state.year]
 
-                # 1a. IF START YEAR, WARM START MANDATORY ACTIVITIES
-                if (state.is_start_year()) and warm_start_activities_enabled:
-                    # IF ATLAS ENABLED, UPDATE USIM INPUT H5
-                    if vehicle_ownership_model_enabled:
-                        run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                    warm_start_activities(settings, year, client)
+            for atlas_year in yrs:
+                # Update state for this atlas_year
+                # (simulate a sub-state for the pre/postprocessor)
+                class AtlasSubState:
+                    def __init__(self, parent_state, year):
+                        self.__dict__ = parent_state.__dict__.copy()
+                        self.year = year
+                        self.current_year = year
+                        self.forecast_year = year
+                        self.start_year = parent_state.start_year
+                        self.full_settings = parent_state.full_settings
+                        self.is_start_year = lambda: (year == parent_state.start_year)
 
-                # 1b. RUN LAND USE SIMULATION
-                forecast_land_use(settings, year, state, client, container_manager)
-                state.complete(WorkflowState.Stage.land_use)
+                atlas_state = AtlasSubState(state, atlas_year)
 
-        # 2. RUN ATLAS (HOUSEHOLD VEHICLE OWNERSHIP)
-        if state.should_do(WorkflowState.Stage.vehicle_ownership_model):
-            if state.forecast_year > 2017:
-                # If the forecast year is the same as the base year of this
-                # iteration, then land use forecasting has not been run. In this
-                # case, atlas need to update urbansim *inputs* before activitysim
-                # reads it in the next step.
-                if state.forecast_year == year:
-                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
+                )
+                # Preprocess
+                preprocessor.update_state(atlas_state)
+                input_data = preprocessor.preprocess(
+                    workspace
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
+                )
 
-                # If urbansim has been called, ATLAS will read, run, and update
-                # vehicle ownership info in urbansim *outputs* h5 datastore.
-                elif state.is_start_year():
-                    run_atlas_auto(settings, state, client, warm_start_atlas=True)
-                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
-                else:
-                    run_atlas_auto(settings, state, client, warm_start_atlas=False, forecast=True)
-            else:
-                logger.info("Skipping atlas in year {0} because we can't start until 2017".format(state.year))
-            state.complete(WorkflowState.Stage.vehicle_ownership_model)
+                logger.info(
+                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
+                )
+                # Run
+                runner.update_state(atlas_state)
+                raw_outputs, run_info = runner.run(
+                    input_data, workspace
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
+                )
 
-        # 3. GENERATE ACTIVITIES
-        if state.should_do(WorkflowState.Stage.activity_demand):
-            activity_demand_model = settings.get('activity_demand_model', False)
-            if activity_demand_model and activity_demand_enabled:
-                # If the forecast year is the same as the base year of this
-                # iteration, then land use forecasting has not been run. In this
-                # case we have to read from the land use *inputs* because no
-                # *outputs* have been generated yet. This is usually only the case
-                # for generating "warm start" skims, so we treat it the same even
-                # if the "warm_start_skims" setting was not set to True at runtime
-                generate_activity_plans(
-                    settings, year, state, client, warm_start=warm_start_skims or not land_use_enabled)
-            else:
-                logger.info("Skipping activity demand generation: activity demand model not enabled")
-            state.complete(WorkflowState.Stage.activity_demand)
+                logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
+                # Postprocess
+                post_run_hash = provenance_tracker.start_model_run(
+                    "atlas_postprocessor",
+                    atlas_state.current_year,
+                    description="ATLAS postprocessing",
+                )
+                postprocessor.update_state(atlas_state)
+                processed_outputs = postprocessor.postprocess(
+                    raw_outputs,
+                    run_info,
+                    workspace,
+                    post_run_hash,
+                )
+                provenance_tracker.complete_model_run(
+                    post_run_hash, output_records=processed_outputs.all_records()
+                )
+                logger.info(
+                    f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
+                )
 
-            # 5. INITIALIZE ASIM LITE IF BEAM REPLANNING ENABLED
-            # have to re-run asim all the way through on sample to shrink the
-            # cache for use in re-planning, otherwise cache will use entire pop
-        if state.should_do(WorkflowState.Stage.initialize_asim_for_replanning):
-            activity_demand_model = settings.get('activity_demand_model', False)
-            if activity_demand_model == 'activitysim' and activity_demand_enabled and replanning_enabled:
-                initialize_asim_for_replanning(settings, state.forecast_year)
-            else:
-                logger.info("Skipping asim initialization for replanning: conditions not met")
-            state.complete(WorkflowState.Stage.initialize_asim_for_replanning)
+            logger.info(
+                "[run.py] [ATLAS] All ATLAS years complete for this major step."
+            )
+            state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
-        if state.should_do(WorkflowState.Stage.activity_demand_directly_from_land_use):
-            # Skip if land use model is not enabled
-            land_use_model = settings.get('land_use_model', False)
-            if not settings.get('land_use_enabled', False) or not land_use_model:
-                logger.info("Skipping direct activity generation from land use: land use model not enabled")
-            else:
-                # If not generating activities with a separate ABM (e.g.
-                # ActivitySim), then we need to create the next iteration of land
-                # use data directly from the last set of land use outputs.
-                usim_post.create_next_iter_usim_data(settings, year, state.forecast_year, state.full_path)
-            state.complete(WorkflowState.Stage.activity_demand_directly_from_land_use)
+        # C. SUPPLY/DEMAND LOOP
+        if state.should_run(WorkflowState.Stage.supply_demand_loop):
+            total_iters = settings.get("supply_demand_iters", 1)
+            for i in range(state.iteration, total_iters):
+                state.iteration = i
+                formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
+                activity_demand_outputs = None
 
-        # DO traffic assignment - but skip if using polaris as this is done along
-        # with activity_demand generation
-        if state.should_do(WorkflowState.Stage.traffic_assignment):
+                # C1. ACTIVITY DEMAND
+                if state.should_run(
+                    WorkflowState.Stage.supply_demand_loop,
+                    i,
+                    WorkflowState.Stage.activity_demand,
+                ):
+                    formatted_print("ACTIVITY DEMAND MODEL")
+                    logger.info("[Main] Running ActivitySim activity demand model.")
+                    activity_demand_outputs = run_activity_demand(
+                        settings, state, client, workspace, provenance_tracker
+                    )
+                    state.complete_step(
+                        WorkflowState.Stage.supply_demand_loop,
+                        i,
+                        WorkflowState.Stage.activity_demand,
+                    )
 
-            # 4. RUN TRAFFIC ASSIGNMENT
-            if settings['discard_plans_every_year']:
-                beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory', 0)
-            else:
-                beam_pre.update_beam_config(settings, working_dir, 'max_plans_memory')
-            # beam_pre.update_beam_config(settings, working_dir, 'beam_replanning_portion', 1.0)
-            if vehicle_ownership_model_enabled:
-                beam_pre.copy_vehicles_from_atlas(settings, state)
-            run_traffic_assignment(settings, year, state, client, -1)
-            state.complete(WorkflowState.Stage.traffic_assignment)
+                # C2. TRAFFIC ASSIGNMENT
+                if state.should_run(
+                    WorkflowState.Stage.supply_demand_loop,
+                    i,
+                    WorkflowState.Stage.traffic_assignment,
+                ):
+                    formatted_print("TRAFFIC ASSIGNMENT MODEL")
+                    logger.info("[Main] Running BEAM traffic assignment model.")
+                    run_traffic_assignment(
+                        settings, state, client, workspace, provenance_tracker, activity_demand_outputs
+                    )
+                    state.complete_step(
+                        WorkflowState.Stage.supply_demand_loop,
+                        i,
+                        WorkflowState.Stage.traffic_assignment,
+                    )
 
-        # 5. REPLAN
-        if state.should_do(WorkflowState.Stage.traffic_assignment_replan):
-            activity_demand_model = settings.get('activity_demand_model', False)
-            if activity_demand_model and activity_demand_model == 'activitysim':
-                if replanning_enabled > 0:
-                    run_replanning_loop(state)
-                    try:
-                        process_event_file(settings, year, settings['replan_iters'])
-                        copy_outputs_to_mep(settings, year, settings['replan_iters'])
-                    except:
-                        print("Skipping post")
-                else:
-                    try:
-                        process_event_file(settings, year, -1)
-                        copy_outputs_to_mep(settings, year, -1)
-                    except:
-                        print("Skipping post")
+            # After all iterations, complete the major stage
+            state.complete_step(WorkflowState.Stage.supply_demand_loop)
 
-            state.complete(WorkflowState.Stage.traffic_assignment_replan)
+        # D. POST-PROCESSING
+        if state.should_run(WorkflowState.Stage.postprocessing):
+            formatted_print("POST-PROCESSING")
+            logger.info("[Main] Running post-processing steps.")
+            if settings.get("mep_metrics_to_create"):
+                process_event_file(settings, state, workspace, provenance_tracker)
+            if settings.get("mep_output_dir"):
+                copy_outputs_to_mep(settings, state, workspace, provenance_tracker)
+            state.complete_step(WorkflowState.Stage.postprocessing)
 
-        activity_demand_model = settings.get('activity_demand_model', "")
-        if (activity_demand_enabled and activity_demand_model.lower() == "activitysim"):
-            if settings['file_format'] == "parquet":
-                try:
-                    asim_data_dir = os.path.join(working_dir, settings['asim_local_output_folder'], "cache")
-                    asim_skims_path = os.path.join(asim_data_dir, 'skims.zarr')
-                    current_od_skims = beam_post.trim_inaccessible_ods_zarr(asim_skims_path, settings)
-                except Exception as e:
-                    logger.error(f"Error trimming inaccessible ODs: {e}")
-            else:
-                beam_post.trim_inaccessible_ods(settings, working_dir)
+    formatted_print("SIMULATION COMPLETE")
+    logger.info("[Main] Simulation complete.")
 
-    logger.info("Finished")
+
+if __name__ == "__main__":
+    main()

@@ -14,10 +14,10 @@ travel_model_freq: 6
 vehicle_ownership_freq: 6
 
 # simulation platforms (leave blank to turn off)
-land_use_model: urbansim
+land_use_model: #urbansim
 travel_model: beam
 activity_demand_model: activitysim
-vehicle_ownership_model: atlas
+vehicle_ownership_model: #atlas
 
 # docker or singularity
 container_manager: singularity
@@ -111,6 +111,7 @@ beam_scenario_folder: urbansim/
 beam_memory: "200g"
 skim_zone_source_id_col: objectid
 replan_iters: 2
+supply_demand_iters: 5 # Added setting for supply-demand iterations
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step
 discard_plans_every_year: False

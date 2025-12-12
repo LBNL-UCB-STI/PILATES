@@ -61,7 +61,8 @@ then run
 ./install.sh
 ```
 
-## Download UrbanSim data
+## Download Data
+### Download UrbanSim data
 
 ```commandline
 cd /global/scratch/users/$USER/sources/PILATES/pilates/urbansim/data/
@@ -76,7 +77,7 @@ wget -O custom_mpo_53199100_model_data.h5 https://storage.googleapis.com/beam-co
 cd ../../../
 ```
 
-## Checkout ActivitySim data
+### Checkout ActivitySim data
 
 ```commandline
 cd /global/scratch/users/$USER/sources/PILATES/pilates/activitysim/configs/
@@ -89,7 +90,7 @@ git clone --branch configs-first-calibration https://github.com/LBNL-UCB-STI/act
 cd ../../../
 ```
 
-## Checkout BEAM data
+### Checkout BEAM data
 
 ```commandline
 cd /global/scratch/users/$USER/sources/PILATES/pilates/beam/production/

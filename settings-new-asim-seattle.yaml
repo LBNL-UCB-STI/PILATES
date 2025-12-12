@@ -7,11 +7,12 @@
 # scenario defs
 region: seattle
 scenario: base
-start_year: 2010
-end_year: 2020
+start_year: 2018
+end_year: 2025
 land_use_freq: 1
 travel_model_freq: 1
 vehicle_ownership_freq: 1
+supply_demand_iters: 6
 
 # simulation platforms (leave blank to turn off)
 land_use_model: # urbansim
@@ -26,7 +27,7 @@ singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
   activitysim: docker://zaneedell/activitysim:0.2.5
-  beam: docker://zaneedell/beam:1.0.11
+  beam: docker://zaneedell/beam:1.0.12
   polaris:
 
 # docker settings
@@ -60,7 +61,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: new-asim-new-map-v5
+output_run_name: new-asim-new-map-v6
 
 # URBANSIM
 region_to_region_id:

@@ -5,8 +5,8 @@ import sys
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout # Log to console
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,  # Log to console
 )
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,7 @@ skims_to_copy = [
     "WLK_TRN_WLK_XWAIT__PM",
 ]
 
+
 def copy_skims(src_path, dest_path, skims_list):
     """
     Copies a specified list of skims from a source OMX file to a destination OMX file,
@@ -239,18 +240,18 @@ def copy_skims(src_path, dest_path, skims_list):
         return
     if not os.path.exists(dest_path):
         logger.critical(f"Destination file not found: {dest_path}")
-        return # Or create it, depending on desired behavior. Sticking to copy to existing here.
+        return  # Or create it, depending on desired behavior. Sticking to copy to existing here.
 
     skims_src = None
     skims_dest = None
 
     try:
         logger.info(f"Opening source file: {src_path}")
-        skims_src = omx.open_file(src_path, 'r')
+        skims_src = omx.open_file(src_path, "r")
 
         logger.info(f"Opening destination file for append/write: {dest_path}")
         # Open in append mode to be able to write/overwrite
-        skims_dest = omx.open_file(dest_path, 'a')
+        skims_dest = omx.open_file(dest_path, "a")
 
         logger.info(f"Attempting to copy {len(skims_list)} specified skims.")
 
@@ -260,11 +261,15 @@ def copy_skims(src_path, dest_path, skims_list):
                 try:
                     # If the skim exists in the destination, delete it first
                     if skim_name in skims_dest.list_matrices():
-                        logger.info(f"  Removing existing skim '{skim_name}' from destination.")
+                        logger.info(
+                            f"  Removing existing skim '{skim_name}' from destination."
+                        )
                         del skims_dest[skim_name]
 
                     # Read data from source file
-                    data_to_copy = skims_src[skim_name][:] # Use [:] to get the actual numpy array
+                    data_to_copy = skims_src[skim_name][
+                        :
+                    ]  # Use [:] to get the actual numpy array
 
                     # Write data to destination file
                     skims_dest[skim_name] = data_to_copy
@@ -274,13 +279,14 @@ def copy_skims(src_path, dest_path, skims_list):
                 except Exception as e:
                     logger.error(f"  Error copying skim '{skim_name}': {e}")
             else:
-                logger.warning(f"  Skim '{skim_name}' not found in source file '{src_path}'. Skipping.")
+                logger.warning(
+                    f"  Skim '{skim_name}' not found in source file '{src_path}'. Skipping."
+                )
 
         logger.info("\n--- Copy Operation Summary ---")
         logger.info(f"Attempted to copy {len(skims_list)} skims.")
         # You could add counters here for success/failure if desired
         logger.info("----------------------------")
-
 
     except FileNotFoundError as e:
         logger.critical(f"File not found error: {e}")
@@ -301,7 +307,7 @@ def copy_skims(src_path, dest_path, skims_list):
                 logger.error(f"Error closing destination file {dest_path}: {e}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Note: The file paths are hardcoded at the top of the script,
     # making this a one-time script tailored to the log analysis.
     # You will need to manually run this script.

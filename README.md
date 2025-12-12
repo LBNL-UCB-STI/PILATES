@@ -1,109 +1,144 @@
-<p align="center"><img src="logo_multi.png" width="700"></p>
+<p align="center"><img src="logo_multi.png" width="700" alt="PILATES Logo"></p>
 
-**P**latform for \
-**I**ntegrated \
-**L**anduse \
-**A**nd \
-**T**ransportation \
-**E**xperiments and \
-**S**imulation
+# PILATES
 
-PILATES is designed to facilitate the integration of various containerized microsimulation applications that together fully model the co-evolution of land use and transportation systems over time for the purpose of long-term regional forecasting.
+**Platform for Integrated Landuse And Transportation Experiments and Simulation**
 
-The PILATES Python library is comprised primarily of the following:
-1. **run.py** -- An executable python script responisble for orchestrating the execution of all containerized applications and data-transformation steps.
-2. **settings.yaml** -- A configuration file for managing and defining high-level system parameters (e.g. geographic region, local data paths, simulation time horizon, etc.)
-3. **application-specific dirs** -- The subdirectories of `pilates/` contain application-specific I/O directories for mounting to their respective container images, as well as application-specific Python modules responsible for transforming and archiving I/O data generated/used by other component applications.
-4. **utils/** -- A subdirectory of `pilates/` containing various Python modules that might be relevant to any or all of the component applications (e.g. common geographic data transformations or http requests to the US Census API.)
+PILATES is a containerized microsimulation framework that orchestrates multiple transportation and land use models to study long-term urban dynamics. It enables researchers and planners to simulate complex feedback loops between transportation systems, land use patterns, and technology adoption over decades.
 
+## Why PILATES?
 
-## 1. Setting up your environment
-1. Make sure docker is running on your machine and that you've either pre-downloaded the required container images (specified in `settings.yaml`) or that you've signed into a valid docker account with dockerhub access.
-2. Change other relevant parameters in `settings.yaml` (probably only [L7-31](https://github.com/ual/PILATES/blob/v2/settings.yaml#L7-L30))
-   - UrbanSim settings of note:
-      - `region_to_region_id` must have an entry that corresponds to the name of the input HDF5 datastore (see below)
-   - ActivtySim settings of note:
-      - num_processors: adjust this number to take full advantage of multi-threaded data processing in Python. Number should be close to the total number of virtual CPUs available on your machine (threads X cores x processors per core or something like that).
-      - chunk_size: adjust this number to take full advantage of the available RAM on your machine. Trying making this number bigger until the activitysim container segfaults or is killed due to a memory error.
-4. Make sure your Python environment has `docker-py`, and `pyyaml` installed.
+Traditional transportation models often operate in isolation, missing critical feedback loops between land use and transportation. PILATES solves this by orchestrating specialized models in containers, preserving their individual strengths while enabling integrated analysis.
 
-## 2. I/O
-PILATES only needs two local data files in order to run: 1) an archive of land use and population tables corresponding to base year data for the specified region; and 2) a table of base-year travel skims in the format of the specified travel model. Currently, these two files are organized as follows:
-1. **pilates/urbansim/data/custom_mpo_\<xxxxxxxx\>_model_data.h5** - an UrbanSim-formatted HDF5 datastore where `<xxxxxxxx>` is an 8-digit region ID corresponding to one of the IDs in the settings [L40](https://github.com/ual/PILATES/blob/master/settings.yaml#L40).
-2. **pilates/\<travel model\>/\<travel model data dir\>/\<skims filename\>** - the input skims file, where `<skims filename>` is the name of the skims file specified in settings [L30](https://github.com/ual/PILATES/blob/master/settings.yaml#L31). Currently `polaris` and `beam` are the only supported travel models/skim formats.
+**Key Benefits:**
+- **Modular**: Leverage existing models (UrbanSim, ActivitySim, BEAM) without modification
+- **Flexible**: Configure different model combinations and execution frequencies
+- **Reproducible**: Complete provenance tracking and state management
+- **Scalable**: Built for high-performance computing environments
 
-With those two files in those two places, PILATES should handle the rest. 
+## Supported Models
 
-NOTE: currently all input data is overwritten in place throughout the course of a multi-year PILATES run. To avoid data loss please store a local copy of the input data outside of PILATES.
+| Model | Purpose | Integration |
+|-------|---------|-------------|
+| **[UrbanSim](https://github.com/UDST/urbansim)** | Long-term land use evolution | Household/business location choices, real estate development |
+| **[ATLAS](https://doi.org/10.1080/03081060.2024.2353784)** | Vehicle fleet dynamics | Fleet turnover, technology adoption (EV/ICE) |
+| **[ActivitySim](https://github.com/ActivitySim/activitysim)** | Daily travel demand | Agent-based activity and travel pattern generation |
+| **[BEAM](https://github.com/LBNL-UCB-STI/beam)** | Transportation network simulation | Traffic, transit, emerging mobility modes |
 
-## 3. Executing the full workflow
-```
-usage: ipython [-v] [-p] [-h HOUSEHOLD_SAMPLE_SIZE] [-s] [-w] [-d DISABLE_MODEL] [-c CONFIG]
+## Simulation Scenarios
 
-optional arguments:
-  -v, --verbose         print docker stdout
-  -p, --pull_latest     pull latest docker images before running
-  -h HOUSEHOLD_SAMPLE_SIZE, --household_sample_size HOUSEHOLD_SAMPLE_SIZE
-                        household sample size (only works if land use models are disables)
-  -s, --static_skims    bypass traffic assignment altogether (i.e. use base year skims for every run)
-  -w, --warm_start_skims
-                        generate full activity plans for the base year only. useful for generating warm start skims.
-  -d DISABLE_MODEL, --disable_model DISABLE_MODEL
-                        "l" for land use, "a" for activity demand, "t" for traffic assignment. Can specify multiple (e.g. "at")
-  -c CONFIG, --config CONFIG
-                        Specify different config .yaml (other than "settings.yaml")
+PILATES supports multiple configuration levels:
+
+1. **Network Analysis** (`BEAM only`) - Study infrastructure impacts with fixed demand
+2. **Travel Demand** (`ActivitySim + BEAM`) - Standard agent-based model with feedback loops
+3. **Land Use + Transport** (`UrbanSim + ActivitySim + BEAM`) - Long-term accessibility feedback
+4. **Full Integration** (`UrbanSim + ATLAS + ActivitySim + BEAM`) - Complete urban system evolution
+
+## Quick Start
+
+### Prerequisites
+
+- Docker or Singularity
+- Anaconda/Miniconda
+
+### Installation
+
+```bash
+# Clone and setup environment
+git clone https://github.com/LBNL-UCB-STI/PILATES.git
+cd PILATES
+conda env create -f environment.yml
+conda activate pilates
 ```
 
-## Miscellany
+### Download Data
 
-### ActivitySim BEAM integration
-In order to have BEAM to run correctly one needs to set the following settings:
+See [`lawrencium-setup.md`](lawrencium-setup.md#download-data) for data preparation instructions.
 
-1. **skims_fname**: `gemini/10.activitySimODSkims.UrbanSim.TAZ.Full.csv.gz` The full skim file that contains all Origin Destinations pairs with ActivitySim path types.
-2. **beam_config**: `gemini/activitysim-base-from-60k-input.conf` Path to beam config. This path must be relative to `beam_local_input_folder` and `region`. The BEAM docker container is provided with this config as an input.
-3. **beam_scenario_folder**: `gemini/activitysim-plans-base-2010-cut-60k` Folder with BEAM scenario where ActivitySim output goes. Files from this folder are a scenario input for BEAM.
-4. **beam_local_input_folder**: `pilates/beam/production/` Path to BEAM input folder. This folder is going to be mapped to the BEAM container input folder.
-5. **beam_local_output_folder**: `pilates/beam/beam_output/` The BEAM output is going to be saved here. In order to have a clean run this directory should be empty before start.
+### Configure and Run
 
-#### BEAM Config: saves ASIM skims, enables BEAM to reuse the previous BEAM output plans, linkstats.
+```bash
+# Edit settings.yaml for your setup
+# Set container_manager: "docker" or "singularity"
+# Adjust region-specific parameters
 
-BEAM config should be set in the way so that BEAM saves ActivitySim skims, linkstats and loads people plans and linkstats from the previous runs.
+# Run simulation (use -p flag for first run to pull containers)
+python run.py -v -p
+```
 
-This is the BEAM config options that enables it.
+### Background Execution
 
-```hocon
-# most of the time we need a single iteration
-beam.agentsim.firstIteration = 0
-beam.agentsim.lastIteration = 0
+```bash
+# For long-running simulations
+nohup python run.py -v &
+```
 
-beam.router.skim = {
-  # This allows to write skims on each iteration
-  writeSkimsInterval = 1
+## Architecture
+
+PILATES uses a consistent preprocessor/runner/postprocessor pattern for model execution:
+
+```mermaid
+flowchart TD
+    A[WorkflowState] -->|Initialize| B[Preprocessor]
+    B -->|Prepare Data| C[Runner]
+    C -->|Execute Model| D[Postprocessor]
+    D -->|Process Results| E[Workspace]
+    E -->|Update State| F[Provenance Tracker]
+    F --> G[Next Iteration]
+    G --> A
+    
+    style A fill:#e1f5fe
+    style E fill:#f3e5f5
+    style F fill:#fff3e0
+```
+
+**Pattern Benefits:**
+- **Modularity**: Independent component development and testing
+- **Reproducibility**: Complete provenance tracking
+- **Flexibility**: Easy model integration and customization
+
+## HPC Usage
+
+For cluster environments:
+
+```bash
+cd hpc
+./job_runner.sh [options]
+```
+
+See [`lawrencium-setup.md`](lawrencium-setup.md) for detailed HPC setup instructions.
+
+## Contributing
+
+We welcome contributions! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+**Report Issues:** [GitHub Issues](https://github.com/LBNL-UCB-STI/PILATES/issues)
+
+**Guidelines:** See `CONTRIBUTING.md` (coming soon)
+
+## Citation
+
+```bibtex
+@misc{pilates_2024,
+  author = {Needell, Zachary and Waddell, Paul and Caicedo, Juan and 
+            Laarabi, Haitam and Wang, Yuhan and Poliziani, Cristian and 
+            Lazarus, Jessica and Openkov, Dmitrii and Gardner, Max and 
+            Rezaei, Nazanin and others},
+  title = {Platform for Integrated Land use And Transportation 
+           Experiments and Simulation (PILATES) v1.0},
+  doi = {10.11578/dc.20240613.2},
+  url = {https://www.osti.gov/biblio/2373117},
+  year = {2024},
+  month = {05}
 }
-
-beam.exchange{
-  output {
-    # this enables saving activitySim Skims
-    activitySimSkimsEnabled = true
-    # geo level different than TAZ (in beam taz-centers format)
-    geo.filePath = ${beam.inputDirectory}"/block_group-centers.csv.gz"
-  }
-}
-
-# This loads linkStats from the last found BEAM runs
-beam.warmStart.type = "linkStatsFromLastRun"
-
-# For subsequential beam runs (some data will be laoded from the latest found run in this directory)
-beam.input.lastBaseOutputDir = ${beam.outputs.baseOutputDirectory}
-# This prefix is used to find the last run output directory within beam.input.lastBaseOutputDir direcotry
-beam.input.simulationPrefix = ${beam.agentsim.simulationName}
-
-# fraction of input plans to be merged into the latest output plans (taken from the beam.input.lastBaseOutputDir)
-beam.agentsim.agents.plans.merge.fraction = 0.2
 ```
 
-#### Executing the simulation
-```shell
-nohup python run.py -v
-```
-nohup keeps the script working in case the user session is closed. The output is saved to nohup.out file by default.
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

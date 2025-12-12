@@ -1,4 +1,5 @@
 import h5py
+
 filename = "pilates/urbansim/data/model_data_2015.h5"
 
 with h5py.File(filename, "r") as f:
@@ -17,7 +18,7 @@ with h5py.File(filename, "r") as f:
 
         # Checkout what keys are inside that group.
         for key in group.keys():
-            print('\t{0}'.format(key))
+            print("\t{0}".format(key))
 
             # data = group[key][()]
             # Do whatever you want with data

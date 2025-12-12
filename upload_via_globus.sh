@@ -27,8 +27,15 @@ if  [ $# -eq 3 ]
         globus mkdir "$TO/$output_dir/activitysim"
         globus mkdir "$TO/$output_dir/activitysim/data"
         globus transfer "$FROM/beam/beam_output/$region/" "$TO/$output_dir/beam/" -s size --recursive --label "BEAM Outputs" --exclude "*xml*"
-        globus transfer "$FROM/activitysim/output/" "$TO/$output_dir/activitysim/" -s size --recursive --label "ASim Outputs" --include "year*" --exclude "*"
         globus transfer "$FROM/activitysim/data/" "$TO/$output_dir/activitysim/data/" -s size --recursive --label "ASim Inputs"
+        for dir in "$output_dir/activitysim/output/"year*; do
+          if [ -d "$dir" ]; then
+            # Example command: list files in the directory
+            echo "Processing $dir"
+            # Place your command here, e.g.:
+             globus transfer "$FROM/$dir" "$TO/$output_dir/activitysim/$(basename "$dir")/" -s size --recursive --label "ASim Outputs"
+          fi
+        done
 else
     echo "Please provide a region (e.g. 'austin' or 'sfbay') and S3 directory name"
 fi        
