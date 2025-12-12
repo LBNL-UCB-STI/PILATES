@@ -318,6 +318,26 @@ class UrbansimPreprocessor(GenericPreprocessor):
         logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
         settings = self.state.full_settings
 
+        # In Consist mode, selectively treat initialization outputs as inputs here.
+        if (
+            hasattr(self.provenance_tracker, "get_init_output_artifacts")
+            and getattr(self, "required_input_data", None)
+        ):
+            try:
+                init_outputs = self.provenance_tracker.get_init_output_artifacts(
+                    list(self.required_input_data)
+                )
+                tracker = getattr(self.provenance_tracker, "_tracker", None)
+                if tracker:
+                    for key, art in init_outputs.items():
+                        tracker.log_input(
+                            art,
+                            key=key,
+                            description="Upstream initialization output",
+                        )
+            except Exception as e:
+                logger.debug(f"Init artifact import skipped: {e}")
+
         # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
         os.makedirs(usim_mutable_data_dir, exist_ok=True)

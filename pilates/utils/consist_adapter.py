@@ -269,6 +269,63 @@ class ConsistProvenanceTracker:
         self.run_info.file_records[file_record.unique_id] = file_record
         return file_record
 
+    # ---------------------------------------------------------------------
+    # Init-artifact helpers (Consist-only mode)
+    # ---------------------------------------------------------------------
+
+    def get_init_output_artifacts(
+        self,
+        keys: List[str],
+        init_tag: str = "init",
+        scenario_id: Optional[str] = None,
+    ) -> Dict[str, Artifact]:
+        """
+        Fetch selected output artifacts from the initialization step in the current scenario.
+
+        This is a convenience for preprocessors/runners that want to treat specific
+        initialization outputs as inputs without re-tagging the entire init store.
+
+        Args:
+            keys: Output artifact keys to retrieve from the init run.
+            init_tag: Tag used to identify the init step (default: "init").
+            scenario_id: Override scenario ID; by default uses active run parent.
+
+        Returns:
+            Dict mapping key -> Artifact for keys found. Missing keys are omitted.
+
+        Raises:
+            RuntimeError if no active Consist run or no init run found.
+        """
+        if not self._tracker.current_consist:
+            raise RuntimeError(
+                "Cannot fetch init artifacts outside an active Consist step."
+            )
+
+        if scenario_id is None:
+            scenario_id = self._tracker.current_consist.run.parent_run_id
+
+        init_runs = self._tracker.find_runs(parent_id=scenario_id, tags=[init_tag])
+        if not init_runs:
+            raise RuntimeError(
+                f"No initialization run found for scenario '{scenario_id}' with tag '{init_tag}'."
+            )
+
+        init_run_id = init_runs[0].id
+        init_artifacts = self._tracker.get_artifacts_for_run(init_run_id)
+
+        found: Dict[str, Artifact] = {}
+        for key in keys:
+            art = init_artifacts.outputs.get(key)
+            if art:
+                # Ensure abs_path is populated for convenience.
+                try:
+                    art.abs_path = self._tracker.resolve_uri(art.uri)
+                except Exception:
+                    pass
+                found[key] = art
+
+        return found
+
     def record_output_file(
         self,
         model: str,

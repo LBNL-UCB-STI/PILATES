@@ -2044,6 +2044,24 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
         output_records = RecordStore()
 
+        # In Consist mode, selectively treat key initialization outputs as inputs here.
+        # This avoids logging the entire initialization store while keeping the DAG correct.
+        if hasattr(self.provenance_tracker, "get_init_output_artifacts"):
+            try:
+                init_outputs = self.provenance_tracker.get_init_output_artifacts(
+                    ["usim_data", "beam_geoms", "omx_skims"]
+                )
+                tracker = getattr(self.provenance_tracker, "_tracker", None)
+                if tracker:
+                    for key, art in init_outputs.items():
+                        tracker.log_input(
+                            art,
+                            key=key,
+                            description="Upstream initialization output",
+                        )
+            except Exception as e:
+                logger.debug(f"Init artifact import skipped: {e}")
+
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
         skims_fname = settings.shared.skims.fname

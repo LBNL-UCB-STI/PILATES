@@ -129,6 +129,26 @@ class AtlasPreprocessor(GenericPreprocessor):
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
 
+        # In Consist mode, selectively treat initialization outputs as inputs here.
+        if (
+            hasattr(self.provenance_tracker, "get_init_output_artifacts")
+            and getattr(self, "required_input_data", None)
+        ):
+            try:
+                init_outputs = self.provenance_tracker.get_init_output_artifacts(
+                    list(self.required_input_data)
+                )
+                tracker = getattr(self.provenance_tracker, "_tracker", None)
+                if tracker:
+                    for key, art in init_outputs.items():
+                        tracker.log_input(
+                            art,
+                            key=key,
+                            description="Upstream initialization output",
+                        )
+            except Exception as e:
+                logger.debug(f"Init artifact import skipped: {e}")
+
         # --- Ensure global ATLAS input files are present for every year ---
         # Source for global files (e.g., cpi.csv, RData files)
         global_source_dir = "pilates/atlas/atlas_input"

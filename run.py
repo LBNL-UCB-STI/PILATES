@@ -384,6 +384,7 @@ def main():
                 model="initialization",
                 year=state.start_year,
                 iteration=0,
+                tags=["init"],
             ):
 
                 init_model = Initialization("initialization", state, provenance_tracker=adapter)

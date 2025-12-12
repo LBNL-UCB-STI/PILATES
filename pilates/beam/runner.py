@@ -191,7 +191,13 @@ class BeamRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
-        input_paths = [r.file_path for r in store.all_records()]
+        # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
+        # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
+        from pilates.generic.records import FileRecord
+
+        input_paths = [
+            r.file_path for r in store.all_records() if isinstance(r, FileRecord)
+        ]
 
         success = self.run_container(
             client=client,
