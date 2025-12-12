@@ -36,26 +36,40 @@ TNC_CONSOLIDATION_MAP = {
 
 
 def find_latest_beam_iteration(beam_output_dir):
+    """
+    Return (path_to_latest_iteration_dir, latest_iteration_number).
+
+    BEAM iteration directories are typically named `it.<n>` under an `ITERS` folder.
+    """
     iter_dirs = [
-        os.path.join(root, dir)
+        os.path.join(root, dir_name)
         for root, dirs, files in os.walk(beam_output_dir)
-        if not root.startswith(".")
-        for dir in dirs
-        if dir == "ITERS"
+        if not os.path.basename(root).startswith(".")
+        for dir_name in dirs
+        if dir_name == "ITERS"
     ]
     logger.info("Looking in directories {0}".format(iter_dirs))
     if not iter_dirs:
         return None, None
+
     last_iters_dir = max(iter_dirs, key=os.path.getmtime)
-    all_iteration_dir = [
-        it for it in os.listdir(last_iters_dir) if not it.startswith(".")
-    ]
-    logger.info("Looking in directories {0}".format(all_iteration_dir))
-    if not all_iteration_dir:
-        return None, None
     it_prefix = "it."
-    max_it_num = max(dir_name[len(it_prefix) :] for dir_name in all_iteration_dir)
-    return os.path.join(last_iters_dir, it_prefix + str(max_it_num)), max_it_num
+
+    iteration_nums = []
+    for dir_name in os.listdir(last_iters_dir):
+        if dir_name.startswith(".") or not dir_name.startswith(it_prefix):
+            continue
+        try:
+            iteration_nums.append(int(dir_name[len(it_prefix) :]))
+        except ValueError:
+            logger.warning(f"Skipping non-integer iteration directory: {dir_name}")
+
+    logger.info("Looking in directories {0}".format(iteration_nums))
+    if not iteration_nums:
+        return None, None
+
+    max_it_num = max(iteration_nums)
+    return os.path.join(last_iters_dir, f"{it_prefix}{max_it_num}"), max_it_num
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
