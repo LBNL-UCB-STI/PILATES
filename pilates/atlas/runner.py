@@ -221,6 +221,11 @@ class AtlasRunner(GenericRunner):
                     year=output_year,
                     description=f"ATLAS {fname} output for year {output_year}",
                     short_name=fname.replace(".csv", ""),
+                    uri=(
+                        self.provenance_tracker.to_uri(output_path)
+                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                        else None
+                    ),
                 )
                 output_records.append(output_record)
             else:

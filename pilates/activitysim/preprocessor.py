@@ -2106,6 +2106,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 models=["activitysim_preprocessor"],
                 description="BEAM skims copied to current workspace",
                 short_name="omx_skims_current_workspace",
+                uri=(
+                    self.provenance_tracker.to_uri(path_to_beam_skims_in_current_run_workspace)
+                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                    else None
+                ),
             )
             output_records.add_record(beam_skims_output_rec)
 
@@ -2149,6 +2154,11 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             models=["activitysim_preprocessor"],
             short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
+            uri=(
+                self.provenance_tracker.to_uri(skims_loc)
+                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                else None
+            ),
         )
 
         if self.state.current_inner_iter > 0:

@@ -237,6 +237,11 @@ class AtlasPostprocessor(GenericPostprocessor):
                     description="ATLAS vehicles2 CSV with vehicleTypeId",
                     short_name="atlas_vehicles2_output",
                     source_file_paths=source_file_paths,
+                    uri=(
+                        self.provenance_tracker.to_uri(atlas_veh2_file)
+                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                        else None
+                    ),
                 )
                 output_records.append(atlas_veh2_output_record)
 

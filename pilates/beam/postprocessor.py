@@ -3456,6 +3456,31 @@ class BeamPostprocessor(GenericPostprocessor):
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
 
+        # Ensure the ActivitySim skims snapshot (archived during ActivitySim postprocess)
+        # is explicitly registered as an input to this BEAM postprocess step.
+        # This is important because the merge operates on the ActivitySim cache skims.zarr,
+        # and the archived snapshot is the stable provenance anchor for that baseline.
+        if self.provenance_tracker and hasattr(self.provenance_tracker, "run_info"):
+            try:
+                asim_zarr_snapshot = self.provenance_tracker.run_info.get_most_recent_record(
+                    "asim_input_skims_zarr_archived"
+                )
+                if asim_zarr_snapshot:
+                    snapshot_path = asim_zarr_snapshot.get_absolute_path(
+                        base_path=workspace.full_path
+                    )
+                    self.provenance_tracker.record_input_file(
+                        self.model_name,
+                        snapshot_path,
+                        description="ActivitySim skims.zarr snapshot used as merge baseline",
+                        short_name="asim_input_skims_zarr_archived",
+                        state=self.state,
+                        skip_missing=True,
+                    )
+            except Exception:
+                # Best-effort provenance; do not fail the workflow if this lookup/logging fails.
+                pass
+
         zarr_record = self.provenance_tracker.run_info.get_most_recent_record(
             "zarr_skims"
         )
@@ -3531,12 +3556,15 @@ class BeamPostprocessor(GenericPostprocessor):
 
             beam_output_dir = workspace.get_beam_output_dir()
 
+            merged_sources = []
+            merged_any = False
             for it, it_skim in enumerate(all_skims_found):
 
                 raw_od_skims_path = os.path.join(
                     workspace.full_path,
                     it_skim,
                 )
+                merged_sources.append(raw_od_skims_path)
 
                 logger.info(f"Processing {raw_od_skims_path} for iteration {it}")
 
@@ -3558,19 +3586,22 @@ class BeamPostprocessor(GenericPostprocessor):
                     ),
                 )
 
-                # The main output is the modified Zarr store. Record it.
+                # The main output is the modified Zarr store.
                 if updated_skims_path:
-                    # Record output file for this model run
-                    from pilates.generic.records import FileRecord
+                    merged_any = True
 
-                    output_rec = FileRecord(
-                        file_path=all_skims_path,
-                        models=["beam_postprocessor"],
-                        description="Zarr skims store updated with BEAM outputs.",
-                        short_name=f"zarr_skims_{self.state.current_year}_{it}",
-                        year=self.state.current_year,
-                    )
-                    processed_records.append(output_rec)
+            if merged_any:
+                rec = self.provenance_tracker.record_output_file(
+                    model=self.model_name,
+                    file_path=all_skims_path,
+                    year=self.state.current_year,
+                    description="Zarr skims store updated with BEAM outputs.",
+                    short_name="zarr_skims",
+                    source_file_paths=merged_sources,
+                    state=self.state,
+                )
+                if rec is not None:
+                    processed_records.append(rec)
 
         if (
             get_setting(settings, "write_skims_to_omx", False)
@@ -3627,6 +3658,11 @@ class BeamPostprocessor(GenericPostprocessor):
                             short_name="final_skims_omx",
                             description="Final skims converted to OMX format for ActivitySim/UrbanSim.",
                             source_file_paths=source_file_paths,
+                            uri=(
+                                self.provenance_tracker.to_uri(final_omx_path)
+                                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                                else None
+                            ),
                         )
                         processed_records.append(omx_output_record)
                 except Exception as e:

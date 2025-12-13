@@ -77,7 +77,11 @@ class BeamRunner(GenericRunner):
     ) -> List[Record]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
-            "raw_od_skims_zarr": ("skimsActivitySimOD_current", ".zarr"),
+            # Zarr OD skims naming differs across BEAM builds/configs:
+            # - `{it}.skimsActivitySimOD_current.zarr` (observed in production)
+            # - `{it}.activitySimODSkims_current.zarr` (observed in some builds)
+            # We handle both below.
+            "raw_od_skims_zarr": (None, ".zarr"),
             "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
             "beam_plans_out": ("plans", ".csv.gz"),
@@ -89,22 +93,32 @@ class BeamRunner(GenericRunner):
         paths, last_iter = find_beam_iterations(beam_local_output_folder)
         for it, path in paths.items():
             for short_name, (file_name, extension) in files_to_get.items():
-                full_path = find_iteration_file(path, it, file_name, extension)
+                if short_name == "raw_od_skims_zarr":
+                    full_path = (
+                        find_iteration_file(path, it, "skimsActivitySimOD_current", ".zarr")
+                        or find_iteration_file(path, it, "activitySimODSkims_current", ".zarr")
+                    )
+                else:
+                    full_path = find_iteration_file(path, it, file_name, extension)
                 if full_path:
                     if it == last_iter:
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
                     else:
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
-                    # Output file provenance is automatically tracked by @provenance_logging decorator on _run()
-                    from pilates.generic.records import FileRecord
-
-                    output_rec = FileRecord(
-                        file_path=full_path,
-                        models=[self.model_name],
+                    # Log as outputs of the active step run (Consist-backed) instead of
+                    # returning bare FileRecords and hoping a wrapper logs them later.
+                    # This ensures BEAM iteration artifacts (including Zarr skims) appear
+                    # on the BEAM step run in the database.
+                    rec = self.provenance_tracker.record_output_file(
+                        self.model_name,
+                        full_path,
                         year=self.state.forecast_year,
                         short_name=dataset_name,
+                        description=f"BEAM output artifact: {dataset_name}",
+                        state=self.state,
                     )
-                    output_records.append(output_rec)
+                    if rec is not None:
+                        output_records.append(rec)
 
         return output_records
 

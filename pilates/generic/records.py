@@ -47,6 +47,9 @@ class Record:
     created_at: Optional[str] = None
     short_name: Optional[str] = None
     description: Optional[str] = None
+    # Optional Consist URI (e.g., workspace://..., inputs://..., ./...).
+    # When present, this should be treated as the authoritative locator for the record.
+    uri: Optional[str] = None
     exists: bool = True
     openlineage_id: Optional[str] = None
 

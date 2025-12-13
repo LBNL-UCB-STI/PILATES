@@ -17,6 +17,101 @@ import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+# ---------------------------------------------------------------------------
+# Optional dependency stubs (for lightweight test environments)
+# ---------------------------------------------------------------------------
+import sys
+import types
+
+
+def _stub_module(module_name: str, attrs=None):
+    mod = sys.modules.get(module_name)
+    if mod is None:
+        mod = types.ModuleType(module_name)
+        sys.modules[module_name] = mod
+    if attrs:
+        for key, value in attrs.items():
+            setattr(mod, key, value)
+    return mod
+
+
+# OpenLineage is an optional dependency in some lightweight environments.
+# Stub it for tests that exercise Consist integration but not OpenLineage payloads.
+try:
+    import openlineage  # noqa: F401
+except ModuleNotFoundError:
+    openlineage_mod = _stub_module("openlineage")
+    openlineage_client_mod = _stub_module(
+        "openlineage.client",
+        attrs={"set_producer": lambda *a, **k: None, "OpenLineageClient": object},
+    )
+    setattr(openlineage_mod, "client", openlineage_client_mod)
+    _stub_module(
+        "openlineage.client.facet",
+        attrs={
+            "SchemaField": object,
+            "SchemaDatasetFacet": object,
+            "DocumentationJobFacet": object,
+            "SourceCodeLocationJobFacet": object,
+        },
+    )
+    _stub_module(
+        "openlineage.client.run",
+        attrs={
+            "Dataset": object,
+            "InputDataset": object,
+            "OutputDataset": object,
+            "RunEvent": object,
+            "Run": object,
+            "Job": object,
+            "RunState": object,
+        },
+    )
+    _stub_module(
+        "openlineage.client.transport.http",
+        attrs={"HttpTransport": object, "HttpConfig": object},
+    )
+    _stub_module(
+        "openlineage.client.transport.file",
+        attrs={"FileTransport": object, "FileConfig": object},
+    )
+    _stub_module(
+        "openlineage.client.transport.composite",
+        attrs={"CompositeTransport": object, "CompositeConfig": object},
+    )
+
+# ActivitySim preprocessor imports heavy optional deps at module import time.
+try:
+    import openmatrix  # noqa: F401
+except ModuleNotFoundError:
+    _stub_module("openmatrix", attrs={"File": object, "open_file": lambda *a, **k: None})
+
+try:
+    import geopandas  # noqa: F401
+except ModuleNotFoundError:
+    _stub_module("geopandas", attrs={"GeoDataFrame": object, "GeoSeries": object})
+
+try:
+    import shapely  # noqa: F401
+except ModuleNotFoundError:
+    shapely_mod = _stub_module("shapely")
+    shapely_wkt_mod = _stub_module("shapely.wkt")
+    shapely_geometry_mod = _stub_module("shapely.geometry", attrs={"Polygon": object})
+    setattr(shapely_mod, "wkt", shapely_wkt_mod)
+    setattr(shapely_mod, "geometry", shapely_geometry_mod)
+
+try:
+    import tqdm  # noqa: F401
+except ModuleNotFoundError:
+    _stub_module("tqdm", attrs={"tqdm": lambda x, *a, **k: x})
+
+try:
+    import matplotlib  # noqa: F401
+except ModuleNotFoundError:
+    matplotlib_mod = _stub_module("matplotlib")
+    matplotlib_pyplot_mod = _stub_module("matplotlib.pyplot")
+    setattr(matplotlib_mod, "pyplot", matplotlib_pyplot_mod)
+
 # Consist Imports
 from consist import Tracker
 
@@ -261,6 +356,61 @@ class TestRunRefactor:
                 artifact_b = tracker.get_artifact(rec_b.short_name)
                 assert artifact_b is not None
                 assert artifact_b.meta["source_file_paths"] == [str(file_a)]
+
+    def test_move_file_skips_noisy_activitysim_final_inputs(self, setup_env):
+        """
+        ActivitySim parquet pipeline outputs are commonly named `final.parquet`.
+        If we log these raw sources as inputs without a stable logical key, Consist
+        collapses many distinct artifacts under the key "final", creating noisy
+        and misleading step inputs.
+
+        For records ending in `_asim_out_temp`, the adapter should skip logging the
+        source as an input and only log the moved output (with `source_file_paths`
+        for lineage).
+        """
+        _, output_dir = setup_env
+        full_run_dir = output_dir / "test_asim_final_noise"
+        full_run_dir.mkdir()
+        db_path = full_run_dir / "fidelity.db"
+
+        tracker = Tracker(
+            run_dir=full_run_dir,
+            db_path=str(db_path),
+            mounts={"workspace": str(full_run_dir)},
+        )
+        adapter = ConsistProvenanceTracker(
+            run_id="placeholder",
+            output_path=str(full_run_dir),
+            tracker=tracker,
+        )
+
+        source_file = full_run_dir / "final.parquet"
+        source_file.write_text("data")
+        dest_file = full_run_dir / "tours.parquet"
+
+        with tracker.scenario("test_scen") as sc:
+            with sc.step("test_step"):
+                rec_src = FileRecord(
+                    file_path=str(source_file),
+                    models=["activitysim"],
+                    short_name="tours_asim_out_temp",
+                    description="Raw ActivitySim output",
+                )
+
+                moved = adapter.move_file(
+                    record=rec_src,
+                    source_path=str(source_file),
+                    destination_path=str(dest_file),
+                    model="activitysim_postprocessor",
+                )
+
+                run_id = tracker.current_consist.run.id
+                artifacts = tracker.get_artifacts_for_run(run_id)
+
+                assert "final" not in (artifacts.inputs or {})
+                assert "tours" in (artifacts.outputs or {})
+                assert str(source_file) in (moved.source_file_paths or [])
+                assert getattr(moved, "uri", None), "Expected moved FileRecord to include a Consist uri"
 
     def test_legacy_run_info_mirroring(self, setup_env):
         """

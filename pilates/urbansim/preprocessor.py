@@ -375,6 +375,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 models=["urbansim_preprocessor"],
                 description="Block to zone mapping for UrbanSim input",
                 short_name="geoid_to_zone",
+                uri=(
+                    self.provenance_tracker.to_uri(geoid_to_zone_path)
+                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                    else None
+                ),
             )
             processed_records.add_record(mapping_output_rec)
 
@@ -438,6 +443,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
                             description="Copied updated skims for UrbanSim consumption",
                             short_name="usim_skims_input_updated",
                             source_file_paths=source_file_paths,
+                            uri=(
+                                self.provenance_tracker.to_uri(dest_skims_path)
+                                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                                else None
+                            ),
                         )
                         if skims_output_rec:
                             processed_records.add_record(skims_output_rec)

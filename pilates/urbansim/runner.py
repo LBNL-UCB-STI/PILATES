@@ -152,6 +152,11 @@ class UrbansimRunner(GenericRunner):
                 year=forecast_year,
                 short_name="usim_forecast_output",
                 description="UrbanSim forecast output data",
+                uri=(
+                    self.provenance_tracker.to_uri(usim_datastore_fpath)
+                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                    else None
+                ),
             )
             output_records.append(output_rec)
             logger.info(

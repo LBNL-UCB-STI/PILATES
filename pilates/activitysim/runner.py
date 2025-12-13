@@ -280,6 +280,11 @@ class ActivitysimRunner(GenericRunner):
                     year=self.state.current_year,
                     description="Zarr skims initialized from omx.",
                     short_name=f"zarr_skims_{self.state.current_year}_-1",
+                    uri=(
+                        self.provenance_tracker.to_uri(all_skims_path)
+                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                        else None
+                    ),
                 )
                 output_records.append(zarr_skims_rec)
                 logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
@@ -469,6 +474,11 @@ class ActivitysimRunner(GenericRunner):
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname + "_asim_out_temp",
                         iteration=self.state.current_inner_iter,
+                        uri=(
+                            self.provenance_tracker.to_uri(fpath)
+                            if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                            else None
+                        ),
                     )
                     output_records.append(output_rec)
 

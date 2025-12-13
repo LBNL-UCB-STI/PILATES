@@ -104,6 +104,12 @@ class ConsistProvenanceTracker:
             return self._tracker.current_consist.run.id
         return None
 
+    def to_uri(self, file_path: str) -> str:
+        """
+        Convert a local path to a portable Consist URI using the configured mounts.
+        """
+        return self._tracker.fs.virtualize_path(os.path.abspath(file_path))
+
     def _normalize_model_name(self, model: str) -> str:
         return model.lower() if model else model
 
@@ -245,7 +251,7 @@ class ConsistProvenanceTracker:
         Wrapper: Logs input to Consist, returns legacy FileRecord.
         """
         ctx = context if context is not None else state
-        abs_path = os.path.abspath(file_path)
+        abs_path = self._abspath_guessing_workspace(file_path)
 
         if not os.path.exists(abs_path):
             if skip_missing: return None
@@ -344,7 +350,7 @@ class ConsistProvenanceTracker:
         Wrapper: Logs output to Consist, returns legacy FileRecord.
         """
         ctx = context if context is not None else state
-        abs_path = os.path.abspath(file_path)
+        abs_path = self._abspath_guessing_workspace(file_path)
 
         if not os.path.exists(abs_path):
             if skip_missing: return None
@@ -565,6 +571,7 @@ class ConsistProvenanceTracker:
             accessed_at=datetime.now().isoformat(),
             description=description,
             short_name=short_name,
+            uri=artifact.uri,
         )
         self.run_info.repo_records[repo_record.unique_id] = repo_record
         return repo_record
@@ -576,6 +583,29 @@ class ConsistProvenanceTracker:
         abs_path = os.path.abspath(file_path)
         try: return os.path.relpath(abs_path, root)
         except ValueError: return abs_path
+
+    def _abspath_guessing_workspace(self, file_path: str) -> str:
+        """
+        Resolve `file_path` to an absolute filesystem path.
+
+        In Consist-backed mode, PILATES frequently stores `FileRecord.file_path` as a
+        path relative to `tracker.run_dir` (workspace root). Some callers also pass
+        relative paths directly. Prefer resolving relative paths against the workspace
+        root when that yields an existing file.
+        """
+        if not file_path:
+            return file_path
+        if os.path.isabs(file_path):
+            return file_path
+
+        workspace_candidate = os.path.abspath(
+            os.path.join(str(self._tracker.run_dir), str(file_path))
+        )
+        if os.path.exists(workspace_candidate):
+            return workspace_candidate
+
+        # Fallback: interpret relative paths against current working directory.
+        return os.path.abspath(str(file_path))
 
     # --- Getters for Legacy Compatibility ---
 
@@ -608,8 +638,18 @@ class ConsistProvenanceTracker:
     def _resolve_record_path(self, record: Union[FileRecord, H5FileRecord]) -> Optional[str]:
         if not record.file_path: return None
         if os.path.isabs(record.file_path): return record.file_path
-        # Use tracker logic to resolve
-        return self._tracker.fs.resolve_uri(record.file_path)
+        file_path = str(record.file_path)
+
+        # If this looks like a Consist URI (workspace://, inputs://, file://, ./...),
+        # resolve via the tracker filesystem manager.
+        try:
+            if "://" in file_path or file_path.startswith("./"):
+                return self._tracker.resolve_uri(file_path)
+        except Exception:
+            pass
+
+        # Otherwise, treat it as a workspace-relative path.
+        return self._abspath_guessing_workspace(file_path)
 
     def log_record_as_artifact(self, record: Union[FileRecord, H5FileRecord], direction: str) -> Optional[Artifact]:
         """Helper for batch logging records that might not have been logged yet."""
@@ -668,6 +708,7 @@ class ConsistProvenanceTracker:
             models=[model],
             # Explicitly mapping fields that were missing in previous implementation
             description=description,
+            uri=artifact.uri,
             producing_run_id=artifact.run_id,
             source_file_paths=source_file_paths,
             metadata=meta,
@@ -688,6 +729,7 @@ class ConsistProvenanceTracker:
             table_record_ids=[],
             # Map legacy fields from meta
             description=meta.get("description"),
+            uri=artifact.uri,
             producing_run_id=artifact.run_id,
             source_file_paths=meta.get("source_file_paths", []),
             year=meta.get("year")

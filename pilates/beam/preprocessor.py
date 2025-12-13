@@ -567,6 +567,11 @@ class BeamPreprocessor(GenericPreprocessor):
                         exists=True,
                         year=self.state.current_year,
                         created_at=str(datetime.now()),
+                        uri=(
+                            self.provenance_tracker.to_uri(expected_full_path)
+                            if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
+                            else None
+                        ),
                     )
                     asim_file_paths[base_name] = (expected_full_path, dummy_record)
                 else:
