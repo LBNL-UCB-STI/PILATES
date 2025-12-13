@@ -137,6 +137,7 @@ install_geos_package "pygeos" "pygeos" "0.14"
 install_if_missing "geopandas==0.11.1" "geopandas" "--no-deps"
 
 # Scientific/data packages
+install_if_missing "py-cpuinfo" "cpuinfo"
 install_if_missing "tables==3.8.0" "tables" "--no-deps"
 install_if_missing "matplotlib==3.7.1" "matplotlib" "--no-deps"
 install_if_missing "numexpr==2.10.2" "numexpr" "--no-deps"
