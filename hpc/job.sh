@@ -22,40 +22,6 @@ PILATES_DIR="/global/scratch/users/$USER/sources/PILATES"
 # FUNCTION DEFINITIONS
 # ==============================================================================
 
-# Check and install Python package if missing
-install_if_missing() {
-    local package=$1
-    local import_name=$2
-    local pip_flags=$3
-
-    # Extract import name from package if not provided (remove version specifiers)
-    if [ -z "$import_name" ]; then
-        import_name=$(echo "$package" | sed 's/[=<>].*//' | sed 's/-/_/g')
-    fi
-
-    if ! python -c "import $import_name" 2>/dev/null; then
-        echo "Installing $package..."
-        pip install --user $pip_flags "$package"
-    else
-        echo "$package already installed, skipping..."
-    fi
-}
-
-# Install GEOS-dependent package with GEOS_CONFIG
-install_geos_package() {
-    local package=$1
-    local import_name=$2
-    local version=$3
-
-    if ! python -c "import $import_name" 2>/dev/null; then
-        echo "Installing $package with GEOS support..."
-        GEOS_CONFIG="$GEOS_INSTALL_DIR/bin/geos-config" \
-            pip install --user --no-binary "$package" "$package==$version"
-    else
-        echo "$package already installed, skipping..."
-    fi
-}
-
 # Display system information
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
@@ -123,48 +89,13 @@ export GEOS_CONFIG="$GEOS_INSTALL_DIR/bin/geos-config"
 
 echo "Checking Python dependencies..."
 
-# Core numerical/data packages (must be installed in order with --no-deps)
-install_if_missing "numpy==1.23.5" "numpy" "--no-deps"
-install_if_missing "six==1.17.0" "six" "--no-deps"
-install_if_missing "python-dateutil==2.9.0.post0" "dateutil" "--no-deps"
-install_if_missing "pytz==2025.1" "pytz" "--no-deps"
-install_if_missing "pandas==1.5.3" "pandas" "--no-deps"
+# Change to PILATES directory to access requirements.txt
+cd "$PILATES_DIR" || exit 1
 
-# Geospatial packages (require GEOS)
-install_geos_package "shapely" "shapely" "1.8.5"
-install_if_missing "pyproj==3.6.1" "pyproj" "--no-deps"
-install_geos_package "pygeos" "pygeos" "0.14"
-install_if_missing "geopandas==0.11.1" "geopandas" "--no-deps"
+echo "Installing packages from requirements.txt..."
+# Use --constraint to ensure versions but allow pip to resolve dependencies
+pip install --user -r requirements.txt
 
-# Scientific/data packages
-install_if_missing "py-cpuinfo" "cpuinfo"
-install_if_missing "tables==3.8.0" "tables" "--no-deps"
-install_if_missing "matplotlib==3.7.1" "matplotlib" "--no-deps"
-install_if_missing "numexpr==2.10.2" "numexpr" "--no-deps"
-install_if_missing "bottleneck==1.4.2" "bottleneck" "--no-deps"
-
-# Utility packages
-install_if_missing "requests"
-install_if_missing "urllib3<2.0.0" "urllib3"
-install_if_missing "certifi"
-install_if_missing "charset-normalizer" "charset_normalizer"
-install_if_missing "idna"
-install_if_missing "tqdm"
-install_if_missing "pyyaml" "yaml"
-install_if_missing "h5py"
-install_if_missing "psutil"
-install_if_missing "joblib"
-install_if_missing "docker"
-install_if_missing "sortedcontainers"
-
-# Data format packages
-install_if_missing "pyarrow==10.0.1" "pyarrow"
-install_if_missing "fastparquet==0.8.3" "fastparquet"
-install_if_missing "xarray==2023.12.0" "xarray" "--no-deps"
-install_if_missing "zarr==2.16.1" "zarr" "--no-deps"
-
-# Provenance tracking
-install_if_missing "openlineage-python" "openlineage"
 
 # Set Python path
 export PYTHONPATH

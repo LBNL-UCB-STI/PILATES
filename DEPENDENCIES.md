@@ -7,7 +7,6 @@ PILATES uses a **manual requirements.txt** approach for dependency management. T
 ## File Structure
 
 - **`requirements.txt`** - All dependencies with pinned versions (manually maintained)
-- **`requirements.in`** - High-level dependencies for documentation (optional reference)
 
 ## Quick Reference
 
