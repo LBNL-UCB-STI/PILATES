@@ -2,114 +2,116 @@
 
 ## Overview
 
-PILATES uses a **manual requirements.txt** approach for dependency management. This ensures compatibility with the HPC environment and provides clear, transparent dependency tracking.
+PILATES uses **conda** for dependency management via `environment.yml`. This provides robust dependency resolution, handles complex binary packages (GEOS, GDAL), and works seamlessly with HPC environments.
 
 ## File Structure
 
-- **`requirements.txt`** - All dependencies with pinned versions (manually maintained)
+- **`environment.yml`** - All dependencies with version specifications (canonical source)
 
 ## Quick Reference
 
 ### Add a new dependency
 
 ```bash
-# 1. Add to requirements.txt with version
-echo "new-package==1.2.3" >> requirements.txt
+# 1. Add to environment.yml under the appropriate section
+vim environment.yml
 
-# 2. Test on HPC
+# Add under relevant section, e.g.:
+# - pip:
+#   - new-package==1.2.3
+
+# 2. Update your local environment
+conda env update -f environment.yml --prune
+
+# 3. Test locally
+python -c "import new_package; print('OK')"
+
+# 4. Test on HPC
 ssh hpc
 cd /global/scratch/users/hmlaarabi/sources/PILATES
-pip install --user -r requirements.txt
+sbatch hpc/job.sh config.yaml scenario.yaml
 
-# 3. If it works, commit
-git add requirements.txt
-git commit -m "Add new-package"
+# 5. If it works, commit
+git add environment.yml
+git commit -m "Add new-package dependency"
 ```
 
 ### Update a dependency
 
 ```bash
-# 1. Edit requirements.txt
-vim requirements.txt
-# Change: old-package==1.0.0
-# To:     old-package==2.0.0
+# 1. Edit environment.yml
+vim environment.yml
+# Change: old-package=1.0.0
+# To:     old-package=2.0.0
 
-# 2. Test on HPC
+# 2. Update local environment
+conda env update -f environment.yml --prune
+
+# 3. Test locally
+python -m pytest tests/
+
+# 4. Test on HPC
 ssh hpc
 cd /global/scratch/users/hmlaarabi/sources/PILATES
-rm -rf ~/.local/lib/python3.10/site-packages/*
-pip install --user -r requirements.txt
+sbatch hpc/job.sh config.yaml scenario.yaml
 
-# 3. If it works, commit
-git add requirements.txt
+# 5. If it works, commit
+git add environment.yml
 git commit -m "Update old-package to 2.0.0"
 ```
 
-### Capture current working state
+### Recreate environment from scratch
 
 ```bash
-# On HPC, after everything works
-ssh hpc
-module load python/3.10.12-gcc-11.4.0
-pip list --format=freeze > requirements.txt
+# Local development
+conda env remove -n pilates
+conda env create -f environment.yml
+conda activate pilates
 
-# Review and clean up
-vim requirements.txt  # Remove system packages, add comments
-git add requirements.txt
-git commit -m "Update requirements from working HPC environment"
+# HPC (automatic via job.sh)
+# The job script automatically creates/updates the environment
+sbatch hpc/job.sh config.yaml scenario.yaml
 ```
-
-## Why Manual?
-
-### ✅ Advantages
-- **Simple**: Just edit a text file
-- **HPC-compatible**: No special tools needed on HPC
-- **Transparent**: Easy to see what changed in git diff
-- **Cross-platform friendly**: No Mac ARM64 vs HPC x86_64 issues
-- **No dependencies**: Standard pip only
-- **Fast**: No compilation or resolution step
-
-### ⚠️ Tradeoffs
-- Manual dependency resolution
-- Must track transitive dependencies yourself
-- Requires testing on HPC
 
 ## Critical Version Constraints
 
 **DO NOT change these without testing on HPC:**
 
-```
+```yaml
 # Core stack (binary compatibility)
-numpy==1.23.5          # tables, pyarrow, scipy compiled against this
-pandas==1.5.3          # Compatible with numpy 1.23.5
-pyarrow==10.0.1        # Compatible with numpy 1.23.5
-scipy==1.11.3          # Compatible with numpy 1.23.5
-numba==0.57.0          # Compatible with numpy 1.23.5
+numpy=1.23.5          # Binary packages compiled against this
+pandas=1.5.3          # Compatible with numpy 1.23.5
+pyarrow=10.0.1        # Compatible with numpy 1.23.5
+scipy=1.11.3          # Compatible with numpy 1.23.5
+numba=0.57.0          # Compatible with numpy 1.23.5
 
-# GEOS-dependent (compiled against custom GEOS 3.12.0)
-shapely==1.8.5         # Must match HPC GEOS version
-pygeos==0.14           # Must match HPC GEOS version
+# Geospatial stack
+geos>=3.9             # Conda manages GEOS automatically
+shapely=1.8.5         # Compatible with GEOS 3.9+
+pygeos=0.14           # Compatible with GEOS 3.9+
+geopandas=0.11.1      # Compatible with shapely 1.8.5
 
-# Data formats (numpy compatibility)
-xarray==2023.12.0      # Compatible with numpy 1.23.5
-zarr==2.16.1           # Compatible with numpy 1.23.5
+# Data formats
+xarray=2023.12.0      # Compatible with numpy 1.23.5
+zarr=2.16.1           # Compatible with numpy 1.23.5
+pytables=3.8.0        # Compatible with numpy 1.23.5
 ```
 
 ### Why these versions?
 
-1. **numpy==1.23.5**: Binary packages (tables, pyarrow, scipy) are compiled against this specific version. Upgrading numpy requires recompiling all binary dependencies.
+1. **numpy==1.23.5**: Binary packages (tables, pyarrow, scipy) are compiled against this specific version. Upgrading numpy requires ensuring all binary dependencies are compatible.
 
-2. **GEOS packages**: shapely and pygeos must be compiled against the GEOS library built on HPC (`~/.local/geos`). Version mismatch causes runtime errors.
+2. **GEOS packages**: Conda automatically manages GEOS and ensures shapely/pygeos compatibility. No manual GEOS compilation needed.
 
-3. **pandas==1.5.3**: Later versions require numpy>=1.24, which breaks binary compatibility.
+3. **pandas==1.5.3**: Later versions require numpy>=1.24, which would break binary compatibility with current stack.
 
 ## Workflow Best Practices
 
 ### Before Making Changes
 
-1. **Test locally** (if possible) on similar Python version
+1. **Test locally** with `conda env update`
 2. **Document why** you're changing versions (in commit message)
-3. **Keep comments** in requirements.txt explaining constraints
+3. **Keep organized** - add packages to the appropriate section in environment.yml
 
 ### Making Changes
 
@@ -118,124 +120,181 @@ zarr==2.16.1           # Compatible with numpy 1.23.5
 git commit -m "Update requests from 2.28.0 to 2.31.0
 
 - Security fix for CVE-2023-xxxxx
-- Tested on HPC: works with existing dependencies
+- Tested locally and on HPC
 - No breaking changes"
 ```
 
 ### After Changes
 
-1. **Test on HPC immediately**
-2. **Clean install** to catch missing dependencies
-3. **Run a test job** before deploying to production
+1. **Test locally** - ensure your code still works
+2. **Test on HPC** - submit a test job
+3. **Document** - update this file if adding new critical constraints
+
+## HPC Deployment
+
+The `hpc/job.sh` script automatically handles conda environment setup:
+
+```bash
+# On HPC, job.sh will:
+# 1. Load anaconda3 module
+# 2. Create conda environment (first run)
+# 3. Update environment from environment.yml (subsequent runs)
+# 4. Activate environment
+# 5. Run your simulation
+
+# Simply submit your job:
+sbatch hpc/job.sh scenarios/config.yaml scenario.yaml
+```
+
+### First-time HPC setup
+
+```bash
+# The first job submission will create the environment
+# This takes ~10-15 minutes as conda installs all packages
+
+ssh hpc
+cd /global/scratch/users/$USER/sources/PILATES
+sbatch hpc/job.sh scenarios/test-config.yaml test-scenario.yaml
+
+# Check job output for environment creation status
+tail -f /global/scratch/users/$USER/pilates_logs/log_*.log
+```
+
+### Manual environment management on HPC
+
+```bash
+# If needed, you can manually manage the environment
+
+ssh hpc
+module load anaconda3
+
+# Create environment
+conda env create -f environment.yml --prefix $HOME/.conda/envs/pilates
+
+# Update environment
+conda env update -f environment.yml --prefix $HOME/.conda/envs/pilates --prune
+
+# Activate environment
+source activate $HOME/.conda/envs/pilates
+
+# Verify
+python -c "import numpy, pandas, geopandas; print('OK')"
+```
 
 ## File Organization
 
-The `requirements.txt` is organized into sections:
+The `environment.yml` is organized into sections:
 
-```txt
-# ============================================================================
-# Core numerical/data packages
-# ============================================================================
-numpy==1.23.5
-pandas==1.5.3
-...
+```yaml
+dependencies:
+  # ============================================================================
+  # Core numerical/data packages
+  # ============================================================================
+  - numpy=1.23.5
+  - pandas=1.5.3
 
-# ============================================================================
-# Geospatial packages
-# ============================================================================
-shapely==1.8.5
-...
+  # ============================================================================
+  # Geospatial packages
+  # ============================================================================
+  - geos>=3.9
+  - shapely=1.8.5
+
+  # ============================================================================
+  # Packages only available via pip
+  # ============================================================================
+  - pip:
+    - h5py
+    - openmatrix
 ```
 
-Keep this structure when adding packages.
+**Keep this structure when adding packages.** Add packages to the appropriate section, or create a new section if needed.
 
 ## Troubleshooting
 
-### "Package conflict" on HPC
+### "Solving environment" takes forever
 
 ```bash
-# Clean install
-ssh hpc
-module load python/3.10.12-gcc-11.4.0
-rm -rf ~/.local/lib/python3.10/site-packages/*
-pip install --user -r requirements.txt
+# Conda's dependency solver can be slow. Use mamba as a faster alternative:
+conda install mamba -n base -c conda-forge
+mamba env update -f environment.yml --prune
 ```
 
-### "Missing dependency"
+### Environment broken after update
 
 ```bash
-# Find what's missing
-pip install --user --dry-run -r requirements.txt
-
-# Add to requirements.txt
-echo "missing-package==1.0.0" >> requirements.txt
+# Recreate from scratch
+conda env remove -n pilates
+conda env create -f environment.yml
+conda activate pilates
 ```
 
-### "Version conflict"
+### Package not available in conda
 
 ```bash
-# Check what requires what
-pip show package-name
-
-# Adjust versions in requirements.txt to satisfy all constraints
+# Add to pip section in environment.yml
+- pip:
+  - package-not-in-conda==1.0.0
 ```
 
-## Alternative Approaches (Not Used)
+### Version conflict
 
-We considered but **chose not to use**:
+```bash
+# Check what's causing the conflict
+conda env create -f environment.yml --dry-run
 
-### pip-tools
-- **Issue**: Cross-platform problems (Mac ARM64 ≠ HPC x86_64)
-- **Workaround**: Would need to run on HPC
-- **Decision**: Manual is simpler
+# Adjust version constraints in environment.yml
+# Use >= instead of == for more flexibility where appropriate
+```
 
-### Poetry
-- **Issue**: Same cross-platform problems + tool dependency
-- **Workaround**: Would need Poetry on HPC
-- **Decision**: Too complex for HPC deployment
+### HPC job fails with import error
 
-### Conda
-- **Issue**: Requires conda on HPC, slower, different ecosystem
-- **Workaround**: Export to requirements.txt anyway
-- **Decision**: pip is standard on HPC
+```bash
+# Check the job log for details
+tail -100 /global/scratch/users/$USER/pilates_logs/log_*.log
 
-## When to Reconsider
+# Common issues:
+# 1. Environment creation failed - check log for conda errors
+# 2. Module not loaded - ensure anaconda3 module is available
+# 3. Package missing - add to environment.yml
+```
 
-Consider automation (pip-tools/Poetry) if:
-- ✅ You can run it on HPC directly
-- ✅ You have >100 dependencies to manage
-- ✅ Multiple people are updating dependencies frequently
-- ✅ You need to support multiple Python versions
+## Advantages of Conda
 
-For now, manual works great for PILATES.
+- **Automatic dependency resolution**: Conda handles complex dependency trees
+- **Binary package management**: No compilation needed for GEOS, GDAL, etc.
+- **Reproducible environments**: Same versions across local dev and HPC
+- **Environment isolation**: Clean separation from system packages
+- **Easy updates**: Single command to update all packages
 
 ## Quick Commands
 
 ```bash
-# Deploy to HPC
-scp requirements.txt hpc:/global/scratch/users/hmlaarabi/sources/PILATES/
+# Local development
+conda env create -f environment.yml              # First time
+conda activate pilates                           # Activate
+conda env update -f environment.yml --prune      # Update
+conda deactivate                                 # Deactivate
 
-# Fresh install on HPC
+# HPC deployment
+scp environment.yml hpc:/global/scratch/users/$USER/sources/PILATES/
 ssh hpc
-module load python/3.10.12-gcc-11.4.0
-rm -rf ~/.local/lib/python3.10/site-packages/*
-cd /global/scratch/users/hmlaarabi/sources/PILATES
-pip install --user -r requirements.txt
+sbatch hpc/job.sh config.yaml scenario.yaml
 
-# Verify installation
-python -c "import numpy, pandas, tables; print('OK')"
+# Verify installation (local or HPC)
+python -c "import numpy, pandas, geopandas, shapely, xarray; print('All imports OK')"
 
-# Run test job
-sbatch hpc/job.sh scenarios/your-config.yaml your-scenario.yaml
+# Check package versions
+conda list | grep numpy
+conda list | grep pandas
 ```
 
 ## Summary
 
-**Manual requirements.txt** is the right choice for PILATES because:
-1. Simple and transparent
-2. No cross-platform issues
-3. Works perfectly with HPC
-4. Easy for collaborators
-5. Standard pip workflow
+**Conda with environment.yml** provides:
+1. Robust dependency management
+2. Automatic handling of binary packages (GEOS, GDAL)
+3. Reproducible environments across platforms
+4. Simple workflow for adding/updating dependencies
+5. Seamless HPC integration via job.sh
 
-Keep dependencies pinned, test on HPC, and document changes. That's it! 🎯
+Keep dependencies organized in sections, test on HPC before committing, and document critical version constraints. 🎯
