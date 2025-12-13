@@ -4,79 +4,72 @@ channels:
   - defaults
 dependencies:
   # ============================================================================
-  # Core Python
+  # Core Python and minimal conda packages
   # ============================================================================
   - python=3.10
   - pip
 
-  # ============================================================================
-  # Core numerical/data packages (critical versions)
-  # ============================================================================
+  # Only critical scientific packages via conda (for binary compatibility)
   - numpy=1.23.*
   - pandas=1.5.*
   - scipy=1.11.*
-
-  # ============================================================================
-  # Scientific/data packages
-  # ============================================================================
-  - numexpr>=2.8
-  - bottleneck>=1.3
-  - matplotlib>=3.5
-  - numba>=0.56
-
-  # ============================================================================
-  # Geospatial packages (conda will manage GEOS automatically)
-  # ============================================================================
   - geos>=3.9
-  - shapely>=1.8,<2.0
-  - pyproj>=3.3
-  - pygeos>=0.10
-  - geopandas>=0.11,<0.15
 
   # ============================================================================
-  # Data format packages
-  # ============================================================================
-  - pyarrow>=10,<15
-  - fastparquet>=0.8
-  - xarray>=2023
-  - zarr>=2.10,<3
-
-  # ============================================================================
-  # Utility packages
-  # ============================================================================
-  - requests
-  - urllib3<2.0
-  - certifi
-  - tqdm
-  - pyyaml
-  - psutil
-  - joblib
-  - sortedcontainers
-  - fsspec
-  - packaging
-
-  # ============================================================================
-  # Packages best installed via pip (not in conda or version-specific)
+  # All other packages via pip (faster than conda for many packages)
   # ============================================================================
   - pip:
+    # Core utilities
     - six==1.17.0
     - python-dateutil==2.9.0.post0
     - pytz==2025.1
     - tzdata>=2022.1
+
+    # Scientific/data packages
+    - numexpr==2.10.2
+    - bottleneck==1.4.2
     - py-cpuinfo
     - blosc2~=2.0.0
     - tables==3.8.0
     - h5py
+    - matplotlib==3.7.1
+    - numba==0.57.0
+
+    # Geospatial packages
+    - shapely==1.8.5
+    - pyproj==3.6.1
+    - pygeos==0.14
+    - geopandas==0.11.1
+
+    # Data format packages
+    - pyarrow==10.0.1
+    - fastparquet==0.8.3
     - cramjam>=2.3.0
+    - fsspec
+    - openmatrix
+    - xarray==2023.12.0
+    - zarr==2.16.1
+    - asciitree
     - numcodecs>=0.10.0
     - fasteners
-    - asciitree
+
+    # Utility packages
+    - requests
+    - urllib3<2.0.0
+    - certifi
+    - charset-normalizer
+    - idna
+    - tqdm
+    - pyyaml
+    - psutil
+    - joblib
     - docker
+    - sortedcontainers
+    - packaging>=21.0
+
+    # Provenance tracking
     - openlineage-python
     - attrs>=20.0
     - httpx>=0.27.0
     - build>=1.2.2
-    - charset-normalizer
-    - idna
-    - openmatrix
 

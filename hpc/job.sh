@@ -55,24 +55,30 @@ cd "$PILATES_DIR" || exit 1
 # Define conda environment path
 CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
 
-# Install mamba if not available (much faster than conda)
-if ! command -v mamba &> /dev/null; then
-    echo "Installing mamba for faster dependency resolution..."
-    conda install mamba -n base -c conda-forge -y
-fi
-
-# Create or update conda environment using mamba
+# Create or update conda environment
 if [ ! -d "$CONDA_ENV_DIR" ]; then
-    echo "Creating new conda environment from environment.yml (using mamba)..."
-    mamba env create -f environment.yml --prefix "$CONDA_ENV_DIR"
+    echo "Creating new conda environment from environment.yml..."
+    conda env create -f environment.yml --prefix "$CONDA_ENV_DIR"
+
+    # Activate environment and install mamba for faster future updates
+    source activate "$CONDA_ENV_DIR"
+    echo "Installing mamba in user environment for faster future updates..."
+    conda install mamba -c conda-forge -y
 else
-    echo "Conda environment exists, updating from environment.yml (using mamba)..."
+    # Activate environment first
+    source activate "$CONDA_ENV_DIR"
+
+    # Install mamba if not in this environment
+    if ! command -v mamba &> /dev/null; then
+        echo "Installing mamba for faster dependency resolution..."
+        conda install mamba -c conda-forge -y
+    fi
+
+    echo "Updating environment from environment.yml (using mamba)..."
     mamba env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
 fi
 
-# Activate conda environment
-echo "Activating conda environment..."
-source activate "$CONDA_ENV_DIR"
+echo "Environment setup complete!"
 
 # Verify environment
 echo "Python version: $(python --version)"
