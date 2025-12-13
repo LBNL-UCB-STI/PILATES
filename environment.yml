@@ -13,7 +13,7 @@ dependencies:
   - numpy=1.23.*
   - pandas=1.5.*
   - scipy=1.11.*
-  - geos>=3.9
+  - geos=3.12.*  # Pin to 3.12 to match PyGEOS compilation
 
   # ============================================================================
   # All other packages via pip (faster than conda for many packages)
