@@ -5,6 +5,7 @@ import os
 import shutil
 from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING
+import re
 
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
 
@@ -311,7 +312,7 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         input_records, output_records = [], []
         region = settings.run.region
-        beam_production_path = self._find_beam_production_path(region)
+        beam_production_path = self._find_beam_production_path(settings, region)
 
         if not beam_production_path:
             logger.error(
@@ -810,73 +811,153 @@ class BeamPreprocessor(GenericPreprocessor):
     def _handle_linkstats(
         self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
     ):
-        """Finds or initializes the linkstats file and adds it to the record store."""
-        linkstats_record = next(
-            (
-                r
-                for r in previous_beam_records
-                if r.short_name.startswith("linkstats") and "_sub" not in r.short_name
-            ),
-            None,
-        )
+        """
+        Ensure a single, explicit warm-start linkstats record is present for this BEAM run.
 
-        if not linkstats_record:
-            linkstats_path = os.path.join(
-                workspace.get_beam_mutable_data_dir(),
+        Semantics:
+        - For the first BEAM run in the PILATES inner-iteration loop, use the initial
+          warm-start linkstats file copied into the BEAM mutable input tree
+          (typically `.../<router_directory>/init.linkstats.csv.gz`).
+        - For subsequent BEAM runs (inner-iterations > 0), use the linkstats produced by
+          the most recent BEAM run's *last* BEAM internal iteration (the one logged without
+          a `_sub...` suffix).
+
+        Implementation note:
+        - We "tag" the selected file via a stable `FileRecord.short_name` of
+          `linkstats_warmstart`, so each BEAM step has a consistent lineage key.
+        """
+        from pilates.generic.records import FileRecord
+
+        def _abs_from_record(rec: FileRecord) -> Optional[str]:
+            if not getattr(rec, "file_path", None):
+                return None
+            if os.path.isabs(rec.file_path):
+                return rec.file_path
+            return os.path.abspath(os.path.join(str(workspace.full_path), rec.file_path))
+
+        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`), which is
+        # named like `linkstats_<year>_<inner_iter>` by BeamRunner.gather_outputs().
+        beam_output_linkstats = None
+        pattern = re.compile(r"^linkstats_\d+_\d+$")
+        for rec in previous_beam_records or []:
+            sn = getattr(rec, "short_name", "") or ""
+            if "_sub" in sn:
+                continue
+            if pattern.match(sn):
+                beam_output_linkstats = rec
+                break
+
+        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
+        # record, use it, but make it very obvious that this is not ideal.
+        if beam_output_linkstats is None:
+            for rec in previous_beam_records or []:
+                sn = getattr(rec, "short_name", "") or ""
+                if sn == "linkstats":
+                    beam_output_linkstats = rec
+                    logger.warning(
+                        "[NOT IDEAL] Using an unversioned `linkstats` record as warm-start input. "
+                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` so lineage is unambiguous."
+                    )
+                    break
+
+        # Determine which physical file path to use.
+        warmstart_abs_path = None
+        warmstart_source = None
+        if beam_output_linkstats is not None:
+            warmstart_abs_path = _abs_from_record(beam_output_linkstats)
+            warmstart_source = "previous_beam_output"
+
+        if warmstart_abs_path is None:
+            warmstart_abs_path = os.path.join(
+                str(workspace.get_beam_mutable_data_dir()),
                 self.settings.run.region,
                 self.settings.beam.router_directory,
                 "init.linkstats.csv.gz",
             )
-            if os.path.exists(linkstats_path):
-                linkstats_record = self.provenance_tracker.record_output_file(
-                    "beam_preprocessor",
-                    linkstats_path,
-                    self.state.year,
-                    description="Initialized linkstats file",
-                    short_name="linkstats",
-                    state=self.state,
-                )
-            else:
-                logger.warning(
-                    f"[BEAM Preprocessor] Could not find init.linkstats file at {linkstats_path}"
-                )
+            warmstart_source = "initial_inputs"
 
-        if linkstats_record:
-            logger.info(
-                f"[BEAM Preprocessor] Linkstats file at {linkstats_record.file_path} added to BEAM input store"
+        if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):
+            logger.warning(
+                "[BEAM Preprocessor] Warm-start linkstats file not found (source=%s): %s",
+                warmstart_source,
+                warmstart_abs_path,
             )
-            store.add_record(linkstats_record)
+            return
+
+        warmstart_rel_path = os.path.relpath(warmstart_abs_path, str(workspace.full_path))
+        warmstart_uri = None
+        if hasattr(self.provenance_tracker, "to_uri"):
+            try:
+                warmstart_uri = self.provenance_tracker.to_uri(warmstart_abs_path)
+            except Exception:
+                warmstart_uri = None
+
+        warmstart_record = FileRecord(
+            file_path=warmstart_rel_path,
+            short_name="linkstats_warmstart",
+            description=f"BEAM warm-start linkstats (source={warmstart_source})",
+            models=["beam"],
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+            uri=warmstart_uri,
+        )
+
+        logger.info(
+            "[BEAM Preprocessor] Using warm-start linkstats (source=%s): %s",
+            warmstart_source,
+            warmstart_rel_path,
+        )
+        store.add_record(warmstart_record)
 
     @staticmethod
-    def _find_beam_production_path(region: str) -> Optional[str]:
-        """Finds the path to the BEAM production data directory."""
-        pilates_root = find_project_root() or os.path.realpath(os.getcwd())
+    def _find_beam_production_path(settings: PilatesConfig, region: str) -> Optional[str]:
+        """
+        Finds the path to the BEAM production data directory.
 
-        primary_path = os.path.abspath(
-            os.path.join(pilates_root, "pilates", "beam", "production", region)
-        )
+        Semantics:
+        - `settings.beam.local_input_folder` is interpreted as an inputs-root-relative
+          path (relative to the directory containing `run.py`) unless absolute.
+        - The returned path should point at the region subdirectory inside that tree.
+        """
+        pilates_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not pilates_root:
+            pilates_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+                "This can break inputs:// URI virtualization and should be fixed by running from the repo root "
+                "or ensuring the repo contains expected markers.",
+                pilates_root,
+            )
+
+        configured_root = getattr(settings.beam, "local_input_folder", None) if settings.beam else None
+        if not configured_root:
+            logger.error("BEAM local_input_folder is not configured.")
+            return None
+
+        if os.path.isabs(configured_root):
+            root_candidate = configured_root
+        else:
+            root_candidate = os.path.join(pilates_root, configured_root)
+
+        primary_path = os.path.abspath(os.path.join(root_candidate, region))
         if os.path.exists(primary_path):
             return primary_path
 
-        alt_path = os.path.abspath(
-            os.path.join(
-                pilates_root,
-                "sources",
-                "PILATES",
-                "pilates",
-                "beam",
-                "production",
-                region,
-            )
-        )
+        # Legacy fallback observed in some HPC layouts.
+        alt_root = os.path.join(pilates_root, "sources", "PILATES")
+        alt_path = os.path.abspath(os.path.join(alt_root, configured_root, region))
         if os.path.exists(alt_path):
-            logger.info(
-                f"Primary BEAM production path not found, using alternate: {alt_path}"
+            logger.warning(
+                "[NOT IDEAL] Primary BEAM production path not found; using legacy alternate layout: %s. "
+                "Prefer fixing mounts/paths so inputs resolve directly under the configured inputs root.",
+                alt_path,
             )
             return alt_path
 
         logger.error(
-            f"BEAM production input directory does not exist at either {primary_path} or {alt_path}"
+            "BEAM production input directory does not exist at either %s or %s",
+            primary_path,
+            alt_path,
         )
         return None
 

@@ -17,6 +17,7 @@ import uuid
 import os
 import logging
 import sys
+from pathlib import Path
 
 # Consist Imports
 from consist import Tracker, Artifact
@@ -335,7 +336,9 @@ def main():
     # Mount Strategy:
     # - 'inputs': The project root. Source files resolve here.
     # - 'workspace': The mutable run dir. Destination files resolve here.
-    project_root_abs = os.getcwd()
+    # NOTE: Do not rely on cwd; production runs may invoke `python run.py` from elsewhere.
+    # Use the directory containing `run.py` as the canonical inputs root.
+    project_root_abs = str(Path(__file__).resolve().parent)
 
     logger.info(f"Initializing Consist Tracker in {full_run_dir}")
     tracker = Tracker(

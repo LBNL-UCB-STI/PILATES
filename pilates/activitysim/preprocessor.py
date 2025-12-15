@@ -1742,6 +1742,16 @@ def plot_skims(
 
     # Saving plots to files.
     asim_validation = settings.activitysim.validation_folder
+    if asim_validation and not os.path.isabs(asim_validation):
+        project_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not project_root:
+            project_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+                "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
+                project_root,
+            )
+        asim_validation = os.path.join(project_root, asim_validation)
     if not os.path.isdir(asim_validation):
         os.mkdir(asim_validation)
 
@@ -2789,7 +2799,21 @@ def _copy_data_to_mutable_location(
     region = get_setting(settings, "run.region")
     input_records = RecordStore()
     output_records = RecordStore()
-    project_root = find_project_root()
+    project_root = find_project_root(start_path=os.path.dirname(__file__))
+    if not project_root:
+        project_root = os.path.realpath(os.getcwd())
+        logger.warning(
+            "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+            "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
+            project_root,
+        )
+
+    def _resolve_inputs_path(path: str) -> str:
+        if not path:
+            return path
+        if os.path.isabs(path):
+            return path
+        return os.path.abspath(os.path.join(project_root, path))
 
     # --- 1. Handle Canonical Zone Geometries ---
     zone_source_path = settings.shared.geography.zones.source_file
@@ -2826,7 +2850,7 @@ def _copy_data_to_mutable_location(
     clipped_geoms_rel_path = get_setting(settings, "activitysim.clipped_geoms_path")
     if clipped_geoms_rel_path:
         # This path is relative to the BEAM router directory
-        beam_prod_dir = os.path.join(project_root, settings.beam.local_input_folder)
+        beam_prod_dir = _resolve_inputs_path(settings.beam.local_input_folder)
         router_dir = os.path.join(beam_prod_dir, region, settings.beam.router_directory)
         clipped_geoms_source_path = os.path.join(router_dir, clipped_geoms_rel_path)
 
@@ -2858,7 +2882,7 @@ def _copy_data_to_mutable_location(
 
     # --- 3. Handle ActivitySim Configs ---
     configs_source_dir = os.path.join(
-        get_setting(settings, "activitysim.local_configs_folder"),
+        _resolve_inputs_path(get_setting(settings, "activitysim.local_configs_folder")),
         get_setting(settings, "run.region"),
     )
     configs_dest_dir = os.path.abspath(

@@ -16,6 +16,7 @@ import warnings
 from shapely.errors import ShapelyDeprecationWarning
 
 from pilates.workspace import Workspace
+from pilates.utils.provenance import find_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +171,21 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
             logger.error(
                 "Missing expected beam output file {0}".format(odSkims), exc_info=e
             )
+        project_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not project_root:
+            project_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+                "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
+                project_root,
+            )
+        beam_inputs_root = (
+            settings.beam.local_input_folder
+            if os.path.isabs(settings.beam.local_input_folder)
+            else os.path.join(project_root, settings.beam.local_input_folder)
+        )
         beam_router_dir = os.path.join(
-            settings.beam.local_input_folder,
+            beam_inputs_root,
             settings.run.region,
             settings.beam.router_directory,
         )

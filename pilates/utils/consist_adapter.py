@@ -90,6 +90,7 @@ class ConsistProvenanceTracker:
         )
 
         logger.info(f"ConsistProvenanceTracker initialized (Wrapper Mode).")
+        self._warned_not_ideal_fallbacks: set[str] = set()
 
     @property
     def data_manager(self) -> "ConsistDataManager":
@@ -591,7 +592,8 @@ class ConsistProvenanceTracker:
         In Consist-backed mode, PILATES frequently stores `FileRecord.file_path` as a
         path relative to `tracker.run_dir` (workspace root). Some callers also pass
         relative paths directly. Prefer resolving relative paths against the workspace
-        root when that yields an existing file.
+        root when that yields an existing file. If that fails, try resolving against
+        the configured Consist project root (inputs mount) before falling back to cwd.
         """
         if not file_path:
             return file_path
@@ -604,8 +606,33 @@ class ConsistProvenanceTracker:
         if os.path.exists(workspace_candidate):
             return workspace_candidate
 
-        # Fallback: interpret relative paths against current working directory.
-        return os.path.abspath(str(file_path))
+        inputs_root = None
+        try:
+            inputs_root = getattr(getattr(self._tracker, "fs", None), "mounts", {}).get("inputs")
+        except Exception:
+            inputs_root = None
+        if inputs_root:
+            inputs_candidate = os.path.abspath(os.path.join(str(inputs_root), str(file_path)))
+            if os.path.exists(inputs_candidate):
+                return inputs_candidate
+
+        # Final fallback (NOT IDEAL): interpret relative paths against current working directory.
+        # This is error-prone in production (cwd may not be the project root) and can lead to
+        # incorrect Consist URIs (e.g., workspace://... for source-tree files).
+        abs_cwd_guess = os.path.abspath(str(file_path))
+        key = f"cwd_fallback::{file_path}"
+        if key not in self._warned_not_ideal_fallbacks:
+            self._warned_not_ideal_fallbacks.add(key)
+            logger.warning(
+                "[NOT IDEAL] Resolving relative path against cwd as a last resort: '%s' -> '%s'. "
+                "This means the file was not found under workspace='%s' or inputs='%s'. "
+                "Prefer passing absolute paths, workspace-relative paths, or inputs-root-relative paths.",
+                file_path,
+                abs_cwd_guess,
+                str(self._tracker.run_dir),
+                inputs_root or "<unset>",
+            )
+        return abs_cwd_guess
 
     # --- Getters for Legacy Compatibility ---
 

@@ -12,7 +12,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.generic.model import provenance_logging
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -188,7 +188,19 @@ class UrbansimPreprocessor(GenericPreprocessor):
             model_data_fname = base_template.format(region_id=region_id)
         else:
             model_data_fname = ""
-        data_dir = settings.urbansim.local_data_input_folder
+        project_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not project_root:
+            project_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+                "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
+                project_root,
+            )
+        data_dir = (
+            settings.urbansim.local_data_input_folder
+            if os.path.isabs(settings.urbansim.local_data_input_folder)
+            else os.path.join(project_root, settings.urbansim.local_data_input_folder)
+        )
 
         # Validate we have a filename
         if not model_data_fname:
@@ -234,16 +246,13 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
 
+        beam_inputs_root = (
+            settings.beam.local_input_folder
+            if os.path.isabs(settings.beam.local_input_folder)
+            else os.path.join(project_root, settings.beam.local_input_folder)
+        )
         skims_src = os.path.abspath(
-            os.path.join(
-                data_dir,
-                "..",
-                "..",
-                "..",
-                settings.beam.local_input_folder,
-                settings.run.region,
-                settings.shared.skims.fname,
-            )
+            os.path.join(beam_inputs_root, settings.run.region, settings.shared.skims.fname)
         )
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 

@@ -268,6 +268,46 @@ class TestRunRefactor:
 
     # --- NEW TESTS BELOW ---
 
+    def test_adapter_resolves_inputs_relative_paths_independent_of_cwd(self, setup_env):
+        """
+        Ensure ConsistProvenanceTracker resolves relative input paths against the configured
+        `tracker.project_root` (inputs mount), not only against cwd/workspace.
+        """
+        input_dir, output_dir = setup_env
+        project_root = input_dir.parent  # .../project_root
+
+        full_run_dir = Path(output_dir) / "test_run_relpaths"
+        full_run_dir.mkdir()
+
+        tracker = Tracker(
+            run_dir=full_run_dir,
+            mounts={"inputs": str(project_root), "workspace": str(full_run_dir)},
+            project_root=str(project_root),
+        )
+
+        adapter = ConsistProvenanceTracker(
+            run_id="placeholder_id",
+            output_path=str(full_run_dir),
+            folder_name="test_run_relpaths",
+            tracker=tracker,
+        )
+
+        old_cwd = os.getcwd()
+        os.chdir(str(output_dir))  # Simulate production: cwd != project root
+        try:
+            with tracker.scenario("test_scenario_relpaths") as scenario:
+                with scenario.step("relpath_step"):
+                    rec = adapter.record_input_file(
+                        "test_model",
+                        "data/households.csv",
+                        short_name="households",
+                        skip_missing=False,
+                    )
+                    assert rec is not None
+                    assert rec.uri == "inputs://data/households.csv"
+        finally:
+            os.chdir(old_cwd)
+
     def test_adapter_context_enforcement(self, setup_env):
         """
         Verify that the new Adapter raises RuntimeError if start_model_run

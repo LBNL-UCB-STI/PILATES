@@ -126,9 +126,11 @@ class Workspace:
             # ActivitySim config copy
             if model_name == "activitysim":
                 asim_preprocessor = asim_pre.ActivitysimPreprocessor()
+                asim_mutable_data_dir = self.get_asim_mutable_data_dir()
+                os.makedirs(asim_mutable_data_dir, exist_ok=True)
                 input_store, output_store = (
                     asim_preprocessor.copy_data_to_mutable_location(
-                        settings, base_folder_path, self.provenance_tracker
+                        settings, asim_mutable_data_dir, self.provenance_tracker
                     )
                 )
                 os.makedirs(self.get_asim_output_dir(), exist_ok=True)
@@ -194,7 +196,7 @@ class Workspace:
     def get_asim_mutable_configs_dir(self) -> str:
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_configs_folder"),
+            get_setting(self.settings, "activitysim.local_mutable_configs_folder"),
         )
 
     def get_asim_output_dir(self) -> str:
