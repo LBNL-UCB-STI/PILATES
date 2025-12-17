@@ -40,7 +40,7 @@ elif [ "$partition_arg" = "lr7" ]; then
     MEMORY_LIMIT="500"
 fi
 
-ACCOUNT="pc_beamcore"
+ACCOUNT="pc_envisionai"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 EXPECTED_EXECUTION_DURATION="3-00:00:00"
 
