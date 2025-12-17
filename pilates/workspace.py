@@ -2,11 +2,7 @@ import os
 import logging
 from typing import Dict, Union
 
-from pilates.activitysim import preprocessor as asim_pre
 from pilates.generic.records import RecordStore
-from pilates.urbansim import preprocessor as usim_pre
-from pilates.beam import preprocessor as beam_pre
-from pilates.atlas import preprocessor as atlas_pre
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
@@ -60,12 +56,17 @@ class Workspace:
         Orchestrates the copying of all necessary initial data from source locations
         to the mutable workspace directory.
         """
+        # NOTE: Model adapter imports are intentionally lazy. Some adapters have
+        # heavy/optional dependencies (e.g., openmatrix) that shouldn't be required
+        # for workflows/tests that don't use them.
         settings = self.settings
         base_folder_path = self.full_path
         have_not_copied_usim_data = True
 
         # BEAM
         if get_setting(settings, "run.models.travel") == "beam":
+            from pilates.beam import preprocessor as beam_pre
+
             input_dir = self.get_beam_mutable_data_dir()
             os.makedirs(input_dir, exist_ok=True)
             beam_preprocessor = beam_pre.BeamPreprocessor()
@@ -93,6 +94,8 @@ class Workspace:
             if model_name == "urbansim" or (
                 model_name == "activitysim" and have_not_copied_usim_data
             ):
+                from pilates.urbansim import preprocessor as usim_pre
+
                 output_dir = self.get_usim_mutable_data_dir()
                 os.makedirs(output_dir, exist_ok=True)
                 usim_preprocessor = usim_pre.UrbansimPreprocessor()
@@ -113,6 +116,8 @@ class Workspace:
 
             # Atlas data copy
             if model_name == "atlas":
+                from pilates.atlas import preprocessor as atlas_pre
+
                 input_dir = self.get_atlas_mutable_input_dir()
                 os.makedirs(input_dir, exist_ok=True)
                 atlas_pre.copy_data_to_mutable_location(settings, input_dir)
@@ -125,6 +130,8 @@ class Workspace:
 
             # ActivitySim config copy
             if model_name == "activitysim":
+                from pilates.activitysim import preprocessor as asim_pre
+
                 asim_preprocessor = asim_pre.ActivitysimPreprocessor()
                 asim_mutable_data_dir = self.get_asim_mutable_data_dir()
                 os.makedirs(asim_mutable_data_dir, exist_ok=True)

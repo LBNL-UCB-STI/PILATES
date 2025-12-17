@@ -315,10 +315,24 @@ class AtlasPreprocessor(GenericPreprocessor):
                             )
                         )
 
-        # Get the model_run_hash from the provenance tracker (set by the decorator)
-        model_run_hash = next(
-            iter(self.provenance_tracker.run_info.model_runs.keys()), None
-        )
+        # Get the model_run_hash from the active Consist step (set by run.py's scenario.step()).
+        # Never guess this from run_info ordering: multiple steps can exist, and dict ordering
+        # is not a reliable proxy for "current step".
+        model_run_hash = getattr(self.provenance_tracker, "current_model_run_id", None)
+        if not model_run_hash:
+            # Fallback for non-Consist/legacy trackers: use last-known run id if available.
+            model_run_hash = getattr(self.provenance_tracker, "current_run_id", None)
+        if not model_run_hash:
+            # Last resort: fall back to any known run in memory (best-effort), but warn.
+            model_run_hash = next(
+                iter(getattr(self.provenance_tracker.run_info, "model_runs", {}).keys()),
+                None,
+            )
+            logger.warning(
+                "[AtlasPreprocessor] Unable to resolve active model_run_id; falling back to an arbitrary in-memory run id (%s). "
+                "This can mis-attribute provenance. Ensure preprocessing runs inside `with scenario.step(...):`.",
+                model_run_hash,
+            )
 
         # --- Write ATLAS input CSVs and record as outputs ---
         output_records = []

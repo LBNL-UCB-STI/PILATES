@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import re
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
@@ -91,6 +92,10 @@ class ConsistProvenanceTracker:
 
         logger.info(f"ConsistProvenanceTracker initialized (Wrapper Mode).")
         self._warned_not_ideal_fallbacks: set[str] = set()
+        # Track the most-recent legacy ModelRunInfo per active Consist step id.
+        # This preserves ergonomic "current model run" lookups while still avoiding
+        # collisions when multiple PILATES model calls occur within one Consist step.
+        self._latest_legacy_model_run_by_step: Dict[str, str] = {}
 
     @property
     def data_manager(self) -> "ConsistDataManager":
@@ -180,9 +185,16 @@ class ConsistProvenanceTracker:
                             pilates_unique_id=rec.unique_id
                         )
 
-        # 3. Update Legacy InMemory State for getters
+        # 3. Update Legacy InMemory State for getters.
+        #
+        # IMPORTANT: in Consist-backed mode, multiple PILATES-decorated methods may execute
+        # within a single `scenario.step(...)` (one Consist Run). Using the Consist run ID
+        # as the sole key would overwrite prior entries and break legacy lookup helpers.
+        # We therefore mint a unique legacy ID per call while still attaching artifacts
+        # to the active Consist run.
+        legacy_run_id = f"{active_run.id}::{self._normalize_model_name(model)}::{uuid.uuid4().hex[:8]}"
         run_record = ModelRunInfo(
-            unique_id=active_run.id,
+            unique_id=legacy_run_id,
             model=model,
             year=year,
             iteration=iteration,
@@ -191,9 +203,10 @@ class ConsistProvenanceTracker:
             status="running",
             input_record_hashes=inputs.all_unique_ids() if inputs else [],
         )
-        self.run_info.model_runs[active_run.id] = run_record
+        self.run_info.model_runs[legacy_run_id] = run_record
+        self._latest_legacy_model_run_by_step[active_run.id] = legacy_run_id
 
-        return active_run.id
+        return legacy_run_id
 
     def complete_model_run(
         self,
@@ -643,8 +656,11 @@ class ConsistProvenanceTracker:
     def current_model_run(self) -> Optional[ModelRunInfo]:
         """Return the ModelRunInfo corresponding to the active Consist run."""
         cid = self.current_model_run_id
-        if cid and cid in self.run_info.model_runs:
-            return self.run_info.model_runs[cid]
+        if not cid:
+            return None
+        legacy_id = self._latest_legacy_model_run_by_step.get(cid)
+        if legacy_id and legacy_id in self.run_info.model_runs:
+            return self.run_info.model_runs[legacy_id]
         return None
 
     def get_latest_completed_model_run(self, model_name: str, year: int, iteration: int) -> Optional[ModelRunInfo]:

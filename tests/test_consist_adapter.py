@@ -641,8 +641,8 @@ def test_start_and_complete_model_run_success(consist_tracker):
                 iteration=0,
             )
 
-            # Wrapper ID is the Consist run ID
-            assert model_run_id == "step_success"
+            # Adapter returns a unique legacy id to avoid collisions within one Consist step.
+            assert model_run_id.startswith("step_success::urbansim::")
             assert consist_tracker.current_model_run_id == "step_success"
 
             # Verify it appears in run_info
@@ -686,8 +686,8 @@ def test_start_and_complete_model_run_failed(consist_tracker):
                 iteration=1,
             )
 
-            assert model_run_id == "step_fail"
-            assert consist_tracker.current_model_run_id == model_run_id
+            assert model_run_id.startswith("step_fail::beam::")
+            assert consist_tracker.current_model_run_id == "step_fail"
 
             # Complete the run with failed status
             consist_tracker.complete_model_run(

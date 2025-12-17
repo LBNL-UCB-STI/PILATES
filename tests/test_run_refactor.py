@@ -474,18 +474,23 @@ class TestRunRefactor:
         with tracker.scenario("mirror_scen") as sc:
             with sc.step("step1"):
                 # Start run via adapter wrapper
-                adapter.start_model_run("my_model", year=2020)
+                legacy_run_id = adapter.start_model_run("my_model", year=2020)
 
                 # Log file
                 rec = adapter.record_output_file("my_model", str(fpath))
 
                 # Check ModelRunInfo
                 current_run_id = tracker.current_consist.run.id
-                assert current_run_id in adapter.run_info.model_runs
-                model_run = adapter.run_info.model_runs[current_run_id]
+                # In Consist-backed mode the adapter mints a unique legacy id per call
+                # to avoid collisions when multiple model runs occur within one step.
+                assert legacy_run_id in adapter.run_info.model_runs
+                assert legacy_run_id.startswith(f"{current_run_id}::my_model::")
+                model_run = adapter.run_info.model_runs[legacy_run_id]
                 assert model_run.year == 2020
                 assert model_run.model == "my_model"
 
                 # Check FileRecord mirroring
                 assert rec.unique_id in adapter.run_info.file_records
-                assert adapter.run_info.file_records[rec.unique_id].file_path == "data.csv"
+                assert (
+                    adapter.run_info.file_records[rec.unique_id].file_path == "data.csv"
+                )

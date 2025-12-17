@@ -377,6 +377,7 @@ def main():
         model="pilates_orchestrator",
         **build_scenario_consist_kwargs(settings),
     ) as scenario:
+        coupler = scenario.coupler
 
 
         # 6. DATA INITIALIZATION STEP
@@ -438,6 +439,25 @@ def main():
                 formatted_print(f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}")
                 logger.info("[Main] Running ATLAS vehicle ownership model.")
 
+                # Explicitly thread the mutable UrbanSim datastore across ATLAS sub-years.
+                # This makes the sequential dependency clear (each sub-year reads the updated file
+                # produced by the previous sub-year) and improves provenance clarity.
+                coupler.pop("usim_datastore_h5", None)
+                if state.run_info_path and os.path.exists(state.run_info_path):
+                    previous_run_dir = os.path.dirname(state.run_info_path)
+                    urbansim_datastore_dir = os.path.join(previous_run_dir, "urbansim", "data")
+                else:
+                    urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
+
+                if state.is_start_year():
+                    region = settings.run.region
+                    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+                    usim_datastore_fname = settings.urbansim.input_file_template.format(region_id=region_id)
+                else:
+                    usim_datastore_fname = settings.urbansim.output_file_template.format(year=state.forecast_year)
+
+                usim_datastore_h5_path = os.path.join(urbansim_datastore_dir, usim_datastore_fname)
+
                 # ATLAS Logic extraction
                 factory = ModelFactory()
                 preprocessor = factory.get_preprocessor("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
@@ -468,14 +488,25 @@ def main():
                     atlas_state = AtlasSubState(state, atlas_year)
                     step_name = f"atlas_{atlas_year}"
 
+                    step_inputs = [coupler.get("usim_datastore_h5") or usim_datastore_h5_path]
+
                     # Run ATLAS Step
                     with scenario.step(
                         step_name,
                         model="atlas",
                         year=atlas_year,
                         iteration=0,
+                        inputs=step_inputs,
                         **build_step_consist_kwargs("atlas", settings),
                     ):
+                        # If this step is a cache hit, adopt hydrated outputs and skip execution.
+                        cached_h5 = coupler.adopt_cached_output("usim_datastore_h5")
+                        if tracker.is_cached and cached_h5:
+                            logger.info(
+                                f"[Main] ATLAS step cache hit for year {atlas_year}; skipping execution."
+                            )
+                            continue
+
                         # 1. Preprocess
                         preprocessor.update_state(atlas_state)
                         input_data = preprocessor.preprocess(workspace)
@@ -488,6 +519,20 @@ def main():
                                 # 3. Postprocess
                                 postprocessor.update_state(atlas_state)
                                 postprocessor.postprocess(raw_outputs, workspace, run_info)
+
+                                # Capture the updated datastore container as an explicit output and
+                                # thread it forward to the next ATLAS sub-year.
+                                if os.path.exists(usim_datastore_h5_path):
+                                    updated_h5 = tracker.log_output(
+                                        usim_datastore_h5_path,
+                                        key="usim_datastore_h5",
+                                        description=f"UrbanSim datastore after ATLAS update for year {atlas_year}",
+                                    )
+                                    coupler.set("usim_datastore_h5", updated_h5)
+                                else:
+                                    logger.warning(
+                                        f"[Main] UrbanSim datastore not found after ATLAS postprocess: {usim_datastore_h5_path}"
+                                    )
                             else:
                                 raise RuntimeError(f"AtlasRunner incomplete: {run_info.status if run_info else 'None'}")
                         except Exception as e:

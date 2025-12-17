@@ -28,6 +28,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.database_upload import create_database_manager
+from pilates.config.models import DatabaseConfig
 from pilates.activitysim.preprocessor import (
     _process_raw_h5_for_asim,
     _create_land_use_table,
@@ -486,12 +487,13 @@ class H5ActivitySimExtractor:
                 "shared.skims.geoms_index_col",
                 default=get_setting(self.settings, "geoms_index_col", "zone_id"),
             )
-            zones = read_zone_geoms(
-                self.settings,
-                year or 2017,
-                asim_zone_id_col=asim_zone_id_col,
-                default_zone_id_col=input_zone_id_col,
-            )
+            try:
+                from pilates.utils.zone_utils import load_canonical_zones
+
+                zones = load_canonical_zones(self.settings, self.workspace)
+            except Exception as e:
+                logger.warning(f"Cannot generate land_use: failed to load zones: {e}")
+                return None
 
             # Extract raw data needed for land_use generation
             raw_households = self._extract_table_from_h5(
@@ -659,7 +661,15 @@ class H5ActivitySimExtractor:
 
         try:
             # Create database manager
-            self.db_manager = create_database_manager(self.settings)
+            db_config = None
+            if hasattr(self.settings, "shared") and getattr(self.settings.shared, "database", None):
+                db_config = self.settings.shared.database
+            else:
+                db_config = get_setting(self.settings, "shared.database", default=None)
+                if isinstance(db_config, dict):
+                    db_config = DatabaseConfig(**db_config)
+
+            self.db_manager = create_database_manager(db_config)
             if not self.db_manager:
                 logger.error("Failed to create database manager")
                 return False

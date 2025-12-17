@@ -23,8 +23,26 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Union, Any
 import logging
 
-from openlineage.client.facet import SchemaField, SchemaDatasetFacet
-from openlineage.client.run import Dataset, InputDataset, OutputDataset
+try:
+    from openlineage.client.facet import SchemaField, SchemaDatasetFacet
+    from openlineage.client.run import Dataset, InputDataset, OutputDataset
+
+    _OPENLINEAGE_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - depends on optional extra
+    SchemaField = object  # type: ignore[assignment]
+    SchemaDatasetFacet = object  # type: ignore[assignment]
+    Dataset = object  # type: ignore[assignment]
+    InputDataset = object  # type: ignore[assignment]
+    OutputDataset = object  # type: ignore[assignment]
+    _OPENLINEAGE_AVAILABLE = False
+
+
+def _require_openlineage() -> None:
+    if not _OPENLINEAGE_AVAILABLE:
+        raise RuntimeError(
+            "OpenLineage is required for dataset conversion helpers. "
+            "Install the optional dependency (e.g., `pip install openlineage-python`)."
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +258,7 @@ class FileRecord(Record):
 
         Returns a mapping of facets to merge into the dataset facets.
         """
+        _require_openlineage()
         facets = {}
         if self.schema:
             fields = [
@@ -261,6 +280,7 @@ class FileRecord(Record):
         The dataset facets include filePath, description, year, metadata and an
         optional schema facet.
         """
+        _require_openlineage()
         return Dataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -277,6 +297,7 @@ class FileRecord(Record):
         """
         Converts the FileRecord to an OpenLineage InputDataset.
         """
+        _require_openlineage()
         return InputDataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -293,6 +314,7 @@ class FileRecord(Record):
         """
         Converts the FileRecord to an OpenLineage OutputDataset.
         """
+        _require_openlineage()
         return OutputDataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -397,6 +419,7 @@ class H5FileRecord(Record):
         """
         Converts the H5FileRecord to an OpenLineage Dataset.
         """
+        _require_openlineage()
         return Dataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -412,6 +435,7 @@ class H5FileRecord(Record):
         """
         Converts the H5FileRecord to an OpenLineage InputDataset.
         """
+        _require_openlineage()
         return InputDataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -427,6 +451,7 @@ class H5FileRecord(Record):
         """
         Converts the H5FileRecord to an OpenLineage OutputDataset.
         """
+        _require_openlineage()
         return OutputDataset(
             namespace=namespace,
             name=self.short_name or self.file_path,
@@ -460,6 +485,7 @@ class RepoRecord(Record):
         """
         Converts the FileRecord to an OpenLineage Dataset.
         """
+        _require_openlineage()
         return Dataset(
             namespace=namespace,
             name=self.short_name or self.repo_path,
@@ -473,6 +499,7 @@ class RepoRecord(Record):
         """
         Converts the FileRecord to an OpenLineage InputDataset.
         """
+        _require_openlineage()
         return InputDataset(
             namespace=namespace,
             name=self.short_name or self.repo_path,
@@ -486,6 +513,7 @@ class RepoRecord(Record):
         """
         Converts the FileRecord to an OpenLineage OutputDataset.
         """
+        _require_openlineage()
         return OutputDataset(
             namespace=namespace,
             name=self.short_name or self.repo_path,

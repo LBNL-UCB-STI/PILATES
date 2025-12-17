@@ -42,6 +42,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict
 from datetime import datetime
+import pytest
 
 # Import PILATES modules
 from pilates.config.models import validate_config
@@ -2221,6 +2222,155 @@ class TestStubProvenanceFlow:
         print("\n" + "=" * 60)
         print("✅ `move_file` PROVENANCE TEST PASSED")
         print("=" * 60)
+
+
+class TestConsistBackedProvenanceBridge:
+    """
+    Targeted tests for Consist-backed provenance behavior.
+
+    These intentionally avoid running any real model/container logic; they validate
+    the PILATES-to-Consist bridge semantics that production runs rely on:
+    - Decorated code must execute inside an active `scenario.step(...)`
+    - Multiple decorated calls within one step must not overwrite legacy run_info
+    """
+
+    def _make_consist_tracker_and_adapter(self, tmp_path):
+        pytest.importorskip("consist")
+        from consist import Tracker
+        from pilates.utils.consist_adapter import ConsistProvenanceTracker
+
+        run_dir = Path(tmp_path) / "consist_runs"
+        tracker = Tracker(
+            run_dir=run_dir,
+            db_path=str(Path(tmp_path) / "consist_test.duckdb"),
+            mounts={"workspace": str(tmp_path)},
+        )
+        adapter = ConsistProvenanceTracker(
+            run_id="stub-consist-run",
+            output_path=str(tmp_path),
+            tracker=tracker,
+            folder_name="stub-consist-run",
+        )
+        return tracker, adapter
+
+    def test_provenance_logging_requires_active_step(self, tmp_path):
+        from pilates.generic.model import Model, provenance_logging
+        from pilates.generic.records import RecordStore, FileRecord
+
+        tracker, adapter = self._make_consist_tracker_and_adapter(tmp_path)
+
+        class StubState:
+            current_year = 2017
+            current_inner_iter = 0
+            current_major_stage = "stub"
+
+        class DummyModel(Model):
+            @provenance_logging
+            def do(self, store: RecordStore) -> RecordStore:
+                out_path = Path(tmp_path) / "out.txt"
+                out_path.write_text("ok")
+                return RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(out_path),
+                            models=[self.model_name],
+                            short_name="out",
+                            description="dummy output",
+                        )
+                    ]
+                )
+
+        in_path = Path(tmp_path) / "in.txt"
+        in_path.write_text("in")
+        store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(in_path),
+                    models=["dummy"],
+                    short_name="in",
+                    description="dummy input",
+                )
+            ]
+        )
+        model = DummyModel("dummy", StubState(), adapter)
+
+        with pytest.raises(RuntimeError, match="active step run"):
+            model.do(store)
+
+        assert adapter.run_info.model_runs == {}
+        assert tracker.current_consist is None
+
+    def test_multiple_decorated_calls_do_not_overwrite_legacy_run_info(self, tmp_path):
+        from pilates.generic.model import Model, provenance_logging
+        from pilates.generic.records import RecordStore, FileRecord
+
+        tracker, adapter = self._make_consist_tracker_and_adapter(tmp_path)
+
+        class StubState:
+            current_year = 2017
+            current_inner_iter = 0
+            current_major_stage = "stub"
+
+        class DummyModel(Model):
+            @provenance_logging
+            def do(self, store: RecordStore) -> RecordStore:
+                out_path = Path(tmp_path) / f"out_{uuid.uuid4().hex[:6]}.txt"
+                out_path.write_text("ok")
+                return RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(out_path),
+                            models=[self.model_name],
+                            short_name="out",
+                            description="dummy output",
+                        )
+                    ]
+                )
+
+        in_path = Path(tmp_path) / "in.txt"
+        in_path.write_text("in")
+        store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(in_path),
+                    models=["dummy"],
+                    short_name="in",
+                    description="dummy input",
+                )
+            ]
+        )
+        model = DummyModel("dummy", StubState(), adapter)
+
+        with tracker.scenario("stub-scenario", model="scenario") as scenario:
+            with scenario.step("stub-step", model="dummy", year=2017, iteration=0):
+                active_step_run_id = tracker.current_consist.run.id
+                before = set(adapter.run_info.model_runs.keys())
+                model.do(store)
+                after = set(adapter.run_info.model_runs.keys())
+                new_ids_1 = list(after - before)
+                assert len(new_ids_1) == 1
+                run_id_1 = new_ids_1[0]
+
+                before = after
+                model.do(store)
+                after = set(adapter.run_info.model_runs.keys())
+                new_ids_2 = list(after - before)
+                assert len(new_ids_2) == 1
+                run_id_2 = new_ids_2[0]
+
+        assert run_id_1 != run_id_2
+        assert run_id_1.startswith(active_step_run_id + "::dummy::")
+        assert run_id_2.startswith(active_step_run_id + "::dummy::")
+
+        dummy_runs = [
+            r for r in adapter.run_info.model_runs.values() if r.model == "dummy"
+        ]
+        assert len(dummy_runs) == 2
+        assert all(r.status == "completed" for r in dummy_runs)
+
+        outs = tracker.get_artifacts_for_run(active_step_run_id).outputs
+        assert "out" in outs
+
 
 
 if __name__ == "__main__":

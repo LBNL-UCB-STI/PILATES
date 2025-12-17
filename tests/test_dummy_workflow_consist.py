@@ -146,7 +146,7 @@ def make_unique_id(file_path: str) -> str:
     Args:
         file_path: The file path to hash
 
-    Returns:
+    Retu/Users/zaneedell/git/PILATES/tests/test_dummy_workflow_consist.pyrns:
         A 16-character hexadecimal string that uniquely identifies the file path
 
     Note:
@@ -390,11 +390,40 @@ class DummyModelAPreprocessor(GenericPreprocessor):
     def _preprocess(
         self, workspace: Workspace, previous_records: RecordStore = RecordStore()
     ) -> RecordStore:
-        # In this dummy example, the preprocessor simply passes through the records
-        # that were copied to the mutable location.
-        # The actual copying is handled by copy_data_to_mutable_location,
-        # and its outputs are passed as previous_records to this method.
-        return previous_records
+        # In Consist, an artifact cannot be both an input and an output of the same run
+        # (run_artifact_link primary key is (run_id, artifact_id)). So a "pass-through"
+        # preprocessor would correctly have inputs but no outputs.
+        #
+        # For this dummy workflow, we make the preprocessor produce distinct outputs
+        # so the step has a meaningful output edge in the lineage graph.
+        output_dir = workspace.output_dir
+
+        csv_record = get_record_by_short_name(previous_records, "data.csv")
+        h5_record = get_record_by_short_name(previous_records, "data.h5")
+        if not csv_record or not h5_record:
+            raise ValueError("Expected data.csv and data.h5 in previous_records")
+
+        pre_csv_path = os.path.join(output_dir, "preprocessed_data.csv")
+        pre_h5_path = os.path.join(output_dir, "preprocessed_data.h5")
+        shutil.copy(csv_record.file_path, pre_csv_path)
+        shutil.copy(h5_record.file_path, pre_h5_path)
+
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=pre_csv_path,
+                    short_name="preprocessed_data.csv",
+                    description="Preprocessed CSV output for Model A",
+                    unique_id=make_unique_id(pre_csv_path),
+                ),
+                H5FileRecord(
+                    file_path=pre_h5_path,
+                    short_name="preprocessed_data.h5",
+                    description="Preprocessed H5 output for Model A",
+                    unique_id=make_unique_id(pre_h5_path),
+                ),
+            ]
+        )
 
 
 class DummyWorkspace:
@@ -450,17 +479,17 @@ class DummyModelARunner(GenericRunner):
     ) -> Tuple[RecordStore, ModelRunInfo]:
         output_dir = workspace.output_dir
         # Extract paths from the RecordStore
-        csv_record = get_record_by_short_name(store, "data.csv")
-        h5_record = get_record_by_short_name(store, "data.h5")
+        csv_record = get_record_by_short_name(store, "preprocessed_data.csv")
+        h5_record = get_record_by_short_name(store, "preprocessed_data.h5")
 
         # Ensure records are found before accessing their paths
         if not csv_record:
             raise ValueError(
-                "data.csv record not found in RecordStore for Model A Runner."
+                "preprocessed_data.csv record not found in RecordStore for Model A Runner."
             )
         if not h5_record:
             raise ValueError(
-                "data.h5 record not found in RecordStore for Model A Runner."
+                "preprocessed_data.h5 record not found in RecordStore for Model A Runner."
             )
 
         csv_path = csv_record.file_path
@@ -878,16 +907,23 @@ class DummyContainerRunner(GenericRunner):
         4. Handle container results and create output records
         """
         output_dir = workspace.output_dir
-        csv_record = get_record_by_short_name(store, "data.csv")
-        h5_record = get_record_by_short_name(store, "data.h5")
+        # Preprocessor may produce distinct "preprocessed_*" artifacts (preferred) to
+        # avoid pass-through input/output collisions in Consist.
+        csv_record = get_record_by_short_name(store, "preprocessed_data.csv")
+        if not csv_record:
+            csv_record = get_record_by_short_name(store, "data.csv")
+
+        h5_record = get_record_by_short_name(store, "preprocessed_data.h5")
+        if not h5_record:
+            h5_record = get_record_by_short_name(store, "data.h5")
 
         if not csv_record:
             raise ValueError(
-                "data.csv record not found in RecordStore for DummyContainerRunner."
+                "Expected CSV input record not found in RecordStore for DummyContainerRunner."
             )
         if not h5_record:
             raise ValueError(
-                "data.h5 record not found in RecordStore for DummyContainerRunner."
+                "Expected H5 input record not found in RecordStore for DummyContainerRunner."
             )
 
         csv_path = csv_record.file_path
@@ -1399,6 +1435,111 @@ class TestDummyWorkflowConsist:
         print(f"  - Scenario inputs: {len(scenario_artifacts.inputs)}")
         print(f"  - Scenario outputs: {len(scenario_artifacts.outputs)}")
         print(f"  - Lineage verified: outputs → inputs through all steps")
+
+    def test_schema_capture_persists_artifact_schema(self, setup_workflow):
+        """
+        Ensure Consist schema profiling is captured in PILATES integration tests.
+
+        Mirrors Consist's e2e expectations:
+        - `tracker.ingest(artifact)` profiles the ingested DuckDB table
+        - `schema_id` / `schema_summary` are written to Artifact.meta
+        - normalized schema rows are persisted (ArtifactSchema/Field/Observation)
+        """
+        workflow_output_dir, provenance_tracker, db_path, tracker = setup_workflow
+
+        from sqlmodel import Session, select
+
+        from consist.models.artifact_schema import (
+            ArtifactSchema,
+            ArtifactSchemaField,
+            ArtifactSchemaObservation,
+        )
+
+        input_data_dir = Path(__file__).resolve().parent / "fixtures" / "dummy_workflow"
+        year = 2025
+        scenario_name = "schema_capture_test"
+
+        workflow_state = DummyWorkflowState(current_year=year)
+        workflow_state.full_settings.shared.database.path = str(db_path)
+        workspace = DummyWorkspace(output_dir=str(workflow_output_dir))
+
+        model_a_config = {"input_dir": str(input_data_dir)}
+        preprocessor = DummyModelAPreprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        runner = DummyModelARunner(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+        postprocessor = DummyModelAPostprocessor(
+            "ModelA", model_a_config, provenance_tracker, workflow_state
+        )
+
+        with tracker.scenario(
+            name=scenario_name,
+            config={"year": year, "model": "ModelA"},
+            tags=["schema_capture_test"],
+            model="test_orchestrator",
+        ) as scenario:
+            with scenario.step("initialization"):
+                _, mutable_records = preprocessor.copy_data_to_mutable_location(
+                    model_a_config, str(workflow_output_dir)
+                )
+                provenance_tracker.log_record_store(mutable_records, direction="output")
+
+            with scenario.step("preprocess"):
+                preprocess_output = preprocessor.preprocess(
+                    workspace, previous_records=mutable_records
+                )
+
+            with scenario.step("run"):
+                runner_output, _ = runner.run(preprocess_output, workspace)
+
+            with scenario.step("postprocess"):
+                postprocessor.postprocess(runner_output, workspace)
+
+        # Prefer the runner-stage CSV output because the postprocessed "final" output can be
+        # legitimately empty (filtering), which prevents dlt from inferring column types.
+        output_key = f"model_a_output_{year}.csv"
+        output_path = workflow_output_dir / output_key
+        assert output_path.exists(), "Expected CSV output to exist for ingestion"
+
+        artifact = tracker.get_artifact(output_key)
+        assert artifact is not None, f"Expected Consist artifact for key='{output_key}'"
+        assert artifact.driver == "csv", f"Expected driver='csv', got {artifact.driver!r}"
+
+        tracker.ingest(artifact)
+
+        artifact_after = tracker.get_artifact(output_key)
+        assert artifact_after is not None
+        meta = artifact_after.meta or {}
+
+        assert meta.get("is_ingested") is True
+        assert "schema_id" in meta
+        assert "schema_summary" in meta
+
+        schema_id = meta["schema_id"]
+        summary = meta["schema_summary"]
+        assert summary.get("n_columns", 0) >= 2
+
+        with Session(tracker.engine) as session:
+            assert session.get(ArtifactSchema, schema_id) is not None
+
+            fields = session.exec(
+                select(ArtifactSchemaField).where(
+                    ArtifactSchemaField.schema_id == schema_id
+                )
+            ).all()
+            field_types = {f.name: (f.logical_type or "").lower() for f in fields}
+            assert {"a", "a_doubled"} <= set(field_types), f"Got fields: {sorted(field_types)}"
+            assert field_types["a"] in {"bigint", "integer", "hugeint"} or "int" in field_types["a"]
+            assert field_types["a_doubled"] in {"bigint", "integer", "hugeint"} or "int" in field_types["a_doubled"]
+
+            observations = session.exec(
+                select(ArtifactSchemaObservation).where(
+                    ArtifactSchemaObservation.schema_id == schema_id
+                )
+            ).all()
+            assert len(observations) >= 1
 
     @pytest.mark.xfail(
         reason=(

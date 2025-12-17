@@ -24,17 +24,51 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple
 
 import pandas as pd
-from openlineage.client import set_producer, OpenLineageClient
-from openlineage.client.facet import DocumentationJobFacet, SourceCodeLocationJobFacet
-from openlineage.client.run import RunEvent, Run, Job, RunState
-from openlineage.client.transport.http import HttpTransport, HttpConfig
-from openlineage.client.transport.file import FileTransport, FileConfig
-from openlineage.client.transport.composite import CompositeTransport, CompositeConfig
+try:
+    from openlineage.client import set_producer, OpenLineageClient
+    from openlineage.client.facet import (
+        DocumentationJobFacet,
+        SourceCodeLocationJobFacet,
+    )
+    from openlineage.client.run import RunEvent, Run, Job, RunState
+    from openlineage.client.transport.http import HttpTransport, HttpConfig
+    from openlineage.client.transport.file import FileTransport, FileConfig
+    from openlineage.client.transport.composite import (
+        CompositeTransport,
+        CompositeConfig,
+    )
+
+    _OPENLINEAGE_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - depends on optional extra
+    set_producer = None  # type: ignore[assignment]
+    OpenLineageClient = object  # type: ignore[assignment]
+    DocumentationJobFacet = object  # type: ignore[assignment]
+    SourceCodeLocationJobFacet = object  # type: ignore[assignment]
+    RunEvent = object  # type: ignore[assignment]
+    Run = object  # type: ignore[assignment]
+    Job = object  # type: ignore[assignment]
+    RunState = object  # type: ignore[assignment]
+    HttpTransport = object  # type: ignore[assignment]
+    HttpConfig = object  # type: ignore[assignment]
+    FileTransport = object  # type: ignore[assignment]
+    FileConfig = object  # type: ignore[assignment]
+    CompositeTransport = object  # type: ignore[assignment]
+    CompositeConfig = object  # type: ignore[assignment]
+    _OPENLINEAGE_AVAILABLE = False
 
 from pilates.config import PilatesConfig
 from pilates.utils.schema_inference import get_schema_from_file
 
-set_producer("https://github.com/LBNL-UCB-STI/PILATES")
+if _OPENLINEAGE_AVAILABLE and set_producer is not None:
+    set_producer("https://github.com/LBNL-UCB-STI/PILATES")
+
+
+def _require_openlineage() -> None:
+    if not _OPENLINEAGE_AVAILABLE:
+        raise RuntimeError(
+            "OpenLineage is required for OpenLineageTracker. "
+            "Install the optional dependency (e.g., `pip install openlineage-python`)."
+        )
 
 from pilates.generic.records import (
     FileRecord,
@@ -681,6 +715,48 @@ class FileProvenanceTracker(ProvenanceTracker):
         self._save_run_info()
         logger.debug(
             f"Recorded repository input for {model}: {relative_path} (exists: {abs_path is not None})"
+        )
+        return repo_record
+
+    def record_repo_output(
+        self,
+        model: str,
+        repo_path: str,
+        short_name: str = None,
+        description: str = None,
+        git_hash: str = None,
+    ) -> RepoRecord:
+        """
+        Record a repository (or directory) as an output of the current model run.
+
+        This mirrors `record_repo_input` for API parity with the Consist adapter and
+        to support dual-storage workflows that materialize derived repos/dirs.
+        """
+        if git_hash is None:
+            git_hash = self._calculate_path_hash(repo_path)
+        model = self._normalize_model_name(model)
+        abs_path = self._validate_file_path(repo_path)
+        if not abs_path:
+            logger.warning(f"Skipping missing repository output for {model}: {repo_path}")
+            return
+        relative_path = self.get_path_relative_to_workspace_root(abs_path)
+
+        repo_record = RepoRecord(
+            unique_id=git_hash,
+            repo_path=relative_path,
+            accessed_at=datetime.now().isoformat(),
+            description=description,
+            short_name=short_name,
+        )
+        self.run_info.repo_records[git_hash] = repo_record
+
+        current_model_run = self.current_model_run()
+        if current_model_run:
+            current_model_run.output_record_hashes.append(repo_record.unique_id)
+
+        self._save_run_info()
+        logger.debug(
+            f"Recorded repository output for {model}: {relative_path} (exists: {abs_path is not None})"
         )
         return repo_record
 
@@ -1635,6 +1711,7 @@ class OpenLineageTracker(FileProvenanceTracker):
             use_marquez (bool): Whether to send events to Marquez (default False).
             marquez_url (str): URL of the Marquez server.
         """
+        _require_openlineage()
         super().__init__(run_id, output_path, folder_name)
         self.namespace = "default"
         self.client = None

@@ -4,7 +4,7 @@ import numpy as np
 import yaml
 from unittest.mock import patch, MagicMock
 import json
-import geopandas as gpd
+import pandas as pd
 
 from pilates.beam.postprocessor import _merge_beam_skims_to_zarr
 from pilates.config.models import load_config
@@ -251,7 +251,7 @@ class TestBeamPostprocessor:
         - Checks that data from the partial skim is merged into the main skim.
         """
         # Arrange
-        mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
+        mock_load_canonical_zones.return_value = pd.DataFrame(
             {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_verify_skim_zone_order.return_value = (
@@ -308,7 +308,7 @@ class TestBeamPostprocessor:
         Test that merging BEAM skims with scrambled zone order raises a ValueError.
         """
         # Arrange
-        mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
+        mock_load_canonical_zones.return_value = pd.DataFrame(
             {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
@@ -350,7 +350,7 @@ class TestBeamPostprocessor:
         Test that merging BEAM skims missing the original_zone_ids attribute raises a ValueError.
         """
         # Arrange
-        mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
+        mock_load_canonical_zones.return_value = pd.DataFrame(
             {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
@@ -391,7 +391,7 @@ class TestBeamPostprocessor:
         Test that merging BEAM skims with 0-based integer zone IDs raises a ValueError.
         """
         # Arrange
-        mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
+        mock_load_canonical_zones.return_value = pd.DataFrame(
             {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
@@ -434,7 +434,7 @@ class TestBeamPostprocessor:
         due to non-0-based otaz coordinates.
         """
         # Arrange
-        mock_load_canonical_zones.return_value = gpd.GeoDataFrame(
+        mock_load_canonical_zones.return_value = pd.DataFrame(
             {"zone_key": CANONICAL_GEOID_ORDER}, index=CANONICAL_GEOID_ORDER
         )
         mock_workspace = MagicMock()
