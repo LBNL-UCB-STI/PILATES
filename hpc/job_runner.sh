@@ -8,10 +8,14 @@ settings_file="settings.yaml"
 stage_file="current_stage_${JOB_NAME}.yaml"
 
 # Default values
-PARTITION="lr8"
-QOS="lr8_normal"
-NUM_CPUS=128
-MEMORY_LIMIT="700"
+PARTITION="lr7"
+QOS="lr_normal"
+NUM_CPUS=56
+MEMORY_LIMIT="500"
+# PARTITION="lr8"
+# QOS="lr8_normal"
+# NUM_CPUS=128
+# MEMORY_LIMIT="700"
 
 while getopts :c:s:p: name
 do
