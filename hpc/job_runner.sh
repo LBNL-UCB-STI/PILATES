@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# Change to repo root directory (parent of hpc/) so relative paths work
+# Change to repo root directory if we're in the hpc/ subdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.." || exit 1
+if [[ "$(basename "$SCRIPT_DIR")" == "hpc" ]]; then
+    cd "$SCRIPT_DIR/.." || exit 1
+fi
 
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
