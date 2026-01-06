@@ -1,11 +1,5 @@
 #!/bin/bash
 
-# Change to repo root directory if we're in the hpc/ subdirectory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "$(basename "$SCRIPT_DIR")" == "hpc" ]]; then
-    cd "$SCRIPT_DIR/.." || exit 1
-fi
-
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
@@ -35,7 +29,7 @@ do
           stage_file="$OPTARG";; # Command line argument for stage file
     p)    pflag=1
           partition_arg="$OPTARG";; # Partition argument
-    ?)   printf "Usage: %s: [-c settings template file loc] [-s stage file loc] [-p partition] args\n" $0
+    ?)   printf "Usage: %s: [-c settings file loc] [-s stage file loc] [-p partition] args\n" $0
           exit 2;;
     esac
 done
@@ -58,19 +52,9 @@ fi
 # Export the BEAM_MEMORY environment variable
 export BEAM_MEMORY
 
-# Debug: Print current directory and template file path
-echo "Current directory: $(pwd)"
-echo "Template file: $template_file"
-echo "Settings file: $settings_file"
-
-# Check if template file exists
-if [ ! -f "$template_file" ]; then
-    echo "Error: Template file '$template_file' not found"
-    exit 1
-fi
-
 # Create the final settings file from the template
-envsubst < "$template_file" > "$settings_file"
+PILATES_PATH="/global/scratch/users/$USER/sources/PILATES"
+envsubst < "$PILATES_PATH/$template_file" > "$PILATES_PATH/$settings_file"
 
 ACCOUNT="pc_envisionai"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
@@ -89,7 +73,7 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    "$SCRIPT_DIR/job.sh" "$settings_file" "$stage_file"
+    job.sh "$settings_file" "$stage_file"
 
 # Print the job log file path
 echo $JOB_LOG_FILE_PATH
