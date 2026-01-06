@@ -4,8 +4,8 @@ RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
 
-template_file="settings_template.yaml" # Template file with variables
-settings_file="settings.yaml" # This file will be generated
+settings_file="settings.yaml" # Template file with variables
+current_settings_file="settings_${JOB_NAME}.yaml" # This file will be generated
 stage_file="current_stage_${JOB_NAME}.yaml" # Current stage file
 
 # Default values
@@ -24,7 +24,7 @@ while getopts :c:s:p: name
 do
     case $name in
     c)    cflag=1
-          template_file="$OPTARG";; # Command line argument for settings template file
+          settings_file="$OPTARG";; # Command line argument for settings template file
     s)    sflag=1
           stage_file="$OPTARG";; # Command line argument for stage file
     p)    pflag=1
@@ -53,8 +53,8 @@ fi
 export BEAM_MEMORY
 
 # Create the final settings file from the template
-PILATES_PATH="/global/scratch/users/$USER/sources/PILATES"
-envsubst < "$PILATES_PATH/$template_file" > "$PILATES_PATH/$settings_file"
+PILATES_DIR="/global/scratch/users/$USER/sources/PILATES"
+envsubst < "$PILATES_DIR/$settings_file" > "$PILATES_DIR/$current_settings_file"
 
 ACCOUNT="pc_envisionai"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
@@ -73,7 +73,7 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    job.sh "$settings_file" "$stage_file"
+    job.sh "$current_settings_file" "$stage_file"
 
 # Print the job log file path
 echo $JOB_LOG_FILE_PATH
