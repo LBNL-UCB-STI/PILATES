@@ -56,6 +56,17 @@ fi
 # Export the BEAM_MEMORY environment variable
 export BEAM_MEMORY
 
+# Debug: Print current directory and template file path
+echo "Current directory: $(pwd)"
+echo "Template file: $template_file"
+echo "Settings file: $settings_file"
+
+# Check if template file exists
+if [ ! -f "$template_file" ]; then
+    echo "Error: Template file '$template_file' not found"
+    exit 1
+fi
+
 # Create the final settings file from the template
 envsubst < "$template_file" > "$settings_file"
 
@@ -76,7 +87,7 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    job.sh "$settings_file" "$stage_file"
+    "$SCRIPT_DIR/job.sh" "$settings_file" "$stage_file"
 
 # Print the job log file path
 echo $JOB_LOG_FILE_PATH
