@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Change to repo root directory (parent of hpc/) so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.." || exit 1
+
 RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
