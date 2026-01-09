@@ -204,28 +204,14 @@ def create_beam_input_data(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
     asim_output_dict,
     source_file_paths: list,
-    model_run_hash: str,
 ) -> Tuple[str, Optional[FileRecord]]:
     forecast_year = state.forecast_year
     asim_output_data_dir = workspace.get_asim_output_dir()
     archive_name = "asim_outputs_{0}.zip".format(forecast_year)
     outpath = os.path.join(asim_output_data_dir, archive_name)
     logger.info("Merging results back into UrbanSim format and storing as .zip!")
-
-    # A virtual model name for this step to distinguish it in provenance
-    model_name = "activitysim_postprocessor"
-
-    # Record the source files (raw asim outputs) as inputs to this step
-    for source_path in source_file_paths:
-        provenance_tracker.record_input_file(
-            model_name,
-            source_path,
-            description="Raw ActivitySim output for BEAM zip creation",
-            model_run_id=model_run_hash,
-        )
 
     with zipfile.ZipFile(outpath, "w") as csv_zip:
         # copy asim outputs into archive
@@ -234,15 +220,11 @@ def create_beam_input_data(
             csv_zip.writestr(table_name + ".csv", asim_output_dict[table_name].to_csv())
     logger.info("Done creating .zip archive!")
 
-    # Record the created zip file as an output
-    output_record = provenance_tracker.record_output_file(
-        model_name,
-        outpath,
+    output_record = FileRecord(
+        file_path=outpath,
         year=forecast_year,
         description="Zipped ActivitySim outputs for BEAM",
-        model_run_id=model_run_hash,
-        source_file_paths=source_file_paths,
-        state=state,
+        short_name="asim_outputs_zip",
     )
     return outpath, output_record
 
@@ -251,11 +233,9 @@ def create_usim_input_data(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
     asim_output_dict,
     tables_updated_by_asim,
     asim_source_paths: list,
-    model_run_hash: str,
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -270,20 +250,8 @@ def create_usim_input_data(
     """
     input_year = state.year
     forecast_year = state.forecast_year
-    model_name = "activitysim_postprocessor"  # Virtual model name
-
     # parse settings
     data_dir = workspace.get_usim_mutable_data_dir()
-
-    # --- Record Inputs ---
-    # 1. Raw ActivitySim outputs (passed via asim_source_paths)
-    for source_path in asim_source_paths:
-        provenance_tracker.record_input_file(
-            model_name,
-            source_path,
-            description="Raw ActivitySim output for next UrbanSim input creation",
-            model_run_id=model_run_hash,
-        )
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
@@ -308,14 +276,6 @@ def create_usim_input_data(
         )
         return None, None
 
-    # 2. Previous UrbanSim input data (now archived)
-    provenance_tracker.record_input_file(
-        model_name,
-        archive_path,
-        description=f"Previous UrbanSim input data (for year {input_year})",
-        model_run_id=model_run_hash,
-    )
-
     # 3. Previous UrbanSim output data
     usim_output_datastore_name = get_usim_datastore_fname(
         settings, "output", forecast_year
@@ -328,13 +288,6 @@ def create_usim_input_data(
             )
         )
         return None, None
-    provenance_tracker.record_input_file(
-        model_name,
-        usim_output_store_path,
-        description=f"Previous UrbanSim output data (for year {forecast_year})",
-        model_run_id=model_run_hash,
-    )
-
     # --- Perform Transformation ---
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
@@ -415,18 +368,11 @@ def create_usim_input_data(
     usim_output_store.close()
     logger.info("Closing all open h5 files")
 
-    # --- Record Output ---
-    all_source_paths = asim_source_paths + [
-        provenance_tracker.get_relative_path(archive_path),
-        provenance_tracker.get_relative_path(usim_output_store_path),
-    ]
-    output_record = provenance_tracker.record_output_file(
-        model_name,
-        input_store_path,  # The path to the newly created H5 file
+    output_record = FileRecord(
+        file_path=input_store_path,
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
-        model_run_id=model_run_hash,
-        source_file_paths=all_source_paths,
+        short_name=f"usim_input_{forecast_year}",
     )
 
     return input_store_path, output_record
@@ -436,14 +382,11 @@ def update_usim_inputs_after_warm_start(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
     model_run_hash: Optional[str] = None,
 ):
     """
     TODO: Combine this method with create_usim_input_data() above
     """
-    model_name = "activitysim_warm_start_postprocessor"  # Virtual model name
-
     # load usim data
     usim_data_dir = workspace.get_usim_mutable_data_dir()
     datastore_name = get_usim_datastore_fname(settings, io="input")
@@ -456,26 +399,6 @@ def update_usim_inputs_after_warm_start(
     warm_start_persons_path = os.path.join(warm_start_dir, "warm_start_persons.csv")
     warm_start_households_path = os.path.join(
         warm_start_dir, "warm_start_households.csv"
-    )
-
-    # --- Record Inputs ---
-    provenance_tracker.record_input_file(
-        model_name,
-        input_store_path,
-        description="UrbanSim input H5 before warm start update",
-        model_run_id=model_run_hash,
-    )
-    provenance_tracker.record_input_file(
-        model_name,
-        warm_start_persons_path,
-        description="Warm start persons data",
-        model_run_id=model_run_id,
-    )
-    provenance_tracker.record_input_file(
-        model_name,
-        warm_start_households_path,
-        description="Warm start households data",
-        model_run_id=model_run_id,
     )
 
     # --- Perform Transformation ---
@@ -509,21 +432,6 @@ def update_usim_inputs_after_warm_start(
     usim_datastore["households"] = hh
 
     usim_datastore.close()
-
-    # --- Record Output ---
-    source_files = [
-        input_store_path,
-        warm_start_persons_path,
-        warm_start_households_path,
-    ]
-    provenance_tracker.record_output_file(
-        model_name,
-        input_store_path,  # The modified H5 file
-        year=state.year,
-        description="UrbanSim input H5 after warm start update",
-        model_run_id=model_run_id,
-        source_file_paths=source_files,
-    )
 
     return
 
@@ -610,24 +518,15 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 target_path = os.path.join(inputs_folder_path, input_file)
                 shutil.copy(source_path, target_path)
 
-                if self.provenance_tracker:
-                    archived_record = self.provenance_tracker.record_output_file(
-                        model="activitysim_postprocessor",
+                processed_records.append(
+                    FileRecord(
                         file_path=target_path,
                         year=self.state.current_year,
                         description=f"Archived ActivitySim input: {input_file}",
                         short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
-                        source_file_paths=[source_path],
-                        state=self.state,
+                        iteration=self.state.current_inner_iter,
                     )
-                    if archived_record:
-                        archived_record.file_path = (
-                            self.provenance_tracker.get_path_relative_to_workspace_root(
-                                target_path
-                            )
-                        )
-                        archived_record.iteration = self.state.current_inner_iter
-                        processed_records.append(archived_record)
+                )
                 logger.info(f"Archived ActivitySim input: {input_file}")
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
@@ -642,24 +541,15 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 shutil.rmtree(zarr_target_path)
             shutil.copytree(zarr_source_path, zarr_target_path)
 
-            if self.provenance_tracker:
-                zarr_record = self.provenance_tracker.record_output_file(
-                    model="activitysim_postprocessor",
+            processed_records.append(
+                FileRecord(
                     file_path=zarr_target_path,
                     year=self.state.current_year,
                     description="Archived ActivitySim input: skims.zarr (snapshot)",
-                    short_name=f"asim_input_skims_zarr_archived",
-                    source_file_paths=[zarr_source_path],
-                    state=self.state,
+                    short_name="asim_input_skims_zarr_archived",
+                    iteration=self.state.current_inner_iter,
                 )
-                if zarr_record:
-                    zarr_record.file_path = (
-                        self.provenance_tracker.get_path_relative_to_workspace_root(
-                            zarr_target_path
-                        )
-                    )
-                    zarr_record.iteration = self.state.current_inner_iter
-                    processed_records.append(zarr_record)
+            )
             logger.info("Archived ActivitySim input: skims.zarr")
         else:
             logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
@@ -673,23 +563,16 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     iteration_folder_path,
                     clean_name + ".parquet",
                 )
-                if self.provenance_tracker:
-                    moved_record = self.provenance_tracker.move_file(
-                        record,
-                        source,
-                        target,
-                        model="activitysim_postprocessor",
-                        state=self.state,
+                shutil.move(source, target)
+                processed_records.append(
+                    FileRecord(
+                        file_path=target,
+                        year=self.state.forecast_year,
+                        description=f"ActivitySim output file: {clean_name}",
+                        short_name=clean_name,
+                        iteration=self.state.current_inner_iter,
                     )
-                    moved_record.file_path = (
-                        self.provenance_tracker.get_path_relative_to_workspace_root(
-                            target
-                        )
-                    )
-                    moved_record.iteration = self.state.current_inner_iter
-                    processed_records.append(moved_record)
-                else:
-                    shutil.move(source, target)
+                )
 
         if self.state.is_enabled(WorkflowState.Stage.land_use):
 
@@ -722,11 +605,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 settings,
                 self.state,
                 workspace,
-                self.provenance_tracker,
                 asim_output_dict,
                 tables_updated_by_asim,
                 source_file_paths,
-                model_run_hash,
             )
             if usim_record:
                 processed_records.append(usim_record)

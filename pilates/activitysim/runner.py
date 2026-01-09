@@ -1,16 +1,13 @@
 import logging
 import os
-from pathlib import Path
 from typing import Tuple, Optional
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
-from pilates.utils.snapshot_manager import SnapshotManager
-from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 logger = logging.getLogger(__name__)
@@ -210,10 +207,6 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
-        asim_compile_run_hash = self.provenance_tracker.run_info.get_latest_model_run(
-            "activitysim"
-        )
-
         filtered_store = RecordStore(
             recordList=[
                 rec
@@ -261,7 +254,6 @@ class ActivitysimRunner(GenericRunner):
                     "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                     "XDG_CACHE_HOME": "/app/numba_cache",
                 },
-                provenance_tracker=self.provenance_tracker,
                 output_paths=[all_skims_path],
                 lineage_mode="none",
             )
@@ -270,62 +262,14 @@ class ActivitysimRunner(GenericRunner):
 
             # Record output files for this compilation run
             if os.path.exists(all_skims_path):
-                from pilates.generic.records import FileRecord
-
                 zarr_skims_rec = FileRecord(
                     file_path=all_skims_path,
                     year=self.state.current_year,
                     description="Zarr skims initialized from omx.",
                     short_name=f"zarr_skims_{self.state.current_year}_-1",
-                    uri=(
-                        self.provenance_tracker.to_uri(all_skims_path)
-                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                        else None
-                    ),
                 )
                 output_records.append(zarr_skims_rec)
                 logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
-
-            # Create initial zarr version snapshot after compilation
-            if success and os.path.exists(all_skims_path):
-                try:
-                    logger.info(
-                        "Creating initial zarr version snapshot after ActivitySim compilation..."
-                    )
-                    database_path_str = settings.shared.database.path
-                    if database_path_str:
-                        db_manager = DuckDBManager(database_path_str)
-
-                        archive_root_str = settings.shared.database.shapshot_path
-                        archive_root_path = (
-                            Path(archive_root_str) if archive_root_str else None
-                        )
-
-                        snapshot_manager = SnapshotManager(
-                            db_manager, archive_root_path=archive_root_path
-                        )
-
-                        snapshot_id = snapshot_manager.create_snapshot(
-                            run_id=self.provenance_tracker.run_info.run_id,
-                            year=self.state.current_year,
-                            iteration=-1,
-                            sub_iteration=None,
-                            model="activitysim",
-                            snapshot_type="initialization",
-                            source_path=Path(all_skims_path),
-                            artifact_format="zarr",
-                            provenance_tracker=self.provenance_tracker,
-                        )
-                        logger.info(f"Created initial zarr snapshot: {snapshot_id}")
-                    else:
-                        logger.debug(
-                            "Database path not configured, skipping zarr snapshot creation"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to create initial zarr snapshot: {e}. Continuing without snapshot.",
-                        exc_info=True,
-                    )
 
             logger.info("ASIM Compilation success: {0}".format(success))
             if not success:
@@ -345,71 +289,15 @@ class ActivitysimRunner(GenericRunner):
                     ) from e
             self.state.compile_asim()  # Update state to mark as compiled
         else:
-            if "beam" in self.provenance_tracker.run_info.models_used:
-                last_beam_post_records = self.provenance_tracker.run_info.get_latest_model_run_output_records(
-                    "beam_postprocessor"
+            if os.path.exists(all_skims_path):
+                zarr_skims_rec = FileRecord(
+                    file_path=all_skims_path,
+                    year=self.state.current_year,
+                    description="Zarr skims from existing ASIM cache.",
+                    short_name=f"zarr_skims_{self.state.current_year}_-1",
                 )
-
-                zarr_skims_recs = sorted(
-                    [
-                        r
-                        for r in last_beam_post_records
-                        if r.short_name.startswith("zarr_skims")
-                    ],
-                    key=lambda r: self._parse_year_iteration_from_short_name(
-                        r.short_name
-                    ),
-                )
-                if zarr_skims_recs:
-                    zarr_skims_rec = zarr_skims_recs[-1]
-                    logger.info(
-                        f"Using zarr skims from last BEAM postprocessor run: {zarr_skims_rec.file_path}"
-                    )
-                else:
-                    logger.warning(
-                        "No zarr skims found as inputs to the previous ASIM run. OMX skims will be used."
-                    )
-                    zarr_skims_rec = None
             else:
-                last_asim_run_hash = (
-                    self.provenance_tracker.run_info.get_latest_model_run("activitysim")
-                )
-                if last_asim_run_hash:
-                    last_asim_run_input_hashes = (
-                        self.provenance_tracker.run_info.model_runs[
-                            last_asim_run_hash
-                        ].input_record_hashes
-                    )
-                    last_asim_run_input_records = [
-                        self.provenance_tracker.run_info.file_records.get(h)
-                        for h in last_asim_run_input_hashes
-                    ]
-                    # Filter and sort to find the most recent versioned zarr_skims
-                    zarr_skims_recs = sorted(
-                        [
-                            r
-                            for r in last_asim_run_input_records
-                            if r and r.short_name.startswith("zarr_skims")
-                        ],
-                        key=lambda r: self._parse_year_iteration_from_short_name(
-                            r.short_name
-                        ),
-                    )
-                    if zarr_skims_recs:
-                        zarr_skims_rec = zarr_skims_recs[-1]
-                        logger.info(
-                            f"Using zarr skims that were inputs to the previous ASIM run: {zarr_skims_rec.file_path}"
-                        )
-                    else:
-                        logger.warning(
-                            "No zarr skims found as inputs to the previous ASIM run. OMX skims will be used."
-                        )
-                        zarr_skims_rec = None
-                else:
-                    logger.warning(
-                        "No previous ASIM run found. OMX skims will be used."
-                    )
-                    zarr_skims_rec = None
+                zarr_skims_rec = None
 
         if zarr_skims_rec:
             filtered_store.remove_record_type("omx_skims")
@@ -440,7 +328,6 @@ class ActivitysimRunner(GenericRunner):
                 "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
                 "XDG_CACHE_HOME": "/app/numba_cache",
             },
-            provenance_tracker=self.provenance_tracker,
             output_paths=[workspace.get_asim_output_dir()],
             lineage_mode="none",
         )
@@ -461,19 +348,12 @@ class ActivitysimRunner(GenericRunner):
                 fpath = os.path.join(output_dir, fname, "final.parquet")
                 if os.path.isfile(fpath):
                     # Record output files for this full run
-                    from pilates.generic.records import FileRecord
-
                     output_rec = FileRecord(
                         file_path=fpath,
                         year=self.state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname + "_asim_out_temp",
                         iteration=self.state.current_inner_iter,
-                        uri=(
-                            self.provenance_tracker.to_uri(fpath)
-                            if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                            else None
-                        ),
                     )
                     output_records.append(output_rec)
 

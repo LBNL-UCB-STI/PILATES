@@ -1,15 +1,13 @@
-from typing import Optional, Union, Tuple
+from typing import Optional, Union
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.workspace import Workspace
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.generic.model_factory import ModelFactory
 
 import os
-from pilates.utils.settings_helper import get as get_setting
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,26 +31,11 @@ class Initialization(Model):
     ):
         super().__init__(model_name, state, provenance_tracker)
 
-    def run(self, settings: PilatesConfig, workspace: Workspace) -> Tuple[RecordStore, RecordStore]:
+    def run(self, settings: PilatesConfig, workspace: Workspace) -> RecordStore:
         """
         Execute the initialization process:
           - Copy all necessary input data from production directories to mutable locations.
-          - Record the input and output file locations as provenance for the initialization job.
         """
-        # Legacy-only run lifecycle. In Consist-backed mode, run.py owns the step context.
-        init_run_hash = None
-        if self.provenance_tracker is not None and not hasattr(
-            self.provenance_tracker, "_tracker"
-        ):
-            init_run_hash = self.provenance_tracker.start_model_run(
-                "initialization",
-                year=get_setting(settings, "run.start_year"),
-                iteration=0,
-                description="Initialization: copying all mutable data",
-                inputs=RecordStore(),  # Inputs are discovered dynamically during copy
-                state=self.state,
-            )
-
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
@@ -157,28 +140,10 @@ class Initialization(Model):
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 
         except Exception as e:
-            # If an error occurs, ensure we mark the run as failed in the tracker
-            if (
-                self.provenance_tracker is not None
-                and init_run_hash
-                and not hasattr(self.provenance_tracker, "_tracker")
-            ):
-                logger.error(f"Initialization failed: {e}")
-                self.provenance_tracker.complete_model_run(
-                    run_hash=init_run_hash, status="failed"
-                )
+            logger.error(f"Initialization failed: {e}")
             raise e
 
-        # Record the combined initialization provenance as a single job.
-        if (
-            self.provenance_tracker is not None
-            and init_run_hash
-            and not hasattr(self.provenance_tracker, "_tracker")
-        ):
-            self.provenance_tracker.complete_model_run(
-                run_hash=init_run_hash,
-                output_records=initialization_records_out.all_records(),
-            )
-
-        return initialization_records_in, initialization_records_out
-        # If no provenance tracker is supplied, we simply skip provenance logging.
+        combined_records = RecordStore()
+        combined_records += initialization_records_in
+        combined_records += initialization_records_out
+        return combined_records

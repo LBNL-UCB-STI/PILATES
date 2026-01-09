@@ -2,7 +2,6 @@ import logging
 import os
 import shutil
 import time
-from pathlib import Path
 from typing import Optional, List
 
 import numpy as np
@@ -23,8 +22,6 @@ from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.snapshot_manager import SnapshotManager
-from pilates.utils.duckdb_manager import DuckDBManager
 
 
 logger = logging.getLogger(__name__)
@@ -2341,10 +2338,6 @@ def _merge_beam_skims_to_zarr(
     settings,
     workspace,
     override=None,
-    provenance_tracker=None,
-    model_run_hash=None,
-    state=None,
-    run_id=None,
 ) -> Optional[str]:
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
@@ -2746,71 +2739,6 @@ def _merge_beam_skims_to_zarr(
         partial_skims_ds.close()
     if skims_ds:
         skims_ds.close()
-
-    # Step 7: Create zarr version snapshot after successful merge
-    if merge_successful and state is not None and run_id is not None:
-        try:
-            logger.info("Creating zarr version snapshot after BEAM merge...")
-
-            database_path_str = get_setting(settings, "shared.database.path")
-            if database_path_str:
-                with DuckDBManager(database_path_str) as db_manager:
-
-                    # Ensure the run data is in the database before creating a snapshot
-                    if provenance_tracker and provenance_tracker.run_info:
-                        logger.info(
-                            f"Uploading run data for run {provenance_tracker.run_info.run_id} to database before creating snapshot."
-                        )
-                        db_manager.upload_run_data(provenance_tracker.run_info)
-
-                    archive_root_str = settings.shared.database.shapshot_path
-                    archive_root_path = (
-                        Path(archive_root_str) if archive_root_str else None
-                    )
-
-                    snapshot_manager = SnapshotManager(
-                        db_manager, archive_root_path=archive_root_path
-                    )
-
-                parent_snapshot_id = snapshot_manager.get_latest_snapshot_id_for_run(
-                    run_id
-                )
-
-                beam_partial_zarr_path = None
-                if input_format == "zarr" and current_skims_path:
-                    beam_partial_zarr_path = (
-                        current_skims_path  # This is the source for partial skims
-                    )
-
-                snapshot_id = snapshot_manager.create_snapshot(
-                    run_id=run_id,
-                    year=state.current_year,
-                    iteration=state.current_inner_iter,
-                    sub_iteration=None,  # Assuming no sub-iteration for this context
-                    model="beam_postprocessor",
-                    snapshot_type="merged",
-                    source_path=Path(
-                        all_skims_path
-                    ),  # The merged full Zarr is the main artifact
-                    artifact_format="zarr",
-                    provenance_tracker=provenance_tracker,
-                    parent_snapshot_id=parent_snapshot_id,
-                    partial_skims_path=(
-                        str(Path(beam_partial_zarr_path).relative_to(archive_root_path))
-                        if beam_partial_zarr_path and archive_root_path
-                        else None
-                    ),  # Store relative path if exists
-                )
-                logger.info(f"Created zarr snapshot: {snapshot_id}")
-            else:
-                logger.debug(
-                    "Database path not configured, skipping zarr snapshot creation"
-                )
-        except Exception as e:
-            logger.warning(
-                f"Failed to create zarr snapshot: {e}. Continuing without snapshot.",
-                exc_info=True,
-            )
 
     # Return the path to the new OMX skims *if* a new one was found and processed.
     # This is used by the caller to check if skims were updated.
@@ -3455,38 +3383,6 @@ class BeamPostprocessor(GenericPostprocessor):
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
 
-        # Ensure the ActivitySim skims snapshot (archived during ActivitySim postprocess)
-        # is explicitly registered as an input to this BEAM postprocess step.
-        # This is important because the merge operates on the ActivitySim cache skims.zarr,
-        # and the archived snapshot is the stable provenance anchor for that baseline.
-        if self.provenance_tracker and hasattr(self.provenance_tracker, "run_info"):
-            try:
-                asim_zarr_snapshot = self.provenance_tracker.run_info.get_most_recent_record(
-                    "asim_input_skims_zarr_archived"
-                )
-                if asim_zarr_snapshot:
-                    snapshot_path = asim_zarr_snapshot.get_absolute_path(
-                        base_path=workspace.full_path
-                    )
-                    self.provenance_tracker.record_input_file(
-                        self.model_name,
-                        snapshot_path,
-                        description="ActivitySim skims.zarr snapshot used as merge baseline",
-                        short_name="asim_input_skims_zarr_archived",
-                        state=self.state,
-                        skip_missing=True,
-                    )
-            except Exception:
-                # Best-effort provenance; do not fail the workflow if this lookup/logging fails.
-                pass
-
-        zarr_record = self.provenance_tracker.run_info.get_most_recent_record(
-            "zarr_skims"
-        )
-        if zarr_record:
-            raw_outputs.add_record(zarr_record)
-            logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
-
         raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
 
@@ -3537,11 +3433,6 @@ class BeamPostprocessor(GenericPostprocessor):
                 f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
             )
         else:
-            if not zarr_record:
-                logger.warning(
-                    "No existing Zarr skims record found, even though the file exists. Will generate a record as an output after merging"
-                )
-
             skim_name = skim_name_found
 
             all_skims_found = [
@@ -3575,14 +3466,6 @@ class BeamPostprocessor(GenericPostprocessor):
                     settings=settings,
                     workspace=workspace,
                     override=raw_od_skims_path,
-                    provenance_tracker=self.provenance_tracker,
-                    model_run_hash=model_run_hash,
-                    state=self.state,
-                    run_id=(
-                        self.provenance_tracker.run_info.run_id
-                        if self.provenance_tracker
-                        else None
-                    ),
                 )
 
                 # The main output is the modified Zarr store.
@@ -3590,17 +3473,14 @@ class BeamPostprocessor(GenericPostprocessor):
                     merged_any = True
 
             if merged_any:
-                rec = self.provenance_tracker.record_output_file(
-                    model=self.model_name,
-                    file_path=all_skims_path,
-                    year=self.state.current_year,
-                    description="Zarr skims store updated with BEAM outputs.",
-                    short_name="zarr_skims",
-                    source_file_paths=merged_sources,
-                    state=self.state,
+                processed_records.append(
+                    FileRecord(
+                        file_path=all_skims_path,
+                        year=self.state.current_year,
+                        description="Zarr skims store updated with BEAM outputs.",
+                        short_name="zarr_skims",
+                    )
                 )
-                if rec is not None:
-                    processed_records.append(rec)
 
         if (
             get_setting(settings, "write_skims_to_omx", False)
@@ -3617,14 +3497,6 @@ class BeamPostprocessor(GenericPostprocessor):
                 )
             else:
                 try:
-                    # Record the final Zarr store as the input for this conversion step
-                    zarr_input_record = self.provenance_tracker.record_input_file(
-                        self.model_name,
-                        all_skims_path,
-                        description="Final Zarr skims store before OMX conversion",
-                        short_name="zarr_skims_for_omx",
-                    )
-
                     # Exclude intermediate trip/failure tables from the final OMX
                     vars_to_exclude = []
                     with xr.open_zarr(all_skims_path) as skims_ds:
@@ -3644,21 +3516,16 @@ class BeamPostprocessor(GenericPostprocessor):
                     )
 
                     if final_omx_path:
-                        # Record the new OMX as an output, with lineage to the Zarr input
-                        # Record output file for this model run
-                        from pilates.generic.records import FileRecord
-
-                        omx_output_record = FileRecord(
-                            file_path=final_omx_path,
-                            short_name="final_skims_omx",
-                            description="Final skims converted to OMX format for ActivitySim/UrbanSim.",
-                            uri=(
-                                self.provenance_tracker.to_uri(final_omx_path)
-                                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                                else None
-                            ),
+                        processed_records.append(
+                            FileRecord(
+                                file_path=final_omx_path,
+                                short_name="final_skims_omx",
+                                description=(
+                                    "Final skims converted to OMX format for "
+                                    "ActivitySim/UrbanSim."
+                                ),
+                            )
                         )
-                        processed_records.append(omx_output_record)
                 except Exception as e:
                     logger.error(f"Failed to write skims to OMX: {e}")
 

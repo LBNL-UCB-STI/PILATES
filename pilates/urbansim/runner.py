@@ -3,7 +3,7 @@ import logging
 import os
 
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -124,7 +124,6 @@ class UrbansimRunner(GenericRunner):
                 command=usim_cmd,
                 model_name=self.model_name,
                 working_dir=settings.urbansim.client_base_folder,
-                provenance_tracker=self.provenance_tracker,
                 # 2. PASS INPUTS
                 input_artifacts=input_paths,
                 # 3. OUTPUTS ALREADY CORRECT
@@ -142,18 +141,11 @@ class UrbansimRunner(GenericRunner):
         # Collect outputs
         output_records = []
         if os.path.exists(usim_datastore_fpath):
-            from pilates.generic.records import FileRecord
-
             output_rec = FileRecord(
                 file_path=usim_datastore_fpath,
                 year=forecast_year,
                 short_name="usim_forecast_output",
                 description="UrbanSim forecast output data",
-                uri=(
-                    self.provenance_tracker.to_uri(usim_datastore_fpath)
-                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                    else None
-                ),
             )
             output_records.append(output_rec)
             logger.info(

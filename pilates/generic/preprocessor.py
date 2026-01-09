@@ -5,10 +5,9 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
-from pilates.generic.model import Model, provenance_logging
+from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
-from pilates.utils.provenance import FileProvenanceTracker
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -53,30 +52,8 @@ class GenericPreprocessor(ABC, Model):
         """
         Preprocess input data for the model.
         """
-        if (
-            self.state.current_major_stage == self.major_stage
-            and self.state.sub_stage_progress in ["runner", "postprocessor"]
-        ):
-            logger.info("Skipping preprocessor, loading outputs from provenance.")
-            preprocessor_run = self.provenance_tracker.get_latest_completed_model_run(
-                f"{self.model_name}_preprocessor",
-                self.state.current_year,
-                self.state.current_inner_iter,
-            )
-            if preprocessor_run:
-                return RecordStore.from_file_records(
-                    preprocessor_run.output_record_hashes,
-                    self.provenance_tracker.run_info.file_records,
-                )
-            else:
-                logger.warning(
-                    "Could not find completed preprocessor run in provenance, re-running preprocessor."
-                )
-                self.state.set_sub_stage_progress("preprocessor")
-                return self._preprocess(workspace, previous_records)
-        else:
-            self.state.set_sub_stage_progress("preprocessor")
-            return self._preprocess(workspace, previous_records)
+        self.state.set_sub_stage_progress("preprocessor")
+        return self._preprocess(workspace, previous_records)
 
     @abstractmethod
     def _preprocess(
@@ -87,6 +64,6 @@ class GenericPreprocessor(ABC, Model):
         """
         Preprocess input data for the model.
 
-        Subclasses should apply the @provenance_logging decorator to their implementation.
+        Subclasses should return a RecordStore of outputs without provenance side effects.
         """
         raise NotImplementedError

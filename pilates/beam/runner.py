@@ -6,7 +6,6 @@ import sys
 from typing import List, Optional
 
 from pilates.config import PilatesConfig
-from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.beam.postprocessor import (
@@ -104,20 +103,14 @@ class BeamRunner(GenericRunner):
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
                     else:
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
-                    # Log as outputs of the active step run (Consist-backed) instead of
-                    # returning bare FileRecords and hoping a wrapper logs them later.
-                    # This ensures BEAM iteration artifacts (including Zarr skims) appear
-                    # on the BEAM step run in the database.
-                    rec = self.provenance_tracker.record_output_file(
-                        self.model_name,
-                        full_path,
-                        year=self.state.forecast_year,
-                        short_name=dataset_name,
-                        description=f"BEAM output artifact: {dataset_name}",
-                        state=self.state,
+                    output_records.append(
+                        FileRecord(
+                            file_path=full_path,
+                            year=self.state.forecast_year,
+                            short_name=dataset_name,
+                            description=f"BEAM output artifact: {dataset_name}",
+                        )
                     )
-                    if rec is not None:
-                        output_records.append(rec)
 
         return output_records
 
@@ -224,7 +217,6 @@ class BeamRunner(GenericRunner):
             model_name=self.model_name,
             working_dir="/app",
             environment={"JAVA_OPTS": java_opts},
-            provenance_tracker=self.provenance_tracker,
             input_artifacts=input_paths,
             output_paths=[abs_beam_output],
             lineage_mode="none",
@@ -241,7 +233,6 @@ class BeamRunner(GenericRunner):
                 self.state.current_year,
                 self.state.current_inner_iter,
             )
-            self.provenance_tracker.rename_directory(old_path, new_path)
             output_path_for_gather = new_path
         except Exception as e:
             logger.error(

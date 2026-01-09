@@ -2032,10 +2032,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         output_dir: str,
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
-
-        return _copy_data_to_mutable_location(
-            settings, output_dir, self.provenance_tracker
-        )
+        return _copy_data_to_mutable_location(settings, output_dir)
 
     def _preprocess(
         self,
@@ -2053,24 +2050,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
         output_records = RecordStore()
-
-        # In Consist mode, selectively treat key initialization outputs as inputs here.
-        # This avoids logging the entire initialization store while keeping the DAG correct.
-        if hasattr(self.provenance_tracker, "get_init_output_artifacts"):
-            try:
-                init_outputs = self.provenance_tracker.get_init_output_artifacts(
-                    ["usim_data", "beam_geoms", "omx_skims"]
-                )
-                tracker = getattr(self.provenance_tracker, "_tracker", None)
-                if tracker:
-                    for key, art in init_outputs.items():
-                        tracker.log_input(
-                            art,
-                            key=key,
-                            description="Upstream initialization output",
-                        )
-            except Exception as e:
-                logger.debug(f"Init artifact import skipped: {e}")
 
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
@@ -2101,27 +2080,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 os.path.join(beam_production_path, skims_fname),
                 path_to_beam_skims_in_current_run_workspace,
             )
-            # Also record provenance for this copy
-            self.provenance_tracker.record_input_file(
-                "activitysim_preprocessor",
-                os.path.join(beam_production_path, skims_fname),
-                description="BEAM skims from production (copied on demand)",
-                short_name="omx_skims_production",
+            output_records.add_record(
+                FileRecord(
+                    file_path=path_to_beam_skims_in_current_run_workspace,
+                    description="BEAM skims copied to current workspace",
+                    short_name="omx_skims_current_workspace",
+                )
             )
-            # Record output file for this model run
-            from pilates.generic.records import FileRecord
-
-            beam_skims_output_rec = FileRecord(
-                file_path=path_to_beam_skims_in_current_run_workspace,
-                description="BEAM skims copied to current workspace",
-                short_name="omx_skims_current_workspace",
-                uri=(
-                    self.provenance_tracker.to_uri(path_to_beam_skims_in_current_run_workspace)
-                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                    else None
-                ),
-            )
-            output_records.add_record(beam_skims_output_rec)
 
         input_records = workspace.output_data.get("activitysim", RecordStore())
         input_records_filtered = RecordStore(
@@ -2135,9 +2100,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         if os.path.exists(
             path_to_beam_skims_in_current_run_workspace
         ):  # <--- This condition should now be true
-            input_skims_record = self.provenance_tracker.record_input_file(
-                "activitysim_preprocessor",
-                path_to_beam_skims_in_current_run_workspace,
+            input_skims_record = FileRecord(
+                file_path=path_to_beam_skims_in_current_run_workspace,
                 short_name="omx_skims",
                 description="Raw BEAM OD skims",
             )
@@ -2154,101 +2118,28 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 output_dir=workspace.get_asim_mutable_data_dir(),
             )
 
-        # Record the skims file as an OUTPUT of the preprocessor
-        # Record output file for this model run
-        from pilates.generic.records import FileRecord
-
         skim_record = FileRecord(
             file_path=skims_loc,
             short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
-            uri=(
-                self.provenance_tracker.to_uri(skims_loc)
-                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                else None
-            ),
         )
 
-        if self.state.current_inner_iter > 0:
-            # 2: Re-use existing persons/households/land_use inputs when possible
-            run_info = self.provenance_tracker.run_info
-            last_asim_hash = run_info.get_latest_model_run("activitysim")
-            last_asim_run = run_info.model_runs.get(last_asim_hash) if last_asim_hash else None
-
-            if last_asim_run:
-                record_hashes = last_asim_run.input_record_hashes or []
-                data_from_usim = [
-                    run_info.file_records.get(h)
-                    for h in record_hashes
-                    if h in run_info.file_records
-                ]
-                required = {"households_asim_in", "persons_asim_in", "land_use_asim_in"}
-                data_from_usim = [r for r in data_from_usim if r and r.short_name in required]
-                logger.info(
-                    f"Retrieved {len(data_from_usim)} records from previous ActivitySim run."
-                )
-            else:
-                # If ActivitySim runner provenance isn't available (e.g., older runs or undecorated runners),
-                # fall back to the most recent preprocessor-created inputs; if those are missing, regenerate.
-                required_short_names = [
-                    "households_asim_in",
-                    "persons_asim_in",
-                    "land_use_asim_in",
-                ]
-                data_from_usim = []
-                missing = []
-                for short_name in required_short_names:
-                    rec = run_info.get_most_recent_record(short_name)
-                    if rec:
-                        data_from_usim.append(rec)
-                    else:
-                        missing.append(short_name)
-
-                if missing:
-                    logger.warning(
-                        "No previous ActivitySim run provenance available and missing cached inputs "
-                        f"{missing}; regenerating ActivitySim inputs."
-                    )
-                    if self._should_use_database_input(settings):
-                        logger.info("Using database input mode for ActivitySim")
-                        data_from_usim = create_asim_data_from_database(
-                            settings,
-                            self.state,
-                            workspace,
-                            self.provenance_tracker,
-                        )
-                    else:
-                        logger.info("Using H5 input mode for ActivitySim")
-                        data_from_usim = create_asim_data_from_h5(
-                            settings,
-                            self.state,
-                            workspace,
-                            self.provenance_tracker,
-                        )
-                else:
-                    logger.warning(
-                        "No previous ActivitySim run provenance available; using most recent cached "
-                        "ActivitySim input records (households/persons/land_use)."
-                    )
+        # 2. Create ActivitySim input data from database or UrbanSim H5
+        # Check if database input mode is configured
+        if self._should_use_database_input(settings):
+            logger.info("Using database input mode for ActivitySim")
+            data_from_usim = create_asim_data_from_database(
+                settings,
+                self.state,
+                workspace,
+            )
         else:
-            # 2. Create ActivitySim input data from database or UrbanSim H5
-            # Check if database input mode is configured
-            if self._should_use_database_input(settings):
-                logger.info("Using database input mode for ActivitySim")
-                data_from_usim = create_asim_data_from_database(
-                    settings,
-                    self.state,
-                    workspace,
-                    self.provenance_tracker,
-                )
-            else:
-                logger.info("Using H5 input mode for ActivitySim")
-                data_from_usim = create_asim_data_from_h5(
-                    settings,
-                    self.state,
-                    workspace,
-                    self.provenance_tracker,
-                )
+            logger.info("Using H5 input mode for ActivitySim")
+            data_from_usim = create_asim_data_from_h5(
+                settings,
+                self.state,
+                workspace,
+            )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
@@ -2770,22 +2661,14 @@ def enrollment_tables(
 def _copy_data_to_mutable_location(
     settings: PilatesConfig,
     folder_path: str,
-    provenance_tracker: FileProvenanceTracker,
 ) -> Tuple[RecordStore, RecordStore]:
     """
     Copies ActivitySim source data (canonical zones, clipped geometries, configs)
     to a mutable location within the current run's workspace.
 
-    This function ensures that ActivitySim has access to necessary input files
-    by copying them from their original source locations to a designated
-    mutable directory. It also records the provenance of these copied files.
-
     Args:
         settings (PilatesConfig): The current PILATES settings object.
         folder_path (str): The base path for the mutable ActivitySim data directory.
-        provenance_tracker (FileProvenanceTracker): The provenance tracker
-            instance to record file operations.
-
     Returns:
         Tuple[RecordStore, RecordStore]: A tuple containing two RecordStore objects:
             - `input_records`: Records of the original source files.
@@ -2826,19 +2709,18 @@ def _copy_data_to_mutable_location(
         )
         shutil.copy(zone_source_path, asim_zones_path)
 
-        input_rec = provenance_tracker.record_input_file(
-            "activitysim_preprocessor",
-            zone_source_path,
-            short_name="canonical_zones_source",
+        input_records.add_record(
+            FileRecord(
+                file_path=zone_source_path,
+                short_name="canonical_zones_source",
+            )
         )
-        output_rec = provenance_tracker.record_output_file_with_inputs(
-            "activitysim_preprocessor",
-            asim_zones_path,
-            [input_rec],
-            short_name="canonical_zones",
+        output_records.add_record(
+            FileRecord(
+                file_path=asim_zones_path,
+                short_name="canonical_zones",
+            )
         )
-        input_records.add_record(input_rec)
-        output_records.add_record(output_rec)
     else:
         logger.warning(
             f"Canonical zone source file not found at {zone_source_path}, skipping copy."
@@ -2860,19 +2742,18 @@ def _copy_data_to_mutable_location(
             )
             shutil.copy(clipped_geoms_source_path, asim_clipped_path)
 
-            input_rec = provenance_tracker.record_input_file(
-                "activitysim_preprocessor",
-                clipped_geoms_source_path,
-                short_name="clipped_geoms_source",
+            input_records.add_record(
+                FileRecord(
+                    file_path=clipped_geoms_source_path,
+                    short_name="clipped_geoms_source",
+                )
             )
-            output_rec = provenance_tracker.record_output_file_with_inputs(
-                "activitysim_preprocessor",
-                asim_clipped_path,
-                [input_rec],
-                short_name="clipped_geoms",
+            output_records.add_record(
+                FileRecord(
+                    file_path=asim_clipped_path,
+                    short_name="clipped_geoms",
+                )
             )
-            input_records.add_record(input_rec)
-            output_records.add_record(output_rec)
         else:
             logger.warning(
                 f"Clipped geoms file not found at {clipped_geoms_source_path}, skipping copy."
@@ -2900,20 +2781,16 @@ def _copy_data_to_mutable_location(
         shutil.rmtree(configs_dest_dir)
     shutil.copytree(configs_source_dir, configs_dest_dir)
 
-    git_hash = provenance_tracker.get_git_hash(configs_source_dir)
     input_records.add_record(
-        provenance_tracker.record_repo_input(
-            "activitysim_preprocessor",
-            repo_path=configs_source_dir,
-            short_name="asim_configs",
-            description="ActivitySim configs repo",
-            git_hash=git_hash,
+        FileRecord(
+            file_path=configs_source_dir,
+            short_name="asim_configs_source",
+            description="ActivitySim configs repo source",
         )
     )
     output_records.add_record(
-        provenance_tracker.record_repo_output(
-            "activitysim_preprocessor",
-            repo_path=configs_dest_dir,
+        FileRecord(
+            file_path=configs_dest_dir,
             short_name="asim_configs",
             description="ActivitySim configs repo",
         )
@@ -2926,7 +2803,6 @@ def copy_beam_geoms(
     beam_geoms_location: str,
     asim_geoms_location: str,
     beam_shape_location: Optional[str],
-    provenance_tracker: FileProvenanceTracker,
     workspace: "Workspace",
 ) -> Tuple[RecordStore, RecordStore]:
     """
@@ -2935,7 +2811,6 @@ def copy_beam_geoms(
     This function reads BEAM geometry data, maps zone IDs according to the
     configured zone type, and saves the processed geometries for ActivitySim.
     It also handles an optional BEAM shapefile, updating its zone IDs if present.
-    All file operations are tracked for provenance.
 
     Args:
         settings (PilatesConfig): The current PILATES settings object.
@@ -2944,8 +2819,6 @@ def copy_beam_geoms(
             ActivitySim geometries CSV.
         beam_shape_location (Optional[str]): The optional file path to the BEAM
             zones shapefile. If provided, its zone IDs will be updated.
-        provenance_tracker (FileProvenanceTracker): The provenance tracker
-            instance to record file operations.
         workspace (Workspace): The current workspace object.
 
     Returns:
@@ -2955,8 +2828,7 @@ def copy_beam_geoms(
     """
     zone_type_column = {"block_group": "BLKGRP", "taz": "TAZ", "block": "BLK"}
     beam_geoms_file = pd.read_csv(beam_geoms_location, dtype={"GEOID": str})
-    beam_geoms_in = provenance_tracker.record_input_file(
-        model="activitysim_preprocessor",
+    beam_geoms_in = FileRecord(
         file_path=beam_geoms_location,
         short_name="beam_geoms_reference",
         description="BEAM geometry file",
@@ -2996,8 +2868,7 @@ def copy_beam_geoms(
             logger.error(f"Unrecognized zone type {zone_type}, ASim may fail")
 
     beam_geoms_file.to_csv(asim_geoms_location)
-    asim_geoms_out = provenance_tracker.record_output_file(
-        model="activitysim_preprocessor",
+    asim_geoms_out = FileRecord(
         file_path=asim_geoms_location,
         short_name="asim_geoms",
         description="ASIM geometry file",
@@ -3013,8 +2884,7 @@ def copy_beam_geoms(
                 get_setting(settings, "beam.skim_zone_source_id_col"),
             )
         )
-        beam_shape_in = provenance_tracker.record_input_file(
-            model="activitysim_preprocessor",
+        beam_shape_in = FileRecord(
             file_path=beam_shape_location,
             short_name="beam_shape",
             description="BEAM zones shapefile",
@@ -3032,8 +2902,7 @@ def copy_beam_geoms(
             )
         )
         zones.to_file(beam_shape_location)
-        beam_shape_out = provenance_tracker.record_output_file(
-            model="activitysim_preprocessor",
+        beam_shape_out = FileRecord(
             file_path=beam_shape_location,
             short_name="beam_shape",
             description="BEAM zones shapefile",
@@ -3713,8 +3582,6 @@ def create_asim_data_from_database(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
-    provenance_tracker: "FileProvenanceTracker",
-    model_run_hash: Optional[str] = None,
 ) -> List[FileRecord]:
     """
     Create ActivitySim input data from database records using dual storage.
@@ -3727,9 +3594,6 @@ def create_asim_data_from_database(
         settings (PilatesConfig): PILATES settings dictionary.
         state (WorkflowState): Workflow state.
         workspace (Workspace): Workspace instance.
-        provenance_tracker (FileProvenanceTracker): For tracking provenance.
-        model_run_hash (Optional[str]): Current model run hash.
-
     Returns:
         List[FileRecord]: List of FileRecord objects for the created CSV files.
 
@@ -3748,9 +3612,6 @@ def create_asim_data_from_database(
         settings: PILATES settings dictionary
         state: Workflow state
         workspace: Workspace instance
-        provenance_tracker: For tracking provenance
-        model_run_hash: Current model run hash
-
     Returns:
         List of FileRecord objects for the created CSV files
     """
@@ -3834,17 +3695,16 @@ def create_asim_data_from_database(
                     )
 
                     # Record as output
-                    output_record = provenance_tracker.record_output_file(
-                        "activitysim_preprocessor",
-                        output_csv_path,
-                        short_name=f"{table_name}_asim_in",
-                        description=f"ActivitySim {table_name} input from database ({data_source})",
-                        model_run_id=model_run_hash,
+                    output_records.append(
+                        FileRecord(
+                            file_path=output_csv_path,
+                            short_name=f"{table_name}_asim_in",
+                            description=(
+                                f"ActivitySim {table_name} input from database ({data_source})"
+                            ),
+                        )
                     )
-
-                    if output_record:
-                        output_records.append(output_record)
-                        tables_created += 1
+                    tables_created += 1
 
                 else:
                     logger.error(f"❌ No {table_name} data found in database")
@@ -3870,17 +3730,14 @@ def create_asim_data_from_database(
                         f"✅ Created optional {table_name}.csv with {len(clean_df)} records"
                     )
 
-                    output_record = provenance_tracker.record_output_file(
-                        "activitysim_preprocessor",
-                        output_csv_path,
-                        short_name=f"{table_name}_asim_in",
-                        description=f"ActivitySim {table_name} input from database",
-                        model_run_id=model_run_hash,
+                    output_records.append(
+                        FileRecord(
+                            file_path=output_csv_path,
+                            short_name=f"{table_name}_asim_in",
+                            description=f"ActivitySim {table_name} input from database",
+                        )
                     )
-
-                    if output_record:
-                        output_records.append(output_record)
-                        tables_created += 1
+                    tables_created += 1
                 else:
                     logger.info(
                         f"ℹ️  Optional table {table_name} not found in database (skipping)"
@@ -3906,8 +3763,6 @@ def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
-    provenance_tracker: "FileProvenanceTracker",
-    model_run_hash: Optional[str] = None,
 ) -> List[FileRecord]:
     """
     Create ActivitySim input data from UrbanSim H5 outputs.
@@ -3921,9 +3776,6 @@ def create_asim_data_from_h5(
         settings (PilatesConfig): PILATES settings dictionary.
         state (WorkflowState): Workflow state.
         workspace (Workspace): Workspace instance.
-        provenance_tracker (FileProvenanceTracker): For tracking provenance.
-        model_run_hash (Optional[str]): Current model run hash.
-
     Returns:
         List[FileRecord]: List of FileRecord objects for the created CSV files.
     """
@@ -3934,9 +3786,6 @@ def create_asim_data_from_h5(
         settings: PILATES settings dictionary
         state: Workflow state
         workspace: Workspace instance
-        provenance_tracker: For tracking provenance
-        model_run_hash: Current model run hash
-
     Returns:
         List of FileRecord objects for the created CSV files
     """
@@ -3959,7 +3808,7 @@ def create_asim_data_from_h5(
     # usim_data_path = get_merged_usim_input_datastore_path( # This variable is not used after assignment.
     #     settings, workspace.get_usim_mutable_data_dir()
     # )
-    # usim_data_in = provenance_tracker.record_input_file( # This variable is not used after assignment.
+    # usim_data_in from UrbanSim is loaded directly from H5 in this path.
     #     "activitysim_preprocessor",
     #     usim_data_path,
     #     short_name="usim_data",
@@ -4014,12 +3863,10 @@ def create_asim_data_from_h5(
         output_csv_path = os.path.join(output_dir, f"{name}.csv")
         df.to_csv(output_csv_path, index=True)
         output_records.append(
-            provenance_tracker.record_output_file(
-                "activitysim_preprocessor",
-                output_csv_path,
+            FileRecord(
+                file_path=output_csv_path,
                 short_name=f"{name}_asim_in",
                 description=f"ActivitySim {name} input from UrbanSim H5",
-                model_run_id=model_run_hash,
             )
         )
 

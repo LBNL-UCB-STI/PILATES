@@ -10,8 +10,7 @@ import numpy as np
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore
-from pilates.generic.model import provenance_logging
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.provenance import FileProvenanceTracker, find_project_root
 
 if TYPE_CHECKING:
@@ -145,7 +144,7 @@ def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspa
 class UrbansimPreprocessor(GenericPreprocessor):
     """
     UrbanSim-specific preprocessor that consolidates all preprocessing steps for the UrbanSim land use model.
-    This includes copying input files to a mutable location, recording provenance, and preparing any additional
+    This includes copying input files to a mutable location and preparing any additional
     data needed for the UrbanSim run.
     """
 
@@ -165,8 +164,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         output_dir,
     ) -> Tuple[RecordStore, RecordStore]:
         """
-        Copy UrbanSim input files from production to mutable location,
-        recording provenance for inputs and outputs.
+        Copy UrbanSim input files from production to mutable location.
 
         Returns:
             Tuple[RecordStore, RecordStore]: (inputs, outputs) as RecordStores
@@ -230,17 +228,15 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 f"[UrbansimPreprocessor] Source UrbanSim HDF5 file not found at {src}. Created empty HDF5 at {dest}."
             )
         inputs = [
-            self.provenance_tracker.record_input_file(
-                "urbansim",
-                src,
+            FileRecord(
+                file_path=src,
                 description="Reference urbanSim model data",
                 short_name="usim_data_reference",
             )
         ]
         outputs = [
-            self.provenance_tracker.record_output_file(
-                "urbansim",
-                dest,
+            FileRecord(
+                file_path=dest,
                 description="UrbanSim model data",
                 short_name="usim_data",
             )
@@ -257,9 +253,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 
         inputs.append(
-            self.provenance_tracker.record_input_file(
-                "urbansim",
-                skims_src,
+            FileRecord(
+                file_path=skims_src,
                 short_name="omx_skims",
                 description="Raw BEAM OD skims",
             )
@@ -267,9 +262,8 @@ class UrbansimPreprocessor(GenericPreprocessor):
         shutil.copyfile(skims_src, skims_target)
 
         outputs.append(
-            self.provenance_tracker.record_output_file(
-                "urbansim",
-                skims_target,
+            FileRecord(
+                file_path=skims_target,
                 short_name="omx_skims",
                 description="Raw BEAM OD skims for USim",
             )
@@ -295,27 +289,24 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 )
                 shutil.copyfile(src, dest)
                 inputs.append(
-                    self.provenance_tracker.record_input_file(
-                        "urbansim",
-                        src,
+                    FileRecord(
+                        file_path=src,
                         description=f"UrbanSim input file: {fname}",
                         short_name=short_name,
                     )
                 )
                 outputs.append(
-                    self.provenance_tracker.record_output_file(
-                        "urbansim",
-                        dest,
+                    FileRecord(
+                        file_path=dest,
                         description=f"UrbanSim input file: {fname}",
                         short_name=short_name,
                     )
                 )
         logger.info(
-            "[UrbansimPreprocessor] Finished copying UrbanSim input files and recording provenance."
+            "[UrbansimPreprocessor] Finished copying UrbanSim input files."
         )
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
-    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -326,26 +317,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
         """
         logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
         settings = self.state.full_settings
-
-        # In Consist mode, selectively treat initialization outputs as inputs here.
-        if (
-            hasattr(self.provenance_tracker, "get_init_output_artifacts")
-            and getattr(self, "required_input_data", None)
-        ):
-            try:
-                init_outputs = self.provenance_tracker.get_init_output_artifacts(
-                    list(self.required_input_data)
-                )
-                tracker = getattr(self.provenance_tracker, "_tracker", None)
-                if tracker:
-                    for key, art in init_outputs.items():
-                        tracker.log_input(
-                            art,
-                            key=key,
-                            description="Upstream initialization output",
-                        )
-            except Exception as e:
-                logger.debug(f"Init artifact import skipped: {e}")
 
         # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
@@ -375,19 +346,10 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 .to_csv(geoid_to_zone_path)
             )
 
-            # Record provenance for the generated mapping file
-            # Output file provenance is automatically tracked by @provenance_logging decorator
-            from pilates.generic.records import FileRecord
-
             mapping_output_rec = FileRecord(
                 file_path=geoid_to_zone_path,
                 description="Block to zone mapping for UrbanSim input",
                 short_name="geoid_to_zone",
-                uri=(
-                    self.provenance_tracker.to_uri(geoid_to_zone_path)
-                    if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                    else None
-                ),
             )
             processed_records.add_record(mapping_output_rec)
 
@@ -433,24 +395,10 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         )
                         shutil.copy(source_skims_path, dest_skims_path)
 
-                        skims_input_rec = self.provenance_tracker.record_input_file(
-                            "urbansim_preprocessor",
-                            source_skims_path,
-                            description="Updated BEAM skims for UrbanSim input",
-                            short_name="updated_beam_skims_input",
-                        )
-                        # Output file provenance is automatically tracked by @provenance_logging decorator
-                        from pilates.generic.records import FileRecord
-
                         skims_output_rec = FileRecord(
                             file_path=dest_skims_path,
                             description="Copied updated skims for UrbanSim consumption",
                             short_name="usim_skims_input_updated",
-                            uri=(
-                                self.provenance_tracker.to_uri(dest_skims_path)
-                                if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                                else None
-                            ),
                         )
                         if skims_output_rec:
                             processed_records.add_record(skims_output_rec)

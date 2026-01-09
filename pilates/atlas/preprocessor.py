@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 import glob
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Tuple, Optional, TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -14,8 +14,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore
-from pilates.generic.model import provenance_logging
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 
@@ -43,7 +42,7 @@ class AtlasPreprocessor(GenericPreprocessor):
     """
     ATLAS-specific preprocessor that consolidates all preprocessing steps for the ATLAS vehicle ownership model.
     This includes extracting UrbanSim outputs, formatting them as ATLAS inputs, and (optionally) calculating accessibility
-    using BEAM skims. All provenance tracking for input files is handled here.
+    using BEAM skims.
     """
 
     def __init__(
@@ -62,8 +61,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         output_dir,
     ) -> Tuple[RecordStore, RecordStore]:
         """
-        Copy ATLAS input files from the production directory to the run's mutable input directory,
-        recording provenance for both the source and the copied files.
+        Copy ATLAS input files from the production directory to the run's mutable input directory.
         """
         input_records = []
         output_records = []
@@ -87,20 +85,20 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                 short_name = os.path.splitext(filename)[0]
 
-                input_rec = self.provenance_tracker.record_input_file(
-                    self.model_name,
-                    source_path,
-                    description=f"ATLAS input file: {filename}",
-                    short_name=short_name,
+                input_records.append(
+                    FileRecord(
+                        file_path=source_path,
+                        description=f"ATLAS input file: {filename}",
+                        short_name=short_name,
+                    )
                 )
-                output_rec = self.provenance_tracker.record_output_file(
-                    self.model_name,
-                    dest_path,
-                    description=f"Mutable ATLAS input file: {filename}",
-                    short_name=short_name,
+                output_records.append(
+                    FileRecord(
+                        file_path=dest_path,
+                        description=f"Mutable ATLAS input file: {filename}",
+                        short_name=short_name,
+                    )
                 )
-                input_records.append(input_rec)
-                output_records.append(output_rec)
 
         logger.info(
             f"[AtlasPreprocessor] Finished copying {len(output_records)} files."
@@ -109,7 +107,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             recordList=output_records
         )
 
-    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -120,34 +117,12 @@ class AtlasPreprocessor(GenericPreprocessor):
         and formatting them as ATLAS inputs. Handles provenance tracking.
 
         Steps:
-        1. Record all input files (UrbanSim HDF5, BEAM skims if needed) for provenance.
-        2. Start the model run in provenance (handled by @provenance_logging decorator).
-        3. Extract UrbanSim HDF5 tables and write them as CSVs for ATLAS.
-        4. If enabled, compute accessibility using BEAM skims.
-        5. Complete the model run in provenance (handled by @provenance_logging decorator).
+        1. Collect required input paths (UrbanSim HDF5, BEAM skims if needed).
+        2. Extract UrbanSim HDF5 tables and write them as CSVs for ATLAS.
+        3. If enabled, compute accessibility using BEAM skims.
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
-
-        # In Consist mode, selectively treat initialization outputs as inputs here.
-        if (
-            hasattr(self.provenance_tracker, "get_init_output_artifacts")
-            and getattr(self, "required_input_data", None)
-        ):
-            try:
-                init_outputs = self.provenance_tracker.get_init_output_artifacts(
-                    list(self.required_input_data)
-                )
-                tracker = getattr(self.provenance_tracker, "_tracker", None)
-                if tracker:
-                    for key, art in init_outputs.items():
-                        tracker.log_input(
-                            art,
-                            key=key,
-                            description="Upstream initialization output",
-                        )
-            except Exception as e:
-                logger.debug(f"Init artifact import skipped: {e}")
 
         # --- Ensure global ATLAS input files are present for every year ---
         # Source for global files (e.g., cpi.csv, RData files)
@@ -162,12 +137,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
-                self.provenance_tracker.record_input_file(
-                    "atlas_preprocessor",
-                    f,
-                    description=f"ATLAS static input file: {os.path.basename(f)}",
-                    short_name=os.path.splitext(os.path.basename(f))[0],
-                )
                 logger.info(
                     f"[AtlasPreprocessor] Copied global CSV file: {f} to {dest_path}"
                 )
@@ -183,12 +152,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
-                self.provenance_tracker.record_input_file(
-                    "atlas_preprocessor",
-                    f,
-                    description=f"ATLAS static RData file: {os.path.basename(f)}",
-                    short_name=os.path.splitext(os.path.basename(f))[0],
-                )
                 logger.info(
                     f"[AtlasPreprocessor] Copied global RData file: {f} to {dest_path}"
                 )
@@ -247,7 +210,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         )
 
         # --- Record all input files before processing ---
-        input_records = []
+        input_records: List[FileRecord] = []
 
         # Record UrbanSim HDF5 as input
         h5_file_record = None
@@ -255,15 +218,12 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.info(
                 f"[AtlasPreprocessor] Recording UrbanSim HDF5 container as input: {urbansim_output}"
             )
-            # Record the H5 container file
-            h5_file_record = self.provenance_tracker.record_h5_input_container(
-                "atlas_preprocessor",
-                urbansim_output,
+            h5_file_record = FileRecord(
+                file_path=urbansim_output,
                 description="UrbanSim output HDF5 container for Atlas input preparation",
                 short_name="usim_h5_container",
             )
-            if h5_file_record:
-                input_records.append(h5_file_record)
+            input_records.append(h5_file_record)
         else:
             logger.warning(
                 f"[AtlasPreprocessor] UrbanSim output file not found: {urbansim_output}"
@@ -281,9 +241,8 @@ class AtlasPreprocessor(GenericPreprocessor):
                     f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}"
                 )
                 input_records.append(
-                    self.provenance_tracker.record_input_file(
-                        "atlas_preprocessor",
-                        expected_beam_skims_path,
+                    FileRecord(
+                        file_path=expected_beam_skims_path,
                         description="BEAM skims for Atlas accessibility calculation",
                         short_name="beam_skims_input",
                     )
@@ -307,37 +266,15 @@ class AtlasPreprocessor(GenericPreprocessor):
                             f"[AtlasPreprocessor] Recording accessibility .RData file: {rdata_file}"
                         )
                         input_records.append(
-                            self.provenance_tracker.record_input_file(
-                                "atlas_preprocessor",
-                                rdata_file,
+                            FileRecord(
+                                file_path=rdata_file,
                                 description="ATLAS accessibility data (RData)",
                                 short_name="atlas_rdata_accessibility",
                             )
                         )
 
-        # Get the model_run_hash from the active Consist step (set by run.py's scenario.step()).
-        # Never guess this from run_info ordering: multiple steps can exist, and dict ordering
-        # is not a reliable proxy for "current step".
-        model_run_hash = getattr(self.provenance_tracker, "current_model_run_id", None)
-        if not model_run_hash:
-            # Fallback for non-Consist/legacy trackers: use last-known run id if available.
-            model_run_hash = getattr(self.provenance_tracker, "current_run_id", None)
-        if not model_run_hash:
-            # Last resort: fall back to any known run in memory (best-effort), but warn.
-            model_run_hash = next(
-                iter(getattr(self.provenance_tracker.run_info, "model_runs", {}).keys()),
-                None,
-            )
-            logger.warning(
-                "[AtlasPreprocessor] Unable to resolve active model_run_id; falling back to an arbitrary in-memory run id (%s). "
-                "This can mis-attribute provenance. Ensure preprocessing runs inside `with scenario.step(...):`.",
-                model_run_hash,
-            )
-
         # --- Write ATLAS input CSVs and record as outputs ---
         output_records = []
-        table_records = []
-
         if not h5_file_record:
             logger.error(
                 "[AtlasPreprocessor] Cannot process HDF5 tables, container record not found."
@@ -355,29 +292,14 @@ class AtlasPreprocessor(GenericPreprocessor):
                     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
                     table_data.to_csv(output_csv_path)
 
-                    # Record the H5 table as a specific input
-                    table_record = self.provenance_tracker.record_h5_table_input(
-                        model_name="atlas_preprocessor",
-                        h5_container_record=h5_file_record,
-                        table_name=table_name_in_h5,
-                        description=f"Source table {table_name_in_h5} for {output_csv_name}",
-                        short_name=f"{output_short_name}_h5_table",
-                        model_run_id=model_run_hash,
+                    output_records.append(
+                        FileRecord(
+                            file_path=output_csv_path,
+                            year=self.state.year,
+                            description=output_description,
+                            short_name=output_short_name,
+                        )
                     )
-                    table_records.append(table_record)
-
-                    # Record the output CSV, linking it to the H5 table record
-                    csv_record = self.provenance_tracker.record_output_file_with_inputs(
-                        model="atlas_preprocessor",
-                        file_path=output_csv_path,
-                        input_records=[table_record],
-                        year=self.state.year,
-                        description=output_description,
-                        short_name=output_short_name,
-                        model_run_id=model_run_hash,
-                        state=self.state,
-                    )
-                    output_records.append(csv_record)
                 except KeyError:
                     logger.warning(
                         f"[AtlasPreprocessor] Table '{table_name_in_h5}' not found in HDF5 file."
@@ -459,12 +381,10 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
             if os.path.exists(accessibility_csv):
                 output_records.append(
-                    self.provenance_tracker.record_output_file(
-                        "atlas_preprocessor",
-                        accessibility_csv,
+                    FileRecord(
+                        file_path=accessibility_csv,
                         description="ATLAS accessibility tract-level CSV",
                         short_name="atlas_accessibility_csv",
-                        model_run_id=model_run_hash,
                     )
                 )
 

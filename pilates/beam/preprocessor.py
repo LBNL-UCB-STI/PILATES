@@ -18,7 +18,6 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.generic.model import provenance_logging
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
@@ -223,7 +222,6 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
         self.settings = self.state.full_settings
 
-    @provenance_logging
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -248,22 +246,9 @@ class BeamPreprocessor(GenericPreprocessor):
                 else:
                     logger.info(f"Skipping {record.short_name} produced by activitysim")
 
-        # For replanning iterations, get outputs from the previous BEAM run
-        previous_beam_records = []
-        if self.state.current_inner_iter > 0:
-            previous_beam_records = (
-                self.provenance_tracker.run_info.get_latest_model_run_output_records(
-                    "beam"
-                )
-            )
-            for record in previous_beam_records:
-                short_name = record.short_name.rsplit("_", 2)[0]
-                if (short_name in self.required_input_data) and (
-                    "_sub" not in record.short_name
-                ):
-                    input_records.add_record(record)
-
-        model_run_hash = self.provenance_tracker.current_model_run_id
+        # For replanning iterations, inputs from the previous BEAM run should be
+        # passed in explicitly by the caller.
+        previous_beam_records: List[FileRecord] = []
 
         # Update BEAM config based on settings
         self._update_beam_config(
@@ -272,29 +257,18 @@ class BeamPreprocessor(GenericPreprocessor):
             base_path=workspace.full_path,
         )
         # Prepare the zone shapefile to ensure consistent zone ordering
-        self.prepare_beam_zone_shapefile(workspace, model_run_hash)
+        self.prepare_beam_zone_shapefile(workspace)
 
         # Copy vehicle data from Atlas (only on first iteration)
         if (
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            self._copy_vehicles_from_atlas(workspace, model_run_hash)
+            self._copy_vehicles_from_atlas(workspace)
 
         # Copy and merge plans from ActivitySim
-        store = self._copy_plans_from_asim(input_records, workspace, model_run_hash)
+        store = self._copy_plans_from_asim(input_records, workspace)
 
-        # Add BEAM production data repo to records
-        beam_prod_repo_record = next(
-            (
-                repo
-                for repo in self.provenance_tracker.run_info.repo_records.values()
-                if repo.short_name == "beam_prod"
-            ),
-            None,
-        )
-        if beam_prod_repo_record:
-            store.add_record(beam_prod_repo_record)
         store += output_records
 
         # Ensure linkstats file is present and recorded
@@ -331,21 +305,17 @@ class BeamPreprocessor(GenericPreprocessor):
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns(".git", ".git*"),
         )
-        git_hash = self.provenance_tracker.get_git_hash(beam_production_path)
         input_records.append(
-            self.provenance_tracker.record_repo_input(
-                "beam",
-                repo_path=beam_production_path,
-                short_name="beam_prod",
-                description="Beam Production Data Repo",
-                git_hash=git_hash,
+            FileRecord(
+                file_path=beam_production_path,
+                short_name="beam_prod_source",
+                description="Beam Production Data Repo source",
             )
         )
 
         output_records.append(
-            self.provenance_tracker.record_repo_output(
-                "beam",
-                repo_path=dest_region,
+            FileRecord(
+                file_path=dest_region,
                 short_name="beam_prod",
                 description="Beam Production Data Repo",
             )
@@ -364,18 +334,15 @@ class BeamPreprocessor(GenericPreprocessor):
                 ignore=shutil.ignore_patterns(".git", ".git*"),
             )
             input_records.append(
-                self.provenance_tracker.record_repo_input(
-                    "beam",
-                    repo_path=common_config_path,
-                    short_name="beam_common",
-                    description="Beam Common Data Repo",
-                    git_hash=git_hash,
+                FileRecord(
+                    file_path=common_config_path,
+                    short_name="beam_common_source",
+                    description="Beam Common Data Repo source",
                 )
             )
             output_records.append(
-                self.provenance_tracker.record_repo_output(
-                    "beam",
-                    repo_path=dest_common,
+                FileRecord(
+                    file_path=dest_common,
                     short_name="beam_common",
                     description="Beam Common Data Repo",
                 )
@@ -411,7 +378,7 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def prepare_beam_zone_shapefile(
-        self, workspace: "Workspace", model_run_hash: str
+        self, workspace: "Workspace"
     ) -> Optional[str]:
         """
         Creates a sorted zone shapefile for BEAM from the canonical zone definitions
@@ -420,14 +387,6 @@ class BeamPreprocessor(GenericPreprocessor):
 
         output_shapefile_path = _prepare_beam_zone_shapefile(workspace, self.settings)
         output_shapefile_name = os.path.basename(output_shapefile_path)
-
-        self.provenance_tracker.record_output_file(
-            "beam_preprocessor",
-            output_shapefile_path,
-            short_name="beam_zone_shapefile_sorted",
-            description="BEAM zone shapefile created from sorted canonical zones.",
-            model_run_id=model_run_hash,
-        )
 
         logger.info("Updating BEAM configuration to use the new sorted shapefile.")
         relative_shapefile_path = os.path.join("shape", output_shapefile_name)
@@ -445,7 +404,7 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         return output_shapefile_path
 
-    def _copy_vehicles_from_atlas(self, workspace: "Workspace", model_run_hash: str):
+    def _copy_vehicles_from_atlas(self, workspace: "Workspace"):
         """Copies the vehicles file from the ATLAS output to the BEAM input scenario."""
         beam_scenario_folder = os.path.join(
             workspace.get_beam_mutable_data_dir(),
@@ -478,30 +437,13 @@ class BeamPreprocessor(GenericPreprocessor):
             f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
         )
 
-        input_record = self.provenance_tracker.record_input_file(
-            "beam_preprocessor",
-            atlas_vehicle_file_loc,
-            short_name="atlas_vehicles2_output",
-            model_run_id=model_run_hash,
-        )
-
         df = pd.read_csv(atlas_vehicle_file_loc)
         df.to_csv(beam_vehicles_path, compression="gzip", index=False)
-
-        self.provenance_tracker.record_output_file_with_inputs(
-            "beam_preprocessor",
-            beam_vehicles_path,
-            input_records=[input_record],
-            description="BEAM vehicles input copied from ATLAS vehicles2 output",
-            short_name="beam_vehicles_in",
-            model_run_id=model_run_hash,
-        )
 
     def _copy_plans_from_asim(
         self,
         input_records: RecordStore,
         workspace: "Workspace",
-        model_run_hash: str,
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
         logger.info("Attempting to copy final ASIM plans from provenance tracker.")
@@ -558,18 +500,13 @@ class BeamPreprocessor(GenericPreprocessor):
                     # A more complete FileRecord could be created by parsing file properties if needed,
                     # but for basic path retrieval, this is sufficient.
                     dummy_record = FileRecord(
-                        file_path=os.path.relpath(
-                            expected_full_path, base_path
-                        ),  # Relative path for record
+                        file_path=os.path.relpath(expected_full_path, base_path),
                         short_name=base_name,
-                        description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
-                        unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}",  # Unique ID for dummy record
-                        year=self.state.current_year,
-                        uri=(
-                            self.provenance_tracker.to_uri(expected_full_path)
-                            if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                            else None
+                        description=(
+                            "ActivitySim output file found via filesystem fallback "
+                            f"({expected_file_name})"
                         ),
+                        year=self.state.current_year,
                     )
                     asim_file_paths[base_name] = (expected_full_path, dummy_record)
                 else:
@@ -581,12 +518,12 @@ class BeamPreprocessor(GenericPreprocessor):
         if self.state.current_inner_iter <= 0:
             # First iteration: just copy files over
             record_list = self._copy_initial_asim_files(
-                asim_file_paths, file_format, model_run_hash, workspace
+                asim_file_paths, file_format, workspace
             )
         else:
             # Subsequent iterations: merge replanned households/persons/plans
             record_list = self._merge_replanned_asim_files(
-                asim_file_paths, file_format, model_run_hash, workspace
+                asim_file_paths, file_format, workspace
             )
 
         return RecordStore(recordList=[r for r in record_list if r is not None])
@@ -595,7 +532,6 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         asim_file_paths: dict,
         file_format: str,
-        model_run_hash: str,
         workspace: "Workspace",
     ) -> List[FileRecord]:
         """Directly copies ActivitySim outputs for the first BEAM iteration."""
@@ -625,7 +561,6 @@ class BeamPreprocessor(GenericPreprocessor):
                     file_format,
                     beam_scenario_folder,
                     input_record=asim_file_record,
-                    model_run_hash=model_run_hash,
                 )
                 if record:
                     record_list.append(record)
@@ -637,7 +572,6 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         asim_file_paths: dict,
         file_format: str,
-        model_run_hash: str,
         workspace: "Workspace",
     ) -> List[FileRecord]:
         """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
@@ -723,11 +657,6 @@ class BeamPreprocessor(GenericPreprocessor):
             (plans_final, "plans", asim_plans_rec),
         ]
 
-        # Retrieve beam_plans_record for provenance mixing
-        beam_plans_rec = self.provenance_tracker.run_info.get_most_recent_record(
-            short_name="plans_beam_in"
-        )
-
         for df, name, asim_rec in outputs:
             path = locate_beam_file(beam_scenario_folder, name, file_format)
 
@@ -740,21 +669,18 @@ class BeamPreprocessor(GenericPreprocessor):
             if file_format != "parquet":
                 df.to_csv(path, index=False, compression="gzip")
 
-            # Handle provenance inputs
-            inputs = [asim_rec] if asim_rec else []
-            if name == "plans" and beam_plans_rec:
-                inputs.append(beam_plans_rec)
-
-            rec = self.provenance_tracker.record_output_file_with_inputs(
-                "beam_preprocessor",
-                path,
-                input_records=inputs,
-                description=f"Merged {name} for BEAM input",
-                model_run_id=model_run_hash,
-                context=self.state,
-                short_name=f"{name}_beam_in_{self.state.current_year}_{self.state.current_inner_iter}",
+            record_list.append(
+                FileRecord(
+                    file_path=path,
+                    description=f"Merged {name} for BEAM input",
+                    short_name=(
+                        f"{name}_beam_in_{self.state.current_year}_"
+                        f"{self.state.current_inner_iter}"
+                    ),
+                    year=self.state.current_year,
+                    iteration=self.state.current_inner_iter,
+                )
             )
-            record_list.append(rec)
 
         return record_list
 
@@ -765,7 +691,6 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         beam_scenario_folder: str,
         input_record: Optional[FileRecord] = None,
-        model_run_hash: str = None,
     ) -> Optional[FileRecord]:
         """Copies and compresses a single file from ActivitySim to BEAM, with provenance."""
         beam_file_path = locate_beam_file(
@@ -777,15 +702,13 @@ class BeamPreprocessor(GenericPreprocessor):
 
         if not os.path.exists(asim_file_path):
             logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
-            return self.provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_file_path,
+            return FileRecord(
+                file_path=beam_file_path,
                 description=f"Missing BEAM input file: {beam_file_name}",
-                model_run_id=model_run_hash,
-                skip_missing=False,
+                short_name=f"{beam_file_name}_beam_in_missing",
+                year=self.state.current_year,
+                iteration=self.state.current_inner_iter,
             )
-
-        self.provenance_tracker.record_input_record(input_record)
 
         table_type = "plans" if "plans" in beam_file_name else beam_file_name
 
@@ -796,13 +719,12 @@ class BeamPreprocessor(GenericPreprocessor):
         else:
             df.to_csv(beam_file_path, compression="gzip", index=False)
 
-        return self.provenance_tracker.record_output_file_with_inputs(
-            "beam_preprocessor",
-            beam_file_path,
-            input_records=[input_record],
+        return FileRecord(
+            file_path=beam_file_path,
             description=f"Copied from ActivitySim output: {beam_file_name}",
             short_name=beam_file_name + "_beam_in",
-            model_run_id=model_run_hash,
+            year=self.state.current_year,
+            iteration=self.state.current_inner_iter,
         )
 
     def _handle_linkstats(
@@ -882,20 +804,12 @@ class BeamPreprocessor(GenericPreprocessor):
             return
 
         warmstart_rel_path = os.path.relpath(warmstart_abs_path, str(workspace.full_path))
-        warmstart_uri = None
-        if hasattr(self.provenance_tracker, "to_uri"):
-            try:
-                warmstart_uri = self.provenance_tracker.to_uri(warmstart_abs_path)
-            except Exception:
-                warmstart_uri = None
-
         warmstart_record = FileRecord(
             file_path=warmstart_rel_path,
             short_name="linkstats_warmstart",
             description=f"BEAM warm-start linkstats (source={warmstart_source})",
             year=getattr(self.state, "forecast_year", None),
             iteration=getattr(self.state, "current_inner_iter", None),
-            uri=warmstart_uri,
         )
 
         logger.info(

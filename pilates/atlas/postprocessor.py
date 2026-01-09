@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore
-from pilates.generic.model import provenance_logging
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
@@ -91,7 +90,7 @@ class AtlasPostprocessor(GenericPostprocessor):
     """
     ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.
     This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
-    All provenance tracking for output files should be handled here.
+    Produces updated UrbanSim inputs and ATLAS vehicle outputs.
     """
 
     def __init__(
@@ -103,7 +102,6 @@ class AtlasPostprocessor(GenericPostprocessor):
     ):
         super().__init__(model_name, state, provenance_tracker, major_stage)
 
-    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
@@ -127,9 +125,6 @@ class AtlasPostprocessor(GenericPostprocessor):
             self.state.current_year,
         )
 
-        # Get the model_run_hash from the decorator's start_model_run call
-        model_run_hash = self.provenance_tracker.current_model_run_id
-
         settings = self.state.full_settings
         output_year = self.state.forecast_year
         output_records = []
@@ -145,40 +140,14 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
 
         if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
-            # 1. Record H5 container and householdv.csv as inputs
-            h5_container_input_record = self.provenance_tracker.record_h5_input_container(
-                "atlas_postprocessor",
-                usim_h5_file,
-                description=f"UrbanSim HDF5 before ATLAS update for year {output_year}",
-                short_name="usim_h5_before_update",
-                model_run_id=model_run_hash,
-            )
-            atlas_hh_input_record = self.provenance_tracker.record_input_file(
-                "atlas_postprocessor",
-                atlas_hh_file,
-                description=f"ATLAS household vehicle counts for year {output_year}",
-                short_name="atlas_householdv_input",
-                model_run_id=model_run_hash,
-            )
-
-            # 2. Define the table to be updated. TODO: Check table names and fall back to /year/households
+            # Define the table to be updated. TODO: Check table names and fall back to /year/households
             table_name = (
                 "households"
                 if self.state.is_start_year()
                 else f"/{output_year}/households"
             )
 
-            # 3. Record the source table as an input
-            source_table_record = self.provenance_tracker.record_h5_table_input(
-                "atlas_postprocessor",
-                h5_container_record=h5_container_input_record,
-                table_name=table_name,
-                description="Source households table before update",
-                short_name="households_table_before_update",
-                model_run_id=model_run_hash,
-            )
-
-            # 4. Perform the update
+            # Perform the update
             self.atlas_update_h5_vehicle(
                 settings, output_year, usim_h5_file, atlas_hh_file
             )
@@ -186,17 +155,14 @@ class AtlasPostprocessor(GenericPostprocessor):
                 "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
             )
 
-            # 5. Record the updated table as an output
-            updated_table_record = self.provenance_tracker.record_h5_table_output(
-                "atlas_postprocessor",
-                h5_container_record=h5_container_input_record,  # The container path is the same
-                table_name=table_name,
-                input_records=[source_table_record, atlas_hh_input_record],
-                description="Updated households table after ATLAS run",
-                short_name="households_table_after_update",
-                model_run_id=model_run_hash,
+            output_records.append(
+                FileRecord(
+                    file_path=usim_h5_file,
+                    year=output_year,
+                    description="UrbanSim HDF5 updated with ATLAS vehicle ownership",
+                    short_name="usim_h5_updated",
+                )
             )
-            output_records.append(updated_table_record)
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh_file = os.path.join(
@@ -214,27 +180,12 @@ class AtlasPostprocessor(GenericPostprocessor):
                 "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
             )
 
-            atlas_veh_input_record = self.provenance_tracker.record_input_file(
-                "atlas_postprocessor",
-                atlas_veh_file,
-                description="ATLAS vehicles CSV before vehicleTypeId addition",
-                short_name="atlas_vehicles_input",
-                model_run_id=model_run_hash,
-            )
-
             if os.path.exists(atlas_veh2_file):
-                from pilates.generic.records import FileRecord
-
                 atlas_veh2_output_record = FileRecord(
                     file_path=atlas_veh2_file,
                     year=output_year,
                     description="ATLAS vehicles2 CSV with vehicleTypeId",
                     short_name="atlas_vehicles2_output",
-                    uri=(
-                        self.provenance_tracker.to_uri(atlas_veh2_file)
-                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                        else None
-                    ),
                 )
                 output_records.append(atlas_veh2_output_record)
 

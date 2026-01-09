@@ -180,7 +180,6 @@ class AtlasRunner(GenericRunner):
                     command=atlas_cmd,
                     model_name=self.model_name,
                     working_dir="/",
-                    provenance_tracker=self.provenance_tracker,
                     # PASS INPUTS HERE
                     input_artifacts=input_paths,
                     # PASS OUTPUTS HERE
@@ -218,11 +217,6 @@ class AtlasRunner(GenericRunner):
                     year=output_year,
                     description=f"ATLAS {fname} output for year {output_year}",
                     short_name=fname.replace(".csv", ""),
-                    uri=(
-                        self.provenance_tracker.to_uri(output_path)
-                        if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
-                        else None
-                    ),
                 )
                 output_records.append(output_record)
             else:
