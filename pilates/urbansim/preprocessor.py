@@ -381,7 +381,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
 
             mapping_output_rec = FileRecord(
                 file_path=geoid_to_zone_path,
-                models=["urbansim_preprocessor"],
                 description="Block to zone mapping for UrbanSim input",
                 short_name="geoid_to_zone",
                 uri=(
@@ -443,15 +442,10 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         # Output file provenance is automatically tracked by @provenance_logging decorator
                         from pilates.generic.records import FileRecord
 
-                        source_file_paths = (
-                            [skims_input_rec.file_path] if skims_input_rec else []
-                        )
                         skims_output_rec = FileRecord(
                             file_path=dest_skims_path,
-                            models=["urbansim_preprocessor"],
                             description="Copied updated skims for UrbanSim consumption",
                             short_name="usim_skims_input_updated",
-                            source_file_paths=source_file_paths,
                             uri=(
                                 self.provenance_tracker.to_uri(dest_skims_path)
                                 if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")

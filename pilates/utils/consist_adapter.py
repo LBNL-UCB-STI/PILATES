@@ -736,7 +736,6 @@ class ConsistProvenanceTracker:
 
         # FIX: Explicitly extract fields needed by FileRecord constructor from metadata
         description = meta.get("description")
-        source_file_paths = meta.get("source_file_paths", [])
 
         # If year not in context, try to find it in meta
         year = ctx.current_year if ctx else meta.get("year")
@@ -744,15 +743,11 @@ class ConsistProvenanceTracker:
         return FileRecord(
             unique_id=str(artifact.id),
             file_path=relative_path,
-            created_at=artifact.created_at_iso or datetime.now().isoformat(),
             short_name=artifact.key,
             year=year,
-            models=[model],
             # Explicitly mapping fields that were missing in previous implementation
             description=description,
             uri=artifact.uri,
-            producing_run_id=artifact.run_id,
-            source_file_paths=source_file_paths,
             metadata=meta,
         )
 

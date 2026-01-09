@@ -274,7 +274,6 @@ class ActivitysimRunner(GenericRunner):
 
                 zarr_skims_rec = FileRecord(
                     file_path=all_skims_path,
-                    models=["activitysim"],
                     year=self.state.current_year,
                     description="Zarr skims initialized from omx.",
                     short_name=f"zarr_skims_{self.state.current_year}_-1",
@@ -466,7 +465,6 @@ class ActivitysimRunner(GenericRunner):
 
                     output_rec = FileRecord(
                         file_path=fpath,
-                        models=["activitysim"],
                         year=self.state.forecast_year,
                         description=f"ActivitySim output file: {fname}",
                         short_name=fname + "_asim_out_temp",

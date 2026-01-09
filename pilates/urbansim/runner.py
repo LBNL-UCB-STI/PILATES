@@ -146,7 +146,6 @@ class UrbansimRunner(GenericRunner):
 
             output_rec = FileRecord(
                 file_path=usim_datastore_fpath,
-                models=[self.model_name],
                 year=forecast_year,
                 short_name="usim_forecast_output",
                 description="UrbanSim forecast output data",

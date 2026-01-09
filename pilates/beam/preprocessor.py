@@ -563,11 +563,8 @@ class BeamPreprocessor(GenericPreprocessor):
                         ),  # Relative path for record
                         short_name=base_name,
                         description=f"ActivitySim output file found via filesystem fallback ({expected_file_name})",
-                        producing_run_id=self.provenance_tracker.run_info.run_id,
                         unique_id=f"fallback-{base_name}-{self.provenance_tracker.run_info.run_id}",  # Unique ID for dummy record
-                        exists=True,
                         year=self.state.current_year,
-                        created_at=str(datetime.now()),
                         uri=(
                             self.provenance_tracker.to_uri(expected_full_path)
                             if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")
@@ -896,7 +893,6 @@ class BeamPreprocessor(GenericPreprocessor):
             file_path=warmstart_rel_path,
             short_name="linkstats_warmstart",
             description=f"BEAM warm-start linkstats (source={warmstart_source})",
-            models=["beam"],
             year=getattr(self.state, "forecast_year", None),
             iteration=getattr(self.state, "current_inner_iter", None),
             uri=warmstart_uri,

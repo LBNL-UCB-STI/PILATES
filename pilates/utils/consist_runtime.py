@@ -132,6 +132,17 @@ class _NoopCoupler:
     def adopt_cached_output(self, *args, **kwargs) -> None:
         return None
 
+    def collect_by_keys(self, artifacts: Dict[str, Any], *keys: str, prefix: str = ""):
+        collected: Dict[str, Any] = {}
+        for key in keys:
+            if key not in artifacts:
+                raise KeyError(f"Missing artifact for key {key!r}.")
+            coupler_key = f"{prefix}{key}"
+            artifact = artifacts[key]
+            self.set(coupler_key, artifact)
+            collected[coupler_key] = artifact
+        return collected
+
 
 class _NoopScenario:
     def __init__(self):
@@ -149,6 +160,24 @@ class _NoopScenario:
 
     def run(self, fn=None, name: Optional[str] = None, **kwargs):
         if fn is None:
-            return None
+            return _NoopRunResult()
         runtime_kwargs = kwargs.get("runtime_kwargs") or {}
-        return fn(**runtime_kwargs)
+        result = fn(**runtime_kwargs)
+
+        outputs = {}
+        output_paths = kwargs.get("output_paths")
+        if output_paths:
+            outputs = dict(output_paths)
+        elif hasattr(result, "to_mapping") and callable(result.to_mapping):
+            outputs = result.to_mapping()
+
+        return _NoopRunResult(outputs=outputs)
+
+    def collect_by_keys(self, artifacts: Dict[str, Any], *keys: str, prefix: str = ""):
+        return self.coupler.collect_by_keys(artifacts, *keys, prefix=prefix)
+
+
+class _NoopRunResult:
+    def __init__(self, outputs: Optional[Dict[str, Any]] = None):
+        self.outputs = outputs or {}
+        self.cache_hit = False

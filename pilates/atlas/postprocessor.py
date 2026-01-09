@@ -225,16 +225,11 @@ class AtlasPostprocessor(GenericPostprocessor):
             if os.path.exists(atlas_veh2_file):
                 from pilates.generic.records import FileRecord
 
-                source_file_paths = (
-                    [atlas_veh_input_record.file_path] if atlas_veh_input_record else []
-                )
                 atlas_veh2_output_record = FileRecord(
                     file_path=atlas_veh2_file,
-                    models=["atlas_postprocessor"],
                     year=output_year,
                     description="ATLAS vehicles2 CSV with vehicleTypeId",
                     short_name="atlas_vehicles2_output",
-                    source_file_paths=source_file_paths,
                     uri=(
                         self.provenance_tracker.to_uri(atlas_veh2_file)
                         if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")

@@ -215,7 +215,6 @@ class AtlasRunner(GenericRunner):
 
                 output_record = FileRecord(
                     file_path=output_path,
-                    models=[self.model_name],
                     year=output_year,
                     description=f"ATLAS {fname} output for year {output_year}",
                     short_name=fname.replace(".csv", ""),

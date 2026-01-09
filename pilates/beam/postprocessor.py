@@ -3648,15 +3648,10 @@ class BeamPostprocessor(GenericPostprocessor):
                         # Record output file for this model run
                         from pilates.generic.records import FileRecord
 
-                        source_file_paths = (
-                            [zarr_input_record.file_path] if zarr_input_record else []
-                        )
                         omx_output_record = FileRecord(
                             file_path=final_omx_path,
-                            models=[self.model_name],
                             short_name="final_skims_omx",
                             description="Final skims converted to OMX format for ActivitySim/UrbanSim.",
-                            source_file_paths=source_file_paths,
                             uri=(
                                 self.provenance_tracker.to_uri(final_omx_path)
                                 if self.provenance_tracker and hasattr(self.provenance_tracker, "to_uri")

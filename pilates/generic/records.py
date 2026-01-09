@@ -41,14 +41,7 @@ class FileRecord:
     year: Optional[int] = None
     iteration: Optional[int] = None
     sub_iteration: Optional[int] = None
-    models: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    source_file_paths: List[str] = field(default_factory=list)
-    producing_run_id: Optional[str] = None
-    consuming_run_ids: List[str] = field(default_factory=list)
-    schema: List[Dict[str, str]] = field(default_factory=list)
-    created_at: Optional[str] = None
-    exists: Optional[bool] = None
     unique_id: Optional[str] = None
     uri: Optional[str] = None
 

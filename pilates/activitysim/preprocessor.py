@@ -2113,7 +2113,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
             beam_skims_output_rec = FileRecord(
                 file_path=path_to_beam_skims_in_current_run_workspace,
-                models=["activitysim_preprocessor"],
                 description="BEAM skims copied to current workspace",
                 short_name="omx_skims_current_workspace",
                 uri=(
@@ -2161,7 +2160,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         skim_record = FileRecord(
             file_path=skims_loc,
-            models=["activitysim_preprocessor"],
             short_name="omx_skims",
             description="OD Skims copied over to ASim data directory",
             uri=(
