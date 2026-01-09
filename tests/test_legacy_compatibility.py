@@ -78,7 +78,7 @@ _stub_module(
 
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.config.models import load_config
-from pilates.generic.records import FileRecord, PilatesRunInfo
+from pilates.generic.records_legacy import FileRecord, PilatesRunInfo
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.provenance import FileProvenanceTracker
 from workflow_state import WorkflowState

@@ -9,7 +9,7 @@ model inputs/outputs with complete provenance tracking.
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
-from pilates.generic.records import PilatesRunInfo
+from pilates.generic.records_legacy import PilatesRunInfo
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from pilates.utils.duckdb_manager import DuckDBManager
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
     from pilates.utils.provenance import FileProvenanceTracker
-    from pilates.generic.records import RecordStore, ModelRunInfo
+    from pilates.generic.records import RecordStore
 
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def provenance_logging(func):
     def wrapper(self: "Model", *args, **kwargs):  # Removed specific 'store' arg
         model_run_id = None
         output_store_from_func = None
-        run_info_from_func = None
+        metadata_from_func = {}
 
         # Determine method name to provide better description
         method_name = func.__name__.replace("_", " ").strip()
@@ -115,29 +115,17 @@ def provenance_logging(func):
             func_result = func(self, *args, **kwargs)  # Pass all original args/kwargs
 
             # Handle different return types
-            if (
-                isinstance(func_result, tuple)
-                and len(func_result) == 2
-                and isinstance(func_result[0], RecordStore)
-            ):
-                output_store_from_func, run_info_from_func = func_result
-            elif isinstance(func_result, RecordStore):
+            if isinstance(func_result, RecordStore):
                 output_store_from_func = func_result
-                run_info_from_func = self.provenance_tracker.run_info.model_runs.get(
-                    model_run_id
-                )  # Get run_info for metadata
             else:
                 # If the function returns something else, it's not a standard RecordStore output.
-                # We'll log completion but won't have specific output records or run_info metadata
+                # We'll log completion but won't have specific output records.
                 logger.warning(
-                    f"Decorated method {func.__name__} returned unexpected type: {type(func_result)}. Expected RecordStore or Tuple[RecordStore, ModelRunInfo]. Provenance output records/metadata might be incomplete."
+                    f"Decorated method {func.__name__} returned unexpected type: {type(func_result)}. Expected RecordStore. Provenance output records might be incomplete."
                 )
                 output_store_from_func = (
                     RecordStore()
                 )  # Default to empty for completion logging
-                run_info_from_func = self.provenance_tracker.run_info.model_runs.get(
-                    model_run_id
-                )  # Get run_info for metadata
 
             # NEW: Add output records to the main file_records dictionary
             if output_store_from_func:
@@ -159,7 +147,7 @@ def provenance_logging(func):
                     if output_store_from_func
                     else []
                 ),
-                metadata=run_info_from_func.metadata if run_info_from_func else {},
+                metadata=metadata_from_func,
             )
 
             # Return the original result of the function

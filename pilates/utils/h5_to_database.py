@@ -33,10 +33,7 @@ from pilates.activitysim.preprocessor import (
     _process_raw_h5_for_asim,
     _create_land_use_table,
 )
-from pilates.generic.records import (
-    FileRecord,
-    PilatesRunInfo,
-)
+from pilates.generic.records_legacy import FileRecord, PilatesRunInfo
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)

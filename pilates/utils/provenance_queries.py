@@ -13,7 +13,7 @@ This API provides standard query patterns that don't require custom JSON parsing
 
 import logging
 from typing import List, Dict, Any, Optional, Set
-from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo
+from pilates.generic.records_legacy import PilatesRunInfo, FileRecord, ModelRunInfo
 
 logger = logging.getLogger(__name__)
 

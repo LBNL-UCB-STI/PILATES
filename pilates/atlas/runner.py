@@ -1,9 +1,9 @@
-from typing import Tuple, Optional
+from typing import Optional
 import logging
 import os
 
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -89,7 +89,7 @@ class AtlasRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Executes the ATLAS model run.
 
@@ -98,9 +98,7 @@ class AtlasRunner(GenericRunner):
             workspace (Workspace): The workspace object for path management.
 
         Returns:
-            tuple: A tuple containing:
-                - data (RecordStore): The raw output files that have been prepared to run the model
-                - model_run_info (ModelRunInfo): Information about the model run
+            RecordStore: The raw output files that have been prepared to run the model.
 
         Notes:
             - All preprocessing and postprocessing should be handled outside this method.
@@ -238,7 +236,4 @@ class AtlasRunner(GenericRunner):
         )
 
         # CRITICAL FIX: Explicitly set status to 'completed'
-        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
-        run_info.status = "completed"
-
-        return RecordStore(recordList=output_records), run_info
+        return RecordStore(recordList=output_records)

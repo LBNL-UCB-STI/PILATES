@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -159,7 +159,7 @@ class ActivitysimRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Do the model run
 
@@ -168,9 +168,7 @@ class ActivitysimRunner(GenericRunner):
             workspace (Workspace): The workspace object for path management.
 
         Returns:
-            tuple: A tuple containing:
-                - data (RecordStore): The raw output files that have been prepared to run the model
-                - model_run_info (ModelRunInfo): Information about the model run
+            RecordStore: The raw output files that have been prepared to run the model.
         """
         settings = self.state.full_settings
         region = settings.run.region
@@ -448,14 +446,13 @@ class ActivitysimRunner(GenericRunner):
             lineage_mode="none",
         )
 
-        run_info = None
         if not success:
             logger.error(
                 "ASIM run failed for year {0} iteration {1}".format(
                     self.state.current_year, self.state.current_inner_iter
                 )
             )
-            return RecordStore(), run_info
+            return RecordStore()
 
         # Assemble outputs: find the expected output files and return as a RecordStore
         output_dir = os.path.join(workspace.get_asim_output_dir(), "final_pipeline")
@@ -482,31 +479,5 @@ class ActivitysimRunner(GenericRunner):
                     )
                     output_records.append(output_rec)
 
-        # Prepare runtime metadata for main run
-        runtime_metadata = {
-            "container_command": asim_cmd,
-            "runtime_parameters": {
-                "household_sample_size": settings.activitysim.household_sample_size,
-                "num_processes": settings.activitysim.num_processes,
-                "chunk_size": settings.activitysim.chunk_size,
-                "additional_args": additional_args,
-            },
-            "container_image": activity_demand_image,
-            "container_manager": settings.infrastructure.container_manager,
-            "working_directory": asim_workdir,
-        }
-
         output_store = RecordStore(recordList=output_records)
-
-        # Provide minimal ModelRunInfo for downstream consumers.
-        if run_info is None:
-            run_info = ModelRunInfo(
-                model="activitysim",
-                year=self.state.forecast_year,
-                iteration=self.state.current_inner_iter,
-                description="ActivitySim run",
-                status="completed" if success else "failed",
-                metadata=runtime_metadata,
-            )
-
-        return output_store, run_info
+        return output_store

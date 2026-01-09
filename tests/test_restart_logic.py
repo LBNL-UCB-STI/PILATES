@@ -4,12 +4,8 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 from pilates.generic.model_factory import ModelFactory
-from pilates.generic.records import (
-    RecordStore,
-    ModelRunInfo,
-    FileRecord,
-    PilatesRunInfo,
-)
+from pilates.generic.records import RecordStore
+from pilates.generic.records_legacy import ModelRunInfo, FileRecord, PilatesRunInfo
 from pilates.utils.provenance import FileProvenanceTracker
 from workflow_state import WorkflowState
 
@@ -186,16 +182,13 @@ def test_fresh_run_executes_all_sub_stages(setup_test_environment):
 
                 # Set up return values for the mocked _preprocess, _run, _postprocess
                 mock_pre_preprocess.return_value = RecordStore()
-                mock_run_run.return_value = (
-                    RecordStore(),
-                    ModelRunInfo(model="urbansim", year=2017, unique_id="run_id"),
-                )
+                mock_run_run.return_value = RecordStore()
                 mock_post_postprocess.return_value = RecordStore()
 
                 # Call the actual preprocess, run, postprocess methods
                 input_data = preprocessor_instance.preprocess(MagicMock())
-                raw_outputs, run_info = runner_instance.run(input_data, MagicMock())
-                postprocessor_instance.postprocess(raw_outputs, MagicMock(), run_info)
+                raw_outputs = runner_instance.run(input_data, MagicMock())
+                postprocessor_instance.postprocess(raw_outputs, MagicMock())
 
                 # Assert that all _preprocess, _run, _postprocess were called
                 mock_pre_preprocess.assert_called_once()
@@ -270,10 +263,8 @@ def test_resume_from_runner_failure_skips_preprocessor(setup_test_environment):
 
                     # Call the actual preprocess, run, postprocess methods
                     input_data = preprocessor_instance.preprocess(MagicMock())
-                    raw_outputs, run_info = runner_instance.run(input_data, MagicMock())
-                    postprocessor_instance.postprocess(
-                        raw_outputs, MagicMock(), run_info
-                    )
+                    raw_outputs = runner_instance.run(input_data, MagicMock())
+                    postprocessor_instance.postprocess(raw_outputs, MagicMock())
 
                     # Assert that _preprocess was NOT called
                     mock_pre_preprocess.assert_not_called()
@@ -356,10 +347,8 @@ def test_resume_from_postprocessor_failure_skips_preprocessor_and_runner(
 
                     # Call the actual preprocess, run, postprocess methods
                     input_data = preprocessor_instance.preprocess(MagicMock())
-                    raw_outputs, run_info = runner_instance.run(input_data, MagicMock())
-                    postprocessor_instance.postprocess(
-                        raw_outputs, MagicMock(), run_info
-                    )
+                    raw_outputs = runner_instance.run(input_data, MagicMock())
+                    postprocessor_instance.postprocess(raw_outputs, MagicMock())
 
                     # Assert that _preprocess and _run were NOT called
                     mock_pre_preprocess.assert_not_called()
@@ -380,8 +369,6 @@ def test_resume_from_postprocessor_failure_skips_preprocessor_and_runner(
                     assert (
                         raw_outputs.all_records()[0].unique_id == "runner_output_hash"
                     )
-                    assert isinstance(run_info, ModelRunInfo)
-                    assert run_info.model == "urbansim"
 
                     # Assert that sub_stage_progress was updated correctly
                     assert (

@@ -70,7 +70,7 @@ def _require_openlineage() -> None:
             "Install the optional dependency (e.g., `pip install openlineage-python`)."
         )
 
-from pilates.generic.records import (
+from pilates.generic.records_legacy import (
     FileRecord,
     RepoRecord,
     ModelRunInfo,

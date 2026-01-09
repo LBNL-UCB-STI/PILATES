@@ -3,12 +3,12 @@ import os
 from datetime import datetime
 
 import sys
-from typing import Tuple, List, Optional
+from typing import List, Optional
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import provenance_logging
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore, ModelRunInfo, Record
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.beam.postprocessor import (
     find_latest_beam_iteration,
     find_beam_iterations,
@@ -72,9 +72,8 @@ class BeamRunner(GenericRunner):
     def gather_outputs(
         self,
         beam_local_output_folder: str,
-        run_info: ModelRunInfo,
         skimFormat: str = "omx",
-    ) -> List[Record]:
+    ) -> List[FileRecord]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
             # Zarr OD skims naming differs across BEAM builds/configs:
@@ -143,7 +142,7 @@ class BeamRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         settings = self.state.full_settings
         region = settings.run.region
         beam_memory = settings.beam.memory
@@ -231,25 +230,6 @@ class BeamRunner(GenericRunner):
             lineage_mode="none",
         )
 
-        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
-        run_info.metadata.update(
-            {
-                "container_command": f"--config={path_to_beam_config}",
-                "runtime_parameters": {
-                    "beam_config": beam_config,
-                    "path_to_beam_config": path_to_beam_config,
-                    "beam_memory": beam_memory,
-                    "region": region,
-                },
-                "container_image": travel_model_image,
-                "container_manager": get_setting(
-                    settings, "infrastructure.container_manager", "docker"
-                ),
-                "working_directory": "/app",
-                "java_opts": java_opts,
-            }
-        )
-
         if not success:
             raise RuntimeError("BEAM run failed after container execution.")
 
@@ -281,16 +261,11 @@ class BeamRunner(GenericRunner):
                 "[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs."
             )
 
-        output_records = self.gather_outputs(
-            output_path_for_gather, run_info, skimFormat
-        )
+        output_records = self.gather_outputs(output_path_for_gather, skimFormat)
         output_store = RecordStore(recordList=output_records)
 
         logger.info(
             f"[BEAM Runner] BEAM run complete. Output records: {len(output_records)}"
         )
 
-        # 5. EXPLICIT SUCCESS STATUS
-        run_info.status = "completed"
-
-        return output_store, run_info
+        return output_store

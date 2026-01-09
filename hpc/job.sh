@@ -21,7 +21,7 @@
 #
 # 5. Install Dependencies (Crucial: Pin Numpy < 2.0 for compatibility):
 #    python -m pip install "numpy<2.0"
-#    python -m pip install shapely openmatrix pygeos geopandas PyYAML dlt duckdb pyarrow pydantic rich sqlalchemy sqlmodel tables xarray zarr typer tqdm scipy
+#    python -m pip install shapely openmatrix pygeos geopandas PyYAML dlt duckdb pyarrow pydantic rich sqlalchemy sqlmodel tables xarray zarr typer tqdm scipy h5py blosc matplotlib openlineage-python joblib
 #
 # 6. Install Custom 'consist' Library (Editable mode):
 #    # Assumes 'consist' folder is next to PILATES-env

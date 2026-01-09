@@ -8,7 +8,7 @@ import os
 from typing import Tuple, Optional
 
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -205,7 +205,6 @@ def create_beam_input_data(
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
     asim_output_dict,
     source_file_paths: list,
     model_run_hash: str,
@@ -253,7 +252,6 @@ def create_usim_input_data(
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
     asim_output_dict,
     tables_updated_by_asim,
     asim_source_paths: list,
@@ -439,12 +437,11 @@ def update_usim_inputs_after_warm_start(
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
+    model_run_hash: Optional[str] = None,
 ):
     """
     TODO: Combine this method with create_usim_input_data() above
     """
-    model_run_id = getattr(runInfo, "model_run_id", None)
     model_name = "activitysim_warm_start_postprocessor"  # Virtual model name
 
     # load usim data
@@ -466,7 +463,7 @@ def update_usim_inputs_after_warm_start(
         model_name,
         input_store_path,
         description="UrbanSim input H5 before warm start update",
-        model_run_id=model_run_id,
+        model_run_id=model_run_hash,
     )
     provenance_tracker.record_input_file(
         model_name,
@@ -549,7 +546,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -561,7 +557,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            runInfo (Optional[ModelRunInfo]): Metadata or information about the model run.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
@@ -728,7 +723,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 self.state,
                 workspace,
                 self.provenance_tracker,
-                runInfo,
                 asim_output_dict,
                 tables_updated_by_asim,
                 source_file_paths,

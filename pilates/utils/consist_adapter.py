@@ -17,11 +17,10 @@ from typing import Dict, List, Optional, Any, Union
 from consist import Tracker, Artifact
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import (
-    FileRecord,
+from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records_legacy import (
     RepoRecord,
     ModelRunInfo,
-    RecordStore,
     PilatesRunInfo,
     H5TableRecord,
     H5FileRecord,

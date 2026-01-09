@@ -309,7 +309,7 @@ class TestPhase1Improvements:
         orphan_file.write_text("orphaned data")
 
         # Record a file but DON'T associate it with any model run
-        from pilates.generic.records import FileRecord
+        from pilates.generic.records_legacy import FileRecord
 
         orphan_record = FileRecord(
             file_path=str(orphan_file),

@@ -16,7 +16,7 @@ import numpy as np
 
 import duckdb
 
-from pilates.generic.records import (
+from pilates.generic.records_legacy import (
     PilatesRunInfo,
     FileRecord,
     H5FileRecord,
@@ -30,7 +30,7 @@ from pilates.utils.database import (
 from pilates.database.schema_generator import _normalize_table_name
 
 if TYPE_CHECKING:
-    from pilates.generic.records import ModelRun, OpenLineageEventMetadata
+    from pilates.generic.records_legacy import ModelRun, OpenLineageEventMetadata
 
 logger = logging.getLogger(__name__)
 

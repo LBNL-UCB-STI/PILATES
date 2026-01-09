@@ -33,7 +33,7 @@ from pilates.activitysim.preprocessor import (
 )
 
 from pilates.atlas.postprocessor import atlas_add_vehileTypeId
-from pilates.generic.records import PilatesRunInfo, FileRecord
+from pilates.generic.records_legacy import PilatesRunInfo, FileRecord
 from datetime import datetime
 import uuid
 import yaml

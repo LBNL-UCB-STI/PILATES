@@ -72,7 +72,7 @@ Usage Notes:
 ------------
 - All dummy classes inherit from Generic* base classes to ensure API compatibility
 - FileRecords must have unique_ids to be added to RecordStores
-- Runners must return Tuple[RecordStore, ModelRunInfo]
+- Runners must return RecordStore only
 - Preprocessors and Postprocessors return RecordStore only
 - RecordStore uses 'recordList' parameter, not 'file_records'
 - Use record_input_file/record_output_file for provenance, not add_input_file/add_output_file
@@ -94,13 +94,8 @@ from pilates.generic.model import provenance_logging
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.runner import GenericRunner
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import (
-    H5FileRecord,
-    H5TableRecord,
-    FileRecord,
-    RecordStore,
-    ModelRunInfo,
-)
+from pilates.generic.records_legacy import H5FileRecord, H5TableRecord, FileRecord
+from pilates.generic.records import RecordStore
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.workspace import Workspace
 from tests.test_consist_adapter import consist_tracker
@@ -460,12 +455,12 @@ class DummyModelARunner(GenericRunner):
     3. Writes output files
     4. Creates FileRecords for outputs
     5. Records provenance
-    6. Returns a RecordStore with output metadata AND a ModelRunInfo
+    6. Returns a RecordStore with output metadata
 
     Key Learning Points:
     - How to find records by short_name using get_record_by_short_name()
     - How to access file paths via record.file_path
-    - How runners must return Tuple[RecordStore, ModelRunInfo] (not just RecordStore)
+    - How runners return RecordStore (not tuples)
     - Pattern for creating output FileRecords with unique_ids
     """
 
@@ -474,9 +469,7 @@ class DummyModelARunner(GenericRunner):
         self.config = config
 
     @provenance_logging
-    def _run(
-        self, store: RecordStore, workspace: Workspace
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
         output_dir = workspace.output_dir
         # Extract paths from the RecordStore
         csv_record = get_record_by_short_name(store, "preprocessed_data.csv")
@@ -531,20 +524,17 @@ class DummyModelARunner(GenericRunner):
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
-        return (
-            RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=output_csv_path,
-                        short_name=f"model_a_output_{year}.csv",
-                        unique_id=make_unique_id(output_csv_path),
-                        year=year,
-                    ),
-                    output_h5_file_record,
-                    output_h5_table_record,
-                ]
-            ),
-            ModelRunInfo(model=self.model_name, year=year),
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=output_csv_path,
+                    short_name=f"model_a_output_{year}.csv",
+                    unique_id=make_unique_id(output_csv_path),
+                    year=year,
+                ),
+                output_h5_file_record,
+                output_h5_table_record,
+            ]
         )
 
 
@@ -575,7 +565,6 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         output_dir = workspace.output_dir
@@ -714,9 +703,7 @@ class DummyModelBRunner(GenericRunner):
         self.config = config
 
     @provenance_logging
-    def _run(
-        self, store: RecordStore, workspace: Workspace
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
         output_dir = workspace.output_dir
         csv_record = get_record_by_short_name(
             store, f"model_a_final_output_{self.state.current_year}.csv"
@@ -773,20 +760,17 @@ class DummyModelBRunner(GenericRunner):
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
-        return (
-            RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=output_csv_path,
-                        short_name=f"model_b_output_{year}.csv",
-                        unique_id=make_unique_id(output_csv_path),
-                        year=year,
-                    ),
-                    output_h5_file_record,
-                    output_h5_table_record,
-                ]
-            ),
-            ModelRunInfo(model=self.model_name, year=year),
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=output_csv_path,
+                    short_name=f"model_b_output_{year}.csv",
+                    unique_id=make_unique_id(output_csv_path),
+                    year=year,
+                ),
+                output_h5_file_record,
+                output_h5_table_record,
+            ]
         )
 
 
@@ -800,7 +784,6 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         output_dir = workspace.output_dir
@@ -894,9 +877,7 @@ class DummyContainerRunner(GenericRunner):
         self.config = config
 
     @provenance_logging
-    def _run(
-        self, store: RecordStore, workspace: Workspace
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
         """
         Run a dummy model using container execution with Consist integration.
 
@@ -1007,15 +988,12 @@ class DummyContainerRunner(GenericRunner):
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
-        return (
-            RecordStore(
-                recordList=[
-                    output_csv_record,
-                    output_h5_file_record,
-                    output_h5_table_record,
-                ]
-            ),
-            ModelRunInfo(model=self.model_name, year=year),
+        return RecordStore(
+            recordList=[
+                output_csv_record,
+                output_h5_file_record,
+                output_h5_table_record,
+            ]
         )
 
 
@@ -1128,7 +1106,7 @@ class TestDummyWorkflowConsist:
                 )
 
             with scenario.step("run_a"):
-                runner_a_output_records, _ = model_a_runner.run(
+                runner_a_output_records = model_a_runner.run(
                     preprocessor_a_output_records, workspace
                 )
 
@@ -1171,7 +1149,7 @@ class TestDummyWorkflowConsist:
                 )
 
             with scenario.step("run_b"):
-                runner_b_output_records, _ = model_b_runner.run(
+                runner_b_output_records = model_b_runner.run(
                     preprocessor_b_output_records, workspace
                 )
 
@@ -1341,7 +1319,7 @@ class TestDummyWorkflowConsist:
                 )
 
             with scenario.step("run"):
-                runner_output, _ = runner.run(preprocess_output, workspace)
+                runner_output = runner.run(preprocess_output, workspace)
 
             with scenario.step("postprocess"):
                 final_output = postprocessor.postprocess(runner_output, workspace)
@@ -1492,7 +1470,7 @@ class TestDummyWorkflowConsist:
                 )
 
             with scenario.step("run"):
-                runner_output, _ = runner.run(preprocess_output, workspace)
+                runner_output = runner.run(preprocess_output, workspace)
 
             with scenario.step("postprocess"):
                 postprocessor.postprocess(runner_output, workspace)
@@ -1585,7 +1563,7 @@ class TestDummyWorkflowConsist:
                 provenance_tracker.log_record_store(mutable_records, direction="output")
 
             with scenario.step("run"):
-                # Force one decorated run so adapter records a completed ModelRunInfo
+                # Force one decorated run so adapter records outputs for restart lookup
                 runner.run(mutable_records, workspace)
 
         # Fresh adapter instance simulating a restart in a new process
@@ -1674,7 +1652,7 @@ class TestDummyWorkflowConsist:
                     model="test_orchestrator",
                 ) as scenario:
                     with scenario.step("run_container", model="modelcontainer", year=year):
-                        runner_output, runner_info = container_runner.run(
+                        runner_output = container_runner.run(
                             preprocess_output, workspace
                         )
 
@@ -1742,10 +1720,7 @@ class TestDummyWorkflowConsist:
         ), "Container runner should create CSV output"
         assert container_output_h5.exists(), "Container runner should create H5 output"
 
-        # Verify provenance was tracked
-        assert (
-            runner_info is not None
-        ), "Runner should return ModelRunInfo for provenance tracking"
+        # Verify provenance was tracked via output records
 
         print("✓ Container runner with Consist integration test passed:")
         print(f"  - consist_run_container was called with correct parameters")
@@ -1894,7 +1869,7 @@ class TestDummyWorkflowConsist:
                 recs = prep.preprocess(workspace, previous_records=recs)
 
             with scenario.step("run_a", model="modela", year=year):
-                recs, _ = runner.run(recs, workspace)
+                recs = runner.run(recs, workspace)
 
             with scenario.step("postprocess_a", model="modela", year=year):
                 recs = post.postprocess(recs, workspace)

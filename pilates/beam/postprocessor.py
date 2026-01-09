@@ -20,7 +20,7 @@ except:
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.snapshot_manager import SnapshotManager
@@ -3447,7 +3447,6 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        run_info: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """

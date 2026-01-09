@@ -7,7 +7,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.generic.model import provenance_logging
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
@@ -219,7 +219,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -228,7 +227,6 @@ class UrbansimPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            runInfo (Optional[ModelRunInfo]): Metadata about the model run. Not used by this processor.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:

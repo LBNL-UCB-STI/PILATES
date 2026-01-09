@@ -69,7 +69,7 @@ Usage Notes:
 ------------
 - All dummy classes inherit from Generic* base classes to ensure API compatibility
 - FileRecords must have unique_ids to be added to RecordStores
-- Runners must return Tuple[RecordStore, ModelRunInfo]
+- Runners must return RecordStore only
 - Preprocessors and Postprocessors return RecordStore only
 - RecordStore uses 'recordList' parameter, not 'file_records'
 - Use record_input_file/record_output_file for provenance, not add_input_file/add_output_file
@@ -89,13 +89,8 @@ from pilates.generic.model import provenance_logging
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.runner import GenericRunner
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import (
-    H5FileRecord,
-    H5TableRecord,
-    FileRecord,
-    RecordStore,
-    ModelRunInfo,
-)
+from pilates.generic.records_legacy import H5FileRecord, H5TableRecord, FileRecord
+from pilates.generic.records import RecordStore
 from pilates.utils.provenance import OpenLineageTracker
 from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.workspace import Workspace
@@ -463,12 +458,12 @@ class DummyModelARunner(GenericRunner):
     3. Writes output files
     4. Creates FileRecords for outputs
     5. Records provenance
-    6. Returns a RecordStore with output metadata AND a ModelRunInfo
+    6. Returns a RecordStore with output metadata
 
     Key Learning Points:
     - How to find records by short_name using get_record_by_short_name()
     - How to access file paths via record.file_path
-    - How runners must return Tuple[RecordStore, ModelRunInfo] (not just RecordStore)
+    - How runners return RecordStore (not tuples)
     - Pattern for creating output FileRecords with unique_ids
     """
 
@@ -477,9 +472,7 @@ class DummyModelARunner(GenericRunner):
         self.config = config
 
     @provenance_logging
-    def _run(
-        self, store: RecordStore, workspace: Workspace
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
         output_dir = workspace.output_dir
         # Extract paths from the RecordStore
         csv_record = get_record_by_short_name(store, "data.csv")
@@ -532,19 +525,16 @@ class DummyModelARunner(GenericRunner):
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
-        return (
-            RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=output_csv_path,
-                        short_name=f"model_a_output_{year}.csv",
-                        unique_id=make_unique_id(output_csv_path),
-                    ),
-                    output_h5_file_record,
-                    output_h5_table_record,
-                ]
-            ),
-            ModelRunInfo(model=self.model_name, year=year),
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=output_csv_path,
+                    short_name=f"model_a_output_{year}.csv",
+                    unique_id=make_unique_id(output_csv_path),
+                ),
+                output_h5_file_record,
+                output_h5_table_record,
+            ]
         )
 
 
@@ -575,7 +565,6 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         output_dir = workspace.output_dir
@@ -710,9 +699,7 @@ class DummyModelBRunner(GenericRunner):
         self.config = config
 
     @provenance_logging
-    def _run(
-        self, store: RecordStore, workspace: Workspace
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    def _run(self, store: RecordStore, workspace: Workspace) -> RecordStore:
         output_dir = workspace.output_dir
         csv_record = get_record_by_short_name(
             store, f"model_a_final_output_{self.state.current_year}.csv"
@@ -767,19 +754,16 @@ class DummyModelBRunner(GenericRunner):
         )
         output_h5_file_record.table_record_ids = [output_h5_table_record.unique_id]
 
-        return (
-            RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=output_csv_path,
-                        short_name=f"model_b_output_{year}.csv",
-                        unique_id=make_unique_id(output_csv_path),
-                    ),
-                    output_h5_file_record,
-                    output_h5_table_record,
-                ]
-            ),
-            ModelRunInfo(model=self.model_name, year=year),
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=output_csv_path,
+                    short_name=f"model_b_output_{year}.csv",
+                    unique_id=make_unique_id(output_csv_path),
+                ),
+                output_h5_file_record,
+                output_h5_table_record,
+            ]
         )
 
 
@@ -793,7 +777,6 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         output_dir = workspace.output_dir
@@ -965,7 +948,7 @@ class TestDummyWorkflow:
         preprocessor_a_output_records = model_a_preprocessor.preprocess(
             workspace, previous_records=mutable_location_records_a
         )
-        runner_a_output_records, _ = model_a_runner.run(
+        runner_a_output_records = model_a_runner.run(
             preprocessor_a_output_records, workspace
         )
         postprocessor_a_output_records = model_a_postprocessor.postprocess(
@@ -1016,7 +999,7 @@ class TestDummyWorkflow:
             previous_records=postprocessor_a_output_records
             + mutable_location_records_b,
         )
-        runner_b_output_records, _ = model_b_runner.run(
+        runner_b_output_records = model_b_runner.run(
             preprocessor_b_output_records, workspace
         )
         postprocessor_b_output_records = model_b_postprocessor.postprocess(
@@ -1214,7 +1197,7 @@ class TestDummyWorkflow:
         preprocess_output = preprocessor.preprocess(
             workspace, previous_records=mutable_records
         )
-        runner_output, _ = runner.run(preprocess_output, workspace)
+        runner_output = runner.run(preprocess_output, workspace)
         final_output = postprocessor.postprocess(runner_output, workspace)
 
         # === Verify Model Run Structure ===

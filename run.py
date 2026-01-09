@@ -203,10 +203,10 @@ def run_land_use(
 
     # 2. RUN
     formatted_print(f"Simulating land use development from {year} to {forecast_year} with {land_use_model}.")
-    raw_outputs, run_info = runner.run(input_data, workspace)
+    raw_outputs = runner.run(input_data, workspace)
 
     # 3. POSTPROCESS
-    postprocessor.postprocess(raw_outputs, workspace, run_info)
+    postprocessor.postprocess(raw_outputs, workspace)
 
     logger.info("Done!")
 
@@ -252,8 +252,8 @@ def run_activity_demand(
         )
 
         input_data = preprocessor.preprocess(workspace)
-        raw_outputs, run_info = runner.run(input_data, workspace)
-        processed_outputs = postprocessor.postprocess(raw_outputs, workspace, run_info)
+        raw_outputs = runner.run(input_data, workspace)
+        processed_outputs = postprocessor.postprocess(raw_outputs, workspace)
 
         return processed_outputs
 
@@ -300,8 +300,8 @@ def run_traffic_assignment(
         )
 
         input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
-        raw_outputs, run_info = runner.run(input_data, workspace)
-        postprocessor.postprocess(raw_outputs, workspace, run_info)
+        raw_outputs = runner.run(input_data, workspace)
+        postprocessor.postprocess(raw_outputs, workspace)
 
     else:
         logger.warning(f"Unknown travel model: {travel_model}")
@@ -387,7 +387,7 @@ def main():
             # We use 'initialization' as the step name.
             # Initialization.py calls `adapter.start_model_run("initialization")` internally.
             # The Adapter will see this active step and ATTACH to it, rather than creating a new one.
-            with scenario.step(
+            with scenario.trace(
                 "initialization",
                 model="initialization",
                 year=state.start_year,
@@ -419,7 +419,7 @@ def main():
 
                 step_name = f"urbansim_{year}"
 
-                with scenario.step(
+                with scenario.trace(
                     step_name,
                     model="urbansim",
                     year=year,
@@ -491,7 +491,7 @@ def main():
                     step_inputs = [coupler.get("usim_datastore_h5") or usim_datastore_h5_path]
 
                     # Run ATLAS Step
-                    with scenario.step(
+                    with scenario.trace(
                         step_name,
                         model="atlas",
                         year=atlas_year,
@@ -514,27 +514,24 @@ def main():
                         # 2. Run
                         runner.update_state(atlas_state)
                         try:
-                            raw_outputs, run_info = runner.run(input_data, workspace)
-                            if run_info and run_info.status == "completed":
-                                # 3. Postprocess
-                                postprocessor.update_state(atlas_state)
-                                postprocessor.postprocess(raw_outputs, workspace, run_info)
+                            raw_outputs = runner.run(input_data, workspace)
+                            # 3. Postprocess
+                            postprocessor.update_state(atlas_state)
+                            postprocessor.postprocess(raw_outputs, workspace)
 
-                                # Capture the updated datastore container as an explicit output and
-                                # thread it forward to the next ATLAS sub-year.
-                                if os.path.exists(usim_datastore_h5_path):
-                                    updated_h5 = tracker.log_output(
-                                        usim_datastore_h5_path,
-                                        key="usim_datastore_h5",
-                                        description=f"UrbanSim datastore after ATLAS update for year {atlas_year}",
-                                    )
-                                    coupler.set("usim_datastore_h5", updated_h5)
-                                else:
-                                    logger.warning(
-                                        f"[Main] UrbanSim datastore not found after ATLAS postprocess: {usim_datastore_h5_path}"
-                                    )
+                            # Capture the updated datastore container as an explicit output and
+                            # thread it forward to the next ATLAS sub-year.
+                            if os.path.exists(usim_datastore_h5_path):
+                                updated_h5 = tracker.log_output(
+                                    usim_datastore_h5_path,
+                                    key="usim_datastore_h5",
+                                    description=f"UrbanSim datastore after ATLAS update for year {atlas_year}",
+                                )
+                                coupler.set("usim_datastore_h5", updated_h5)
                             else:
-                                raise RuntimeError(f"AtlasRunner incomplete: {run_info.status if run_info else 'None'}")
+                                logger.warning(
+                                    f"[Main] UrbanSim datastore not found after ATLAS postprocess: {usim_datastore_h5_path}"
+                                )
                         except Exception as e:
                             logger.error(f"ATLAS failed for {atlas_year}: {e}")
                             sys.exit(1)
@@ -555,7 +552,7 @@ def main():
                         formatted_print("ACTIVITY DEMAND MODEL")
                         step_name = f"activitysim_{year}_iter{i}"
 
-                        with scenario.step(
+                        with scenario.trace(
                             step_name,
                             model="activitysim",
                             year=year,
@@ -577,7 +574,7 @@ def main():
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
                         step_name = f"beam_{year}_iter{i}"
 
-                        with scenario.step(
+                        with scenario.trace(
                             step_name,
                             model="beam",
                             year=year,
@@ -597,7 +594,7 @@ def main():
             # D. POST-PROCESSING
             if state.should_run(WorkflowState.Stage.postprocessing):
                 formatted_print("POST-PROCESSING")
-                with scenario.step(
+                with scenario.trace(
                     f"postprocessing_{year}",
                     model="postprocessing",
                     year=year,

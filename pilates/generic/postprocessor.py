@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 from pilates.generic.model import Model, provenance_logging
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -27,7 +27,6 @@ class GenericPostprocessor(ABC, Model):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -36,21 +35,19 @@ class GenericPostprocessor(ABC, Model):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            runInfo (Optional[ModelRunInfo]): Metadata about the model run.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.
         """
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, runInfo, model_run_hash)
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     @abstractmethod
     def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -61,7 +58,6 @@ class GenericPostprocessor(ABC, Model):
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
-            runInfo (Optional[ModelRunInfo]): Metadata about the model run.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:

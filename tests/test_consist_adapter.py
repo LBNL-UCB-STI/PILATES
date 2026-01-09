@@ -26,13 +26,12 @@ import h5py
 from consist import Tracker
 
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
-from pilates.generic.records import (
-    FileRecord,
+from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records_legacy import (
     H5FileRecord,
     H5TableRecord,
     RepoRecord,
     ModelRunInfo,
-    RecordStore,
 )
 
 

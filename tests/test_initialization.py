@@ -3,7 +3,7 @@ import os
 from types import SimpleNamespace
 
 from pilates.generic.initialization import Initialization
-from pilates.generic.records import RecordStore, Record
+from pilates.generic.records import RecordStore, FileRecord
 import json
 
 # ----------------------------------------------------------------------
@@ -19,8 +19,16 @@ class DummyPreprocessor:
 
     def copy_data_to_mutable_location(self, settings, output_dir):
         # Return two RecordStore objects with known records
-        in_record = Record(unique_id="in1", short_name="input")
-        out_record = Record(unique_id="out1", short_name="output")
+        in_record = FileRecord(
+            unique_id="in1",
+            short_name="input",
+            file_path="/tmp/input",
+        )
+        out_record = FileRecord(
+            unique_id="out1",
+            short_name="output",
+            file_path="/tmp/output",
+        )
         return RecordStore(recordList=[in_record]), RecordStore(recordList=[out_record])
 
     def preprocess(self, workspace, previous_records=None):
@@ -128,12 +136,12 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     assert "urbansim" in workspace.input_data
     assert "urbansim" in workspace.output_data
 
-    # Verify that the stored records are of type Record
+    # Verify that the stored records are FileRecord instances
     for model_key in ("beam", "urbansim"):
         for rec in workspace.input_data[model_key].all_records():
-            assert isinstance(rec, Record)
+            assert isinstance(rec, FileRecord)
         for rec in workspace.output_data[model_key].all_records():
-            assert isinstance(rec, Record)
+            assert isinstance(rec, FileRecord)
 
 
 def test_initialization_handles_missing_models_gracefully(monkeypatch):

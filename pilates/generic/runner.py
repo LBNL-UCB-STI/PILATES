@@ -1,7 +1,7 @@
 import abc
 import logging
 import shlex
-from typing import TYPE_CHECKING, Optional, Tuple, List, Union, Dict, Any
+from typing import TYPE_CHECKING, Optional, List, Union, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -16,7 +16,7 @@ except ImportError:
 
 from abc import ABC
 
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -102,7 +102,7 @@ class GenericRunner(ABC, Model):
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Do the model run
 
@@ -111,9 +111,7 @@ class GenericRunner(ABC, Model):
             workspace (Workspace): The workspace.
 
         Returns:
-            tuple: A tuple containing:
-                - data (RecordStore): The raw output files that have been prepared to run the model
-                - model_run_info (ModelRunInfo): Information about the model run
+            RecordStore: The raw output files that have been prepared to run the model.
         """
         if (
             self.state.current_major_stage == self.major_stage
@@ -128,8 +126,7 @@ class GenericRunner(ABC, Model):
                     runner_run.output_record_hashes,
                     self.provenance_tracker.run_info.file_records,
                 )
-                run_info = runner_run
-                return raw_outputs, run_info
+                return raw_outputs
             else:
                 logger.warning(
                     "Could not find completed runner run in provenance, re-running runner."
@@ -145,7 +142,7 @@ class GenericRunner(ABC, Model):
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Do the model run.
 
@@ -159,9 +156,7 @@ class GenericRunner(ABC, Model):
             workspace (Workspace): The workspace.
 
         Returns:
-            tuple: A tuple containing:
-                - data (RecordStore): The raw output files that have been prepared to run the model
-                - model_run_info (ModelRunInfo): Information about the model run
+            RecordStore: The raw output files that have been prepared to run the model.
         """
         raise NotImplementedError("Subclasses should implement this method.")
 

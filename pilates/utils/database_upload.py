@@ -15,7 +15,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.config.models import DatabaseConfig
-from pilates.generic.records import PilatesRunInfo, FileRecord, ModelRunInfo
+from pilates.generic.records_legacy import PilatesRunInfo, FileRecord, ModelRunInfo
 from pilates.utils.database import DatabaseManager
 from pilates.utils.duckdb_manager import DuckDBManager
 

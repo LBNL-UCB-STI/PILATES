@@ -1,9 +1,9 @@
-from typing import Tuple, Optional
+from typing import Optional
 import logging
 import os
 
 from pilates.generic.runner import GenericRunner
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -71,7 +71,7 @@ class UrbansimRunner(GenericRunner):
         store: RecordStore,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Executes the UrbanSim model run.
 
@@ -82,9 +82,7 @@ class UrbansimRunner(GenericRunner):
                 If not provided, a new one will be created.
 
         Returns:
-            tuple: A tuple containing:
-                - RecordStore: The raw output files from the model run.
-                - ModelRunInfo: Information about the model run.
+            RecordStore: The raw output files from the model run.
         """
         logger.info(
             "[UrbansimRunner] Starting UrbanSim model run for year %s",
@@ -170,8 +168,4 @@ class UrbansimRunner(GenericRunner):
                 f"UrbanSim output file not found at {usim_datastore_fpath}"
             )
 
-        # 4. EXPLICIT STATUS UPDATE
-        run_info = ModelRunInfo(model=self.model_name, year=self.state.current_year)
-        run_info.status = "completed"
-
-        return RecordStore(recordList=output_records), run_info
+        return RecordStore(recordList=output_records)

@@ -17,7 +17,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record, FileRecord
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.generic.model import provenance_logging
 from pilates.utils.io import locate_beam_file
 from pilates.utils.provenance import find_project_root, FileProvenanceTracker
@@ -600,7 +600,7 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         model_run_hash: str,
         workspace: "Workspace",
-    ) -> List[Record]:
+    ) -> List[FileRecord]:
         """Directly copies ActivitySim outputs for the first BEAM iteration."""
         record_list = []
         asim_to_beam_mapping = [
@@ -642,7 +642,7 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         model_run_hash: str,
         workspace: "Workspace",
-    ) -> List[Record]:
+    ) -> List[FileRecord]:
         """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
         logger.info("Merging asim outputs with existing beam input scenario files.")
         beam_scenario_folder = os.path.join(
@@ -767,9 +767,9 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_file_name: str,
         file_format: str,
         beam_scenario_folder: str,
-        input_record: Optional[Record] = None,
+        input_record: Optional[FileRecord] = None,
         model_run_hash: str = None,
-    ) -> Optional[Record]:
+    ) -> Optional[FileRecord]:
         """Copies and compresses a single file from ActivitySim to BEAM, with provenance."""
         beam_file_path = locate_beam_file(
             beam_scenario_folder, beam_file_name, file_format

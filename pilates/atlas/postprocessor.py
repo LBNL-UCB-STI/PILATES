@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore
 from pilates.generic.model import provenance_logging
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -108,7 +108,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: Workspace,
-        runInfo: Optional[ModelRunInfo] = None,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
         """
@@ -118,7 +117,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         Args:
             raw_outputs (RecordStore): The raw outputs from the ATLAS model run.
             workspace (Workspace): The workspace object for path management.
-            runInfo (Optional[ModelRunInfo]): Metadata about the model run. Not used by this processor.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:

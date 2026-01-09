@@ -14,7 +14,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from pilates.utils.duckdb_manager import DuckDBManager
-from pilates.generic.records import (
+from pilates.generic.records_legacy import (
     PilatesRunInfo,
     FileRecord,
     ModelRunInfo,
