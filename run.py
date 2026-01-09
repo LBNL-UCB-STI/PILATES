@@ -71,6 +71,67 @@ def formatted_print(string, width=50, fill_char="#"):
     print(fill_char * width, "\n")
 
 
+def _artifact_to_path(value, workspace: "Workspace" = None):
+    if value is None:
+        return None
+    path = getattr(value, "path", None) or getattr(value, "uri", None) or value
+    if isinstance(path, str) and workspace is not None and not os.path.isabs(path):
+        return os.path.join(workspace.full_path, path)
+    return path
+
+
+def _expected_inputs_for(model_name: str, settings, state, workspace) -> dict:
+    try:
+        runner_cls = ModelFactory._registry[model_name]["runner"]
+    except KeyError:
+        return {}
+    expected_fn = getattr(runner_cls, "expected_inputs", None)
+    if callable(expected_fn):
+        return expected_fn(settings, state, workspace) or {}
+    return {}
+
+
+def _merge_expected_inputs(target: dict, expected: dict) -> dict:
+    for key, value in expected.items():
+        if key in target or value is None:
+            continue
+        target[key] = value
+    return target
+
+
+def _update_coupler_from_beam_outputs(
+    output_store: RecordStore,
+    coupler,
+    typed_coupler,
+    workspace: "Workspace",
+):
+    if not output_store:
+        return
+    for record in output_store.all_records():
+        if record.short_name == "zarr_skims":
+            zarr_path = _artifact_to_path(record.file_path, workspace)
+            if zarr_path and os.path.exists(zarr_path):
+                zarr_artifact = cr.log_output(
+                    zarr_path,
+                    key="zarr_skims",
+                    description="Zarr skims updated with BEAM outputs",
+                )
+                coupler.set("zarr_skims", zarr_artifact or zarr_path)
+                if typed_coupler is not None and zarr_artifact is not None:
+                    typed_coupler.zarr_skims = zarr_artifact
+        elif record.short_name == "final_skims_omx":
+            omx_path = _artifact_to_path(record.file_path, workspace)
+            if omx_path and os.path.exists(omx_path):
+                omx_artifact = cr.log_output(
+                    omx_path,
+                    key="final_skims_omx",
+                    description="Final skims OMX for downstream models",
+                )
+                coupler.set("final_skims_omx", omx_artifact or omx_path)
+                if typed_coupler is not None and omx_artifact is not None:
+                    typed_coupler.final_skims_omx = omx_artifact
+
+
 def warm_start_activities(
     settings: PilatesConfig,
     state: WorkflowState,
@@ -220,6 +281,7 @@ def run_activity_demand(
     state: WorkflowState,
     workspace: Workspace,
     provenance_tracker: ConsistProvenanceTracker,
+    input_store: RecordStore = None,
 ) -> RecordStore:
     """
     Generate activity plans for the current year using the configured activity demand model.
@@ -233,6 +295,7 @@ def run_activity_demand(
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace instance for file operations.
         provenance_tracker (OpenLineageTracker): Provenance tracker for model events.
+        input_store (RecordStore, optional): Preprocessed inputs to reuse if available.
 
     Returns:
         RecordStore: Processed outputs (file records) from the activity demand postprocessor.
@@ -255,7 +318,7 @@ def run_activity_demand(
             "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
         )
 
-        input_data = preprocessor.preprocess(workspace)
+        input_data = input_store or preprocessor.preprocess(workspace)
         raw_outputs = runner.run(input_data, workspace)
         processed_outputs = postprocessor.postprocess(raw_outputs, workspace)
 
@@ -272,6 +335,7 @@ def run_traffic_assignment(
     workspace: Workspace,
     provenance_tracker: ConsistProvenanceTracker,
     activity_demand_outputs: RecordStore = None,
+    previous_beam_outputs: RecordStore = None,
 ):
     """
     Run the configured traffic assignment (supply) model for the current year/iteration.
@@ -286,12 +350,14 @@ def run_traffic_assignment(
         workspace (Workspace): Workspace instance.
         provenance_tracker (OpenLineageTracker): Provenance tracker instance.
         activity_demand_outputs (RecordStore, optional): Processed activity demand outputs.
+        previous_beam_outputs (RecordStore, optional): Outputs from previous BEAM iteration.
     """
     factory = ModelFactory()
     travel_model = settings.run.models.travel
 
     if travel_model == "polaris":
         logger.info("POLARIS module is not activated")
+        return RecordStore()
     elif travel_model == "beam":
         preprocessor = factory.get_preprocessor(
             "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
@@ -303,12 +369,19 @@ def run_traffic_assignment(
             "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
         )
 
-        input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
+        combined_inputs = RecordStore()
+        if activity_demand_outputs:
+            combined_inputs += activity_demand_outputs
+        if previous_beam_outputs:
+            combined_inputs += previous_beam_outputs
+        input_data = preprocessor.preprocess(workspace, combined_inputs)
         raw_outputs = runner.run(input_data, workspace)
-        postprocessor.postprocess(raw_outputs, workspace)
+        processed_outputs = postprocessor.postprocess(raw_outputs, workspace)
+        return processed_outputs
 
     else:
         logger.warning(f"Unknown travel model: {travel_model}")
+        return RecordStore()
 
 
 def main():
@@ -398,6 +471,8 @@ def main():
             "asim_output_dir",
             "beam_output_dir",
             "atlas_output_dir",
+            "zarr_skims",
+            "final_skims_omx",
         )
         typed_coupler = None
         if consist is not None and consist_enabled:
@@ -407,6 +482,8 @@ def main():
                 asim_output_dir: Any
                 beam_output_dir: Any
                 atlas_output_dir: Any
+                zarr_skims: Any
+                final_skims_omx: Any
 
             typed_coupler = scenario.coupler_schema(WorkflowCoupler)
 
@@ -681,6 +758,7 @@ def main():
             # C. SUPPLY/DEMAND LOOP
             if state.should_run(WorkflowState.Stage.supply_demand_loop):
                 total_iters = settings.run.supply_demand_iters
+                previous_beam_outputs = None
 
                 for i in range(state.iteration, total_iters):
                     state.iteration = i
@@ -708,6 +786,104 @@ def main():
                                 key="usim_datastore_h5",
                                 description=f"UrbanSim datastore for ActivitySim year {year}, iter {i}",
                             )
+                        zarr_skims_input = coupler.get("zarr_skims")
+                        if zarr_skims_input:
+                            asim_inputs["zarr_skims"] = zarr_skims_input
+                            zarr_skims_path = _artifact_to_path(
+                                zarr_skims_input, workspace
+                            )
+                            if zarr_skims_path:
+                                cr.log_input(
+                                    zarr_skims_path,
+                                    key="zarr_skims",
+                                    description=f"ActivitySim compiled zarr skims for year {year}, iter {i}",
+                                )
+                        expected_asim_inputs = _expected_inputs_for(
+                            "activitysim", settings, state, workspace
+                        )
+                        _merge_expected_inputs(asim_inputs, expected_asim_inputs)
+
+                        activitysim_compile_holder = {
+                            "input_store": None,
+                            "compile_outputs": None,
+                        }
+
+                        if not state.asim_compiled:
+                            compile_step_name = f"activitysim_compile_{year}"
+
+                            def _run_activitysim_compile_step(
+                                *,
+                                settings: PilatesConfig,
+                                state: WorkflowState,
+                                workspace: Workspace,
+                                adapter: ConsistProvenanceTracker,
+                                output_holder: dict,
+                                typed_coupler,
+                            ):
+                                factory = ModelFactory()
+                                preprocessor = factory.get_preprocessor(
+                                    "activitysim",
+                                    state,
+                                    adapter,
+                                    major_stage=WorkflowState.Stage.activity_demand,
+                                )
+                                compile_runner = factory.get_runner(
+                                    "activitysim_compile",
+                                    state,
+                                    adapter,
+                                    major_stage=WorkflowState.Stage.activity_demand,
+                                )
+
+                                input_store = preprocessor.preprocess(workspace)
+                                compile_outputs = compile_runner.run(
+                                    input_store, workspace
+                                )
+
+                                output_holder["input_store"] = input_store
+                                output_holder["compile_outputs"] = compile_outputs
+
+                                zarr_record = None
+                                if compile_outputs:
+                                    for record in compile_outputs.all_records():
+                                        if record.short_name == "zarr_skims":
+                                            zarr_record = record
+                                            break
+                                if zarr_record and os.path.exists(zarr_record.file_path):
+                                    artifact = cr.log_output(
+                                        zarr_record.file_path,
+                                        key="zarr_skims",
+                                        description="ActivitySim compiled zarr skims",
+                                    )
+                                    coupler.set(
+                                        "zarr_skims",
+                                        artifact or zarr_record.file_path,
+                                    )
+                                    if typed_coupler is not None and artifact is not None:
+                                        typed_coupler.zarr_skims = artifact
+
+                            scenario.run(
+                                fn=_run_activitysim_compile_step,
+                                name=compile_step_name,
+                                model="activitysim_compile",
+                                year=year,
+                                iteration=-1,
+                                inputs=asim_inputs,
+                                cache_mode="overwrite",
+                                load_inputs=False,
+                                runtime_kwargs={
+                                    "settings": settings,
+                                    "state": state,
+                                    "workspace": workspace,
+                                    "adapter": adapter,
+                                    "output_holder": activitysim_compile_holder,
+                                    "typed_coupler": typed_coupler,
+                                },
+                                **build_step_consist_kwargs(
+                                    "activitysim_compile",
+                                    settings,
+                                    workspace_path=workspace.full_path,
+                                ),
+                            )
 
                         def _run_activitysim_step(
                             *,
@@ -719,9 +895,18 @@ def main():
                             typed_coupler,
                             year: int,
                             iteration: int,
+                            input_store: RecordStore,
+                            compile_outputs: RecordStore,
                         ):
+                            combined_input_store = input_store
+                            if combined_input_store is not None and compile_outputs:
+                                combined_input_store = combined_input_store + compile_outputs
                             output_holder["activity_demand_outputs"] = run_activity_demand(
-                                settings, state, workspace, adapter
+                                settings,
+                                state,
+                                workspace,
+                                adapter,
+                                input_store=combined_input_store,
                             )
                             asim_output_dir = workspace.get_asim_output_dir()
                             if os.path.exists(asim_output_dir):
@@ -755,6 +940,10 @@ def main():
                                 "typed_coupler": typed_coupler,
                                 "year": year,
                                 "iteration": i,
+                                "input_store": activitysim_compile_holder["input_store"],
+                                "compile_outputs": activitysim_compile_holder[
+                                    "compile_outputs"
+                                ],
                             },
                             **build_step_consist_kwargs(
                                 "activitysim",
@@ -773,11 +962,18 @@ def main():
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
                         step_name = f"beam_{year}_iter{i}"
 
-                        beam_inputs = (
-                            activity_demand_outputs.to_mapping()
-                            if activity_demand_outputs
-                            else None
+                        beam_inputs = {}
+                        if activity_demand_outputs:
+                            beam_inputs.update(activity_demand_outputs.to_mapping())
+                        if previous_beam_outputs:
+                            beam_inputs.update(previous_beam_outputs.to_mapping())
+                        zarr_skims_input = coupler.get("zarr_skims")
+                        if zarr_skims_input:
+                            beam_inputs["zarr_skims"] = zarr_skims_input
+                        expected_beam_inputs = _expected_inputs_for(
+                            "beam", settings, state, workspace
                         )
+                        _merge_expected_inputs(beam_inputs, expected_beam_inputs)
                         if beam_inputs:
                             cr.log_artifacts(beam_inputs, direction="input")
                         beam_mutable_dir = workspace.get_beam_mutable_data_dir()
@@ -796,12 +992,19 @@ def main():
                             workspace: Workspace,
                             adapter: ConsistProvenanceTracker,
                             activity_demand_outputs: RecordStore,
+                            previous_beam_outputs: RecordStore,
+                            output_holder: dict,
                             typed_coupler,
                             year: int,
                             iteration: int,
                         ):
-                            run_traffic_assignment(
-                                settings, state, workspace, adapter, activity_demand_outputs
+                            output_holder["beam_outputs"] = run_traffic_assignment(
+                                settings,
+                                state,
+                                workspace,
+                                adapter,
+                                activity_demand_outputs,
+                                previous_beam_outputs,
                             )
                             beam_output_dir = workspace.get_beam_output_dir()
                             if os.path.exists(beam_output_dir):
@@ -816,13 +1019,20 @@ def main():
                                 if typed_coupler is not None and artifact is not None:
                                     typed_coupler.beam_output_dir = artifact
 
+                            output_store = output_holder.get("beam_outputs")
+                            _update_coupler_from_beam_outputs(
+                                output_store, coupler, typed_coupler, workspace
+                            )
+
+                        beam_holder = {"beam_outputs": None}
+
                         scenario.run(
                             fn=_run_beam_step,
                             name=step_name,
                             model="beam",
                             year=year,
                             iteration=i,
-                            inputs=beam_inputs,
+                            inputs=beam_inputs or None,
                             cache_mode="overwrite",
                             load_inputs=False,
                             runtime_kwargs={
@@ -831,6 +1041,8 @@ def main():
                                 "workspace": workspace,
                                 "adapter": adapter,
                                 "activity_demand_outputs": activity_demand_outputs,
+                                "previous_beam_outputs": previous_beam_outputs,
+                                "output_holder": beam_holder,
                                 "typed_coupler": typed_coupler,
                                 "year": year,
                                 "iteration": i,
@@ -839,6 +1051,7 @@ def main():
                                 "beam", settings, workspace_path=workspace.full_path
                             ),
                         )
+                        previous_beam_outputs = beam_holder["beam_outputs"]
 
                         state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.traffic_assignment)
 

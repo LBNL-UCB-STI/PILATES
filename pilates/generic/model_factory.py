@@ -1,5 +1,5 @@
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
-from pilates.activitysim.runner import ActivitysimRunner
+from pilates.activitysim.runner import ActivitysimRunner, ActivitysimCompileRunner
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.beam.runner import BeamRunner
@@ -18,6 +18,11 @@ class ModelFactory:
         "activitysim": {
             "preprocessor": ActivitysimPreprocessor,
             "runner": ActivitysimRunner,
+            "postprocessor": ActivitysimPostprocessor,
+        },
+        "activitysim_compile": {
+            "preprocessor": ActivitysimPreprocessor,
+            "runner": ActivitysimCompileRunner,
             "postprocessor": ActivitysimPostprocessor,
         },
         "beam": {

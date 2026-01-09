@@ -59,6 +59,17 @@ class BeamRunner(GenericRunner):
     Runner for the BEAM model.
     """
 
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> dict:
+        return {
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+            "zarr_skims": os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            ),
+        }
+
     def __init__(
         self,
         model_name: str,

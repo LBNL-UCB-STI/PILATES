@@ -77,14 +77,16 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
 
-    if model_norm == "activitysim":
+    if model_norm in {"activitysim", "activitysim_compile"}:
         if workspace_path is None:
             raise ValueError("workspace_path is required for activitysim hash_inputs.")
         return {
             "config": build_activitysim_identity_config(settings),
             "facet": build_activitysim_facet(settings),
             "hash_inputs": build_activitysim_hash_inputs(settings, workspace_path),
-            "facet_schema_version": "activitysim_v1",
+            "facet_schema_version": "activitysim_compile_v1"
+            if model_norm == "activitysim_compile"
+            else "activitysim_v1",
             "facet_index": True,
         }
 
