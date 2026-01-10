@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import abc
 import logging
+import os
 import shlex
+import shutil
+import subprocess
 from typing import TYPE_CHECKING, Optional, List, Union, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
-
-# Try to import consist container execution
-try:
-    from consist.integrations.containers import run_container as consist_run_container
-    CONSIST_AVAILABLE = True
-except ImportError:
-    raise ImportError("Consist library is required for PILATES container execution.")
-    CONSIST_AVAILABLE = False
 
 from abc import ABC
 
@@ -155,38 +150,14 @@ class GenericRunner(ABC, Model):
             lineage_mode: str = None,
     ) -> bool:
         """
-        Executes container using Consist integration.
-
-        Acts as a bridge to `consist.integrations.containers.run_container`, ensuring
-        proper provenance tracking and caching for all model runs. Adapts PILATES-style
-        arguments (like nested volume dictionaries) to the format expected by Consist.
+        Executes container with Consist if available, otherwise falls back to direct
+        Docker/Singularity execution without provenance.
         """
-        tracker = cr.current_tracker()
-        if not tracker:
-            raise RuntimeError(
-                "A Consist tracker must be active for container execution. "
-                "Ensure the call occurs within a Consist scenario/run context."
-            )
-
-        logger.info(f"[{model_name}] Delegating container execution to Consist")
-
-        # Adapt volumes from PILATES format {host: {'bind': cont, 'mode': 'rw'}} or {host: cont}
-        # to Consist format {host: cont}
-        consist_volumes = {}
-        for host_path, mount_info in volumes.items():
-            if isinstance(mount_info, dict):
-                container_path = mount_info.get("bind", mount_info)
-            else:
-                container_path = mount_info
-            consist_volumes[host_path] = container_path
+        mounts = GenericRunner._extract_mounts(volumes)
+        consist_volumes = {host: container for host, container, _mode in mounts}
 
         # Handle command + args: Split if string, combine with args
-        full_command_list = shlex.split(command)
-        if args:
-            if isinstance(args, list):
-                full_command_list.extend(args)
-            else:
-                full_command_list.extend(shlex.split(str(args)))
+        full_command_list = GenericRunner._build_full_command(command, args)
 
         # Determine settings from config
         backend_type = get_setting(
@@ -195,24 +166,208 @@ class GenericRunner(ABC, Model):
         pull_latest = get_setting(
             settings, "infrastructure.docker_config.pull_latest", False
         )
+        docker_stdout = get_setting(
+            settings, "infrastructure.docker_config.stdout", None
+        )
+        if docker_stdout is None:
+            docker_stdout = get_setting(settings, "docker_stdout", False)
 
-        try:
-            return consist_run_container(
-                tracker=tracker,
-                run_id=f"{model_name}_container",
+        if cr.consist_available(settings):
+            tracker = cr.current_tracker()
+            if not tracker:
+                raise RuntimeError(
+                    "A Consist tracker must be active for container execution. "
+                    "Ensure the call occurs within a Consist scenario/run context."
+                )
+            try:
+                from consist.integrations.containers import run_container as consist_run_container
+            except ImportError as e:
+                logger.error(
+                    f"Consist container integration unavailable: {e}. Falling back to direct execution."
+                )
+            else:
+                logger.info(f"[{model_name}] Delegating container execution to Consist")
+                try:
+                    return consist_run_container(
+                        tracker=tracker,
+                        run_id=f"{model_name}_container",
+                        image=image,
+                        command=full_command_list,
+                        volumes=consist_volumes,
+                        inputs=input_artifacts or [],
+                        outputs=output_paths or [],
+                        environment=environment or {},
+                        working_dir=working_dir,
+                        backend_type=backend_type,
+                        pull_latest=pull_latest,
+                        lineage_mode=lineage_mode,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Consist container execution failed: {e}",
+                        exc_info=True,
+                    )
+
+        logger.info(
+            f"[{model_name}] Consist disabled/unavailable; using direct container execution."
+        )
+        return GenericRunner._run_container_direct(
+            image=image,
+            command=full_command_list,
+            mounts=mounts,
+            environment=environment or {},
+            backend=backend_type,
+            working_dir=working_dir,
+            pull_latest=pull_latest,
+            docker_stdout=docker_stdout,
+        )
+
+    @staticmethod
+    def _build_full_command(command: Union[str, List[str]], args=None) -> List[str]:
+        if isinstance(command, list):
+            full_command_list = list(command)
+        else:
+            full_command_list = shlex.split(str(command))
+
+        if args:
+            if isinstance(args, list):
+                full_command_list.extend(args)
+            else:
+                full_command_list.extend(shlex.split(str(args)))
+
+        return full_command_list
+
+    @staticmethod
+    def _extract_mounts(volumes: dict) -> List[tuple]:
+        mounts = []
+        for host_path, mount_info in volumes.items():
+            if isinstance(mount_info, dict):
+                container_path = mount_info.get("bind", mount_info)
+                mode = mount_info.get("mode", "rw")
+            else:
+                container_path = mount_info
+                mode = "rw"
+
+            if not isinstance(container_path, str):
+                raise ValueError(
+                    f"Invalid container path for mount {host_path!r}: {container_path!r}"
+                )
+
+            abs_host_path = os.path.abspath(host_path)
+            mounts.append((abs_host_path, container_path, mode))
+        return mounts
+
+    @staticmethod
+    def _run_container_direct(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        backend: str,
+        working_dir: Optional[str],
+        pull_latest: bool,
+        docker_stdout: bool,
+    ) -> bool:
+        if backend == "docker":
+            return GenericRunner._run_docker_container(
                 image=image,
-                command=full_command_list,
-                volumes=consist_volumes,
-                inputs=input_artifacts or [],
-                outputs=output_paths or [],
-                environment=environment or {},
+                command=command,
+                mounts=mounts,
+                environment=environment,
                 working_dir=working_dir,
-                backend_type=backend_type,
                 pull_latest=pull_latest,
-                lineage_mode=lineage_mode,
+                docker_stdout=docker_stdout,
             )
-        except Exception as e:
-            logger.error(f"Consist container execution failed: {e}", exc_info=True)
+        if backend == "singularity":
+            return GenericRunner._run_singularity_container(
+                image=image,
+                command=command,
+                mounts=mounts,
+                environment=environment,
+                working_dir=working_dir,
+            )
+
+        raise ValueError(f"Unknown container backend: {backend}")
+
+    @staticmethod
+    def _run_docker_container(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        working_dir: Optional[str],
+        pull_latest: bool,
+        docker_stdout: bool,
+    ) -> bool:
+        if pull_latest:
+            pull_cmd = ["docker", "pull", image]
+            logger.info(f"Pulling Docker image {image}")
+            subprocess.run(pull_cmd, check=True)
+
+        docker_cmd = ["docker", "run", "--rm"]
+        if working_dir:
+            docker_cmd.extend(["-w", working_dir])
+
+        for host_path, container_path, mode in mounts:
+            docker_cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
+
+        for key, value in (environment or {}).items():
+            docker_cmd.extend(["-e", f"{key}={value}"])
+
+        docker_cmd.append(image)
+        docker_cmd.extend(command)
+
+        logger.info(f"Running Docker container: {' '.join(docker_cmd)}")
+        try:
+            subprocess.run(
+                docker_cmd,
+                check=True,
+                capture_output=not docker_stdout,
+                text=True,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Docker execution failed: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def _run_singularity_container(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        working_dir: Optional[str],
+    ) -> bool:
+        runtime = "apptainer" if shutil.which("apptainer") else "singularity"
+
+        bind_args = []
+        for host_path, container_path, mode in mounts:
+            bind_args.extend(["-B", f"{host_path}:{container_path}:{mode}"])
+
+        sing_cmd = [runtime, "run"]
+        if working_dir:
+            sing_cmd.extend(["--pwd", working_dir])
+        sing_cmd.extend(bind_args)
+        sing_cmd.append(image)
+        sing_cmd.extend(command)
+
+        env = dict(os.environ)
+        for key, value in (environment or {}).items():
+            if runtime == "apptainer":
+                env[f"APPTAINERENV_{key}"] = value
+            else:
+                env[f"SINGULARITYENV_{key}"] = value
+
+        logger.info(f"Running Singularity container: {' '.join(sing_cmd)}")
+        try:
+            subprocess.run(
+                sing_cmd,
+                check=True,
+                env=env,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Singularity execution failed: {e}", exc_info=True)
             return False
 
     @staticmethod

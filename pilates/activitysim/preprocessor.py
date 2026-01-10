@@ -1861,6 +1861,42 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ActivitySim-specific preprocessor that consolidates all preprocessing steps.
     """
 
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Union[str, None]]:
+        """
+        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        """
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_input_fname = settings.urbansim.input_file_template.format(
+            region_id=region_id
+        )
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
+            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+            "usim_datastore_h5": usim_input_path
+            if os.path.exists(usim_input_path)
+            else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, str]:
+        """
+        Declare the output paths/artifacts this preprocessor produces.
+        """
+        return {
+            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
+            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
+        }
+
     def __init__(
         self,
         model_name: str,

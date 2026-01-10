@@ -43,6 +43,11 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    clean_expected_outputs,
+    update_coupler_from_beam_outputs,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -71,65 +76,73 @@ def formatted_print(string, width=50, fill_char="#"):
     print(fill_char * width, "\n")
 
 
-def _artifact_to_path(value, workspace: "Workspace" = None):
-    if value is None:
-        return None
-    path = getattr(value, "path", None) or getattr(value, "uri", None) or value
-    if isinstance(path, str) and workspace is not None and not os.path.isabs(path):
-        return os.path.join(workspace.full_path, path)
-    return path
-
-
 def _expected_inputs_for(model_name: str, settings, state, workspace) -> dict:
-    try:
-        runner_cls = ModelFactory._registry[model_name]["runner"]
-    except KeyError:
-        return {}
-    expected_fn = getattr(runner_cls, "expected_inputs", None)
-    if callable(expected_fn):
-        return expected_fn(settings, state, workspace) or {}
-    return {}
+    expected = {}
+    components = ModelFactory._registry.get(model_name, {})
+    for component_name in ("preprocessor", "runner", "postprocessor"):
+        component_cls = components.get(component_name)
+        if component_cls is None:
+            continue
+        expected_fn = getattr(component_cls, "expected_inputs", None)
+        if callable(expected_fn):
+            _merge_expected_inputs(expected, expected_fn(settings, state, workspace) or {})
+    return expected
 
 
-def _merge_expected_inputs(target: dict, expected: dict) -> dict:
+def _expected_outputs_for(
+    model_name: str, settings, state, workspace, *, components=None
+) -> dict:
+    expected = {}
+    registry_components = ModelFactory._registry.get(model_name, {})
+    component_names = components or ("runner", "postprocessor")
+    for component_name in component_names:
+        component_cls = registry_components.get(component_name)
+        if component_cls is None:
+            continue
+        expected_fn = getattr(component_cls, "expected_outputs", None)
+        if callable(expected_fn):
+            _merge_expected_outputs(expected, expected_fn(settings, state, workspace) or {})
+    return expected
+
+
+def _merge_expected_inputs(
+    target: dict, expected: dict, *, prefer_expected: bool = False
+) -> dict:
     for key, value in expected.items():
-        if key in target or value is None:
+        if value is None:
+            continue
+        if key in target:
+            if prefer_expected:
+                target[key] = value
+            else:
+                logger.debug(
+                    "Input '%s' already provided; keeping existing value.", key
+                )
             continue
         target[key] = value
     return target
 
 
-def _update_coupler_from_beam_outputs(
-    output_store: RecordStore,
-    coupler,
-    typed_coupler,
-    workspace: "Workspace",
-):
-    if not output_store:
-        return
-    for record in output_store.all_records():
-        if record.short_name == "zarr_skims":
-            zarr_path = _artifact_to_path(record.file_path, workspace)
-            if zarr_path and os.path.exists(zarr_path):
-                zarr_artifact = cr.log_output(
-                    zarr_path,
-                    key="zarr_skims",
-                    description="Zarr skims updated with BEAM outputs",
+def _merge_expected_outputs(
+    target: dict, expected: dict, *, prefer_expected: bool = False
+) -> dict:
+    for key, value in expected.items():
+        if value is None:
+            continue
+        if key in target:
+            if prefer_expected:
+                target[key] = value
+            else:
+                logger.debug(
+                    "Output '%s' already provided; keeping existing value.", key
                 )
-                coupler.set("zarr_skims", zarr_artifact or zarr_path)
-                if typed_coupler is not None and zarr_artifact is not None:
-                    typed_coupler.zarr_skims = zarr_artifact
-        elif record.short_name == "final_skims_omx":
-            omx_path = _artifact_to_path(record.file_path, workspace)
-            if omx_path and os.path.exists(omx_path):
-                omx_artifact = cr.log_output(
-                    omx_path,
-                    key="final_skims_omx",
-                    description="Final skims OMX for downstream models",
-                )
-                coupler.set("final_skims_omx", omx_artifact or omx_path)
-                if typed_coupler is not None and omx_artifact is not None:
-                    typed_coupler.final_skims_omx = omx_artifact
+            continue
+        target[key] = value
+    return target
+
+
+
+
 
 
 def warm_start_activities(
@@ -558,6 +571,14 @@ def main():
                             description="UrbanSim mutable data directory",
                         )
 
+                expected_usim_inputs = _expected_inputs_for(
+                    "urbansim", settings, state, workspace
+                )
+                _merge_expected_inputs(usim_inputs, expected_usim_inputs)
+                expected_usim_outputs = clean_expected_outputs(
+                    _expected_outputs_for("urbansim", settings, state, workspace)
+                )
+
                 def _run_urbansim_step(
                     *,
                     settings: PilatesConfig,
@@ -566,16 +587,19 @@ def main():
                     adapter: ConsistProvenanceTracker,
                     usim_data_dir: str,
                     typed_coupler,
+                    expected_outputs: dict,
                 ):
                     if state.is_start_year() and settings.activitysim.warm_start_activities:
                         logger.info("[Main] Running warm start activities for ActivitySim.")
                         warm_start_activities(settings, state, workspace, adapter)
 
                     forecast_land_use(settings, year, state, workspace, adapter)
-                    usim_output_fname = usim_post.get_usim_datastore_fname(
-                        settings, io="output", year=state.forecast_year
-                    )
-                    usim_output_path = os.path.join(usim_data_dir, usim_output_fname)
+                    usim_output_path = expected_outputs.get("usim_datastore_h5")
+                    if not usim_output_path:
+                        usim_output_fname = usim_post.get_usim_datastore_fname(
+                            settings, io="output", year=state.forecast_year
+                        )
+                        usim_output_path = os.path.join(usim_data_dir, usim_output_fname)
                     if os.path.exists(usim_output_path):
                         artifact = cr.log_output(
                             usim_output_path,
@@ -595,6 +619,7 @@ def main():
                     year=year,
                     iteration=0,
                     inputs=usim_inputs,
+                    output_paths=expected_usim_outputs or None,
                     load_inputs=False,
                     runtime_kwargs={
                         "settings": settings,
@@ -603,6 +628,7 @@ def main():
                         "adapter": adapter,
                         "usim_data_dir": usim_data_dir,
                         "typed_coupler": typed_coupler,
+                        "expected_outputs": expected_usim_outputs,
                     },
                     **build_step_consist_kwargs("urbansim", settings),
                 )
@@ -669,6 +695,13 @@ def main():
                         "usim_datastore_h5": atlas_usim_input,
                         "atlas_mutable_input_dir": atlas_mutable_input_dir,
                     }
+                    expected_atlas_inputs = _expected_inputs_for(
+                        "atlas", settings, atlas_state, workspace
+                    )
+                    _merge_expected_inputs(step_inputs, expected_atlas_inputs)
+                    expected_atlas_outputs = clean_expected_outputs(
+                        _expected_outputs_for("atlas", settings, atlas_state, workspace)
+                    )
 
                     def _run_atlas_step(
                         *,
@@ -681,6 +714,7 @@ def main():
                         coupler,
                         usim_datastore_h5_path: str,
                         atlas_year: int,
+                        expected_outputs: dict,
                     ):
                         # 1. Preprocess
                         preprocessor.update_state(atlas_state)
@@ -694,7 +728,9 @@ def main():
                             postprocessor.update_state(atlas_state)
                             postprocessor.postprocess(raw_outputs, workspace)
 
-                            atlas_output_dir = workspace.get_atlas_output_dir()
+                            atlas_output_dir = expected_outputs.get("atlas_output_dir")
+                            if not atlas_output_dir:
+                                atlas_output_dir = workspace.get_atlas_output_dir()
                             if os.path.exists(atlas_output_dir):
                                 artifact = cr.log_output(
                                     atlas_output_dir,
@@ -709,20 +745,23 @@ def main():
 
                             # Capture the updated datastore container as an explicit output and
                             # thread it forward to the next ATLAS sub-year.
-                            if os.path.exists(usim_datastore_h5_path):
+                            atlas_usim_output = expected_outputs.get("usim_datastore_h5")
+                            if not atlas_usim_output:
+                                atlas_usim_output = usim_datastore_h5_path
+                            if os.path.exists(atlas_usim_output):
                                 updated_h5 = cr.log_output(
-                                    usim_datastore_h5_path,
+                                    atlas_usim_output,
                                     key="usim_datastore_h5",
                                     description=f"UrbanSim datastore after ATLAS update for year {atlas_year}",
                                 )
                                 coupler.set(
-                                    "usim_datastore_h5", updated_h5 or usim_datastore_h5_path
+                                    "usim_datastore_h5", updated_h5 or atlas_usim_output
                                 )
                                 if typed_coupler is not None and updated_h5 is not None:
                                     typed_coupler.usim_datastore_h5 = updated_h5
                             else:
                                 logger.warning(
-                                    f"[Main] UrbanSim datastore not found after ATLAS postprocess: {usim_datastore_h5_path}"
+                                    f"[Main] UrbanSim datastore not found after ATLAS postprocess: {atlas_usim_output}"
                                 )
                         except Exception as e:
                             logger.error(f"ATLAS failed for {atlas_year}: {e}")
@@ -735,8 +774,8 @@ def main():
                             year=atlas_year,
                             iteration=0,
                             inputs=step_inputs,
-                            outputs=["usim_datastore_h5"],
-                            output_paths={"usim_datastore_h5": usim_datastore_h5_path},
+                            outputs=list(expected_atlas_outputs.keys()) or None,
+                            output_paths=expected_atlas_outputs or None,
                             cache_hydration="outputs-requested",
                             load_inputs=False,
                             runtime_kwargs={
@@ -749,6 +788,7 @@ def main():
                                 "coupler": coupler,
                                 "usim_datastore_h5_path": usim_datastore_h5_path,
                                 "atlas_year": atlas_year,
+                                "expected_outputs": expected_atlas_outputs,
                             },
                             **build_step_consist_kwargs("atlas", settings),
                         )
@@ -789,7 +829,7 @@ def main():
                         zarr_skims_input = coupler.get("zarr_skims")
                         if zarr_skims_input:
                             asim_inputs["zarr_skims"] = zarr_skims_input
-                            zarr_skims_path = _artifact_to_path(
+                            zarr_skims_path = artifact_to_path(
                                 zarr_skims_input, workspace
                             )
                             if zarr_skims_path:
@@ -798,6 +838,12 @@ def main():
                                     key="zarr_skims",
                                     description=f"ActivitySim compiled zarr skims for year {year}, iter {i}",
                                 )
+                        expected_asim_compile_inputs = _expected_inputs_for(
+                            "activitysim_compile", settings, state, workspace
+                        )
+                        _merge_expected_inputs(
+                            asim_inputs, expected_asim_compile_inputs
+                        )
                         expected_asim_inputs = _expected_inputs_for(
                             "activitysim", settings, state, workspace
                         )
@@ -810,6 +856,15 @@ def main():
 
                         if not state.asim_compiled:
                             compile_step_name = f"activitysim_compile_{year}"
+                            expected_compile_outputs = clean_expected_outputs(
+                                _expected_outputs_for(
+                                    "activitysim_compile",
+                                    settings,
+                                    state,
+                                    workspace,
+                                    components=("runner",),
+                                )
+                            )
 
                             def _run_activitysim_compile_step(
                                 *,
@@ -819,6 +874,7 @@ def main():
                                 adapter: ConsistProvenanceTracker,
                                 output_holder: dict,
                                 typed_coupler,
+                                expected_outputs: dict,
                             ):
                                 factory = ModelFactory()
                                 preprocessor = factory.get_preprocessor(
@@ -848,15 +904,18 @@ def main():
                                         if record.short_name == "zarr_skims":
                                             zarr_record = record
                                             break
-                                if zarr_record and os.path.exists(zarr_record.file_path):
+                                zarr_output_path = expected_outputs.get("zarr_skims")
+                                if not zarr_output_path and zarr_record is not None:
+                                    zarr_output_path = zarr_record.file_path
+                                if zarr_output_path and os.path.exists(zarr_output_path):
                                     artifact = cr.log_output(
-                                        zarr_record.file_path,
+                                        zarr_output_path,
                                         key="zarr_skims",
                                         description="ActivitySim compiled zarr skims",
                                     )
                                     coupler.set(
                                         "zarr_skims",
-                                        artifact or zarr_record.file_path,
+                                        artifact or zarr_output_path,
                                     )
                                     if typed_coupler is not None and artifact is not None:
                                         typed_coupler.zarr_skims = artifact
@@ -868,6 +927,7 @@ def main():
                                 year=year,
                                 iteration=-1,
                                 inputs=asim_inputs,
+                                output_paths=expected_compile_outputs or None,
                                 cache_mode="overwrite",
                                 load_inputs=False,
                                 runtime_kwargs={
@@ -877,6 +937,7 @@ def main():
                                     "adapter": adapter,
                                     "output_holder": activitysim_compile_holder,
                                     "typed_coupler": typed_coupler,
+                                    "expected_outputs": expected_compile_outputs,
                                 },
                                 **build_step_consist_kwargs(
                                     "activitysim_compile",
@@ -897,6 +958,7 @@ def main():
                             iteration: int,
                             input_store: RecordStore,
                             compile_outputs: RecordStore,
+                            expected_outputs: dict,
                         ):
                             combined_input_store = input_store
                             if combined_input_store is not None and compile_outputs:
@@ -908,7 +970,9 @@ def main():
                                 adapter,
                                 input_store=combined_input_store,
                             )
-                            asim_output_dir = workspace.get_asim_output_dir()
+                            asim_output_dir = expected_outputs.get("asim_output_dir")
+                            if not asim_output_dir:
+                                asim_output_dir = workspace.get_asim_output_dir()
                             if os.path.exists(asim_output_dir):
                                 artifact = cr.log_output(
                                     asim_output_dir,
@@ -922,6 +986,9 @@ def main():
                                     typed_coupler.asim_output_dir = artifact
 
                         activitysim_holder = {"activity_demand_outputs": None}
+                        expected_asim_outputs = clean_expected_outputs(
+                            _expected_outputs_for("activitysim", settings, state, workspace)
+                        )
                         scenario.run(
                             fn=_run_activitysim_step,
                             name=step_name,
@@ -929,6 +996,7 @@ def main():
                             year=year,
                             iteration=i,
                             inputs=asim_inputs,
+                            output_paths=expected_asim_outputs or None,
                             cache_mode="overwrite",
                             load_inputs=False,
                             runtime_kwargs={
@@ -944,6 +1012,7 @@ def main():
                                 "compile_outputs": activitysim_compile_holder[
                                     "compile_outputs"
                                 ],
+                                "expected_outputs": expected_asim_outputs,
                             },
                             **build_step_consist_kwargs(
                                 "activitysim",
@@ -997,6 +1066,7 @@ def main():
                             typed_coupler,
                             year: int,
                             iteration: int,
+                            expected_outputs: dict,
                         ):
                             output_holder["beam_outputs"] = run_traffic_assignment(
                                 settings,
@@ -1006,7 +1076,9 @@ def main():
                                 activity_demand_outputs,
                                 previous_beam_outputs,
                             )
-                            beam_output_dir = workspace.get_beam_output_dir()
+                            beam_output_dir = expected_outputs.get("beam_output_dir")
+                            if not beam_output_dir:
+                                beam_output_dir = workspace.get_beam_output_dir()
                             if os.path.exists(beam_output_dir):
                                 artifact = cr.log_output(
                                     beam_output_dir,
@@ -1020,11 +1092,14 @@ def main():
                                     typed_coupler.beam_output_dir = artifact
 
                             output_store = output_holder.get("beam_outputs")
-                            _update_coupler_from_beam_outputs(
+                            update_coupler_from_beam_outputs(
                                 output_store, coupler, typed_coupler, workspace
                             )
 
                         beam_holder = {"beam_outputs": None}
+                        expected_beam_outputs = clean_expected_outputs(
+                            _expected_outputs_for("beam", settings, state, workspace)
+                        )
 
                         scenario.run(
                             fn=_run_beam_step,
@@ -1033,6 +1108,7 @@ def main():
                             year=year,
                             iteration=i,
                             inputs=beam_inputs or None,
+                            output_paths=expected_beam_outputs or None,
                             cache_mode="overwrite",
                             load_inputs=False,
                             runtime_kwargs={
@@ -1046,6 +1122,7 @@ def main():
                                 "typed_coupler": typed_coupler,
                                 "year": year,
                                 "iteration": i,
+                                "expected_outputs": expected_beam_outputs,
                             },
                             **build_step_consist_kwargs(
                                 "beam", settings, workspace_path=workspace.full_path

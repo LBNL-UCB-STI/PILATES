@@ -1,9 +1,11 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 import os
 
+from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.urbansim import postprocessor as usim_post
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.provenance import FileProvenanceTracker
@@ -16,6 +18,45 @@ class UrbansimRunner(GenericRunner):
     Runner for the UrbanSim land use model.
     This class is responsible for running the UrbanSim containerized model.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects from the workflow.
+        """
+        usim_data_dir = workspace.get_usim_mutable_data_dir()
+        if state.is_start_year():
+            usim_input_fname = usim_post.get_usim_datastore_fname(
+                settings, io="input"
+            )
+        else:
+            usim_input_fname = usim_post.get_usim_datastore_fname(
+                settings, io="output", year=state.forecast_year
+            )
+        usim_input_path = os.path.join(usim_data_dir, usim_input_fname)
+        return {
+            "usim_mutable_data_dir": usim_data_dir,
+            "usim_datastore_h5": usim_input_path if os.path.exists(usim_input_path) else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        usim_output_fname = usim_post.get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        )
+        usim_output_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        )
+        return {
+            "usim_datastore_h5": usim_output_path,
+        }
 
     def __init__(
         self,

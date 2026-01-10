@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 import glob
-from typing import Tuple, Optional, TYPE_CHECKING, List
+from typing import Tuple, Optional, TYPE_CHECKING, List, Dict, Any
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 import numpy as np
 import pandas as pd
 
+from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.provenance import FileProvenanceTracker
@@ -44,6 +45,37 @@ class AtlasPreprocessor(GenericPreprocessor):
     This includes extracting UrbanSim outputs, formatting them as ATLAS inputs, and (optionally) calculating accessibility
     using BEAM skims.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        """
+        usim_input_fname = _get_usim_datastore_fname(
+            settings, io="input" if state.is_start_year() else "output", year=state.forecast_year
+        )
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
+            "usim_datastore_h5": usim_input_path
+            if os.path.exists(usim_input_path)
+            else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this preprocessor produces.
+        """
+        return {
+            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
+        }
 
     def __init__(
         self,

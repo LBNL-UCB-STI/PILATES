@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 import os
 
+from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
@@ -75,6 +76,61 @@ class AtlasRunner(GenericRunner):
     All preprocessing and postprocessing should be handled outside this method,
     following the BEAM/ActivitySim pattern.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects from the workflow.
+        """
+        atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+        if state.is_start_year():
+            region = settings.run.region
+            region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+            usim_datastore_fname = settings.urbansim.input_file_template.format(
+                region_id=region_id
+            )
+        else:
+            usim_datastore_fname = settings.urbansim.output_file_template.format(
+                year=state.forecast_year
+            )
+        usim_datastore_h5 = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_datastore_fname
+        )
+        return {
+            "atlas_mutable_input_dir": atlas_input_dir,
+            "usim_datastore_h5": usim_datastore_h5
+            if os.path.exists(usim_datastore_h5)
+            else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        atlas_output_dir = workspace.get_atlas_output_dir()
+        usim_output_path = None
+        if state.is_start_year():
+            region = settings.run.region
+            region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+            usim_output_fname = settings.urbansim.input_file_template.format(
+                region_id=region_id
+            )
+        else:
+            usim_output_fname = settings.urbansim.output_file_template.format(
+                year=state.forecast_year
+            )
+        usim_output_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        )
+        return {
+            "atlas_output_dir": atlas_output_dir,
+            "usim_datastore_h5": usim_output_path,
+        }
 
     def __init__(
         self,

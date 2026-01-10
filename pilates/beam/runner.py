@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import sys
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
@@ -62,13 +62,26 @@ class BeamRunner(GenericRunner):
     @staticmethod
     def expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> dict:
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects from the workflow.
+        """
+        zarr_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "zarr_skims": os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            ),
+            "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
         }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        return {"beam_output_dir": workspace.get_beam_output_dir()}
 
     def __init__(
         self,

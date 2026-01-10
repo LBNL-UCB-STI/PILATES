@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, FileRecord
@@ -17,6 +17,30 @@ class ActivitysimCompileRunner(GenericRunner):
     """
     Runner that performs the one-time ActivitySim compile step.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects from the workflow.
+        """
+        return {
+            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        return {
+            "zarr_skims": os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+        }
 
     def __init__(
         self,
@@ -143,13 +167,26 @@ class ActivitysimRunner(GenericRunner):
     @staticmethod
     def expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> dict:
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects from the workflow.
+        """
+        zarr_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
         return {
             "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
-            "zarr_skims": os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            ),
+            "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
         }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        return {"asim_output_dir": workspace.get_asim_output_dir()}
 
     def __init__(
         self,

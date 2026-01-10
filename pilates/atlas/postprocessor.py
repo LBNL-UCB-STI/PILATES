@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 import os
 
@@ -92,6 +92,44 @@ class AtlasPostprocessor(GenericPostprocessor):
     This includes updating UrbanSim HDF5 with new vehicle ownership and adding vehicleTypeId to ATLAS vehicle outputs.
     Produces updated UrbanSim inputs and ATLAS vehicle outputs.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        """
+        usim_output_fname = get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        )
+        usim_output_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        )
+        return {
+            "atlas_output_dir": workspace.get_atlas_output_dir(),
+            "usim_datastore_h5": usim_output_path
+            if os.path.exists(usim_output_path)
+            else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this postprocessor produces.
+        """
+        usim_output_fname = get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        )
+        usim_output_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        )
+        return {
+            "atlas_output_dir": workspace.get_atlas_output_dir(),
+            "usim_datastore_h5": usim_output_path,
+        }
 
     def __init__(
         self,

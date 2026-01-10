@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Tuple, Optional, TYPE_CHECKING, Dict, Any
 import os
 import shutil
 import logging
@@ -147,6 +147,57 @@ class UrbansimPreprocessor(GenericPreprocessor):
     This includes copying input files to a mutable location and preparing any additional
     data needed for the UrbanSim run.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        """
+        project_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not project_root:
+            project_root = os.path.realpath(os.getcwd())
+        source_dir = (
+            settings.urbansim.local_data_input_folder
+            if os.path.isabs(settings.urbansim.local_data_input_folder)
+            else os.path.join(project_root, settings.urbansim.local_data_input_folder)
+        )
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_input_fname = settings.urbansim.input_file_template.format(
+            region_id=region_id
+        )
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "usim_source_data_dir": source_dir,
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+            "usim_datastore_h5": usim_input_path
+            if os.path.exists(usim_input_path)
+            else None,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this preprocessor produces.
+        """
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_input_fname = settings.urbansim.input_file_template.format(
+            region_id=region_id
+        )
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+            "usim_datastore_h5": usim_input_path,
+        }
 
     def __init__(
         self,

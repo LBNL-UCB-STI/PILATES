@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from datetime import datetime
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
 import re
 
 from pilates.utils.consist_adapter import ConsistProvenanceTracker
@@ -204,6 +204,28 @@ class BeamPreprocessor(GenericPreprocessor):
     Preprocessor for the BEAM model. Handles data preparation, configuration updates,
     and copying of inputs from other model components like ActivitySim and ATLAS.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        """
+        return {
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            "atlas_output_dir": workspace.get_atlas_output_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this preprocessor produces.
+        """
+        return {"beam_mutable_data_dir": workspace.get_beam_mutable_data_dir()}
 
     def __init__(
         self,

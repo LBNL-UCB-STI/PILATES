@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 import numpy as np
 import openmatrix as omx
@@ -3357,6 +3357,38 @@ class BeamPostprocessor(GenericPostprocessor):
     """
     Postprocessor for BEAM model.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        """
+        return {
+            "beam_output_dir": workspace.get_beam_output_dir(),
+            "asim_output_dir": workspace.get_asim_output_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this postprocessor produces.
+        """
+        zarr_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
+        region = settings.run.region
+        omx_name = settings.shared.skims.fname
+        final_omx_path = os.path.join(
+            workspace.get_beam_mutable_data_dir(), region, omx_name
+        )
+        return {
+            "zarr_skims": zarr_path,
+            "final_skims_omx": final_omx_path,
+        }
 
     def __init__(
         self,

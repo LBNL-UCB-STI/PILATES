@@ -5,8 +5,9 @@ import shutil
 import pandas as pd
 import zipfile
 import os
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
+from pilates.config import PilatesConfig
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import read_datastore
@@ -440,6 +441,34 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     """
     ActivitySim-specific postprocessor that consolidates all postprocessing steps.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        """
+        return {
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this postprocessor produces.
+        """
+        usim_input_fname = get_usim_datastore_fname(settings, io="input")
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            "usim_datastore_h5": usim_input_path,
+        }
 
     def __init__(
         self,

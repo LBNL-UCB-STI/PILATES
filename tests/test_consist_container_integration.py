@@ -1,17 +1,13 @@
 """
-Unit tests for Consist container integration in GenericRunner.run_container()
+Unit tests for Consist container integration in GenericRunner.run_container().
 
-Tests the pure delegation logic in GenericRunner.run_container().
-Since legacy fallback logic has been removed, these tests strictly enforce:
-1. Consist availability
-2. Provenance tracker presence
-3. Correct argument mapping to consist.integrations.containers.run_container
+Tests the Consist delegation path and validates argument mapping and
+fallback behavior when Consist is disabled or unavailable.
 """
 
 import pytest
 import shlex
 from unittest.mock import Mock, MagicMock, patch
-from types import SimpleNamespace
 
 from pilates.generic.runner import GenericRunner
 
@@ -19,10 +15,19 @@ class TestRunContainerConsistDelegation:
     """Tests for GenericRunner.run_container delegation to Consist."""
 
     @patch("pilates.generic.runner.get_setting")
-    @patch("pilates.generic.runner.consist_run_container")
-    def test_delegation_to_consist_success(self, mock_consist_run_container, mock_get_setting):
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    @patch("pilates.generic.runner.cr.consist_available")
+    def test_delegation_to_consist_success(
+        self,
+        mock_consist_available,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_get_setting,
+    ):
         """Test that run_container calls Consist with properly mapped arguments."""
         mock_consist_run_container.return_value = True
+        mock_consist_available.return_value = True
 
         # Setup inputs
         settings = MagicMock()
@@ -48,7 +53,7 @@ class TestRunContainerConsistDelegation:
 
         # Mock tracker
         tracker = Mock()
-        tracker._tracker = Mock()
+        mock_current_tracker.return_value = tracker
 
         # Execute
         result = GenericRunner.run_container(
@@ -59,7 +64,6 @@ class TestRunContainerConsistDelegation:
             command=command,
             model_name=model_name,
             args=args,
-            provenance_tracker=tracker
         )
 
         assert result is True
@@ -82,11 +86,19 @@ class TestRunContainerConsistDelegation:
         assert call_kwargs["backend_type"] == "docker"
         assert call_kwargs["pull_latest"] is True
         assert call_kwargs["run_id"] == "test_model_container"
-        assert call_kwargs["tracker"] == tracker._tracker
+        assert call_kwargs["tracker"] == tracker
 
-    def test_missing_tracker_raises_error(self):
-        """Test that missing provenance_tracker raises RuntimeError."""
-        with pytest.raises(RuntimeError, match="Consist-backed provenance_tracker is required"):
+    @patch("pilates.generic.runner.cr.current_tracker")
+    @patch("pilates.generic.runner.cr.consist_available")
+    def test_missing_tracker_raises_error(
+        self,
+        mock_consist_available,
+        mock_current_tracker,
+    ):
+        """Test that missing tracker raises RuntimeError when Consist is enabled."""
+        mock_consist_available.return_value = True
+        mock_current_tracker.return_value = None
+        with pytest.raises(RuntimeError, match="Consist tracker must be active"):
             GenericRunner.run_container(
                 client=None,
                 settings=MagicMock(),
@@ -94,17 +106,24 @@ class TestRunContainerConsistDelegation:
                 volumes={},
                 command="cmd",
                 model_name="model",
-                provenance_tracker=None # Missing
             )
 
-    @patch("pilates.generic.runner.consist_run_container")
-    def test_command_string_args_combination(self, mock_consist_run_container):
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    @patch("pilates.generic.runner.cr.consist_available")
+    def test_command_string_args_combination(
+        self,
+        mock_consist_available,
+        mock_current_tracker,
+        mock_consist_run_container,
+    ):
         """Test that string args are correctly split and combined."""
         mock_consist_run_container.return_value = True
+        mock_consist_available.return_value = True
 
         # Setup inputs
         tracker = Mock()
-        tracker._tracker = Mock()
+        mock_current_tracker.return_value = tracker
 
         GenericRunner.run_container(
             client=None,
@@ -114,20 +133,30 @@ class TestRunContainerConsistDelegation:
             command="python script.py",
             model_name="model",
             args="--arg val", # String format args
-            provenance_tracker=tracker
         )
 
         call_kwargs = mock_consist_run_container.call_args.kwargs
         expected_cmd = ["python", "script.py", "--arg", "val"]
         assert call_kwargs["command"] == expected_cmd
 
-    @patch("pilates.generic.runner.consist_run_container")
-    def test_exception_handling_returns_false(self, mock_consist_run_container):
-        """Test that exceptions from Consist are caught and return False."""
+    @patch("pilates.generic.runner.GenericRunner._run_container_direct")
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    @patch("pilates.generic.runner.cr.consist_available")
+    def test_exception_handling_returns_false(
+        self,
+        mock_consist_available,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_run_container_direct,
+    ):
+        """Test that exceptions from Consist fall back to direct execution."""
         mock_consist_run_container.side_effect = Exception("Consist failed")
+        mock_consist_available.return_value = True
+        mock_run_container_direct.return_value = False
 
         tracker = Mock()
-        tracker._tracker = Mock()
+        mock_current_tracker.return_value = tracker
 
         result = GenericRunner.run_container(
             client=None,
@@ -136,16 +165,25 @@ class TestRunContainerConsistDelegation:
             volumes={},
             command="cmd",
             model_name="model",
-            provenance_tracker=tracker
         )
 
         assert result is False
+        assert mock_run_container_direct.called
 
     @patch("pilates.generic.runner.get_setting")
-    @patch("pilates.generic.runner.consist_run_container")
-    def test_backend_defaults(self, mock_consist_run_container, mock_get_setting):
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    @patch("pilates.generic.runner.cr.consist_available")
+    def test_backend_defaults(
+        self,
+        mock_consist_available,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_get_setting,
+    ):
         """Test default backend selection."""
         mock_consist_run_container.return_value = True
+        mock_consist_available.return_value = True
 
         settings = MagicMock()
 
@@ -158,7 +196,7 @@ class TestRunContainerConsistDelegation:
         mock_get_setting.side_effect = get_setting_side_effect
 
         tracker = Mock()
-        tracker._tracker = Mock()
+        mock_current_tracker.return_value = tracker
 
         GenericRunner.run_container(
             client=None,
@@ -167,7 +205,6 @@ class TestRunContainerConsistDelegation:
             volumes={},
             command="cmd",
             model_name="model",
-            provenance_tracker=tracker
         )
 
         assert mock_consist_run_container.call_args.kwargs["backend_type"] == "singularity"
