@@ -50,7 +50,9 @@ def build_scenario_facet(settings: PilatesConfig) -> Dict[str, Any]:
     if run_cfg is not None:
         if HasConsistFacet is not None and isinstance(run_cfg, HasConsistFacet):
             run_cfg = run_cfg.to_consist_facet()
-        elif hasattr(run_cfg, "to_consist_facet") and callable(run_cfg.to_consist_facet):
+        elif hasattr(run_cfg, "to_consist_facet") and callable(
+            run_cfg.to_consist_facet
+        ):
             run_cfg = run_cfg.to_consist_facet()
     return {"run": run_cfg}
 
@@ -84,9 +86,11 @@ def build_step_consist_kwargs(
             "config": build_activitysim_identity_config(settings),
             "facet": build_activitysim_facet(settings),
             "hash_inputs": build_activitysim_hash_inputs(settings, workspace_path),
-            "facet_schema_version": "activitysim_compile_v1"
-            if model_norm == "activitysim_compile"
-            else "activitysim_v1",
+            "facet_schema_version": (
+                "activitysim_compile_v1"
+                if model_norm == "activitysim_compile"
+                else "activitysim_v1"
+            ),
             "facet_index": True,
         }
 
@@ -126,7 +130,10 @@ def build_step_consist_kwargs(
         }
 
     # Default: no special config mapping yet.
-    return {"facet_schema_version": f"{model_norm or 'unknown'}_v1", "facet_index": True}
+    return {
+        "facet_schema_version": f"{model_norm or 'unknown'}_v1",
+        "facet_index": True,
+    }
 
 
 def _only_keys(src: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
@@ -147,13 +154,15 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
         "replan_hh_samp_size": cfg.replan_hh_samp_size,
         "replan_after": cfg.replan_after,
         "random_seed": cfg.random_seed,
-        "database": {
-            "enabled": cfg.database.enabled,
-            "use_processed_data": cfg.database.use_processed_data,
-            "year": cfg.database.year,
-        }
-        if getattr(cfg, "database", None) is not None
-        else None,
+        "database": (
+            {
+                "enabled": cfg.database.enabled,
+                "use_processed_data": cfg.database.use_processed_data,
+                "year": cfg.database.year,
+            }
+            if getattr(cfg, "database", None) is not None
+            else None
+        ),
     }
 
 
@@ -169,14 +178,18 @@ def build_activitysim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_activitysim_identity_config(settings)
 
 
-def build_activitysim_hash_inputs(settings: PilatesConfig, workspace_path: str) -> List[HashInput]:
+def build_activitysim_hash_inputs(
+    settings: PilatesConfig, workspace_path: str
+) -> List[HashInput]:
     cfg = settings.activitysim
     if cfg is None:
         return []
 
     configs_dir = Path(workspace_path) / cfg.local_mutable_configs_folder
     if not configs_dir.exists():
-        raise FileNotFoundError(f"ActivitySim mutable configs dir not found: {configs_dir}")
+        raise FileNotFoundError(
+            f"ActivitySim mutable configs dir not found: {configs_dir}"
+        )
 
     return [("asim_mutable_configs", configs_dir)]
 
@@ -208,7 +221,9 @@ def build_beam_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_beam_identity_config(settings)
 
 
-def build_beam_hash_inputs(settings: PilatesConfig, workspace_path: str) -> List[HashInput]:
+def build_beam_hash_inputs(
+    settings: PilatesConfig, workspace_path: str
+) -> List[HashInput]:
     cfg = settings.beam
     if cfg is None:
         return []

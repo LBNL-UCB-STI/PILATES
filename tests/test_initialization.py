@@ -38,7 +38,7 @@ class DummyPreprocessor:
 class DummyModelFactory:
     """ModelFactory stub that returns DummyPreprocessor for any model."""
 
-    def get_preprocessor(self, model_name, state, provenance_tracker):
+    def get_preprocessor(self, model_name, state, major_stage=None):
         return DummyPreprocessor()
 
 
@@ -81,15 +81,15 @@ class DummyWorkspace:
 
 def test_initialization_runs_beam_and_urbansim(monkeypatch):
     """
-    Verify that Initialization.run correctly aggregates provenance records
-    for beam and urbansim models using the dummy preprocessor.
+    Verify that Initialization.run aggregates input/output records for
+    beam and urbansim models using the dummy preprocessor.
     """
     # Patch ModelFactory used inside Initialization
     monkeypatch.setattr(
         "pilates.generic.initialization.ModelFactory", DummyModelFactory
     )
 
-    init = Initialization("init", None, None)
+    init = Initialization("init", None)
     workspace = DummyWorkspace()
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -129,7 +129,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
 
-    # After run, provenance records should be stored in workspace dicts
+    # After run, records should be stored in workspace dicts
     # Two records per model (input + output)
     assert "beam" in workspace.input_data
     assert "beam" in workspace.output_data
@@ -153,7 +153,7 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
         "pilates.generic.initialization.ModelFactory", DummyModelFactory
     )
 
-    init = Initialization("init", None, None)
+    init = Initialization("init", None)
     workspace = DummyWorkspace()
     # Settings only contains a model that is not in the loop (e.g., no beam)
     settings = SimpleNamespace(

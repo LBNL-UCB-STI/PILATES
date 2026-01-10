@@ -1,9 +1,8 @@
-from typing import Optional, Union
+from typing import Optional
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
-from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
 
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 class Initialization(Model):
     """
     A dedicated class to handle the initialization of mutable data and
-    provenance recording. This class consolidates input data copying for
+    record creation. This class consolidates input data copying for
     all models into one single initialization job. It does not conform to the
     GenericPreprocessor interface.
     """
@@ -25,11 +24,8 @@ class Initialization(Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: Union[
-            FileProvenanceTracker, ConsistProvenanceTracker, None
-        ],
     ):
-        super().__init__(model_name, state, provenance_tracker)
+        super().__init__(model_name, state)
 
     def run(self, settings: PilatesConfig, workspace: Workspace) -> RecordStore:
         """
@@ -44,9 +40,7 @@ class Initialization(Model):
         try:
             # BEAM model initialization
             if settings.run.models.travel == "beam":
-                beam_preprocessor = model_factory.get_preprocessor(
-                    "beam", self.state, self.provenance_tracker
-                )
+                beam_preprocessor = model_factory.get_preprocessor("beam", self.state)
 
                 beam_input_dir = workspace.get_beam_mutable_data_dir()
                 result = beam_preprocessor.copy_data_to_mutable_location(
@@ -79,7 +73,7 @@ class Initialization(Model):
                     output_dir = workspace.get_usim_mutable_data_dir()
                     os.makedirs(output_dir, exist_ok=True)
                     usim_preprocessor = model_factory.get_preprocessor(
-                        "urbansim", self.state, self.provenance_tracker
+                        "urbansim", self.state
                     )
                     result = usim_preprocessor.copy_data_to_mutable_location(
                         settings, output_dir
@@ -105,7 +99,7 @@ class Initialization(Model):
                     input_dir = workspace.get_atlas_mutable_input_dir()
                     os.makedirs(input_dir, exist_ok=True)
                     atlas_preprocessor = model_factory.get_preprocessor(
-                        "atlas", self.state, self.provenance_tracker
+                        "atlas", self.state
                     )
                     rec_in, rec_out = atlas_preprocessor.copy_data_to_mutable_location(
                         settings, input_dir
@@ -118,7 +112,7 @@ class Initialization(Model):
                 if model_name == "activitysim":
 
                     activitysim_preprocessor = model_factory.get_preprocessor(
-                        model_name, self.state, self.provenance_tracker
+                        model_name, self.state
                     )
                     asim_input_dir = workspace.get_asim_mutable_data_dir()
                     rec_in, rec_out = (

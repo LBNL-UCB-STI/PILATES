@@ -8,7 +8,6 @@ from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.workspace import Workspace
 
 
@@ -165,8 +164,12 @@ class UrbansimPostprocessor(GenericPostprocessor):
         )
         return {
             "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": usim_input_path if os.path.exists(usim_input_path) else None,
-            "usim_output_h5": usim_output_path if os.path.exists(usim_output_path) else None,
+            "usim_datastore_h5": (
+                usim_input_path if os.path.exists(usim_input_path) else None
+            ),
+            "usim_output_h5": (
+                usim_output_path if os.path.exists(usim_output_path) else None
+            ),
         }
 
     @staticmethod
@@ -188,10 +191,9 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
 
     def _postprocess(
         self,

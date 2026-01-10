@@ -9,7 +9,6 @@ import openmatrix as omx
 
 from pilates.config import PilatesConfig
 import pilates.utils.zone_utils as zone_utils
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 try:
@@ -3377,9 +3376,7 @@ class BeamPostprocessor(GenericPostprocessor):
         """
         Declare the output paths/artifacts this postprocessor produces.
         """
-        zarr_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         region = settings.run.region
         omx_name = settings.shared.skims.fname
         final_omx_path = os.path.join(
@@ -3394,10 +3391,9 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
         self.skim_format = get_setting(
             self.state.full_settings, "shared.skims.fname", "skimsActivitySimOD_current"

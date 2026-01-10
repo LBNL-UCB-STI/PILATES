@@ -78,7 +78,6 @@ class ExecutionContext(Protocol):
 
     See Also
     --------
-    OpenLineageTracker : Uses ExecutionContext for provenance tracking
     WorkflowState : PILATES workflow state that satisfies this protocol
     """
 

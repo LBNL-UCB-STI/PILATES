@@ -8,9 +8,7 @@ from pilates.utils import consist_runtime as cr
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
-    from pilates.utils.provenance import FileProvenanceTracker
     from pilates.generic.records import RecordStore
-    from pilates.utils.consist_adapter import ConsistProvenanceTracker
 
 
 logger = logging.getLogger(__name__)
@@ -113,12 +111,10 @@ class Model:
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: Optional[ConsistProvenanceTracker],
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
         self.model_name = model_name
         self.state = state
-        self.provenance_tracker = provenance_tracker
         self.major_stage = major_stage  # new
 
     def update_state(self, state: "WorkflowState"):

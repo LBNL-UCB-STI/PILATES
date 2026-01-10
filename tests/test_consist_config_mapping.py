@@ -83,4 +83,3 @@ def test_build_step_consist_kwargs_beam_includes_hash_inputs(tmp_path):
     assert kwargs["facet_schema_version"] == "beam_v1"
     assert kwargs["facet"] == {"sample": 1.0}
     assert kwargs["hash_inputs"][0][0] == "beam_conf/main.conf"
-

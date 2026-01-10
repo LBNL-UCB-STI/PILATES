@@ -8,7 +8,6 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.urbansim import postprocessor as usim_post
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +27,7 @@ class UrbansimRunner(GenericRunner):
         """
         usim_data_dir = workspace.get_usim_mutable_data_dir()
         if state.is_start_year():
-            usim_input_fname = usim_post.get_usim_datastore_fname(
-                settings, io="input"
-            )
+            usim_input_fname = usim_post.get_usim_datastore_fname(settings, io="input")
         else:
             usim_input_fname = usim_post.get_usim_datastore_fname(
                 settings, io="output", year=state.forecast_year
@@ -38,7 +35,9 @@ class UrbansimRunner(GenericRunner):
         usim_input_path = os.path.join(usim_data_dir, usim_input_fname)
         return {
             "usim_mutable_data_dir": usim_data_dir,
-            "usim_datastore_h5": usim_input_path if os.path.exists(usim_input_path) else None,
+            "usim_datastore_h5": (
+                usim_input_path if os.path.exists(usim_input_path) else None
+            ),
         }
 
     @staticmethod
@@ -62,10 +61,9 @@ class UrbansimRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_files = ["usim_data"]
 
     def get_usim_docker_vols(self, output_dir: str) -> dict:

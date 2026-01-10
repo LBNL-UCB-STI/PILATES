@@ -152,7 +152,7 @@ class DatabaseConfig(BaseModel):
     )
     use_consist: bool = Field(
         False,
-        description="Use Consist library for provenance tracking instead of legacy FileProvenanceTracker",
+        description="Use Consist library for provenance tracking",
     )
 
     @model_validator(mode="after")
@@ -466,16 +466,13 @@ class PilatesConfig(BaseModel):
                 "scenario": self.run.scenario,
                 "start_year": self.run.start_year,
             },
-
             # 2. Geography: The spatial resolution and zone system
             # IdentityManager will auto-serialize this Pydantic model
             "geography": self.shared.geography,
-
             # 3. Initial Conditions: Baseline costs/impedances (filenames)
             # Note: Content hashing of these files happens via input_artifacts=[...],
             # this only hashes the *pointer* to the file.
             "initial_conditions": self.shared.skims,
-
             # 4. Orchestration: The DAG topology
             # Changes here alter the workflow state machine construction
             "orchestration": {
@@ -488,7 +485,7 @@ class PilatesConfig(BaseModel):
                 },
                 # Determines which sub-models are active
                 "enabled_models": self.run.models,
-            }
+            },
         }
 
 

@@ -16,7 +16,6 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -54,16 +53,18 @@ class AtlasPreprocessor(GenericPreprocessor):
         Declare the input paths/artifacts this preprocessor expects from the workflow.
         """
         usim_input_fname = _get_usim_datastore_fname(
-            settings, io="input" if state.is_start_year() else "output", year=state.forecast_year
+            settings,
+            io="input" if state.is_start_year() else "output",
+            year=state.forecast_year,
         )
         usim_input_path = os.path.join(
             workspace.get_usim_mutable_data_dir(), usim_input_fname
         )
         return {
             "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
-            "usim_datastore_h5": usim_input_path
-            if os.path.exists(usim_input_path)
-            else None,
+            "usim_datastore_h5": (
+                usim_input_path if os.path.exists(usim_input_path) else None
+            ),
         }
 
     @staticmethod
@@ -81,10 +82,9 @@ class AtlasPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_data = ["usim_data"]
 
     def copy_data_to_mutable_location(

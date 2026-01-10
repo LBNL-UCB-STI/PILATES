@@ -54,9 +54,7 @@ def _ensure_geoid_column(blocks_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             src = lowered[cand]
             blocks_gdf = blocks_gdf.rename(columns={src: "GEOID"})
             blocks_gdf["GEOID"] = blocks_gdf["GEOID"].astype(str)
-            logger.info(
-                f"Normalized block GEOID column from '{src}' to 'GEOID'."
-            )
+            logger.info(f"Normalized block GEOID column from '{src}' to 'GEOID'.")
             return blocks_gdf
 
     raise KeyError(

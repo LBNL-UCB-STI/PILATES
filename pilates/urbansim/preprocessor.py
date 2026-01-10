@@ -11,7 +11,7 @@ import numpy as np
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.provenance import FileProvenanceTracker, find_project_root
+from pilates.utils.path_utils import find_project_root
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -174,9 +174,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
         return {
             "usim_source_data_dir": source_dir,
             "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
-            "usim_datastore_h5": usim_input_path
-            if os.path.exists(usim_input_path)
-            else None,
+            "usim_datastore_h5": (
+                usim_input_path if os.path.exists(usim_input_path) else None
+            ),
         }
 
     @staticmethod
@@ -203,10 +203,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_data = ["usim_data_reference"]
 
     def copy_data_to_mutable_location(
@@ -299,7 +298,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
             else os.path.join(project_root, settings.beam.local_input_folder)
         )
         skims_src = os.path.abspath(
-            os.path.join(beam_inputs_root, settings.run.region, settings.shared.skims.fname)
+            os.path.join(
+                beam_inputs_root, settings.run.region, settings.shared.skims.fname
+            )
         )
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
 
@@ -353,9 +354,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         short_name=short_name,
                     )
                 )
-        logger.info(
-            "[UrbansimPreprocessor] Finished copying UrbanSim input files."
-        )
+        logger.info("[UrbansimPreprocessor] Finished copying UrbanSim input files.")
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
     def _preprocess(

@@ -48,7 +48,7 @@ def test_provenance_logging_requires_active_run_when_enabled(monkeypatch):
     monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: None)
 
-    model = DummyModel("dummy", state, provenance_tracker=None)
+    model = DummyModel("dummy", state)
     with pytest.raises(RuntimeError, match="active run context"):
         model.do(RecordStore())
 
@@ -84,7 +84,7 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
             )
         ]
     )
-    model = DummyModel("dummy", state, provenance_tracker=None)
+    model = DummyModel("dummy", state)
     model.do(input_store=input_store)
 
     assert len(calls) == 2
@@ -138,7 +138,7 @@ def test_decorator_logs_artifacts_with_consist(monkeypatch, tmp_path):
         ]
     )
 
-    model = DummyModel("dummy", state, provenance_tracker=None)
+    model = DummyModel("dummy", state)
     with cr.use_tracker(tracker):
         with cr.scenario("decorator-test", tracker=tracker) as scenario:
             scenario.run(
@@ -174,14 +174,15 @@ def test_run_container_uses_current_tracker(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(
-        "pilates.generic.runner.consist_run_container", _fake_run_container
+        "consist.integrations.containers.run_container", _fake_run_container
     )
 
     settings = types.SimpleNamespace(
+        shared=types.SimpleNamespace(database=types.SimpleNamespace(use_consist=True)),
         infrastructure=types.SimpleNamespace(
             container_manager="docker",
             docker_config=types.SimpleNamespace(pull_latest=False),
-        )
+        ),
     )
 
     with cr.use_tracker(tracker):

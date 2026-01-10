@@ -18,14 +18,12 @@ import matplotlib.pyplot as plt
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.duckdb_manager import DuckDBManager
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
     load_canonical_zones,
 )
 from pilates.utils.io import read_datastore
-from pilates.utils.provenance import FileProvenanceTracker, find_project_root
-from pilates.utils.database_upload import create_database_manager
+from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
 
@@ -1880,9 +1878,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
             "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "usim_datastore_h5": usim_input_path
-            if os.path.exists(usim_input_path)
-            else None,
+            "usim_datastore_h5": (
+                usim_input_path if os.path.exists(usim_input_path) else None
+            ),
         }
 
     @staticmethod
@@ -1901,166 +1899,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
-
-    def _should_use_database_input(self, settings: PilatesConfig) -> bool:
-        """
-        Determine whether to use database input mode for ActivitySim.
-
-        Database input mode is enabled when:
-        1. UrbanSim is turned off (land_use_model != 'urbansim')
-        2. Database is configured and enabled
-        3. ActivitySim database configuration is present
-
-        Args:
-            settings: PILATES settings dictionary
-
-        Returns:
-            bool: True if database input should be used
-        """
-        # Check if UrbanSim is turned off
-        land_use_model = settings.run.models.land_use or ""
-        urbansim_disabled = land_use_model != "urbansim"
-
-        # Check if database is configured
-        database_enabled = settings.shared.database.enabled
-
-        # Check if ActivitySim database configuration exists
-        asim_db_enabled = settings.activitysim.database.enabled
-
-        # Database input mode requires all conditions
-        use_database = urbansim_disabled and database_enabled and asim_db_enabled
-
-        if use_database:
-            logger.info(
-                "Database input mode enabled: UrbanSim is off and database is configured"
-            )
-        elif not urbansim_disabled:
-            logger.info("Database input mode disabled: UrbanSim is enabled")
-        elif not database_enabled:
-            logger.info("Database input mode disabled: Database not configured")
-        elif not asim_db_enabled:
-            logger.info(
-                "Database input mode disabled: ActivitySim database configuration not enabled"
-            )
-
-        return use_database
-
-    def _clean_activitysim_data(
-        self, df: pd.DataFrame, table_name: str
-    ) -> pd.DataFrame:
-        """
-        Clean and format data for ActivitySim compatibility.
-
-        Args:
-            df: Raw DataFrame from database
-            table_name: Name of the ActivitySim table
-
-        Returns:
-            Cleaned DataFrame ready for ActivitySim
-        """
-        clean_df = df.copy()
-
-        # Remove database metadata columns that ActivitySim doesn't need
-        metadata_cols = [
-            "id",
-            "file_record_id",
-            "run_id",
-            "openlineage_id",
-            "created_at",
-        ]
-        for col in metadata_cols:
-            if col in clean_df.columns:
-                clean_df = clean_df.drop(columns=[col])
-
-        # Handle specific table cleaning
-        if table_name == "households":
-            # Ensure household_id is the index for ActivitySim
-            if "household_id" in clean_df.columns:
-                clean_df = clean_df.set_index("household_id")
-                clean_df.index.name = "household_id"
-
-            # Ensure required columns exist with defaults
-            required_cols = {
-                "TAZ": "1",
-                "persons": 1,
-                "income": 50000,
-                "cars": 1,
-                "HHT": 1,
-                "workers": 1,
-            }
-            for col, default_val in required_cols.items():
-                if col not in clean_df.columns:
-                    clean_df[col] = default_val
-
-        elif table_name == "persons":
-            # Ensure person_id is the index for ActivitySim
-            if "person_id" in clean_df.columns:
-                clean_df = clean_df.set_index("person_id")
-                clean_df.index.name = "person_id"
-
-            # Ensure required columns exist with defaults
-            required_cols = {
-                "household_id": 1,
-                "TAZ": "1",
-                "age": 35,
-                "worker": 0,
-                "student": 0,
-                "ptype": 1,
-                "pemploy": 1,
-                "pstudent": 3,
-                "member_id": 1,
-                "workplace_taz": -1,
-                "school_taz": -1,
-                "home_x": 0.0,
-                "home_y": 0.0,
-            }
-            for col, default_val in required_cols.items():
-                if col not in clean_df.columns:
-                    clean_df[col] = default_val
-
-        elif table_name == "land_use":
-            # Ensure TAZ is the index for ActivitySim
-            if "TAZ" in clean_df.columns:
-                clean_df = clean_df.set_index("TAZ")
-                clean_df.index.name = "TAZ"
-
-            # Ensure required columns exist with defaults
-            required_cols = {
-                "TOTPOP": 100,
-                "TOTHH": 50,
-                "TOTEMP": 75,
-                "TOTACRE": 10.0,
-                "area_type": 3,
-                "employment_density": 7.5,
-                "pop_density": 10.0,
-                "hh_density": 5.0,
-            }
-            for col, default_val in required_cols.items():
-                if col not in clean_df.columns:
-                    clean_df[col] = default_val
-
-        # Convert data types appropriately
-        for col in clean_df.columns:
-            # Convert numeric columns that might be stored as objects
-            if clean_df[col].dtype == "object":
-                try:
-                    # Try to convert to numeric
-                    clean_df[col] = pd.to_numeric(clean_df[col], errors="ignore")
-                except Exception:
-                    pass
-
-        # Replace any NaN values with appropriate defaults
-        clean_df = clean_df.fillna(0)
-
-        logger.debug(
-            f"Cleaned {table_name} data: shape {clean_df.shape}, columns {list(clean_df.columns)}"
-        )
-        return clean_df
 
     def copy_data_to_mutable_location(
         self,
@@ -2160,22 +2002,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             description="OD Skims copied over to ASim data directory",
         )
 
-        # 2. Create ActivitySim input data from database or UrbanSim H5
-        # Check if database input mode is configured
-        if self._should_use_database_input(settings):
-            logger.info("Using database input mode for ActivitySim")
-            data_from_usim = create_asim_data_from_database(
-                settings,
-                self.state,
-                workspace,
-            )
-        else:
-            logger.info("Using H5 input mode for ActivitySim")
-            data_from_usim = create_asim_data_from_h5(
-                settings,
-                self.state,
-                workspace,
-            )
+        # 2. Create ActivitySim input data from UrbanSim H5
+        logger.info("Using H5 input mode for ActivitySim")
+        data_from_usim = create_asim_data_from_h5(
+            settings,
+            self.state,
+            workspace,
+        )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
 
@@ -2506,115 +2339,6 @@ def _compute_area_type(zones: pd.DataFrame) -> pd.Series:
         include_lowest=True,
     ).astype(str)
     return area_types
-
-
-def _clean_activitysim_data_for_csv(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
-    """
-    Clean and format data for ActivitySim CSV compatibility.
-
-    This is a standalone version for use in module-level functions.
-
-    Args:
-        df (pd.DataFrame): Raw DataFrame from database.
-        table_name (str): Name of the ActivitySim table (e.g., "households", "persons", "land_use").
-
-    Returns:
-        pd.DataFrame: Cleaned DataFrame ready for ActivitySim, with metadata
-            columns removed, required columns ensured with defaults, and
-            appropriate data types.
-    """
-    clean_df = df.copy()
-
-    # Remove database metadata columns that ActivitySim doesn't need
-    metadata_cols = ["id", "file_record_id", "run_id", "openlineage_id", "created_at"]
-    for col in metadata_cols:
-        if col in clean_df.columns:
-            clean_df = clean_df.drop(columns=[col])
-
-    # Handle specific table cleaning
-    if table_name == "households":
-        # Ensure household_id is the index for ActivitySim
-        if "household_id" in clean_df.columns:
-            clean_df = clean_df.set_index("household_id")
-            clean_df.index.name = "household_id"
-
-        # Ensure required columns exist with defaults
-        required_cols = {
-            "TAZ": "1",
-            "persons": 1,
-            "income": 50000,
-            "cars": 1,
-            "HHT": 1,
-            "workers": 1,
-        }
-        for col, default_val in required_cols.items():
-            if col not in clean_df.columns:
-                clean_df[col] = default_val
-
-    elif table_name == "persons":
-        # Ensure person_id is the index for ActivitySim
-        if "person_id" in clean_df.columns:
-            clean_df = clean_df.set_index("person_id")
-            clean_df.index.name = "person_id"
-
-        # Ensure required columns exist with defaults
-        required_cols = {
-            "household_id": 1,
-            "TAZ": "1",
-            "age": 35,
-            "worker": 0,
-            "student": 0,
-            "ptype": 1,
-            "pemploy": 1,
-            "pstudent": 3,
-            "member_id": 1,
-            "workplace_taz": -1,
-            "school_taz": -1,
-            "home_x": 0.0,
-            "home_y": 0.0,
-        }
-        for col, default_val in required_cols.items():
-            if col not in clean_df.columns:
-                clean_df[col] = default_val
-
-    elif table_name == "land_use":
-        # Ensure TAZ is the index for ActivitySim
-        if "TAZ" in clean_df.columns:
-            clean_df = clean_df.set_index("TAZ")
-            clean_df.index.name = "TAZ"
-
-        # Ensure required columns exist with defaults
-        required_cols = {
-            "TOTPOP": 100,
-            "TOTHH": 50,
-            "TOTEMP": 75,
-            "TOTACRE": 10.0,
-            "area_type": 3,
-            "employment_density": 7.5,
-            "pop_density": 10.0,
-            "hh_density": 5.0,
-        }
-        for col, default_val in required_cols.items():
-            if col not in clean_df.columns:
-                clean_df[col] = default_val
-
-    # Convert data types appropriately
-    for col in clean_df.columns:
-        # Convert numeric columns that might be stored as objects
-        if clean_df[col].dtype == "object":
-            try:
-                # Try to convert to numeric
-                clean_df[col] = pd.to_numeric(clean_df[col], errors="ignore")
-            except Exception:
-                pass
-
-    # Replace any NaN values with appropriate defaults
-    clean_df = clean_df.fillna(0)
-
-    logger.debug(
-        f"Cleaned {table_name} data: shape {clean_df.shape}, columns {list(clean_df.columns)}"
-    )
-    return clean_df
 
 
 def enrollment_tables(
@@ -3614,187 +3338,6 @@ def _create_land_use_table(
     return zones
 
 
-def create_asim_data_from_database(
-    settings: PilatesConfig,
-    state: "WorkflowState",
-    workspace: "Workspace",
-) -> List[FileRecord]:
-    """
-    Create ActivitySim input data from database records using dual storage.
-
-    This function queries the database for pre-extracted ActivitySim input tables
-    that were uploaded using the h5_to_database utility with dual storage support.
-    It can use either processed ActivitySim data or reprocess from raw UrbanSim data.
-
-    Args:
-        settings (PilatesConfig): PILATES settings dictionary.
-        state (WorkflowState): Workflow state.
-        workspace (Workspace): Workspace instance.
-    Returns:
-        List[FileRecord]: List of FileRecord objects for the created CSV files.
-
-    Raises:
-        ValueError: If the database is not configured but database input mode is enabled.
-        AssertionError: If the database manager is not a DuckDBManager (current limitation).
-    """
-    """
-    Create ActivitySim input data from database records using dual storage.
-
-    This function queries the database for pre-extracted ActivitySim input tables
-    that were uploaded using the h5_to_database utility with dual storage support.
-    It can use either processed ActivitySim data or reprocess from raw UrbanSim data.
-
-    Args:
-        settings: PILATES settings dictionary
-        state: Workflow state
-        workspace: Workspace instance
-    Returns:
-        List of FileRecord objects for the created CSV files
-    """
-    logger.info("🗄️ Creating ActivitySim input data from database (dual storage)")
-
-    # Create database manager
-    db_manager = create_database_manager(settings.shared.database)
-    if not db_manager:
-        raise ValueError(
-            "Database is not configured but database input mode is enabled"
-        )
-
-    output_dir = workspace.get_asim_mutable_data_dir()
-    output_records = []
-
-    # Standard ActivitySim input tables we expect to find
-    required_tables = ["households", "persons", "land_use"]
-    optional_tables = ["accessibility", "zones", "maz", "taz"]
-
-    # Database configuration for ActivitySim inputs
-    db_config = settings.activitysim.database
-    # config_hash = db_config.config_hash  # Optional: match specific config
-    year = db_config.year  # Year to query for
-    use_processed = db_config.use_processed_data
-
-    logger.info("📊 Database query parameters:")
-    # logger.info(f"   Config hash: {config_hash or 'any'}")
-    config_hash = None
-    logger.info(f"   Year: {year}")
-    logger.info(
-        f"   Data source: {'processed ActivitySim' if use_processed else 'raw UrbanSim (will reprocess)'}"
-    )
-
-    try:
-        with db_manager:
-            assert isinstance(
-                db_manager, DuckDBManager
-            ), "This doesn't work with databases beyond duckdb yet"
-            # Create ActivitySim input CSV files from database
-            tables_created = 0
-
-            # Process each required table
-            for table_name in required_tables:
-                logger.info(f"🔍 Processing {table_name} table...")
-
-                if use_processed:
-                    # Use pre-processed ActivitySim data (fast path)
-                    data_df = db_manager.retrieve_activitysim_data(
-                        table_name=table_name, config_hash=config_hash, year=year
-                    )
-                    data_source = "processed ActivitySim"
-                else:
-                    # Use raw UrbanSim data (reproducible path - would need reprocessing)
-                    data_df = db_manager.retrieve_urbansim_raw_data(
-                        table_name=table_name, config_hash=config_hash, year=year
-                    )
-                    data_source = "raw UrbanSim"
-
-                    # TODO: Add reprocessing logic here when needed
-                    if data_df is not None:
-                        logger.warning(
-                            f"⚠️  Raw data found but reprocessing not yet implemented for {table_name}"
-                        )
-                        logger.warning(
-                            "   Consider using use_processed_data: true in activitysim_database config"
-                        )
-                        data_df = None
-
-                if data_df is not None and not data_df.empty:
-                    # Create CSV file for ActivitySim
-                    output_csv_path = os.path.join(output_dir, f"{table_name}.csv")
-
-                    # Clean and format the data for ActivitySim
-                    clean_df = _clean_activitysim_data_for_csv(data_df, table_name)
-                    clean_df.to_csv(
-                        output_csv_path, index=True
-                    )  # ActivitySim expects indexes
-
-                    logger.info(
-                        f"✅ Created {table_name}.csv with {len(clean_df)} records from {data_source}"
-                    )
-
-                    # Record as output
-                    output_records.append(
-                        FileRecord(
-                            file_path=output_csv_path,
-                            short_name=f"{table_name}_asim_in",
-                            description=(
-                                f"ActivitySim {table_name} input from database ({data_source})"
-                            ),
-                        )
-                    )
-                    tables_created += 1
-
-                else:
-                    logger.error(f"❌ No {table_name} data found in database")
-
-            # Process optional tables
-            for table_name in optional_tables:
-                logger.info(f"🔍 Processing optional {table_name} table...")
-
-                if use_processed:
-                    data_df = db_manager.retrieve_activitysim_data(
-                        table_name=table_name, config_hash=config_hash, year=year
-                    )
-                else:
-                    # Skip optional tables for raw mode for now
-                    data_df = None
-
-                if data_df is not None and not data_df.empty:
-                    output_csv_path = os.path.join(output_dir, f"{table_name}.csv")
-                    clean_df = _clean_activitysim_data_for_csv(data_df, table_name)
-                    clean_df.to_csv(output_csv_path, index=True)
-
-                    logger.info(
-                        f"✅ Created optional {table_name}.csv with {len(clean_df)} records"
-                    )
-
-                    output_records.append(
-                        FileRecord(
-                            file_path=output_csv_path,
-                            short_name=f"{table_name}_asim_in",
-                            description=f"ActivitySim {table_name} input from database",
-                        )
-                    )
-                    tables_created += 1
-                else:
-                    logger.info(
-                        f"ℹ️  Optional table {table_name} not found in database (skipping)"
-                    )
-
-            logger.info(
-                f"🎉 Successfully created {tables_created} ActivitySim input files from database"
-            )
-
-            if tables_created < len(required_tables):
-                logger.warning(
-                    f"⚠️  Only {tables_created}/{len(required_tables)} required tables were created successfully"
-                )
-
-            return output_records
-
-    except Exception as e:
-        logger.error(f"Failed to create ActivitySim data from database: {e}")
-        raise
-
-
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -3907,66 +3450,3 @@ def create_asim_data_from_h5(
         )
 
     return output_records
-
-
-def _create_minimal_placeholder(table_name: str) -> pd.DataFrame:
-    """
-    Create minimal placeholder data for ActivitySim tables when database query fails.
-
-    Args:
-        table_name: Name of the ActivitySim table
-
-    Returns:
-        DataFrame with minimal viable data structure
-    """
-    if table_name == "households":
-        return pd.DataFrame(
-            {
-                "household_id": [1],
-                "TAZ": ["1"],
-                "persons": [1],
-                "income": [50000],
-                "cars": [1],
-                "HHT": [1],
-                "workers": [1],
-            }
-        ).set_index("household_id")
-
-    elif table_name == "persons":
-        return pd.DataFrame(
-            {
-                "person_id": [1],
-                "household_id": [1],
-                "TAZ": ["1"],
-                "age": [35],
-                "worker": [1],
-                "student": [0],
-                "ptype": [1],
-                "pemploy": [1],
-                "pstudent": [3],
-                "member_id": [1],
-                "workplace_taz": [-1],
-                "school_taz": [-1],
-                "home_x": [0.0],
-                "home_y": [0.0],
-            }
-        ).set_index("person_id")
-
-    elif table_name == "land_use":
-        return pd.DataFrame(
-            {
-                "TAZ": ["1"],
-                "TOTPOP": [100],
-                "TOTHH": [50],
-                "TOTEMP": [75],
-                "TOTACRE": [10.0],
-                "area_type": [3],
-                "employment_density": [7.5],
-                "pop_density": [10.0],
-                "hh_density": [5.0],
-            }
-        ).set_index("TAZ")
-
-    else:
-        # Generic placeholder
-        return pd.DataFrame({"placeholder": [1]})

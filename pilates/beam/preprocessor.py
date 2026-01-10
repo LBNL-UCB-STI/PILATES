@@ -7,8 +7,6 @@ from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
 import re
 
-from pilates.utils.consist_adapter import ConsistProvenanceTracker
-
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
@@ -19,7 +17,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
-from pilates.utils.provenance import find_project_root, FileProvenanceTracker
+from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
 
@@ -231,10 +229,9 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: ConsistProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_data: List[str] = [
             "persons",
             "households",
@@ -399,9 +396,7 @@ class BeamPreprocessor(GenericPreprocessor):
             recordList=output_records
         )
 
-    def prepare_beam_zone_shapefile(
-        self, workspace: "Workspace"
-    ) -> Optional[str]:
+    def prepare_beam_zone_shapefile(self, workspace: "Workspace") -> Optional[str]:
         """
         Creates a sorted zone shapefile for BEAM from the canonical zone definitions
         and updates the BEAM config to use it.
@@ -468,7 +463,7 @@ class BeamPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
-        logger.info("Attempting to copy final ASIM plans from provenance tracker.")
+        logger.info("Attempting to copy final ASIM plans from input records.")
         file_format = self.settings.activitysim.file_format
 
         base_path = (
@@ -492,8 +487,8 @@ class BeamPreprocessor(GenericPreprocessor):
                     f"Found ActivitySim output file {record.short_name}: {record.file_path}"
                 )
 
-        # Fallback: If required files are not found via provenance, try to locate them directly on the filesystem.
-        # This provides robustness against provenance database issues or missing entries.
+        # Fallback: If required files are not found in the input records, try to
+        # locate them directly on the filesystem.
         required_asim_base_names = [
             "households",
             "persons",
@@ -516,7 +511,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 if os.path.exists(expected_full_path):
                     logger.warning(
                         f"ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
-                        f"not found in provenance records. Falling back to filesystem at: {expected_full_path}"
+                        f"not found in input records. Falling back to filesystem at: {expected_full_path}"
                     )
                     # Create a dummy FileRecord for consistency, linking it to the current run
                     # A more complete FileRecord could be created by parsing file properties if needed,
@@ -534,7 +529,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 else:
                     logger.warning(
                         f"Required ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
-                        f"not found in provenance records AND not found on filesystem at: {expected_full_path}"
+                        f"not found in input records AND not found on filesystem at: {expected_full_path}"
                     )
 
         if self.state.current_inner_iter <= 0:
@@ -714,7 +709,7 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_scenario_folder: str,
         input_record: Optional[FileRecord] = None,
     ) -> Optional[FileRecord]:
-        """Copies and compresses a single file from ActivitySim to BEAM, with provenance."""
+        """Copies and compresses a single file from ActivitySim to BEAM."""
         beam_file_path = locate_beam_file(
             beam_scenario_folder, beam_file_name, file_format
         )
@@ -774,7 +769,9 @@ class BeamPreprocessor(GenericPreprocessor):
                 return None
             if os.path.isabs(rec.file_path):
                 return rec.file_path
-            return os.path.abspath(os.path.join(str(workspace.full_path), rec.file_path))
+            return os.path.abspath(
+                os.path.join(str(workspace.full_path), rec.file_path)
+            )
 
         # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`), which is
         # named like `linkstats_<year>_<inner_iter>` by BeamRunner.gather_outputs().
@@ -825,7 +822,9 @@ class BeamPreprocessor(GenericPreprocessor):
             )
             return
 
-        warmstart_rel_path = os.path.relpath(warmstart_abs_path, str(workspace.full_path))
+        warmstart_rel_path = os.path.relpath(
+            warmstart_abs_path, str(workspace.full_path)
+        )
         warmstart_record = FileRecord(
             file_path=warmstart_rel_path,
             short_name="linkstats_warmstart",
@@ -842,7 +841,9 @@ class BeamPreprocessor(GenericPreprocessor):
         store.add_record(warmstart_record)
 
     @staticmethod
-    def _find_beam_production_path(settings: PilatesConfig, region: str) -> Optional[str]:
+    def _find_beam_production_path(
+        settings: PilatesConfig, region: str
+    ) -> Optional[str]:
         """
         Finds the path to the BEAM production data directory.
 
@@ -861,7 +862,11 @@ class BeamPreprocessor(GenericPreprocessor):
                 pilates_root,
             )
 
-        configured_root = getattr(settings.beam, "local_input_folder", None) if settings.beam else None
+        configured_root = (
+            getattr(settings.beam, "local_input_folder", None)
+            if settings.beam
+            else None
+        )
         if not configured_root:
             logger.error("BEAM local_input_folder is not configured.")
             return None

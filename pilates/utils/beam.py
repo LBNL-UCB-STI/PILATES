@@ -1,5 +1,5 @@
 import os
-from pilates.utils.provenance import find_project_root
+from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
 

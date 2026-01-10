@@ -37,7 +37,6 @@ from pilates.generic.initialization import Initialization
 from pilates.config.models import PilatesConfig
 from pilates.utils.io import parse_args_and_settings
 from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
-from pilates.utils.consist_adapter import ConsistProvenanceTracker
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
@@ -85,7 +84,9 @@ def _expected_inputs_for(model_name: str, settings, state, workspace) -> dict:
             continue
         expected_fn = getattr(component_cls, "expected_inputs", None)
         if callable(expected_fn):
-            _merge_expected_inputs(expected, expected_fn(settings, state, workspace) or {})
+            _merge_expected_inputs(
+                expected, expected_fn(settings, state, workspace) or {}
+            )
     return expected
 
 
@@ -101,7 +102,9 @@ def _expected_outputs_for(
             continue
         expected_fn = getattr(component_cls, "expected_outputs", None)
         if callable(expected_fn):
-            _merge_expected_outputs(expected, expected_fn(settings, state, workspace) or {})
+            _merge_expected_outputs(
+                expected, expected_fn(settings, state, workspace) or {}
+            )
     return expected
 
 
@@ -141,15 +144,10 @@ def _merge_expected_outputs(
     return target
 
 
-
-
-
-
 def warm_start_activities(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     TODO: THIS IS BROKEN
@@ -171,7 +169,6 @@ def warm_start_activities(
         settings (PilatesConfig): Parsed simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace object with file paths.
-        provenance_tracker (OpenLineageTracker): Provenance tracker instance.
     """
     factory = ModelFactory()
     activity_demand_model, _ = GenericRunner.get_model_and_image(
@@ -179,11 +176,13 @@ def warm_start_activities(
     )
 
     if activity_demand_model == "polaris":
-        logger.info("POLARIS module is not activated due to missing polarisruntime library")
+        logger.info(
+            "POLARIS module is not activated due to missing polarisruntime library"
+        )
 
     elif activity_demand_model == "activitysim":
-        runner = factory.get_runner("activitysim", state, provenance_tracker)
-        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
+        runner = factory.get_runner("activitysim", state)
+        preprocessor = factory.get_preprocessor("activitysim", state)
 
         # Preprocess
         input_data = preprocessor.preprocess(workspace)
@@ -191,13 +190,14 @@ def warm_start_activities(
         # Run ActivitySim
         runner.run(input_data, workspace)
 
-        logger.info("Appending warm start activities/choices to UrbanSim base year input data")
+        logger.info(
+            "Appending warm start activities/choices to UrbanSim base year input data"
+        )
 
         asim_post.update_usim_inputs_after_warm_start(
             settings,
             state,
             workspace,
-            provenance_tracker,
             model_run_hash=None,
         )
 
@@ -209,14 +209,11 @@ def forecast_land_use(
     year: int,
     workflow_state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     High-level wrapper to start an UrbanSim (land use) run.
     """
-    land_use_model, _ = GenericRunner.get_model_and_image(
-        settings, "land_use_model"
-    )
+    land_use_model, _ = GenericRunner.get_model_and_image(settings, "land_use_model")
 
     run_land_use(
         year,
@@ -224,7 +221,6 @@ def forecast_land_use(
         land_use_model,
         workflow_state,
         workspace,
-        provenance_tracker,
     )
 
     # Verify Output
@@ -248,7 +244,6 @@ def run_land_use(
     land_use_model,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: ConsistProvenanceTracker,
 ):
     """
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
@@ -259,20 +254,19 @@ def run_land_use(
         land_use_model (str): Land use model identifier (e.g., 'urbansim').
         state (WorkflowState): Workflow state.
         workspace (Workspace): Workspace instance for data paths.
-        provenance_tracker (OpenLineageTracker): Provenance tracker instance.
     """
     logger.info("Running land use")
 
     factory = ModelFactory()
 
     preprocessor = factory.get_preprocessor(
-        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, major_stage=WorkflowState.Stage.land_use
     )
     runner = factory.get_runner(
-        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, major_stage=WorkflowState.Stage.land_use
     )
     postprocessor = factory.get_postprocessor(
-        "urbansim", state, provenance_tracker, major_stage=WorkflowState.Stage.land_use
+        "urbansim", state, major_stage=WorkflowState.Stage.land_use
     )
 
     # 1. PREPROCESS
@@ -280,7 +274,9 @@ def run_land_use(
     input_data = preprocessor.preprocess(workspace)
 
     # 2. RUN
-    formatted_print(f"Simulating land use development from {year} to {forecast_year} with {land_use_model}.")
+    formatted_print(
+        f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
+    )
     raw_outputs = runner.run(input_data, workspace)
 
     # 3. POSTPROCESS
@@ -293,7 +289,6 @@ def run_activity_demand(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: ConsistProvenanceTracker,
     input_store: RecordStore = None,
 ) -> RecordStore:
     """
@@ -307,7 +302,6 @@ def run_activity_demand(
         settings (PilatesConfig): Simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace instance for file operations.
-        provenance_tracker (OpenLineageTracker): Provenance tracker for model events.
         input_store (RecordStore, optional): Preprocessed inputs to reuse if available.
 
     Returns:
@@ -322,13 +316,19 @@ def run_activity_demand(
 
     elif activity_demand_model == "activitysim":
         preprocessor = factory.get_preprocessor(
-            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim",
+            state,
+            major_stage=WorkflowState.Stage.activity_demand,
         )
         runner = factory.get_runner(
-            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim",
+            state,
+            major_stage=WorkflowState.Stage.activity_demand,
         )
         postprocessor = factory.get_postprocessor(
-            "activitysim", state, provenance_tracker, major_stage=WorkflowState.Stage.activity_demand,
+            "activitysim",
+            state,
+            major_stage=WorkflowState.Stage.activity_demand,
         )
 
         input_data = input_store or preprocessor.preprocess(workspace)
@@ -346,7 +346,6 @@ def run_traffic_assignment(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: ConsistProvenanceTracker,
     activity_demand_outputs: RecordStore = None,
     previous_beam_outputs: RecordStore = None,
 ):
@@ -361,7 +360,6 @@ def run_traffic_assignment(
         settings (PilatesConfig): Simulation settings.
         state (WorkflowState): Current workflow state.
         workspace (Workspace): Workspace instance.
-        provenance_tracker (OpenLineageTracker): Provenance tracker instance.
         activity_demand_outputs (RecordStore, optional): Processed activity demand outputs.
         previous_beam_outputs (RecordStore, optional): Outputs from previous BEAM iteration.
     """
@@ -373,13 +371,19 @@ def run_traffic_assignment(
         return RecordStore()
     elif travel_model == "beam":
         preprocessor = factory.get_preprocessor(
-            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam",
+            state,
+            major_stage=WorkflowState.Stage.traffic_assignment,
         )
         runner = factory.get_runner(
-            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam",
+            state,
+            major_stage=WorkflowState.Stage.traffic_assignment,
         )
         postprocessor = factory.get_postprocessor(
-            "beam", state, provenance_tracker, major_stage=WorkflowState.Stage.traffic_assignment,
+            "beam",
+            state,
+            major_stage=WorkflowState.Stage.traffic_assignment,
         )
 
         combined_inputs = RecordStore()
@@ -436,7 +440,11 @@ def main():
         logger.info(f"Initializing Consist Tracker in {full_run_dir}")
         tracker = Tracker(
             run_dir=full_run_dir,
-            db_path=settings.shared.database.path if settings.shared.database.enabled else None,
+            db_path=(
+                settings.shared.database.path
+                if settings.shared.database.enabled
+                else None
+            ),
             mounts={
                 "inputs": project_root_abs,  # Immutable Source
                 "workspace": full_run_dir,  # Mutable Destination
@@ -446,26 +454,13 @@ def main():
     else:
         logger.info("Consist disabled/unavailable; running without Consist tracker.")
 
-    # 4. INITIALIZE WORKSPACE & ADAPTER
-    # We pass the native 'tracker' to the adapter.
-    # The adapter will detect active scenario steps and "attach" to them.
-    adapter = None
-    if tracker is not None:
-        adapter = ConsistProvenanceTracker(
-            run_id="placeholder_id",  # Will be overwritten by attach mode
-            output_path=full_run_dir,
-            folder_name=run_name,
-            tracker=tracker,
-        )
-
+    # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
         settings,
         output_path,
         folder_name=run_name,
-        provenance_tracker=adapter,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
-
 
     # 5. START SCENARIO
     if tracker is not None:
@@ -489,6 +484,7 @@ def main():
         )
         typed_coupler = None
         if consist is not None and consist_enabled:
+
             @consist.coupler_schema
             class WorkflowCoupler:
                 usim_datastore_h5: Any
@@ -500,14 +496,10 @@ def main():
 
             typed_coupler = scenario.coupler_schema(WorkflowCoupler)
 
-
         # 6. DATA INITIALIZATION STEP
         if not state.data_initialized:
             logger.info("Running Initialization Step (Copying mutable data)")
 
-            # We use 'initialization' as the step name.
-            # Initialization.py calls `adapter.start_model_run("initialization")` internally.
-            # The Adapter will see this active step and ATTACH to it, rather than creating a new one.
             with scenario.trace(
                 "initialization",
                 model="initialization",
@@ -518,8 +510,7 @@ def main():
                     "initialization", settings, workspace_path=workspace.full_path
                 ),
             ):
-
-                init_model = Initialization("initialization", state, provenance_tracker=adapter)
+                init_model = Initialization("initialization", state)
 
                 # This performs the copy.
                 # Source files -> recorded as inputs (inputs://...)
@@ -528,7 +519,9 @@ def main():
 
             state.set_data_initialized(True)
         else:
-            logger.info("Restarting from a previous state. Skipping data initialization.")
+            logger.info(
+                "Restarting from a previous state. Skipping data initialization."
+            )
 
         # 6. MAIN WORKFLOW LOOP
         for year in state:
@@ -584,31 +577,35 @@ def main():
                     settings: PilatesConfig,
                     state: WorkflowState,
                     workspace: Workspace,
-                    adapter: ConsistProvenanceTracker,
                     usim_data_dir: str,
                     typed_coupler,
                     expected_outputs: dict,
                 ):
-                    if state.is_start_year() and settings.activitysim.warm_start_activities:
-                        logger.info("[Main] Running warm start activities for ActivitySim.")
-                        warm_start_activities(settings, state, workspace, adapter)
+                    if (
+                        state.is_start_year()
+                        and settings.activitysim.warm_start_activities
+                    ):
+                        logger.info(
+                            "[Main] Running warm start activities for ActivitySim."
+                        )
+                        warm_start_activities(settings, state, workspace)
 
-                    forecast_land_use(settings, year, state, workspace, adapter)
+                    forecast_land_use(settings, year, state, workspace)
                     usim_output_path = expected_outputs.get("usim_datastore_h5")
                     if not usim_output_path:
                         usim_output_fname = usim_post.get_usim_datastore_fname(
                             settings, io="output", year=state.forecast_year
                         )
-                        usim_output_path = os.path.join(usim_data_dir, usim_output_fname)
+                        usim_output_path = os.path.join(
+                            usim_data_dir, usim_output_fname
+                        )
                     if os.path.exists(usim_output_path):
                         artifact = cr.log_output(
                             usim_output_path,
                             key="usim_datastore_h5",
                             description=f"UrbanSim datastore output for year {state.forecast_year}",
                         )
-                        coupler.set(
-                            "usim_datastore_h5", artifact or usim_output_path
-                        )
+                        coupler.set("usim_datastore_h5", artifact or usim_output_path)
                         if typed_coupler is not None and artifact is not None:
                             typed_coupler.usim_datastore_h5 = artifact
 
@@ -625,7 +622,6 @@ def main():
                         "settings": settings,
                         "state": state,
                         "workspace": workspace,
-                        "adapter": adapter,
                         "usim_data_dir": usim_data_dir,
                         "typed_coupler": typed_coupler,
                         "expected_outputs": expected_usim_outputs,
@@ -637,7 +633,9 @@ def main():
 
             # B. VEHICLE OWNERSHIP MODEL (ATLAS)
             if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-                formatted_print(f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}")
+                formatted_print(
+                    f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+                )
                 logger.info("[Main] Running ATLAS vehicle ownership model.")
 
                 # Explicitly thread the mutable UrbanSim datastore across ATLAS sub-years.
@@ -646,29 +644,59 @@ def main():
                 coupler.pop("usim_datastore_h5", None)
                 if state.run_info_path and os.path.exists(state.run_info_path):
                     previous_run_dir = os.path.dirname(state.run_info_path)
-                    urbansim_datastore_dir = os.path.join(previous_run_dir, "urbansim", "data")
+                    urbansim_datastore_dir = os.path.join(
+                        previous_run_dir, "urbansim", "data"
+                    )
                 else:
                     urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
 
                 if state.is_start_year():
                     region = settings.run.region
-                    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-                    usim_datastore_fname = settings.urbansim.input_file_template.format(region_id=region_id)
+                    region_id = settings.urbansim.region_mappings[
+                        "region_to_region_id"
+                    ][region]
+                    usim_datastore_fname = settings.urbansim.input_file_template.format(
+                        region_id=region_id
+                    )
                 else:
-                    usim_datastore_fname = settings.urbansim.output_file_template.format(year=state.forecast_year)
+                    usim_datastore_fname = (
+                        settings.urbansim.output_file_template.format(
+                            year=state.forecast_year
+                        )
+                    )
 
-                usim_datastore_h5_path = os.path.join(urbansim_datastore_dir, usim_datastore_fname)
+                usim_datastore_h5_path = os.path.join(
+                    urbansim_datastore_dir, usim_datastore_fname
+                )
 
                 # ATLAS Logic extraction
                 factory = ModelFactory()
-                preprocessor = factory.get_preprocessor("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
-                runner = factory.get_runner("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
-                postprocessor = factory.get_postprocessor("atlas", state, adapter, major_stage=WorkflowState.Stage.vehicle_ownership_model)
+                preprocessor = factory.get_preprocessor(
+                    "atlas",
+                    state,
+                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
+                )
+                runner = factory.get_runner(
+                    "atlas",
+                    state,
+                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
+                )
+                postprocessor = factory.get_postprocessor(
+                    "atlas",
+                    state,
+                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
+                )
 
                 warm_start_atlas = state.is_start_year()
                 forecast = True
-                yrs = [state.year] + [y + 2 for y in range(state.year, state.forecast_year, 2)] if forecast else [state.year]
-                if not yrs and forecast: yrs = [state.forecast_year]
+                yrs = (
+                    [state.year]
+                    + [y + 2 for y in range(state.year, state.forecast_year, 2)]
+                    if forecast
+                    else [state.year]
+                )
+                if not yrs and forecast:
+                    yrs = [state.forecast_year]
 
                 # ATLAS Sub-loop
                 for atlas_year in yrs:
@@ -682,14 +710,19 @@ def main():
                             self.main_forecast_year = parent_state.forecast_year
                             self.start_year = parent_state.start_year
                             self.full_settings = parent_state.full_settings
-                            self.is_start_year = lambda: (year == parent_state.start_year)
+                            self.is_start_year = lambda: (
+                                year == parent_state.start_year
+                            )
+
                         def set_sub_stage_progress(self, sub_stage_progress):
                             state.set_sub_stage_progress(sub_stage_progress)
 
                     atlas_state = AtlasSubState(state, atlas_year)
                     step_name = f"atlas_{atlas_year}"
 
-                    atlas_usim_input = coupler.get("usim_datastore_h5") or usim_datastore_h5_path
+                    atlas_usim_input = (
+                        coupler.get("usim_datastore_h5") or usim_datastore_h5_path
+                    )
                     atlas_mutable_input_dir = workspace.get_atlas_mutable_input_dir()
                     step_inputs = {
                         "usim_datastore_h5": atlas_usim_input,
@@ -745,7 +778,9 @@ def main():
 
                             # Capture the updated datastore container as an explicit output and
                             # thread it forward to the next ATLAS sub-year.
-                            atlas_usim_output = expected_outputs.get("usim_datastore_h5")
+                            atlas_usim_output = expected_outputs.get(
+                                "usim_datastore_h5"
+                            )
                             if not atlas_usim_output:
                                 atlas_usim_output = usim_datastore_h5_path
                             if os.path.exists(atlas_usim_output):
@@ -806,7 +841,11 @@ def main():
                     activity_demand_outputs = None
 
                     # C1. ACTIVITY DEMAND
-                    if state.should_run(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.activity_demand):
+                    if state.should_run(
+                        WorkflowState.Stage.supply_demand_loop,
+                        i,
+                        WorkflowState.Stage.activity_demand,
+                    ):
                         formatted_print("ACTIVITY DEMAND MODEL")
                         step_name = f"activitysim_{year}_iter{i}"
 
@@ -820,7 +859,9 @@ def main():
                                 description=f"ActivitySim mutable data dir for year {year}, iter {i}",
                             )
                         if usim_inputs and "usim_datastore_h5" in usim_inputs:
-                            asim_inputs["usim_datastore_h5"] = usim_inputs["usim_datastore_h5"]
+                            asim_inputs["usim_datastore_h5"] = usim_inputs[
+                                "usim_datastore_h5"
+                            ]
                             cr.log_input(
                                 usim_inputs["usim_datastore_h5"],
                                 key="usim_datastore_h5",
@@ -871,7 +912,6 @@ def main():
                                 settings: PilatesConfig,
                                 state: WorkflowState,
                                 workspace: Workspace,
-                                adapter: ConsistProvenanceTracker,
                                 output_holder: dict,
                                 typed_coupler,
                                 expected_outputs: dict,
@@ -880,13 +920,11 @@ def main():
                                 preprocessor = factory.get_preprocessor(
                                     "activitysim",
                                     state,
-                                    adapter,
                                     major_stage=WorkflowState.Stage.activity_demand,
                                 )
                                 compile_runner = factory.get_runner(
                                     "activitysim_compile",
                                     state,
-                                    adapter,
                                     major_stage=WorkflowState.Stage.activity_demand,
                                 )
 
@@ -907,7 +945,9 @@ def main():
                                 zarr_output_path = expected_outputs.get("zarr_skims")
                                 if not zarr_output_path and zarr_record is not None:
                                     zarr_output_path = zarr_record.file_path
-                                if zarr_output_path and os.path.exists(zarr_output_path):
+                                if zarr_output_path and os.path.exists(
+                                    zarr_output_path
+                                ):
                                     artifact = cr.log_output(
                                         zarr_output_path,
                                         key="zarr_skims",
@@ -917,7 +957,10 @@ def main():
                                         "zarr_skims",
                                         artifact or zarr_output_path,
                                     )
-                                    if typed_coupler is not None and artifact is not None:
+                                    if (
+                                        typed_coupler is not None
+                                        and artifact is not None
+                                    ):
                                         typed_coupler.zarr_skims = artifact
 
                             scenario.run(
@@ -934,7 +977,6 @@ def main():
                                     "settings": settings,
                                     "state": state,
                                     "workspace": workspace,
-                                    "adapter": adapter,
                                     "output_holder": activitysim_compile_holder,
                                     "typed_coupler": typed_coupler,
                                     "expected_outputs": expected_compile_outputs,
@@ -951,7 +993,6 @@ def main():
                             settings: PilatesConfig,
                             state: WorkflowState,
                             workspace: Workspace,
-                            adapter: ConsistProvenanceTracker,
                             output_holder: dict,
                             typed_coupler,
                             year: int,
@@ -962,13 +1003,16 @@ def main():
                         ):
                             combined_input_store = input_store
                             if combined_input_store is not None and compile_outputs:
-                                combined_input_store = combined_input_store + compile_outputs
-                            output_holder["activity_demand_outputs"] = run_activity_demand(
-                                settings,
-                                state,
-                                workspace,
-                                adapter,
-                                input_store=combined_input_store,
+                                combined_input_store = (
+                                    combined_input_store + compile_outputs
+                                )
+                            output_holder["activity_demand_outputs"] = (
+                                run_activity_demand(
+                                    settings,
+                                    state,
+                                    workspace,
+                                    input_store=combined_input_store,
+                                )
                             )
                             asim_output_dir = expected_outputs.get("asim_output_dir")
                             if not asim_output_dir:
@@ -987,7 +1031,9 @@ def main():
 
                         activitysim_holder = {"activity_demand_outputs": None}
                         expected_asim_outputs = clean_expected_outputs(
-                            _expected_outputs_for("activitysim", settings, state, workspace)
+                            _expected_outputs_for(
+                                "activitysim", settings, state, workspace
+                            )
                         )
                         scenario.run(
                             fn=_run_activitysim_step,
@@ -1003,12 +1049,13 @@ def main():
                                 "settings": settings,
                                 "state": state,
                                 "workspace": workspace,
-                                "adapter": adapter,
                                 "output_holder": activitysim_holder,
                                 "typed_coupler": typed_coupler,
                                 "year": year,
                                 "iteration": i,
-                                "input_store": activitysim_compile_holder["input_store"],
+                                "input_store": activitysim_compile_holder[
+                                    "input_store"
+                                ],
                                 "compile_outputs": activitysim_compile_holder[
                                     "compile_outputs"
                                 ],
@@ -1024,10 +1071,18 @@ def main():
                             "activity_demand_outputs"
                         ]
 
-                        state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.activity_demand)
+                        state.complete_step(
+                            WorkflowState.Stage.supply_demand_loop,
+                            i,
+                            WorkflowState.Stage.activity_demand,
+                        )
 
                     # C2. TRAFFIC ASSIGNMENT
-                    if state.should_run(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.traffic_assignment):
+                    if state.should_run(
+                        WorkflowState.Stage.supply_demand_loop,
+                        i,
+                        WorkflowState.Stage.traffic_assignment,
+                    ):
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
                         step_name = f"beam_{year}_iter{i}"
 
@@ -1059,7 +1114,6 @@ def main():
                             settings: PilatesConfig,
                             state: WorkflowState,
                             workspace: Workspace,
-                            adapter: ConsistProvenanceTracker,
                             activity_demand_outputs: RecordStore,
                             previous_beam_outputs: RecordStore,
                             output_holder: dict,
@@ -1072,7 +1126,6 @@ def main():
                                 settings,
                                 state,
                                 workspace,
-                                adapter,
                                 activity_demand_outputs,
                                 previous_beam_outputs,
                             )
@@ -1115,7 +1168,6 @@ def main():
                                 "settings": settings,
                                 "state": state,
                                 "workspace": workspace,
-                                "adapter": adapter,
                                 "activity_demand_outputs": activity_demand_outputs,
                                 "previous_beam_outputs": previous_beam_outputs,
                                 "output_holder": beam_holder,
@@ -1130,23 +1182,34 @@ def main():
                         )
                         previous_beam_outputs = beam_holder["beam_outputs"]
 
-                        state.complete_step(WorkflowState.Stage.supply_demand_loop, i, WorkflowState.Stage.traffic_assignment)
+                        state.complete_step(
+                            WorkflowState.Stage.supply_demand_loop,
+                            i,
+                            WorkflowState.Stage.traffic_assignment,
+                        )
 
                 state.complete_step(WorkflowState.Stage.supply_demand_loop)
 
             # D. POST-PROCESSING
             if state.should_run(WorkflowState.Stage.postprocessing):
                 formatted_print("POST-PROCESSING")
+
                 def _run_postprocessing_step(
                     *,
                     settings: PilatesConfig,
                     state: WorkflowState,
                     workspace: Workspace,
-                    tracker,
                 ):
                     if "postprocessing" in settings:
-                        process_event_file(settings, state, workspace, tracker)
-                        copy_outputs_to_mep(settings, state, workspace, tracker)
+                        process_event_file(
+                            settings, state.forecast_year, state.current_inner_iter
+                        )
+                        copy_outputs_to_mep(
+                            settings,
+                            state.forecast_year,
+                            state.current_inner_iter,
+                            workspace,
+                        )
 
                 scenario.run(
                     fn=_run_postprocessing_step,
@@ -1159,7 +1222,6 @@ def main():
                         "settings": settings,
                         "state": state,
                         "workspace": workspace,
-                        "tracker": tracker,
                     },
                     **build_step_consist_kwargs("postprocessing", settings),
                 )

@@ -10,7 +10,6 @@ from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
-from pilates.utils.provenance import FileProvenanceTracker
 
 
 class ModelFactory:
@@ -46,31 +45,28 @@ class ModelFactory:
         self,
         model_name,
         state: "WorkflowState" = None,
-        provenance_tracker: FileProvenanceTracker = None,
         major_stage: "WorkflowState.Stage" = None,
     ):
         return self._registry[model_name.lower()]["runner"](
-            model_name, state, provenance_tracker, major_stage
+            model_name, state, major_stage
         )
 
     def get_preprocessor(
         self,
         model_name,
         state: "WorkflowState" = None,
-        provenance_tracker: FileProvenanceTracker = None,
         major_stage: "WorkflowState.Stage" = None,
     ):
         return self._registry[model_name.lower()]["preprocessor"](
-            model_name, state, provenance_tracker, major_stage
+            model_name, state, major_stage
         )
 
     def get_postprocessor(
         self,
         model_name,
         state: "WorkflowState" = None,
-        provenance_tracker: FileProvenanceTracker = None,
         major_stage: "WorkflowState.Stage" = None,
     ):
         return self._registry[model_name.lower()]["postprocessor"](
-            model_name, state, provenance_tracker, major_stage
+            model_name, state, major_stage
         )

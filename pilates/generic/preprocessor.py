@@ -7,7 +7,6 @@ from typing import Tuple, Optional, TYPE_CHECKING
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
-from pilates.utils.consist_adapter import ConsistProvenanceTracker
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -26,10 +25,9 @@ class GenericPreprocessor(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: ConsistProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)  # new
+        super().__init__(model_name, state, major_stage)  # new
         self.required_input_data: list[str] = []
 
     @abstractmethod
@@ -39,7 +37,7 @@ class GenericPreprocessor(ABC, Model):
         output_dir: str,
     ) -> Tuple[RecordStore, RecordStore]:
         """
-        Copy initial data into a mutable location and record the input and output files as provenance.
+        Copy initial data into a mutable location.
         Returns a tuple (input_record_store, output_record_store).
         """
         raise NotImplementedError

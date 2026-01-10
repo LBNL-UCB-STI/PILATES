@@ -1,6 +1,7 @@
 import os
 import pytest
 import pandas as pd
+
 gpd = pytest.importorskip("geopandas")
 pytest.importorskip("shapely.geometry")
 from shapely.geometry import Polygon
@@ -19,12 +20,18 @@ CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
 try:
     Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 except Exception as e:
-    pytest.skip(f"Shapely Polygon is not usable in this environment: {e}", allow_module_level=True)
+    pytest.skip(
+        f"Shapely Polygon is not usable in this environment: {e}",
+        allow_module_level=True,
+    )
 
 try:
     gpd.GeoDataFrame({"a": [1, 2]})
 except Exception as e:
-    pytest.skip(f"GeoPandas GeoDataFrame is not usable in this environment: {e}", allow_module_level=True)
+    pytest.skip(
+        f"GeoPandas GeoDataFrame is not usable in this environment: {e}",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture
@@ -350,7 +357,7 @@ class TestBeamPreprocessor:
     ):
         """
         Test that the preprocessor correctly sorts the BEAM shapefile and adds
-        the asim_idx column, and tracks provenance.
+        the asim_idx column, and updates the BEAM config.
         """
         # Arrange
         mock_state = SimpleNamespace(
@@ -359,22 +366,16 @@ class TestBeamPreprocessor:
             current_inner_iter=0,
             run_info_path=None,  # Mock as needed
         )
-        provenance_tracker = MagicMock()
-        model_run_hash = "test_hash_123"
-
         # Instantiate the preprocessor
         preprocessor = BeamPreprocessor(
             model_name="beam",
             state=mock_state,
-            provenance_tracker=provenance_tracker,
             major_stage=None,
         )
 
         # Act
-        # Call the public method that performs the sorting and provenance tracking
-        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(
-            mock_workspace, model_run_hash
-        )
+        # Call the public method that performs the sorting and config update
+        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
 
         # Assert
         # 1. Verify the shapefile was modified correctly
@@ -386,14 +387,5 @@ class TestBeamPreprocessor:
             final_order == CANONICAL_GEOID_ORDER
         ), "Shapefile GEOID order does not match canonical order after sorting."
 
-        # 2. Verify provenance tracking for the output file
-        provenance_tracker.record_output_file.assert_called_once_with(
-            "beam_preprocessor",
-            output_shapefile_path,
-            short_name="beam_zone_shapefile_sorted",
-            description="BEAM zone shapefile created from sorted canonical zones.",
-            model_run_id=model_run_hash,
-        )
-
-        # Ensure record_output_file_with_inputs was not called by this method
-        provenance_tracker.record_output_file_with_inputs.assert_not_called()
+        # 2. Verify the new shapefile is used in the BEAM config
+        assert mock_settings.beam.skim_zone_geoid_col in sorted_gdf.columns

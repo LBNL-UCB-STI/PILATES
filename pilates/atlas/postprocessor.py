@@ -10,7 +10,6 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +107,9 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
         return {
             "atlas_output_dir": workspace.get_atlas_output_dir(),
-            "usim_datastore_h5": usim_output_path
-            if os.path.exists(usim_output_path)
-            else None,
+            "usim_datastore_h5": (
+                usim_output_path if os.path.exists(usim_output_path) else None
+            ),
         }
 
     @staticmethod
@@ -135,10 +134,9 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
 
     def _postprocess(
         self,

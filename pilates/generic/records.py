@@ -150,17 +150,23 @@ class RecordStore:
         """
         mapping: Dict[str, str] = {}
         for record in self.all_records():
-            key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
+            key = getattr(record, "short_name", None) or getattr(
+                record, "unique_id", None
+            )
             if not key:
                 logger.warning("Record missing short_name and unique_id; skipping.")
                 continue
 
             path = getattr(record, "uri", None)
             if not path:
-                path = getattr(record, "file_path", None) or getattr(record, "repo_path", None)
+                path = getattr(record, "file_path", None) or getattr(
+                    record, "repo_path", None
+                )
 
             if not path:
-                logger.warning(f"Record '{key}' missing uri/file_path/repo_path; skipping.")
+                logger.warning(
+                    f"Record '{key}' missing uri/file_path/repo_path; skipping."
+                )
                 continue
 
             if key in mapping:

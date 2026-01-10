@@ -1,6 +1,5 @@
 import pytest
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.generic.records_legacy import RepoRecord
 
 
 def make_file_record(uid: str, short_name: str, path: str) -> FileRecord:
@@ -12,18 +11,9 @@ def make_file_record(uid: str, short_name: str, path: str) -> FileRecord:
     )
 
 
-def make_repo_record(uid: str, short_name: str, repo_path: str) -> RepoRecord:
-    return RepoRecord(
-        unique_id=uid,
-        short_name=short_name,
-        repo_path=repo_path,
-        description="test repo",
-    )
-
-
 def test_recordstore_add_and_get():
     r1 = make_file_record("id1", "file1", "/tmp/file1")
-    r2 = make_repo_record("id2", "repo1", "/tmp/repo1")
+    r2 = make_file_record("id2", "file2", "/tmp/file2")
 
     store = RecordStore()
     store.add_record(r1)
@@ -43,7 +33,7 @@ def test_recordstore_add_and_get():
 def test_recordstore_combination_operations():
     r1 = make_file_record("id1", "file1", "/tmp/file1")
     r2 = make_file_record("id2", "file2", "/tmp/file2")
-    r3 = make_repo_record("id3", "repo1", "/tmp/repo1")
+    r3 = make_file_record("id3", "file3", "/tmp/file3")
 
     store_a = RecordStore(recordDict={"id1": r1, "id2": r2})
     store_b = RecordStore(recordDict={"id3": r3})
@@ -63,7 +53,7 @@ def test_recordstore_combination_operations():
 
 def test_recordstore_remove_record_type():
     r_file = make_file_record("fid", "common", "/tmp/file")
-    r_repo = make_repo_record("rid", "common", "/tmp/repo")
+    r_repo = make_file_record("rid", "common", "/tmp/file2")
 
     store = RecordStore(recordDict={"fid": r_file, "rid": r_repo})
 

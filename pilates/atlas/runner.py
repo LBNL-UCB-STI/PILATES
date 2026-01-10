@@ -7,7 +7,6 @@ from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 
 
 logger = logging.getLogger(__name__)
@@ -100,9 +99,9 @@ class AtlasRunner(GenericRunner):
         )
         return {
             "atlas_mutable_input_dir": atlas_input_dir,
-            "usim_datastore_h5": usim_datastore_h5
-            if os.path.exists(usim_datastore_h5)
-            else None,
+            "usim_datastore_h5": (
+                usim_datastore_h5 if os.path.exists(usim_datastore_h5) else None
+            ),
         }
 
     @staticmethod
@@ -136,10 +135,9 @@ class AtlasRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
 
     def _run(
         self,

@@ -4,7 +4,6 @@ from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 
 
 class GenericPostprocessor(ABC, Model):
@@ -17,10 +16,9 @@ class GenericPostprocessor(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)  # new
+        super().__init__(model_name, state, major_stage)  # new
         self.required_input_data: list[str] = []
 
     def postprocess(

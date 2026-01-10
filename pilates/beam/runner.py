@@ -15,7 +15,6 @@ from pilates.beam.postprocessor import (
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -66,9 +65,7 @@ class BeamRunner(GenericRunner):
         """
         Declare the input paths/artifacts this runner expects from the workflow.
         """
-        zarr_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
             "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
@@ -87,10 +84,9 @@ class BeamRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
 
     def gather_outputs(
         self,
@@ -116,9 +112,10 @@ class BeamRunner(GenericRunner):
         for it, path in paths.items():
             for short_name, (file_name, extension) in files_to_get.items():
                 if short_name == "raw_od_skims_zarr":
-                    full_path = (
-                        find_iteration_file(path, it, "skimsActivitySimOD_current", ".zarr")
-                        or find_iteration_file(path, it, "activitySimODSkims_current", ".zarr")
+                    full_path = find_iteration_file(
+                        path, it, "skimsActivitySimOD_current", ".zarr"
+                    ) or find_iteration_file(
+                        path, it, "activitySimODSkims_current", ".zarr"
                     )
                 else:
                     full_path = find_iteration_file(path, it, file_name, extension)

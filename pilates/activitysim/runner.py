@@ -7,7 +7,6 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 logger = logging.getLogger(__name__)
@@ -46,10 +45,9 @@ class ActivitysimCompileRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_files = [
             "omx_skims",
             "asim_geoms",
@@ -131,9 +129,7 @@ class ActivitysimCompileRunner(GenericRunner):
         output_records = []
         if os.path.exists(all_skims_path):
             try:
-                ensure_0_based_and_flag_zarr_skims(
-                    all_skims_path, settings, workspace
-                )
+                ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
             except Exception as e:
                 logger.error(
                     f"Failed to correct and flag initial Zarr skims after compilation: {e}",
@@ -171,9 +167,7 @@ class ActivitysimRunner(GenericRunner):
         """
         Declare the input paths/artifacts this runner expects from the workflow.
         """
-        zarr_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         return {
             "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
             "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
@@ -192,10 +186,9 @@ class ActivitysimRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)
+        super().__init__(model_name, state, major_stage)
         self.required_input_files = [
             "persons_asim_in",
             "households_asim_in",

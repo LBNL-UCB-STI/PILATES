@@ -11,6 +11,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 from pilates.generic.runner import GenericRunner
 
+
 class TestRunContainerConsistDelegation:
     """Tests for GenericRunner.run_container delegation to Consist."""
 
@@ -45,7 +46,7 @@ class TestRunContainerConsistDelegation:
         image = "test/image:tag"
         volumes = {
             "/host/data": {"bind": "/container/data", "mode": "rw"},
-            "/host/output": "/container/output"  # Simple string format
+            "/host/output": "/container/output",  # Simple string format
         }
         command = "python script.py"
         args = ["--arg", "val"]
@@ -75,7 +76,7 @@ class TestRunContainerConsistDelegation:
         # 1. Volumes adapted correctly (stripped 'bind'/'mode')
         assert call_kwargs["volumes"] == {
             "/host/data": "/container/data",
-            "/host/output": "/container/output"
+            "/host/output": "/container/output",
         }
 
         # 2. Command split and extended with args
@@ -132,7 +133,7 @@ class TestRunContainerConsistDelegation:
             volumes={},
             command="python script.py",
             model_name="model",
-            args="--arg val", # String format args
+            args="--arg val",  # String format args
         )
 
         call_kwargs = mock_consist_run_container.call_args.kwargs
@@ -207,4 +208,6 @@ class TestRunContainerConsistDelegation:
             model_name="model",
         )
 
-        assert mock_consist_run_container.call_args.kwargs["backend_type"] == "singularity"
+        assert (
+            mock_consist_run_container.call_args.kwargs["backend_type"] == "singularity"
+        )

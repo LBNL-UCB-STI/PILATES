@@ -16,7 +16,7 @@ import warnings
 from shapely.errors import ShapelyDeprecationWarning
 
 from pilates.workspace import Workspace
-from pilates.utils.provenance import find_project_root
+from pilates.utils.path_utils import find_project_root
 
 logger = logging.getLogger(__name__)
 

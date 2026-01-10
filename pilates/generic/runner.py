@@ -20,11 +20,6 @@ from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
 
-# Type checking import for ConsistProvenanceTracker
-if TYPE_CHECKING:
-    from pilates.utils.consist_adapter import ConsistProvenanceTracker
-    from pilates.utils.provenance import FileProvenanceTracker
-
 logger = logging.getLogger(__name__)
 
 
@@ -37,10 +32,9 @@ class GenericRunner(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        provenance_tracker: FileProvenanceTracker,
         major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, provenance_tracker, major_stage)  # new
+        super().__init__(model_name, state, major_stage)  # new
         self.required_input_files = []
         self.required_output_files = []
 
@@ -136,18 +130,18 @@ class GenericRunner(ABC, Model):
 
     @staticmethod
     def run_container(
-            client,
-            settings: PilatesConfig,
-            image: str,
-            volumes: dict,
-            command: str,
-            model_name: str,
-            working_dir=None,
-            environment=None,
-            args=None,
-            input_artifacts: List[Union[str, Any]] = None,
-            output_paths: List[str] = None,
-            lineage_mode: str = None,
+        client,
+        settings: PilatesConfig,
+        image: str,
+        volumes: dict,
+        command: str,
+        model_name: str,
+        working_dir=None,
+        environment=None,
+        args=None,
+        input_artifacts: List[Union[str, Any]] = None,
+        output_paths: List[str] = None,
+        lineage_mode: str = None,
     ) -> bool:
         """
         Executes container with Consist if available, otherwise falls back to direct
@@ -180,7 +174,9 @@ class GenericRunner(ABC, Model):
                     "Ensure the call occurs within a Consist scenario/run context."
                 )
             try:
-                from consist.integrations.containers import run_container as consist_run_container
+                from consist.integrations.containers import (
+                    run_container as consist_run_container,
+                )
             except ImportError as e:
                 logger.error(
                     f"Consist container integration unavailable: {e}. Falling back to direct execution."
