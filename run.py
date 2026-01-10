@@ -438,19 +438,26 @@ def main():
     tracker = None
     if consist_enabled:
         logger.info(f"Initializing Consist Tracker in {full_run_dir}")
-        tracker = Tracker(
-            run_dir=full_run_dir,
-            db_path=(
-                settings.shared.database.path
-                if settings.shared.database.enabled
-                else None
-            ),
-            mounts={
-                "inputs": project_root_abs,  # Immutable Source
-                "workspace": full_run_dir,  # Mutable Destination
-            },
-            project_root=project_root_abs,
-        )
+        try:
+            tracker = Tracker(
+                run_dir=full_run_dir,
+                db_path=(
+                    settings.shared.database.path
+                    if settings.shared.database.enabled
+                    else None
+                ),
+                mounts={
+                    "inputs": project_root_abs,  # Immutable Source
+                    "workspace": full_run_dir,  # Mutable Destination
+                },
+                project_root=project_root_abs,
+            )
+        except Exception:
+            logger.exception(
+                "Consist tracker initialization failed. Set "
+                "settings.shared.database.use_consist=False to disable Consist."
+            )
+            raise
     else:
         logger.info("Consist disabled/unavailable; running without Consist tracker.")
 
@@ -739,6 +746,7 @@ def main():
                     def _run_atlas_step(
                         *,
                         atlas_state,
+                        base_state,
                         preprocessor,
                         runner,
                         postprocessor,
@@ -798,35 +806,42 @@ def main():
                                 logger.warning(
                                     f"[Main] UrbanSim datastore not found after ATLAS postprocess: {atlas_usim_output}"
                                 )
-                        except Exception as e:
-                            logger.error(f"ATLAS failed for {atlas_year}: {e}")
+                        except Exception:
+                            from pilates.utils.failure_handling import (
+                                persist_state_on_error,
+                            )
+
+                            persist_state_on_error(
+                                base_state, f"ATLAS year {atlas_year}"
+                            )
                             sys.exit(1)
 
-                        scenario.run(
-                            fn=_run_atlas_step,
-                            name=step_name,
-                            model="atlas",
-                            year=atlas_year,
-                            iteration=0,
-                            inputs=step_inputs,
-                            outputs=list(expected_atlas_outputs.keys()) or None,
-                            output_paths=expected_atlas_outputs or None,
-                            cache_hydration="outputs-requested",
-                            load_inputs=False,
-                            runtime_kwargs={
-                                "atlas_state": atlas_state,
-                                "preprocessor": preprocessor,
-                                "runner": runner,
-                                "postprocessor": postprocessor,
-                                "workspace": workspace,
-                                "typed_coupler": typed_coupler,
-                                "coupler": coupler,
-                                "usim_datastore_h5_path": usim_datastore_h5_path,
-                                "atlas_year": atlas_year,
-                                "expected_outputs": expected_atlas_outputs,
-                            },
-                            **build_step_consist_kwargs("atlas", settings),
-                        )
+                    scenario.run(
+                        fn=_run_atlas_step,
+                        name=step_name,
+                        model="atlas",
+                        year=atlas_year,
+                        iteration=0,
+                        inputs=step_inputs,
+                        outputs=list(expected_atlas_outputs.keys()) or None,
+                        output_paths=expected_atlas_outputs or None,
+                        cache_hydration="outputs-requested",
+                        load_inputs=False,
+                        runtime_kwargs={
+                            "atlas_state": atlas_state,
+                            "base_state": state,
+                            "preprocessor": preprocessor,
+                            "runner": runner,
+                            "postprocessor": postprocessor,
+                            "workspace": workspace,
+                            "typed_coupler": typed_coupler,
+                            "coupler": coupler,
+                            "usim_datastore_h5_path": usim_datastore_h5_path,
+                            "atlas_year": atlas_year,
+                            "expected_outputs": expected_atlas_outputs,
+                        },
+                        **build_step_consist_kwargs("atlas", settings),
+                    )
 
                 state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 

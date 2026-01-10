@@ -101,11 +101,13 @@ class Initialization(Model):
                     atlas_preprocessor = model_factory.get_preprocessor(
                         "atlas", self.state
                     )
-                    rec_in, rec_out = atlas_preprocessor.copy_data_to_mutable_location(
+                    result = atlas_preprocessor.copy_data_to_mutable_location(
                         settings, input_dir
                     )
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
+                    if result:
+                        rec_in, rec_out = result
+                        initialization_records_in += rec_in
+                        initialization_records_out += rec_out
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
 
                 # ActivitySim config copy
