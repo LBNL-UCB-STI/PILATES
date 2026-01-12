@@ -459,6 +459,17 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``asim_output_dir``: ActivitySim output directory retained after
+              postprocessing.
+            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
+              for downstream UrbanSim/ATLAS steps.
+        Related docs
+            - See `pilates/activitysim/inputs.py` for the corresponding input
+              descriptions used by ActivitySim and downstream models.
         """
         usim_input_fname = get_usim_datastore_fname(settings, io="input")
         usim_input_path = os.path.join(

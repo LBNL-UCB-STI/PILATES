@@ -110,6 +110,16 @@ class AtlasRunner(GenericRunner):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this runner produces.
+
+        Notes
+        -----
+        Output keys
+            - ``atlas_output_dir``: ATLAS output directory for the run.
+            - ``usim_datastore_h5``: UrbanSim datastore updated for the
+              forecast year.
+        Related docs
+            - See `pilates/atlas/inputs.py` for the corresponding input
+              descriptions used by ATLAS and downstream models.
         """
         atlas_output_dir = workspace.get_atlas_output_dir()
         usim_output_path = None

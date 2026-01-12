@@ -1889,6 +1889,17 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ) -> Dict[str, str]:
         """
         Declare the output paths/artifacts this preprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``asim_mutable_data_dir``: Local mutable data dir staged for
+              ActivitySim inputs (tables, configs, skims).
+            - ``asim_mutable_configs_dir``: Config directory for ActivitySim
+              run-time settings.
+        Related docs
+            - See `pilates/activitysim/inputs.py` for the corresponding input
+              descriptions used by ActivitySim and downstream models.
         """
         return {
             "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),

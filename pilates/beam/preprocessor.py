@@ -222,6 +222,15 @@ class BeamPreprocessor(GenericPreprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this preprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``beam_mutable_data_dir``: Mutable BEAM data directory populated
+              with inputs for the runner.
+        Related docs
+            - See `pilates/beam/inputs.py` for the corresponding input
+              descriptions used by BEAM and downstream models.
         """
         return {"beam_mutable_data_dir": workspace.get_beam_mutable_data_dir()}
 

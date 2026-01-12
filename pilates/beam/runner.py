@@ -77,6 +77,14 @@ class BeamRunner(GenericRunner):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this runner produces.
+
+        Notes
+        -----
+        Output keys
+            - ``beam_output_dir``: BEAM output directory for the run.
+        Related docs
+            - See `pilates/beam/inputs.py` for the corresponding input
+              descriptions used by BEAM and downstream models.
         """
         return {"beam_output_dir": workspace.get_beam_output_dir()}
 

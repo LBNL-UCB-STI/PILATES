@@ -185,6 +185,17 @@ class UrbansimPreprocessor(GenericPreprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this preprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``usim_mutable_data_dir``: UrbanSim mutable data directory populated
+              with inputs for the runner.
+            - ``usim_datastore_h5``: Base-year UrbanSim datastore staged into the
+              mutable directory.
+        Related docs
+            - See `pilates/urbansim/inputs.py` for the corresponding input
+              descriptions used by UrbanSim and downstream models.
         """
         region = settings.run.region
         region_id = settings.urbansim.region_mappings["region_to_region_id"][region]

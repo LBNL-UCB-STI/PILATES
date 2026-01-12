@@ -33,6 +33,19 @@ def build_urbansim_inputs(
     -------
     tuple of dict
         (inputs, descriptions) where descriptions are per-key log strings.
+
+    Notes
+    -----
+    Input keys
+        - ``usim_datastore_h5``: UrbanSim datastore containing base-year or
+          prior-year land use and demographic tables (H5).
+        - ``usim_mutable_data_dir``: UrbanSim mutable data directory used as
+          the container input/output mount.
+    Related outputs
+        - UrbanSim runner/postprocessor update ``usim_datastore_h5`` for
+          downstream ActivitySim/ATLAS runs.
+        - TODO: Add any additional UrbanSim outputs (e.g., diagnostics or
+          intermediate tables) that should be surfaced in logs or the coupler.
     """
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}

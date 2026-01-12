@@ -45,6 +45,22 @@ def build_beam_inputs(
     tuple
         (inputs, beam_mutable_dir, beam_mutable_description). The mutable
         directory values are None when no directory exists.
+
+    Notes
+    -----
+    Input keys
+        - ``activity_demand_outputs``: ActivitySim demand output store (tours,
+          trips, and schedules) expressed as a RecordStore mapping.
+        - ``previous_beam_outputs``: Prior BEAM outputs that seed warm-start
+          behavior (e.g., linkstats, plans).
+        - ``zarr_skims``: Current skims from ActivitySim compile or BEAM update.
+        - ``beam_mutable_data_dir``: BEAM mutable data directory for container I/O.
+    Related outputs
+        - BEAM produces ``beam_output_dir`` plus additional artifacts such as
+          ``linkstats``, ``beam_plans_out``, ``final_skims_omx``, and updated
+          ``zarr_skims`` (via postprocessing and coupler helpers).
+        - TODO: Confirm which BEAM outputs should be declared as expected
+          outputs versus only logged as artifacts for diagnostics.
     """
     inputs: Dict[str, Any] = {}
 

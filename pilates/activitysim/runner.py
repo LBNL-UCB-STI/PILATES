@@ -34,6 +34,15 @@ class ActivitysimCompileRunner(GenericRunner):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this runner produces.
+
+        Notes
+        -----
+        Output keys
+            - ``zarr_skims``: Compiled skims in Zarr format written under the
+              ActivitySim output cache directory.
+        Related docs
+            - See `pilates/activitysim/inputs.py` for the corresponding input
+              descriptions used by ActivitySim and downstream models.
         """
         return {
             "zarr_skims": os.path.join(
@@ -179,6 +188,14 @@ class ActivitysimRunner(GenericRunner):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this runner produces.
+
+        Notes
+        -----
+        Output keys
+            - ``asim_output_dir``: ActivitySim output directory for the run.
+        Related docs
+            - See `pilates/activitysim/inputs.py` for the corresponding input
+              descriptions used by ActivitySim and downstream models.
         """
         return {"asim_output_dir": workspace.get_asim_output_dir()}
 

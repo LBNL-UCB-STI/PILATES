@@ -178,6 +178,15 @@ class UrbansimPostprocessor(GenericPostprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``usim_datastore_h5``: UrbanSim input datastore updated for the
+              next model stage (H5).
+        Related docs
+            - See `pilates/urbansim/inputs.py` for the corresponding input
+              descriptions used by UrbanSim and downstream models.
         """
         usim_input_fname = get_usim_datastore_fname(settings, io="input")
         usim_input_path = os.path.join(

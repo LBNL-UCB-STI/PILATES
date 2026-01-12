@@ -118,6 +118,16 @@ class AtlasPostprocessor(GenericPostprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``atlas_output_dir``: ATLAS output directory after postprocessing.
+            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) emitted
+              for subsequent model stages.
+        Related docs
+            - See `pilates/atlas/inputs.py` for the corresponding input
+              descriptions used by ATLAS and downstream models.
         """
         usim_output_fname = get_usim_datastore_fname(
             settings, io="output", year=state.forecast_year

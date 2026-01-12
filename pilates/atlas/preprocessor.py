@@ -73,6 +73,15 @@ class AtlasPreprocessor(GenericPreprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this preprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``atlas_mutable_input_dir``: ATLAS mutable input directory with
+              prepared configs and data.
+        Related docs
+            - See `pilates/atlas/inputs.py` for the corresponding input
+              descriptions used by ATLAS and downstream models.
         """
         return {
             "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),

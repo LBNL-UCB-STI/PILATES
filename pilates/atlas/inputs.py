@@ -38,6 +38,19 @@ def build_atlas_inputs(
     -------
     tuple of dict
         (inputs, descriptions) where descriptions are per-key log strings.
+
+    Notes
+    -----
+    Input keys
+        - ``usim_datastore_h5``: UrbanSim datastore used as the land use input
+          for ATLAS scenario generation.
+        - ``atlas_mutable_input_dir``: ATLAS mutable input directory (configs
+          and data mounted into the container).
+    Related outputs
+        - ATLAS produces ``atlas_output_dir`` and may update
+          ``usim_datastore_h5`` for subsequent model stages.
+        - TODO: Document ATLAS outputs that should flow into downstream models
+          or be logged as explicit expected outputs.
     """
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}

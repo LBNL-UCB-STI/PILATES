@@ -43,6 +43,22 @@ def build_activitysim_inputs(
     tuple of dict
         (inputs, descriptions) where descriptions are per-key log strings.
         Descriptions may be None to skip logging for a given input.
+
+    Notes
+    -----
+    Input keys
+        - ``asim_mutable_data_dir``: ActivitySim input data/config directory
+          containing household/person tables, land use, and settings files.
+        - ``usim_datastore_h5``: UrbanSim datastore path that ActivitySim uses
+          to read land use and demographic inputs (H5).
+        - ``zarr_skims``: Travel time skims in Zarr format produced by
+          ActivitySim compilation or updated by BEAM.
+    Related outputs
+        - ActivitySim compile produces ``zarr_skims`` for downstream runs.
+        - ActivitySim main produces ``asim_output_dir`` and refreshes
+          ``usim_datastore_h5`` via postprocessing for UrbanSim/ATLAS.
+        - TODO: Document other ActivitySim outputs (e.g., in-memory demand
+          stores) and confirm coupler keys expected by downstream steps.
     """
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, Optional[str]] = {}

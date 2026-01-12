@@ -3375,6 +3375,16 @@ class BeamPostprocessor(GenericPostprocessor):
     ) -> Dict[str, Any]:
         """
         Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing.
+            - ``final_skims_omx``: Final OMX skims written to the BEAM
+              mutable data directory.
+        Related docs
+            - See `pilates/beam/inputs.py` for the corresponding input
+              descriptions used by BEAM and downstream models.
         """
         zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         region = settings.run.region
