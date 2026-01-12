@@ -214,6 +214,7 @@ shared:
     type: duckdb
     path: /clusterfs/beam-core-data-nfs/db/seattle/consist-seattle.duckdb
     snapshot_path: /clusterfs/beam-core-data-nfs/db/seattle/snapshots
+    use_consist: true
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION
