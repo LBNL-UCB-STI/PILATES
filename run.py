@@ -248,6 +248,7 @@ def main():
         #
         for year in state:
             formatted_print(f"STARTING YEAR {year}")
+            usim_inputs: Dict[str, Any] = {}
 
             # A. LAND USE FORECASTING
             # Forecasts demographic and economic changes using UrbanSim long-term simulation.
