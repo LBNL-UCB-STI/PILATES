@@ -18,6 +18,28 @@ class ActivitysimCompileRunner(GenericRunner):
     """
 
     @staticmethod
+    def get_base_asim_cmd(
+        settings: PilatesConfig, household_sample_size=None, num_processes=None
+    ):
+        return ActivitysimRunner.get_base_asim_cmd(
+            settings,
+            household_sample_size=household_sample_size,
+            num_processes=num_processes,
+        )
+
+    @staticmethod
+    def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
+        return ActivitysimRunner.get_asim_additional_args(
+            settings, asim_docker_vols, compile
+        )
+
+    @staticmethod
+    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
+        return ActivitysimRunner.get_asim_docker_vols(
+            settings, working_dir=working_dir
+        )
+
+    @staticmethod
     def expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
