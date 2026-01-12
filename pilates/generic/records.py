@@ -13,6 +13,7 @@ These classes exist ONLY for inter-model data flow.
 
 import uuid
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
@@ -52,6 +53,22 @@ class FileRecord:
 
     def __hash__(self):
         return hash(self.unique_id)
+
+    def get_absolute_path(self, base_path: Optional[str] = None) -> Optional[str]:
+        """
+        Return an absolute file path for this record.
+
+        If file_path is already absolute, returns it as-is. If it is relative and a
+        base_path is provided, joins against base_path. If base_path is not provided,
+        resolves relative to the current working directory.
+        """
+        if not self.file_path:
+            return None
+        if os.path.isabs(self.file_path):
+            return self.file_path
+        if base_path:
+            return os.path.abspath(os.path.join(base_path, self.file_path))
+        return os.path.abspath(self.file_path)
 
 
 @dataclass(kw_only=True)
