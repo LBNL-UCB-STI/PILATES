@@ -177,12 +177,6 @@ def main():
     if tracker is not None:
         cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
-    if consist_enabled and consist is not None:
-        schema_coupler_cls = getattr(consist, "SchemaValidatingCoupler", None)
-        if schema_coupler_cls is not None:
-            scenario_kwargs["coupler"] = schema_coupler_cls(
-                schema=PILATES_COUPLER_SCHEMA
-            )
     with cr.scenario(
         run_name,
         tracker=tracker,
@@ -193,6 +187,10 @@ def main():
     ) as scenario:
         scenario = cast(ScenarioWithCoupler, scenario)
         coupler = scenario.coupler
+        if consist_enabled:
+            schema_attr = getattr(coupler, "schema", None)
+            if schema_attr is not None:
+                coupler.schema = PILATES_COUPLER_SCHEMA
         scenario.declare_outputs(
             "usim_datastore_h5",
             "asim_output_dir",
