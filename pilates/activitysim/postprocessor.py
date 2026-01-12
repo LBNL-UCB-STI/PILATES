@@ -448,8 +448,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         """
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
+        asim_output_dir = workspace.get_asim_output_dir()
         return {
-            "asim_output_dir": workspace.get_asim_output_dir(),
+            "asim_output_dir": asim_output_dir if os.path.exists(asim_output_dir) else None,
             "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
         }
 

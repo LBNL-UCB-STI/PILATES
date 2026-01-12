@@ -105,8 +105,11 @@ class AtlasPostprocessor(GenericPostprocessor):
         usim_output_path = os.path.join(
             workspace.get_usim_mutable_data_dir(), usim_output_fname
         )
+        atlas_output_dir = workspace.get_atlas_output_dir()
         return {
-            "atlas_output_dir": workspace.get_atlas_output_dir(),
+            "atlas_output_dir": (
+                atlas_output_dir if os.path.exists(atlas_output_dir) else None
+            ),
             "usim_datastore_h5": (
                 usim_output_path if os.path.exists(usim_output_path) else None
             ),
