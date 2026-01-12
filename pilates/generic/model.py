@@ -23,12 +23,14 @@ def provenance_logging(func):
     - PILATES continues to pass `RecordStore` inputs/outputs between stages.
 
     Responsibilities:
+
     1. Extract a `RecordStore` from args/kwargs and log it as inputs.
     2. Attach PILATES workflow metadata to the active Consist run.
     3. Execute the wrapped method.
     4. Log any returned `RecordStore` as outputs.
 
     Non-responsibilities (handled elsewhere):
+
     - Starting/ending Consist runs.
     - Cache hydration / auto-skip (stubbed for later).
     - Legacy DuckDB provenance upserts.

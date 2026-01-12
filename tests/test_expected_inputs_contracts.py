@@ -116,11 +116,6 @@ def test_update_coupler_from_beam_outputs_sets_outputs(monkeypatch, tmp_path):
         def set(self, key, value):
             self._store[key] = value
 
-    class _Typed:
-        zarr_skims = None
-        final_skims_omx = None
-
-    typed = _Typed()
     coupler = _Coupler()
 
     logged = {}
@@ -132,10 +127,8 @@ def test_update_coupler_from_beam_outputs_sets_outputs(monkeypatch, tmp_path):
     monkeypatch.setattr("pilates.utils.coupler_helpers.cr.log_output", _log_output)
 
     update_coupler_from_beam_outputs(
-        records, coupler, typed, workspace=SimpleNamespace(full_path=str(tmp_path))
+        records, coupler, workspace=SimpleNamespace(full_path=str(tmp_path))
     )
 
     assert coupler._store["zarr_skims"] == "artifact:zarr_skims"
     assert coupler._store["final_skims_omx"] == "artifact:final_skims_omx"
-    assert typed.zarr_skims == "artifact:zarr_skims"
-    assert typed.final_skims_omx == "artifact:final_skims_omx"

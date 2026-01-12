@@ -31,9 +31,11 @@ def test_noop_scenario_run_returns_outputs_mapping():
         return store
 
     with cr.scenario("noop-test", enabled=False) as scenario:
-        result = scenario.run(fn=_run)
+        result = scenario.run(fn=_run, output_paths={"out": "/tmp/out.txt"})
 
-    assert result.outputs == {"out": "/tmp/out.txt"}
+    output = result.outputs["out"]
+    path = getattr(output, "path", None) or getattr(output, "uri", None) or output
+    assert str(path) == "/tmp/out.txt"
     assert result.cache_hit is False
 
 

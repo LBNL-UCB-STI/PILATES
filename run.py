@@ -13,46 +13,56 @@ This module:
 
 import warnings
 from datetime import datetime
-import uuid
 import os
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Optional, cast
 
 # Consist Imports (optional)
 try:
     import consist
-    from consist import Tracker
 except ImportError:  # Consist optional dependency
     consist = None
-    Tracker = None
 
 # Legacy/PILATES Imports
 from pilates.generic.model_factory import ModelFactory
-from pilates.generic.records import RecordStore
-from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from pilates.generic.initialization import Initialization
-from pilates.config.models import PilatesConfig
+from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
-from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.utils.coupler_helpers import (
-    artifact_to_path,
-    clean_expected_outputs,
-    update_coupler_from_beam_outputs,
+from pilates.activitysim.inputs import build_activitysim_inputs
+from pilates.atlas.inputs import build_atlas_inputs
+from pilates.beam.inputs import build_beam_inputs
+from pilates.urbansim.inputs import build_urbansim_inputs
+from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
+from pilates.utils.coupler_helpers import clean_expected_outputs
+from pilates.utils.input_logging import log_inputs
+from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
+from pilates.workflows.step_io import (
+    build_outputs,
+    merge_expected_model_inputs,
+    merge_model_expected_inputs,
 )
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-from pilates.activitysim import postprocessor as asim_post
-from pilates.urbansim import postprocessor as usim_post
+from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
+from pilates.workflows.steps import (
+    make_activitysim_compile_step,
+    make_activitysim_step,
+    make_atlas_step,
+    make_beam_step,
+    make_postprocessing_step,
+    make_urbansim_step,
+)
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -62,348 +72,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def formatted_print(string, width=50, fill_char="#"):
-    """
-    Print a formatted banner for major workflow steps.
-    """
-    print("\n")
-    if len(string) + 2 > width:
-        width = len(string) + 4
-    string = string.upper()
-    print(fill_char * width)
-    print("{:#^{width}}".format(" " + string + " ", width=width))
-    print(fill_char * width, "\n")
-
-
-def _expected_inputs_for(model_name: str, settings, state, workspace) -> dict:
-    expected = {}
-    components = ModelFactory._registry.get(model_name, {})
-    for component_name in ("preprocessor", "runner", "postprocessor"):
-        component_cls = components.get(component_name)
-        if component_cls is None:
-            continue
-        expected_fn = getattr(component_cls, "expected_inputs", None)
-        if callable(expected_fn):
-            _merge_expected_inputs(
-                expected, expected_fn(settings, state, workspace) or {}
-            )
-    return expected
-
-
-def _expected_outputs_for(
-    model_name: str, settings, state, workspace, *, components=None
-) -> dict:
-    expected = {}
-    registry_components = ModelFactory._registry.get(model_name, {})
-    component_names = components or ("runner", "postprocessor")
-    for component_name in component_names:
-        component_cls = registry_components.get(component_name)
-        if component_cls is None:
-            continue
-        expected_fn = getattr(component_cls, "expected_outputs", None)
-        if callable(expected_fn):
-            _merge_expected_outputs(
-                expected, expected_fn(settings, state, workspace) or {}
-            )
-    return expected
-
-
-def _merge_expected_inputs(
-    target: dict, expected: dict, *, prefer_expected: bool = False
-) -> dict:
-    for key, value in expected.items():
-        if value is None:
-            continue
-        if key in target:
-            if prefer_expected:
-                target[key] = value
-            else:
-                logger.debug(
-                    "Input '%s' already provided; keeping existing value.", key
-                )
-            continue
-        target[key] = value
-    return target
-
-
-def _merge_expected_outputs(
-    target: dict, expected: dict, *, prefer_expected: bool = False
-) -> dict:
-    for key, value in expected.items():
-        if value is None:
-            continue
-        if key in target:
-            if prefer_expected:
-                target[key] = value
-            else:
-                logger.debug(
-                    "Output '%s' already provided; keeping existing value.", key
-                )
-            continue
-        target[key] = value
-    return target
-
-
-def warm_start_activities(
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-):
-    """
-    TODO: THIS IS BROKEN
-
-    Run ActivitySim warm-start to update UrbanSim inputs with long-term choices.
-
-    This function is typically executed only in the initial start year as part of
-    the Land Use step when ActivitySim is used as the activity demand model.
-
-    Sequence:
-      - Instantiate ActivitySim preprocessor/runner via ModelFactory
-      - Preprocess to prepare ActivitySim inputs
-      - Run ActivitySim runner to produce outputs
-      - Apply a specialized post-processing function that updates UrbanSim H5 input
-        files with warm-started choices (workplace, school, auto ownership)
-      - Record the postprocessor model run with the provenance tracker
-
-    Args:
-        settings (PilatesConfig): Parsed simulation settings.
-        state (WorkflowState): Current workflow state.
-        workspace (Workspace): Workspace object with file paths.
-    """
-    factory = ModelFactory()
-    activity_demand_model, _ = GenericRunner.get_model_and_image(
-        settings, "activity_demand_model"
-    )
-
-    if activity_demand_model == "polaris":
-        logger.info(
-            "POLARIS module is not activated due to missing polarisruntime library"
-        )
-
-    elif activity_demand_model == "activitysim":
-        runner = factory.get_runner("activitysim", state)
-        preprocessor = factory.get_preprocessor("activitysim", state)
-
-        # Preprocess
-        input_data = preprocessor.preprocess(workspace)
-
-        # Run ActivitySim
-        runner.run(input_data, workspace)
-
-        logger.info(
-            "Appending warm start activities/choices to UrbanSim base year input data"
-        )
-
-        asim_post.update_usim_inputs_after_warm_start(
-            settings,
-            state,
-            workspace,
-            model_run_hash=None,
-        )
-
-    logger.info("Done!")
-
-
-def forecast_land_use(
-    settings: PilatesConfig,
-    year: int,
-    workflow_state: WorkflowState,
-    workspace: Workspace,
-):
-    """
-    High-level wrapper to start an UrbanSim (land use) run.
-    """
-    land_use_model, _ = GenericRunner.get_model_and_image(settings, "land_use_model")
-
-    run_land_use(
-        year,
-        workflow_state.forecast_year,
-        land_use_model,
-        workflow_state,
-        workspace,
-    )
-
-    # Verify Output
-    usim_output_store_name = usim_post.get_usim_datastore_fname(
-        settings, io="output", year=workflow_state.forecast_year
-    )
-    usim_datastore_fpath = os.path.join(
-        workspace.get_usim_mutable_data_dir(), usim_output_store_name
-    )
-
-    if not os.path.exists(usim_datastore_fpath):
-        logger.critical(
-            f"No UrbanSim output data found at {usim_datastore_fpath}. Run failed."
-        )
-        sys.exit(1)
-
-
-def run_land_use(
-    year,
-    forecast_year,
-    land_use_model,
-    state: WorkflowState,
-    workspace: Workspace,
-):
-    """
-    Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
-
-    Args:
-        year (int): Current simulation year (start of forecast).
-        forecast_year (int): Forecast target year.
-        land_use_model (str): Land use model identifier (e.g., 'urbansim').
-        state (WorkflowState): Workflow state.
-        workspace (Workspace): Workspace instance for data paths.
-    """
-    logger.info("Running land use")
-
-    factory = ModelFactory()
-
-    preprocessor = factory.get_preprocessor(
-        "urbansim", state, major_stage=WorkflowState.Stage.land_use
-    )
-    runner = factory.get_runner(
-        "urbansim", state, major_stage=WorkflowState.Stage.land_use
-    )
-    postprocessor = factory.get_postprocessor(
-        "urbansim", state, major_stage=WorkflowState.Stage.land_use
-    )
-
-    # 1. PREPROCESS
-    formatted_print(f"Preparing {year} input data for land use development simulation.")
-    input_data = preprocessor.preprocess(workspace)
-
-    # 2. RUN
-    formatted_print(
-        f"Simulating land use development from {year} to {forecast_year} with {land_use_model}."
-    )
-    raw_outputs = runner.run(input_data, workspace)
-
-    # 3. POSTPROCESS
-    postprocessor.postprocess(raw_outputs, workspace)
-
-    logger.info("Done!")
-
-
-def run_activity_demand(
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    input_store: RecordStore = None,
-) -> RecordStore:
-    """
-    Generate activity plans for the current year using the configured activity demand model.
-
-    Supports:
-      - ActivitySim: full preprocess -> run -> postprocess sequence
-      - Polaris: logged but not implemented here
-
-    Args:
-        settings (PilatesConfig): Simulation settings.
-        state (WorkflowState): Current workflow state.
-        workspace (Workspace): Workspace instance for file operations.
-        input_store (RecordStore, optional): Preprocessed inputs to reuse if available.
-
-    Returns:
-        RecordStore: Processed outputs (file records) from the activity demand postprocessor.
-    """
-    factory = ModelFactory()
-    activity_demand_model = settings.run.models.activity_demand
-
-    if activity_demand_model == "polaris":
-        logger.info("POLARIS module is not activated")
-        return RecordStore()
-
-    elif activity_demand_model == "activitysim":
-        preprocessor = factory.get_preprocessor(
-            "activitysim",
-            state,
-            major_stage=WorkflowState.Stage.activity_demand,
-        )
-        runner = factory.get_runner(
-            "activitysim",
-            state,
-            major_stage=WorkflowState.Stage.activity_demand,
-        )
-        postprocessor = factory.get_postprocessor(
-            "activitysim",
-            state,
-            major_stage=WorkflowState.Stage.activity_demand,
-        )
-
-        input_data = input_store or preprocessor.preprocess(workspace)
-        raw_outputs = runner.run(input_data, workspace)
-        processed_outputs = postprocessor.postprocess(raw_outputs, workspace)
-
-        return processed_outputs
-
-    else:
-        logger.warning(f"Unknown activity demand model: {activity_demand_model}")
-        return RecordStore()
-
-
-def run_traffic_assignment(
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    activity_demand_outputs: RecordStore = None,
-    previous_beam_outputs: RecordStore = None,
-):
-    """
-    Run the configured traffic assignment (supply) model for the current year/iteration.
-
-    Currently supports:
-      - BEAM: obtains preprocessor, runner, postprocessor via ModelFactory and runs the
-        preprocessor with the activity demand outputs as input.
-
-    Args:
-        settings (PilatesConfig): Simulation settings.
-        state (WorkflowState): Current workflow state.
-        workspace (Workspace): Workspace instance.
-        activity_demand_outputs (RecordStore, optional): Processed activity demand outputs.
-        previous_beam_outputs (RecordStore, optional): Outputs from previous BEAM iteration.
-    """
-    factory = ModelFactory()
-    travel_model = settings.run.models.travel
-
-    if travel_model == "polaris":
-        logger.info("POLARIS module is not activated")
-        return RecordStore()
-    elif travel_model == "beam":
-        preprocessor = factory.get_preprocessor(
-            "beam",
-            state,
-            major_stage=WorkflowState.Stage.traffic_assignment,
-        )
-        runner = factory.get_runner(
-            "beam",
-            state,
-            major_stage=WorkflowState.Stage.traffic_assignment,
-        )
-        postprocessor = factory.get_postprocessor(
-            "beam",
-            state,
-            major_stage=WorkflowState.Stage.traffic_assignment,
-        )
-
-        combined_inputs = RecordStore()
-        if activity_demand_outputs:
-            combined_inputs += activity_demand_outputs
-        if previous_beam_outputs:
-            combined_inputs += previous_beam_outputs
-        input_data = preprocessor.preprocess(workspace, combined_inputs)
-        raw_outputs = runner.run(input_data, workspace)
-        processed_outputs = postprocessor.postprocess(raw_outputs, workspace)
-        return processed_outputs
-
-    else:
-        logger.warning(f"Unknown travel model: {travel_model}")
-        return RecordStore()
-
-
 def main():
     """
-    Main entrypoint refactored to use Consist Scenario API.
+    Main entrypoint for PILATES simulation orchestration using Consist Scenario API.
+
+    This workflow coordinates multiple land use and transportation microsimulation models
+    across a multi-year planning horizon:
+
+    1. **Initialization**: Copy immutable input data to mutable workspace
+    2. **Land Use Forecasting**: UrbanSim predicts demographic/economic changes
+    3. **Vehicle Ownership**: ATLAS models vehicle fleet evolution
+    4. **Supply/Demand Loop**: Iterates between activity demand (ActivitySim) and
+       traffic assignment (BEAM) until convergence
+    5. **Post-Processing**: Validation and output generation
+
+    Architecture:
+    - **Consist Scenario**: Manages caching of expensive computations and provenance logging
+    - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
+    - **StepConfig**: Declarative config for each model step
+    - **Step Builders**: Encapsulate model-specific execution logic
+
+    Caching Strategy:
+    - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
+    - Model outputs: Cached per iteration (convergence check)
+    - Restarting: Skips initialization if run_state.yaml exists
     """
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
@@ -427,6 +119,11 @@ def main():
     os.makedirs(full_run_dir, exist_ok=True)
 
     # 3. INITIALIZE CONSIST TRACKER (OPTIONAL)
+    # Consist provides provenance tracking and computation caching. It's optional; PILATES
+    # works without it but gains:
+    #   - Provenance: Full lineage of data transformations (OpenLineage compatible)
+    #   - Caching: Skips expensive computations if inputs unchanged
+    #   - Coupler: Manages artifact passing between steps
     # Mount Strategy:
     # - 'inputs': The project root. Source files resolve here.
     # - 'workspace': The mutable run dir. Destination files resolve here.
@@ -435,31 +132,32 @@ def main():
     project_root_abs = str(Path(__file__).resolve().parent)
 
     consist_enabled = cr.consist_available(settings)
-    tracker = None
+    tracker: Optional[TrackerLike] = None
     if consist_enabled:
         logger.info(f"Initializing Consist Tracker in {full_run_dir}")
-        try:
-            tracker = Tracker(
-                run_dir=full_run_dir,
-                db_path=(
-                    settings.shared.database.path
-                    if settings.shared.database.enabled
-                    else None
-                ),
-                mounts={
-                    "inputs": project_root_abs,  # Immutable Source
-                    "workspace": full_run_dir,  # Mutable Destination
-                },
-                project_root=project_root_abs,
-            )
-        except Exception:
-            logger.exception(
-                "Consist tracker initialization failed. Set "
-                "settings.shared.database.use_consist=False to disable Consist."
-            )
-            raise
     else:
         logger.info("Consist disabled/unavailable; running without Consist tracker.")
+
+    tracker = cr.create_tracker(
+        settings=settings,
+        enabled=consist_enabled,
+        run_dir=full_run_dir,
+        db_path=(
+            settings.shared.database.path if settings.shared.database.enabled else None
+        ),
+        mounts={
+            "inputs": project_root_abs,  # Immutable Source
+            "workspace": full_run_dir,  # Mutable Destination
+        },
+        project_root=project_root_abs,
+    )
+    if tracker is None and consist_enabled:
+        raise RuntimeError(
+            "Consist enabled but tracker could not be created. "
+            "Install Consist or set settings.shared.database.use_consist=False."
+        )
+    if consist_enabled:
+        assert tracker is not None
 
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
@@ -469,17 +167,31 @@ def main():
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
 
-    # 5. START SCENARIO
+    # 5. START SCENARIO CONTEXT
+    # The scenario context is where all model execution happens. Each step runs inside
+    # scenario.run(), which handles:
+    #   - Caching checks (skip if inputs identical to previous run)
+    #   - Provenance logging (inputs, outputs, dependencies)
+    #   - Coupler coordination (step outputs → coupler → next step inputs)
+    # The coupler is a shared dict-like object for passing artifacts between steps.
     if tracker is not None:
         cr.set_tracker(tracker)
+    scenario_kwargs = build_scenario_consist_kwargs(settings)
+    if consist_enabled and consist is not None:
+        schema_coupler_cls = getattr(consist, "SchemaValidatingCoupler", None)
+        if schema_coupler_cls is not None:
+            scenario_kwargs["coupler"] = schema_coupler_cls(
+                schema=PILATES_COUPLER_SCHEMA
+            )
     with cr.scenario(
         run_name,
         tracker=tracker,
         enabled=consist_enabled,
         tags=["pilates_simulation"],
         model="pilates_orchestrator",
-        **build_scenario_consist_kwargs(settings),
+        **scenario_kwargs,
     ) as scenario:
+        scenario = cast(ScenarioWithCoupler, scenario)
         coupler = scenario.coupler
         scenario.declare_outputs(
             "usim_datastore_h5",
@@ -489,21 +201,15 @@ def main():
             "zarr_skims",
             "final_skims_omx",
         )
-        typed_coupler = None
-        if consist is not None and consist_enabled:
-
-            @consist.coupler_schema
-            class WorkflowCoupler:
-                usim_datastore_h5: Any
-                asim_output_dir: Any
-                beam_output_dir: Any
-                atlas_output_dir: Any
-                zarr_skims: Any
-                final_skims_omx: Any
-
-            typed_coupler = scenario.coupler_schema(WorkflowCoupler)
 
         # 6. DATA INITIALIZATION STEP
+        # Copies immutable input data to the mutable workspace. This is the critical
+        # "data initialization" event in provenance: it links original sources (inputs://)
+        # to the working copies (workspace://). Only runs if state.data_initialized is
+        # False (first run) or if resuming from a checkpoint (uses previous workspace).
+        #
+        # ProvenanceNote: scenario.trace() logs this step, creating a provenance entry
+        # that later steps reference as inputs.
         if not state.data_initialized:
             logger.info("Running Initialization Step (Copying mutable data)")
 
@@ -531,114 +237,77 @@ def main():
             )
 
         # 6. MAIN WORKFLOW LOOP
+        # Iterates through forecast years. For each year, runs sequential stages:
+        # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
+        #
+        # Step Pattern (used for all stages):
+        #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
+        #   2. log_inputs(...)          - Log for provenance
+        #   3. build_*_outputs(...)     - Declare what we expect to produce
+        #   4. make_*_step(...)         - Create step function with coupler refs
+        #   5. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
+        #   6. scenario.run(...)        - Execute via Consist (handles caching + provenance)
+        #
         for year in state:
             formatted_print(f"STARTING YEAR {year}")
 
             # A. LAND USE FORECASTING
+            # Forecasts demographic and economic changes using UrbanSim long-term simulation.
+            # Outputs: Households, persons, jobs, land use → coupler → all later stages.
+            # Cached: If no land-use-sensitive inputs changed, skip this stage.
+            #
             if state.should_run(WorkflowState.Stage.land_use):
                 formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
 
                 step_name = f"urbansim_{year}"
 
-                usim_inputs = {}
                 usim_data_dir = workspace.get_usim_mutable_data_dir()
-                usim_input_fname = usim_post.get_usim_datastore_fname(
-                    settings, io="input"
+                usim_inputs, usim_input_descriptions = build_urbansim_inputs(
+                    settings, state, workspace, year
                 )
-                usim_input_path = os.path.join(usim_data_dir, usim_input_fname)
-                if os.path.exists(usim_input_path):
-                    usim_inputs["usim_datastore_h5"] = usim_input_path
-                elif not state.is_start_year():
-                    usim_output_fname = usim_post.get_usim_datastore_fname(
-                        settings, io="output", year=year
-                    )
-                    usim_output_path = os.path.join(usim_data_dir, usim_output_fname)
-                    if os.path.exists(usim_output_path):
-                        usim_inputs["usim_datastore_h5"] = usim_output_path
-                if os.path.exists(usim_data_dir):
-                    usim_inputs["usim_mutable_data_dir"] = usim_data_dir
-                if usim_inputs:
-                    if "usim_datastore_h5" in usim_inputs:
-                        cr.log_input(
-                            usim_inputs["usim_datastore_h5"],
-                            key="usim_datastore_h5",
-                            description=f"UrbanSim input datastore for year {year}",
-                        )
-                    if "usim_mutable_data_dir" in usim_inputs:
-                        cr.log_input(
-                            usim_inputs["usim_mutable_data_dir"],
-                            key="usim_mutable_data_dir",
-                            description="UrbanSim mutable data directory",
-                        )
-
-                expected_usim_inputs = _expected_inputs_for(
-                    "urbansim", settings, state, workspace
+                log_inputs(usim_inputs, usim_input_descriptions)
+                usim_inputs = merge_model_expected_inputs(
+                    "urbansim", usim_inputs, settings, state, workspace
                 )
-                _merge_expected_inputs(usim_inputs, expected_usim_inputs)
                 expected_usim_outputs = clean_expected_outputs(
-                    _expected_outputs_for("urbansim", settings, state, workspace)
+                    build_outputs("urbansim", settings, state, workspace)
                 )
 
-                def _run_urbansim_step(
-                    *,
-                    settings: PilatesConfig,
-                    state: WorkflowState,
-                    workspace: Workspace,
-                    usim_data_dir: str,
-                    typed_coupler,
-                    expected_outputs: dict,
-                ):
-                    if (
-                        state.is_start_year()
-                        and settings.activitysim.warm_start_activities
-                    ):
-                        logger.info(
-                            "[Main] Running warm start activities for ActivitySim."
-                        )
-                        warm_start_activities(settings, state, workspace)
-
-                    forecast_land_use(settings, year, state, workspace)
-                    usim_output_path = expected_outputs.get("usim_datastore_h5")
-                    if not usim_output_path:
-                        usim_output_fname = usim_post.get_usim_datastore_fname(
-                            settings, io="output", year=state.forecast_year
-                        )
-                        usim_output_path = os.path.join(
-                            usim_data_dir, usim_output_fname
-                        )
-                    if os.path.exists(usim_output_path):
-                        artifact = cr.log_output(
-                            usim_output_path,
-                            key="usim_datastore_h5",
-                            description=f"UrbanSim datastore output for year {state.forecast_year}",
-                        )
-                        coupler.set("usim_datastore_h5", artifact or usim_output_path)
-                        if typed_coupler is not None and artifact is not None:
-                            typed_coupler.usim_datastore_h5 = artifact
-
-                scenario.run(
-                    fn=_run_urbansim_step,
+                urbansim_step = make_urbansim_step(
+                    coupler=coupler,
+                    year=year,
+                )
+                urbansim_config = build_step_config(
+                    fn=urbansim_step,
                     name=step_name,
                     model="urbansim",
-                    year=year,
+                    state=state,
                     iteration=0,
                     inputs=usim_inputs,
                     output_paths=expected_usim_outputs or None,
                     load_inputs=False,
-                    runtime_kwargs={
-                        "settings": settings,
-                        "state": state,
-                        "workspace": workspace,
-                        "usim_data_dir": usim_data_dir,
-                        "typed_coupler": typed_coupler,
-                        "expected_outputs": expected_usim_outputs,
-                    },
-                    **build_step_consist_kwargs("urbansim", settings),
+                    runtime_kwargs=common_runtime_kwargs(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        usim_data_dir=usim_data_dir,
+                        expected_outputs=expected_usim_outputs,
+                    ),
+                    consist_kwargs=build_step_consist_kwargs("urbansim", settings),
                 )
+                scenario.run(**urbansim_config.to_kwargs())
 
                 state.complete_step(WorkflowState.Stage.land_use)
 
             # B. VEHICLE OWNERSHIP MODEL (ATLAS)
+            # ATLAS models vehicle fleet evolution between the current year and forecast year.
+            # It runs at multiple intermediate years (every 2 years by default) to capture
+            # gradual fleet turnover and policy impacts (e.g., vehicle electrification).
+            #
+            # Key pattern: Each ATLAS sub-year reads the UrbanSim output from the previous
+            # iteration, updates it, and passes the updated file to the next sub-year.
+            # This creates a sequential dependency chain for provenance clarity.
+            #
             if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
                 formatted_print(
                     f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
@@ -678,17 +347,7 @@ def main():
 
                 # ATLAS Logic extraction
                 factory = ModelFactory()
-                preprocessor = factory.get_preprocessor(
-                    "atlas",
-                    state,
-                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
-                )
-                runner = factory.get_runner(
-                    "atlas",
-                    state,
-                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
-                )
-                postprocessor = factory.get_postprocessor(
+                preprocessor, runner, postprocessor = factory.get_components(
                     "atlas",
                     state,
                     major_stage=WorkflowState.Stage.vehicle_ownership_model,
@@ -707,145 +366,79 @@ def main():
 
                 # ATLAS Sub-loop
                 for atlas_year in yrs:
-                    # Create SubState
-                    class AtlasSubState:
-                        def __init__(self, parent_state, year):
-                            self.__dict__ = parent_state.__dict__.copy()
-                            self.year = year
-                            self.current_year = year
-                            self.forecast_year = year
-                            self.main_forecast_year = parent_state.forecast_year
-                            self.start_year = parent_state.start_year
-                            self.full_settings = parent_state.full_settings
-                            self.is_start_year = lambda: (
-                                year == parent_state.start_year
-                            )
-
-                        def set_sub_stage_progress(self, sub_stage_progress):
-                            state.set_sub_stage_progress(sub_stage_progress)
-
                     atlas_state = AtlasSubState(state, atlas_year)
                     step_name = f"atlas_{atlas_year}"
 
-                    atlas_usim_input = (
-                        coupler.get("usim_datastore_h5") or usim_datastore_h5_path
-                    )
-                    atlas_mutable_input_dir = workspace.get_atlas_mutable_input_dir()
-                    step_inputs = {
-                        "usim_datastore_h5": atlas_usim_input,
-                        "atlas_mutable_input_dir": atlas_mutable_input_dir,
-                    }
-                    expected_atlas_inputs = _expected_inputs_for(
-                        "atlas", settings, atlas_state, workspace
-                    )
-                    _merge_expected_inputs(step_inputs, expected_atlas_inputs)
-                    expected_atlas_outputs = clean_expected_outputs(
-                        _expected_outputs_for("atlas", settings, atlas_state, workspace)
-                    )
-
-                    def _run_atlas_step(
-                        *,
+                    step_inputs, step_input_descriptions = build_atlas_inputs(
+                        settings,
                         atlas_state,
-                        base_state,
-                        preprocessor,
-                        runner,
-                        postprocessor,
-                        workspace: Workspace,
-                        typed_coupler,
+                        workspace,
+                        atlas_year,
                         coupler,
-                        usim_datastore_h5_path: str,
-                        atlas_year: int,
-                        expected_outputs: dict,
-                    ):
-                        # 1. Preprocess
-                        preprocessor.update_state(atlas_state)
-                        input_data = preprocessor.preprocess(workspace)
+                        usim_datastore_h5_path,
+                    )
+                    log_inputs(step_inputs, step_input_descriptions)
+                    step_inputs = merge_model_expected_inputs(
+                        "atlas", step_inputs, settings, atlas_state, workspace
+                    )
+                    expected_atlas_outputs = clean_expected_outputs(
+                        build_outputs("atlas", settings, atlas_state, workspace)
+                    )
 
-                        # 2. Run
-                        runner.update_state(atlas_state)
-                        try:
-                            raw_outputs = runner.run(input_data, workspace)
-                            # 3. Postprocess
-                            postprocessor.update_state(atlas_state)
-                            postprocessor.postprocess(raw_outputs, workspace)
-
-                            atlas_output_dir = expected_outputs.get("atlas_output_dir")
-                            if not atlas_output_dir:
-                                atlas_output_dir = workspace.get_atlas_output_dir()
-                            if os.path.exists(atlas_output_dir):
-                                artifact = cr.log_output(
-                                    atlas_output_dir,
-                                    key="atlas_output_dir",
-                                    description=f"ATLAS output directory for year {atlas_year}",
-                                )
-                                coupler.set(
-                                    "atlas_output_dir", artifact or atlas_output_dir
-                                )
-                                if typed_coupler is not None and artifact is not None:
-                                    typed_coupler.atlas_output_dir = artifact
-
-                            # Capture the updated datastore container as an explicit output and
-                            # thread it forward to the next ATLAS sub-year.
-                            atlas_usim_output = expected_outputs.get(
-                                "usim_datastore_h5"
-                            )
-                            if not atlas_usim_output:
-                                atlas_usim_output = usim_datastore_h5_path
-                            if os.path.exists(atlas_usim_output):
-                                updated_h5 = cr.log_output(
-                                    atlas_usim_output,
-                                    key="usim_datastore_h5",
-                                    description=f"UrbanSim datastore after ATLAS update for year {atlas_year}",
-                                )
-                                coupler.set(
-                                    "usim_datastore_h5", updated_h5 or atlas_usim_output
-                                )
-                                if typed_coupler is not None and updated_h5 is not None:
-                                    typed_coupler.usim_datastore_h5 = updated_h5
-                            else:
-                                logger.warning(
-                                    f"[Main] UrbanSim datastore not found after ATLAS postprocess: {atlas_usim_output}"
-                                )
-                        except Exception:
-                            from pilates.utils.failure_handling import (
-                                persist_state_on_error,
-                            )
-
-                            persist_state_on_error(
-                                base_state, f"ATLAS year {atlas_year}"
-                            )
-                            sys.exit(1)
-
-                    scenario.run(
-                        fn=_run_atlas_step,
+                    atlas_step = make_atlas_step(
+                        coupler=coupler,
+                    )
+                    atlas_config = build_step_config(
+                        fn=atlas_step,
                         name=step_name,
                         model="atlas",
-                        year=atlas_year,
+                        state=atlas_state,
                         iteration=0,
                         inputs=step_inputs,
                         outputs=list(expected_atlas_outputs.keys()) or None,
                         output_paths=expected_atlas_outputs or None,
                         cache_hydration="outputs-requested",
                         load_inputs=False,
-                        runtime_kwargs={
-                            "atlas_state": atlas_state,
-                            "base_state": state,
-                            "preprocessor": preprocessor,
-                            "runner": runner,
-                            "postprocessor": postprocessor,
-                            "workspace": workspace,
-                            "typed_coupler": typed_coupler,
-                            "coupler": coupler,
-                            "usim_datastore_h5_path": usim_datastore_h5_path,
-                            "atlas_year": atlas_year,
-                            "expected_outputs": expected_atlas_outputs,
-                        },
-                        **build_step_consist_kwargs("atlas", settings),
+                        runtime_kwargs=common_runtime_kwargs(
+                            settings=settings,
+                            workspace=workspace,
+                            atlas_state=atlas_state,
+                            base_state=state,
+                            preprocessor=preprocessor,
+                            runner=runner,
+                            postprocessor=postprocessor,
+                            usim_datastore_h5_path=usim_datastore_h5_path,
+                            atlas_year=atlas_year,
+                            expected_outputs=expected_atlas_outputs,
+                        ),
+                        consist_kwargs=build_step_consist_kwargs("atlas", settings),
                     )
+                    scenario.run(**atlas_config.to_kwargs())
 
                 state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
             # C. SUPPLY/DEMAND LOOP
+            # Iterates between activity demand generation (ActivitySim) and traffic
+            # assignment (BEAM) until convergence. Consist handles expensive computation
+            # caching across iterations:
+            #
+            # - ActivitySim Compilation (Iter 1 only): Preprocesses demand data.
+            #   - Cached: If UrbanSim output unchanged since last run, skip.
+            #   - Outputs: Compiled data passed to all iterations via compile_outputs_holder.
+            #
+            # - ActivitySim Main (All Iters): Generates activity schedules using compiled data.
+            #   - Depends on: UrbanSim outputs (from land use stage) + compiled data.
+            #   - Outputs: Activity plans → coupler → BEAM inputs.
+            #   - Cached: If activity model inputs unchanged, skip.
+            #
+            # - BEAM Traffic Assignment (All Iters): Simulates traffic network.
+            #   - Depends on: ActivitySim outputs (demand).
+            #   - Outputs: Skims (travel times) → coupler → next ActivitySim iteration.
+            #   - Cached: If demand unchanged, skip.
+            #
+            # Loop terminates when:
+            # - Supplied iterations exhausted (settings.run.supply_demand_iters)
+            #
             if state.should_run(WorkflowState.Stage.supply_demand_loop):
                 total_iters = settings.run.supply_demand_iters
                 previous_beam_outputs = None
@@ -861,59 +454,42 @@ def main():
                         i,
                         WorkflowState.Stage.activity_demand,
                     ):
+                        # Consist integration: scenario.run handles caching/provenance;
+                        # coupler bridges ActivitySim outputs into BEAM inputs.
                         formatted_print("ACTIVITY DEMAND MODEL")
                         step_name = f"activitysim_{year}_iter{i}"
 
-                        asim_inputs = {}
-                        asim_data_dir = workspace.get_asim_mutable_data_dir()
-                        if os.path.exists(asim_data_dir):
-                            asim_inputs["asim_mutable_data_dir"] = asim_data_dir
-                            cr.log_input(
-                                asim_data_dir,
-                                key="asim_mutable_data_dir",
-                                description=f"ActivitySim mutable data dir for year {year}, iter {i}",
-                            )
-                        if usim_inputs and "usim_datastore_h5" in usim_inputs:
-                            asim_inputs["usim_datastore_h5"] = usim_inputs[
-                                "usim_datastore_h5"
-                            ]
-                            cr.log_input(
-                                usim_inputs["usim_datastore_h5"],
-                                key="usim_datastore_h5",
-                                description=f"UrbanSim datastore for ActivitySim year {year}, iter {i}",
-                            )
-                        zarr_skims_input = coupler.get("zarr_skims")
-                        if zarr_skims_input:
-                            asim_inputs["zarr_skims"] = zarr_skims_input
-                            zarr_skims_path = artifact_to_path(
-                                zarr_skims_input, workspace
-                            )
-                            if zarr_skims_path:
-                                cr.log_input(
-                                    zarr_skims_path,
-                                    key="zarr_skims",
-                                    description=f"ActivitySim compiled zarr skims for year {year}, iter {i}",
-                                )
-                        expected_asim_compile_inputs = _expected_inputs_for(
-                            "activitysim_compile", settings, state, workspace
+                        asim_inputs, asim_input_descriptions = build_activitysim_inputs(
+                            settings,
+                            state,
+                            workspace,
+                            year,
+                            i,
+                            coupler,
+                            usim_inputs=usim_inputs,
                         )
-                        _merge_expected_inputs(
-                            asim_inputs, expected_asim_compile_inputs
+                        log_inputs(asim_inputs, asim_input_descriptions)
+                        asim_inputs = merge_expected_model_inputs(
+                            ("activitysim_compile", "activitysim"),
+                            asim_inputs,
+                            settings,
+                            state,
+                            workspace,
                         )
-                        expected_asim_inputs = _expected_inputs_for(
-                            "activitysim", settings, state, workspace
-                        )
-                        _merge_expected_inputs(asim_inputs, expected_asim_inputs)
 
-                        activitysim_compile_holder = {
+                        compile_outputs_holder = {
                             "input_store": None,
                             "compile_outputs": None,
                         }
 
+                        # ActivitySim Compilation: Expensive preprocessing step, run only once.
+                        # This uses Consist caching to skip recompilation if UrbanSim outputs
+                        # are unchanged from previous run. The compiled data is then reused
+                        # across all supply/demand iterations.
                         if not state.asim_compiled:
                             compile_step_name = f"activitysim_compile_{year}"
                             expected_compile_outputs = clean_expected_outputs(
-                                _expected_outputs_for(
+                                build_outputs(
                                     "activitysim_compile",
                                     settings,
                                     state,
@@ -922,167 +498,74 @@ def main():
                                 )
                             )
 
-                            def _run_activitysim_compile_step(
-                                *,
-                                settings: PilatesConfig,
-                                state: WorkflowState,
-                                workspace: Workspace,
-                                output_holder: dict,
-                                typed_coupler,
-                                expected_outputs: dict,
-                            ):
-                                factory = ModelFactory()
-                                preprocessor = factory.get_preprocessor(
-                                    "activitysim",
-                                    state,
-                                    major_stage=WorkflowState.Stage.activity_demand,
-                                )
-                                compile_runner = factory.get_runner(
-                                    "activitysim_compile",
-                                    state,
-                                    major_stage=WorkflowState.Stage.activity_demand,
-                                )
-
-                                input_store = preprocessor.preprocess(workspace)
-                                compile_outputs = compile_runner.run(
-                                    input_store, workspace
-                                )
-
-                                output_holder["input_store"] = input_store
-                                output_holder["compile_outputs"] = compile_outputs
-
-                                zarr_record = None
-                                if compile_outputs:
-                                    for record in compile_outputs.all_records():
-                                        if record.short_name == "zarr_skims":
-                                            zarr_record = record
-                                            break
-                                zarr_output_path = expected_outputs.get("zarr_skims")
-                                if not zarr_output_path and zarr_record is not None:
-                                    zarr_output_path = zarr_record.file_path
-                                if zarr_output_path and os.path.exists(
-                                    zarr_output_path
-                                ):
-                                    artifact = cr.log_output(
-                                        zarr_output_path,
-                                        key="zarr_skims",
-                                        description="ActivitySim compiled zarr skims",
-                                    )
-                                    coupler.set(
-                                        "zarr_skims",
-                                        artifact or zarr_output_path,
-                                    )
-                                    if (
-                                        typed_coupler is not None
-                                        and artifact is not None
-                                    ):
-                                        typed_coupler.zarr_skims = artifact
-
-                            scenario.run(
-                                fn=_run_activitysim_compile_step,
+                            activitysim_compile_step = make_activitysim_compile_step(
+                                coupler=coupler,
+                            )
+                            compile_config = build_step_config(
+                                fn=activitysim_compile_step,
                                 name=compile_step_name,
                                 model="activitysim_compile",
-                                year=year,
+                                state=state,
                                 iteration=-1,
                                 inputs=asim_inputs,
                                 output_paths=expected_compile_outputs or None,
                                 cache_mode="overwrite",
                                 load_inputs=False,
-                                runtime_kwargs={
-                                    "settings": settings,
-                                    "state": state,
-                                    "workspace": workspace,
-                                    "output_holder": activitysim_compile_holder,
-                                    "typed_coupler": typed_coupler,
-                                    "expected_outputs": expected_compile_outputs,
-                                },
-                                **build_step_consist_kwargs(
+                                runtime_kwargs=common_runtime_kwargs(
+                                    settings=settings,
+                                    state=state,
+                                    workspace=workspace,
+                                    compile_outputs_holder=compile_outputs_holder,
+                                    expected_outputs=expected_compile_outputs,
+                                ),
+                                consist_kwargs=build_step_consist_kwargs(
                                     "activitysim_compile",
                                     settings,
                                     workspace_path=workspace.full_path,
                                 ),
                             )
+                            scenario.run(**compile_config.to_kwargs())
 
-                        def _run_activitysim_step(
-                            *,
-                            settings: PilatesConfig,
-                            state: WorkflowState,
-                            workspace: Workspace,
-                            output_holder: dict,
-                            typed_coupler,
-                            year: int,
-                            iteration: int,
-                            input_store: RecordStore,
-                            compile_outputs: RecordStore,
-                            expected_outputs: dict,
-                        ):
-                            combined_input_store = input_store
-                            if combined_input_store is not None and compile_outputs:
-                                combined_input_store = (
-                                    combined_input_store + compile_outputs
-                                )
-                            output_holder["activity_demand_outputs"] = (
-                                run_activity_demand(
-                                    settings,
-                                    state,
-                                    workspace,
-                                    input_store=combined_input_store,
-                                )
-                            )
-                            asim_output_dir = expected_outputs.get("asim_output_dir")
-                            if not asim_output_dir:
-                                asim_output_dir = workspace.get_asim_output_dir()
-                            if os.path.exists(asim_output_dir):
-                                artifact = cr.log_output(
-                                    asim_output_dir,
-                                    key="asim_output_dir",
-                                    description=f"ActivitySim output directory for year {year}, iter {iteration}",
-                                )
-                                coupler.set(
-                                    "asim_output_dir", artifact or asim_output_dir
-                                )
-                                if typed_coupler is not None and artifact is not None:
-                                    typed_coupler.asim_output_dir = artifact
-
-                        activitysim_holder = {"activity_demand_outputs": None}
+                        # ActivitySim Main: Generate activity-based travel demand.
+                        # Uses both UrbanSim outputs (land use) and compiled ActivitySim data.
+                        # Outputs stored in holder so BEAM step can reference them.
+                        # Note: Holder pattern allows Consist to manage caching while we thread
+                        # outputs forward across conditions and loops.
+                        asim_outputs_holder = {"activity_demand_outputs": None}
                         expected_asim_outputs = clean_expected_outputs(
-                            _expected_outputs_for(
-                                "activitysim", settings, state, workspace
-                            )
+                            build_outputs("activitysim", settings, state, workspace)
                         )
-                        scenario.run(
-                            fn=_run_activitysim_step,
+                        activitysim_step = make_activitysim_step(
+                            coupler=coupler,
+                        )
+                        asim_config = build_step_config(
+                            fn=activitysim_step,
                             name=step_name,
                             model="activitysim",
-                            year=year,
-                            iteration=i,
+                            state=state,
                             inputs=asim_inputs,
                             output_paths=expected_asim_outputs or None,
                             cache_mode="overwrite",
                             load_inputs=False,
-                            runtime_kwargs={
-                                "settings": settings,
-                                "state": state,
-                                "workspace": workspace,
-                                "output_holder": activitysim_holder,
-                                "typed_coupler": typed_coupler,
-                                "year": year,
-                                "iteration": i,
-                                "input_store": activitysim_compile_holder[
-                                    "input_store"
-                                ],
-                                "compile_outputs": activitysim_compile_holder[
+                            runtime_kwargs=common_runtime_kwargs(
+                                settings=settings,
+                                state=state,
+                                workspace=workspace,
+                                asim_outputs_holder=asim_outputs_holder,
+                                input_store=compile_outputs_holder["input_store"],
+                                compile_outputs=compile_outputs_holder[
                                     "compile_outputs"
                                 ],
-                                "expected_outputs": expected_asim_outputs,
-                            },
-                            **build_step_consist_kwargs(
+                                expected_outputs=expected_asim_outputs,
+                            ),
+                            consist_kwargs=build_step_consist_kwargs(
                                 "activitysim",
                                 settings,
                                 workspace_path=workspace.full_path,
                             ),
                         )
-                        activity_demand_outputs = activitysim_holder[
+                        scenario.run(**asim_config.to_kwargs())
+                        activity_demand_outputs = asim_outputs_holder[
                             "activity_demand_outputs"
                         ]
 
@@ -1098,104 +581,75 @@ def main():
                         i,
                         WorkflowState.Stage.traffic_assignment,
                     ):
+                        # Consist integration: scenario.run handles caching/provenance;
+                        # coupler bridges BEAM outputs into downstream stages.
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
                         step_name = f"beam_{year}_iter{i}"
 
-                        beam_inputs = {}
-                        if activity_demand_outputs:
-                            beam_inputs.update(activity_demand_outputs.to_mapping())
-                        if previous_beam_outputs:
-                            beam_inputs.update(previous_beam_outputs.to_mapping())
-                        zarr_skims_input = coupler.get("zarr_skims")
-                        if zarr_skims_input:
-                            beam_inputs["zarr_skims"] = zarr_skims_input
-                        expected_beam_inputs = _expected_inputs_for(
-                            "beam", settings, state, workspace
+                        (
+                            beam_inputs,
+                            beam_mutable_dir,
+                            beam_mutable_description,
+                        ) = build_beam_inputs(
+                            settings,
+                            state,
+                            workspace,
+                            year,
+                            i,
+                            coupler,
+                            activity_demand_outputs=activity_demand_outputs,
+                            previous_beam_outputs=previous_beam_outputs,
                         )
-                        _merge_expected_inputs(beam_inputs, expected_beam_inputs)
+                        beam_inputs = merge_model_expected_inputs(
+                            "beam", beam_inputs, settings, state, workspace
+                        )
                         if beam_inputs:
                             cr.log_artifacts(beam_inputs, direction="input")
-                        beam_mutable_dir = workspace.get_beam_mutable_data_dir()
-                        if os.path.exists(beam_mutable_dir):
+                        if beam_mutable_dir:
                             cr.log_input(
                                 beam_mutable_dir,
                                 key="beam_mutable_data_dir",
-                                description=f"BEAM mutable data dir for year {year}, iter {i}",
-                            )
-                        # TODO: Log BEAM outputs from prior iterations as inputs once coupler mappings exist.
-
-                        def _run_beam_step(
-                            *,
-                            settings: PilatesConfig,
-                            state: WorkflowState,
-                            workspace: Workspace,
-                            activity_demand_outputs: RecordStore,
-                            previous_beam_outputs: RecordStore,
-                            output_holder: dict,
-                            typed_coupler,
-                            year: int,
-                            iteration: int,
-                            expected_outputs: dict,
-                        ):
-                            output_holder["beam_outputs"] = run_traffic_assignment(
-                                settings,
-                                state,
-                                workspace,
-                                activity_demand_outputs,
-                                previous_beam_outputs,
-                            )
-                            beam_output_dir = expected_outputs.get("beam_output_dir")
-                            if not beam_output_dir:
-                                beam_output_dir = workspace.get_beam_output_dir()
-                            if os.path.exists(beam_output_dir):
-                                artifact = cr.log_output(
-                                    beam_output_dir,
-                                    key="beam_output_dir",
-                                    description=f"BEAM output directory for year {year}, iter {iteration}",
-                                )
-                                coupler.set(
-                                    "beam_output_dir", artifact or beam_output_dir
-                                )
-                                if typed_coupler is not None and artifact is not None:
-                                    typed_coupler.beam_output_dir = artifact
-
-                            output_store = output_holder.get("beam_outputs")
-                            update_coupler_from_beam_outputs(
-                                output_store, coupler, typed_coupler, workspace
+                                description=beam_mutable_description or "",
                             )
 
-                        beam_holder = {"beam_outputs": None}
+                        # BEAM Traffic Assignment: Simulate network equilibration.
+                        # Uses activity demand from ActivitySim (via activity_demand_outputs).
+                        # Generates skims (travel times) that feed back to ActivitySim
+                        # for next iteration via coupler (coupler["zarr_skims"]).
+                        # Consist handles caching: if demand unchanged → skip BEAM.
+                        beam_outputs_holder = {"beam_outputs": None}
                         expected_beam_outputs = clean_expected_outputs(
-                            _expected_outputs_for("beam", settings, state, workspace)
+                            build_outputs("beam", settings, state, workspace)
                         )
-
-                        scenario.run(
-                            fn=_run_beam_step,
+                        beam_step = make_beam_step(
+                            coupler=coupler,
+                        )
+                        beam_config = build_step_config(
+                            fn=beam_step,
                             name=step_name,
                             model="beam",
-                            year=year,
-                            iteration=i,
+                            state=state,
                             inputs=beam_inputs or None,
                             output_paths=expected_beam_outputs or None,
                             cache_mode="overwrite",
                             load_inputs=False,
-                            runtime_kwargs={
-                                "settings": settings,
-                                "state": state,
-                                "workspace": workspace,
-                                "activity_demand_outputs": activity_demand_outputs,
-                                "previous_beam_outputs": previous_beam_outputs,
-                                "output_holder": beam_holder,
-                                "typed_coupler": typed_coupler,
-                                "year": year,
-                                "iteration": i,
-                                "expected_outputs": expected_beam_outputs,
-                            },
-                            **build_step_consist_kwargs(
-                                "beam", settings, workspace_path=workspace.full_path
+                            runtime_kwargs=common_runtime_kwargs(
+                                settings=settings,
+                                state=state,
+                                workspace=workspace,
+                                activity_demand_outputs=activity_demand_outputs,
+                                previous_beam_outputs=previous_beam_outputs,
+                                beam_outputs_holder=beam_outputs_holder,
+                                expected_outputs=expected_beam_outputs,
+                            ),
+                            consist_kwargs=build_step_consist_kwargs(
+                                "beam",
+                                settings,
+                                workspace_path=workspace.full_path,
                             ),
                         )
-                        previous_beam_outputs = beam_holder["beam_outputs"]
+                        scenario.run(**beam_config.to_kwargs())
+                        previous_beam_outputs = beam_outputs_holder["beam_outputs"]
 
                         state.complete_step(
                             WorkflowState.Stage.supply_demand_loop,
@@ -1206,40 +660,30 @@ def main():
                 state.complete_step(WorkflowState.Stage.supply_demand_loop)
 
             # D. POST-PROCESSING
+            # Validation and output generation. Processes raw model outputs into
+            # final deliverables (e.g., travel metrics, visualization-ready data).
+            #
             if state.should_run(WorkflowState.Stage.postprocessing):
                 formatted_print("POST-PROCESSING")
 
-                def _run_postprocessing_step(
-                    *,
-                    settings: PilatesConfig,
-                    state: WorkflowState,
-                    workspace: Workspace,
-                ):
-                    if "postprocessing" in settings:
-                        process_event_file(
-                            settings, state.forecast_year, state.current_inner_iter
-                        )
-                        copy_outputs_to_mep(
-                            settings,
-                            state.forecast_year,
-                            state.current_inner_iter,
-                            workspace,
-                        )
-
-                scenario.run(
-                    fn=_run_postprocessing_step,
+                postprocessing_step = make_postprocessing_step()
+                postprocessing_config = build_step_config(
+                    fn=postprocessing_step,
                     name=f"postprocessing_{year}",
                     model="postprocessing",
-                    year=year,
+                    state=state,
                     cache_mode="overwrite",
                     load_inputs=False,
-                    runtime_kwargs={
-                        "settings": settings,
-                        "state": state,
-                        "workspace": workspace,
-                    },
-                    **build_step_consist_kwargs("postprocessing", settings),
+                    runtime_kwargs=common_runtime_kwargs(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    ),
+                    consist_kwargs=build_step_consist_kwargs(
+                        "postprocessing", settings
+                    ),
                 )
+                scenario.run(**postprocessing_config.to_kwargs())
                 state.complete_step(WorkflowState.Stage.postprocessing)
 
     formatted_print("SIMULATION COMPLETE")

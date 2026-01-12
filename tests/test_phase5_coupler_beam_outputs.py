@@ -26,16 +26,11 @@ def test_update_coupler_from_beam_outputs_updates_keys(tmp_path, monkeypatch):
     )
 
     coupler = DummyCoupler()
-    typed_coupler = SimpleNamespace()
     workspace = SimpleNamespace(full_path=str(tmp_path))
 
     monkeypatch.setattr(coupler_helpers.cr, "log_output", lambda *args, **kwargs: None)
 
-    coupler_helpers.update_coupler_from_beam_outputs(
-        output_store, coupler, typed_coupler, workspace
-    )
+    coupler_helpers.update_coupler_from_beam_outputs(output_store, coupler, workspace)
 
     assert coupler.values["zarr_skims"] == str(zarr_path)
     assert coupler.values["final_skims_omx"] == str(omx_path)
-    assert not hasattr(typed_coupler, "zarr_skims")
-    assert not hasattr(typed_coupler, "final_skims_omx")
