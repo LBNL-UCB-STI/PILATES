@@ -17,7 +17,7 @@ import os
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, cast
+from typing import Optional, cast, Dict, Any
 
 # Consist Imports (optional)
 try:
@@ -602,14 +602,6 @@ def main():
                         beam_inputs = merge_model_expected_inputs(
                             "beam", beam_inputs, settings, state, workspace
                         )
-                        if beam_inputs:
-                            cr.log_artifacts(beam_inputs, direction="input")
-                        if beam_mutable_dir:
-                            cr.log_input(
-                                beam_mutable_dir,
-                                key="beam_mutable_data_dir",
-                                description=beam_mutable_description or "",
-                            )
 
                         # BEAM Traffic Assignment: Simulate network equilibration.
                         # Uses activity demand from ActivitySim (via activity_demand_outputs).
@@ -638,6 +630,9 @@ def main():
                                 workspace=workspace,
                                 activity_demand_outputs=activity_demand_outputs,
                                 previous_beam_outputs=previous_beam_outputs,
+                                beam_inputs=beam_inputs,
+                                beam_mutable_dir=beam_mutable_dir,
+                                beam_mutable_description=beam_mutable_description,
                                 beam_outputs_holder=beam_outputs_holder,
                                 expected_outputs=expected_beam_outputs,
                             ),

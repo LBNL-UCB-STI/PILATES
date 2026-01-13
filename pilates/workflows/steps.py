@@ -251,6 +251,9 @@ def make_beam_step(
     @require_common_runtime(
         "activity_demand_outputs",
         "previous_beam_outputs",
+        "beam_inputs",
+        "beam_mutable_dir",
+        "beam_mutable_description",
         "beam_outputs_holder",
         "expected_outputs",
     )
@@ -261,9 +264,20 @@ def make_beam_step(
         workspace: Workspace,
         activity_demand_outputs: RecordStore,
         previous_beam_outputs: RecordStore,
+        beam_inputs: Dict[str, Any],
+        beam_mutable_dir: str,
+        beam_mutable_description: str,
         beam_outputs_holder: Dict[str, Any],
         expected_outputs: Dict[str, Any],
     ) -> None:
+        if beam_inputs:
+            cr.log_artifacts(beam_inputs, direction="input")
+        if beam_mutable_dir:
+            cr.log_input(
+                beam_mutable_dir,
+                key="beam_mutable_data_dir",
+                description=beam_mutable_description or "",
+            )
         beam_outputs_holder["beam_outputs"] = run_traffic_assignment(
             settings,
             state,
