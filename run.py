@@ -400,6 +400,7 @@ def main():
                         load_inputs=False,
                         runtime_kwargs=common_runtime_kwargs(
                             settings=settings,
+                            state=atlas_state,
                             workspace=workspace,
                             atlas_state=atlas_state,
                             base_state=state,
