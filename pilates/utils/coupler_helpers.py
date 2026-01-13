@@ -1,8 +1,11 @@
 import os
+import logging
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
 from pilates.utils import consist_runtime as cr
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pilates.generic.records import RecordStore
@@ -38,6 +41,99 @@ def artifact_to_path(
         if "://" not in path:
             return os.path.join(workspace.full_path, path)
     return path
+
+
+def resolve_artifact_from_value(
+    value: Any,
+    *,
+    key: Optional[str] = None,
+    workspace: Optional["Workspace"] = None,
+) -> Any:
+    """
+    Resolve a coupler value to a Consist Artifact when possible.
+
+    If the value is already an Artifact, it is returned unchanged. If it is a
+    path-like value, we attempt to locate a previously-logged Artifact by URI
+    (without re-hashing). Falls back to the original value when unavailable.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "uri") and getattr(value, "key", None):
+        return value
+
+    path = artifact_to_path(value, workspace)
+    if not path:
+        return value
+
+    tracker = cr.current_tracker()
+    if tracker is None or getattr(tracker, "db", None) is None:
+        return value
+
+    try:
+        if "://" in str(path):
+            uri = str(path)
+        else:
+            abs_path = os.path.abspath(path)
+            uri = tracker.fs.virtualize_path(abs_path)
+        artifact = tracker.db.find_latest_artifact_at_uri(uri)
+        if artifact is None:
+            return value
+        if key and getattr(artifact, "key", None) != key:
+            artifact.key = key
+        return artifact
+    except Exception:
+        return value
+
+
+def log_coupler_value(
+    *,
+    key: str,
+    value: Any,
+    workspace: Optional["Workspace"] = None,
+    context: str = "coupler",
+) -> None:
+    """
+    Debug helper to show whether a coupler value is an Artifact or raw path.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    value_type = type(value).__name__
+    has_uri = hasattr(value, "uri")
+    has_key = hasattr(value, "key")
+    path = artifact_to_path(value, workspace)
+
+    tracker = cr.current_tracker()
+    uri = None
+    db_hit = None
+    if has_uri:
+        uri = getattr(value, "uri", None)
+    elif path:
+        if tracker is not None:
+            if "://" in str(path):
+                uri = str(path)
+            else:
+                uri = tracker.fs.virtualize_path(os.path.abspath(path))
+        else:
+            uri = str(path)
+
+    if tracker is not None and getattr(tracker, "db", None) is not None and uri:
+        try:
+            db_hit = tracker.db.find_latest_artifact_at_uri(uri) is not None
+        except Exception:
+            db_hit = None
+
+    logger.debug(
+        "[CouplerDebug] %s key=%s type=%s has_uri=%s has_key=%s path=%s uri=%s db_hit=%s",
+        context,
+        key,
+        value_type,
+        has_uri,
+        has_key,
+        path,
+        uri,
+        db_hit,
+    )
 
 
 def update_coupler_from_beam_outputs(

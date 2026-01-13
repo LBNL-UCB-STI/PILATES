@@ -2,7 +2,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    resolve_artifact_from_value,
+    log_coupler_value,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -80,6 +84,24 @@ def build_activitysim_inputs(
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
         zarr_skims_input = get_value("zarr_skims")
+        log_coupler_value(
+            key="zarr_skims",
+            value=zarr_skims_input,
+            workspace=workspace,
+            context="activitysim_inputs.get",
+        )
+        zarr_skims_input = resolve_artifact_from_value(
+            zarr_skims_input, key="zarr_skims", workspace=workspace
+        )
+        set_from_artifact = getattr(coupler, "set_from_artifact", None)
+        if callable(set_from_artifact):
+            set_from_artifact("zarr_skims", zarr_skims_input)
+            log_coupler_value(
+                key="zarr_skims",
+                value=zarr_skims_input,
+                workspace=workspace,
+                context="activitysim_inputs.set",
+            )
     if zarr_skims_input:
         inputs["zarr_skims"] = zarr_skims_input
         zarr_skims_path = artifact_to_path(zarr_skims_input, workspace)
