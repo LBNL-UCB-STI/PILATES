@@ -148,6 +148,7 @@ def main():
         mounts={
             "inputs": project_root_abs,  # Immutable Source
             "workspace": full_run_dir,  # Mutable Destination
+            "scratch": str(Path(output_path).resolve()), # For temp files
         },
         project_root=project_root_abs,
     )

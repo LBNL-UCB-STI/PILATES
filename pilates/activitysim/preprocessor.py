@@ -25,6 +25,7 @@ from pilates.utils.zone_utils import (
 from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.utils import consist_runtime as cr
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -1875,9 +1876,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             workspace.get_usim_mutable_data_dir(), usim_input_fname
         )
         return {
-            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
             "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
             "usim_datastore_h5": (
                 usim_input_path if os.path.exists(usim_input_path) else None
             ),
@@ -2478,6 +2477,12 @@ def _copy_data_to_mutable_location(
         logger.info(
             f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
         )
+        if cr.current_run() is not None:
+            cr.log_input(
+                zone_source_path,
+                key="asim_canonical_zones_source",
+                description="ActivitySim canonical zones source file",
+            )
         shutil.copy(zone_source_path, asim_zones_path)
 
         input_records.add_record(
@@ -2511,6 +2516,12 @@ def _copy_data_to_mutable_location(
             logger.info(
                 f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}"
             )
+            if cr.current_run() is not None:
+                cr.log_input(
+                    clipped_geoms_source_path,
+                    key="asim_clipped_geoms_source",
+                    description="ActivitySim clipped geoms source file",
+                )
             shutil.copy(clipped_geoms_source_path, asim_clipped_path)
 
             input_records.add_record(

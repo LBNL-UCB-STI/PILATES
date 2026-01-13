@@ -47,7 +47,6 @@ class ActivitysimCompileRunner(GenericRunner):
         Declare the input paths/artifacts this runner expects from the workflow.
         """
         return {
-            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
         }
 
     @staticmethod
@@ -200,7 +199,6 @@ class ActivitysimRunner(GenericRunner):
         """
         zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         return {
-            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
             "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
         }
 
