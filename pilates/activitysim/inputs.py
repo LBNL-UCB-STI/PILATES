@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
@@ -21,6 +22,8 @@ def build_activitysim_inputs(
     iteration: int,
     coupler: Any,
     usim_inputs: Optional[Dict[str, Any]] = None,
+    *,
+    include_omx_skims: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
     """
     Build ActivitySim input paths from available sources.
@@ -69,10 +72,24 @@ def build_activitysim_inputs(
 
     asim_data_dir = Path(workspace.get_asim_mutable_data_dir())
     if asim_data_dir.exists():
-        inputs["asim_mutable_data_dir"] = str(asim_data_dir)
-        descriptions["asim_mutable_data_dir"] = (
-            f"ActivitySim mutable data dir for year {year}, iter {iteration}"
-        )
+        explicit_inputs = {
+            "asim_households_csv": "households.csv",
+            "asim_persons_csv": "persons.csv",
+            "asim_land_use_csv": "land_use.csv",
+        }
+        for key, filename in explicit_inputs.items():
+            file_path = asim_data_dir / filename
+            if file_path.exists():
+                inputs[key] = str(file_path)
+                descriptions[key] = f"ActivitySim input {filename} for year {year}"
+
+        if include_omx_skims:
+            omx_path = asim_data_dir / "skims.omx"
+            if omx_path.exists():
+                inputs["omx_skims"] = str(omx_path)
+                descriptions["omx_skims"] = (
+                    f"ActivitySim compile input skims (OMX) for year {year}"
+                )
 
     if usim_inputs and "usim_datastore_h5" in usim_inputs:
         inputs["usim_datastore_h5"] = usim_inputs["usim_datastore_h5"]

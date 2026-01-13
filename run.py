@@ -466,6 +466,7 @@ def main():
                             i,
                             coupler,
                             usim_inputs=usim_inputs,
+                            include_omx_skims=not state.asim_compiled,
                         )
                         log_inputs(asim_inputs, asim_input_descriptions)
                         asim_inputs = merge_expected_model_inputs(
@@ -524,6 +525,26 @@ def main():
                                 ),
                             )
                             scenario.run(**compile_config.to_kwargs())
+
+                        # Refresh inputs after compile so zarr_skims can be sourced
+                        # from the coupler as an Artifact (avoids re-hashing).
+                        asim_inputs, _ = build_activitysim_inputs(
+                            settings,
+                            state,
+                            workspace,
+                            year,
+                            i,
+                            coupler,
+                            usim_inputs=usim_inputs,
+                            include_omx_skims=False,
+                        )
+                        asim_inputs = merge_expected_model_inputs(
+                            ("activitysim_compile", "activitysim"),
+                            asim_inputs,
+                            settings,
+                            state,
+                            workspace,
+                        )
 
                         # ActivitySim Main: Generate activity-based travel demand.
                         # Uses both UrbanSim outputs (land use) and compiled ActivitySim data.

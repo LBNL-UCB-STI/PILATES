@@ -173,6 +173,20 @@ def make_activitysim_compile_step(
         )
 
         input_store = preprocessor.preprocess(workspace)
+        omx_record = None
+        if input_store:
+            for record in input_store.all_records():
+                if getattr(record, "short_name", None) == "omx_skims":
+                    omx_record = record
+                    break
+        if omx_record is not None:
+            omx_path = omx_record.get_absolute_path(base_path=workspace.full_path)
+            if omx_path and os.path.exists(omx_path):
+                cr.log_input(
+                    omx_path,
+                    key="omx_skims",
+                    description="ActivitySim compile input skims (OMX)",
+                )
         compile_outputs = compile_runner.run(input_store, workspace)
 
         compile_outputs_holder["input_store"] = input_store
