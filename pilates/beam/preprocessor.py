@@ -210,10 +210,17 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         Declare the input paths/artifacts this preprocessor expects from the workflow.
         """
+        asim_output_dir = None
+        if getattr(settings, "activity_demand_enabled", False):
+            asim_output_dir = workspace.get_asim_output_dir()
+
+        atlas_output_dir = None
+        if getattr(settings, "vehicle_ownership_model_enabled", False):
+            atlas_output_dir = workspace.get_atlas_output_dir()
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "asim_output_dir": workspace.get_asim_output_dir(),
-            "atlas_output_dir": workspace.get_atlas_output_dir(),
+            "asim_output_dir": asim_output_dir,
+            "atlas_output_dir": atlas_output_dir,
         }
 
     @staticmethod
