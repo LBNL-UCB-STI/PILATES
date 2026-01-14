@@ -48,6 +48,7 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.input_logging import log_inputs
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
 from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
 from pilates.workflows.step_io import build_outputs, merge_model_expected_inputs
 
@@ -321,56 +322,44 @@ def main():
                 )
 
                 urbansim_steps = [
-                    (
-                        "urbansim_preprocess",
-                        make_urbansim_preprocess_step(
+                    WorkflowStepSpec(
+                        name="urbansim_preprocess",
+                        step_func=make_urbansim_preprocess_step(
                             coupler=coupler,
                             outputs_holder=outputs_holder_year,
                         ),
-                        None,
-                        usim_inputs,
+                        inputs=usim_inputs,
                     ),
-                    (
-                        "urbansim_run",
-                        make_urbansim_run_step(
+                    WorkflowStepSpec(
+                        name="urbansim_run",
+                        step_func=make_urbansim_run_step(
                             coupler=coupler,
                             outputs_holder=outputs_holder_year,
                         ),
-                        ["usim_mutable_data_dir", "usim_datastore_h5"],
-                        None,
+                        input_keys=["usim_mutable_data_dir", "usim_datastore_h5"],
                     ),
-                    (
-                        "urbansim_postprocess",
-                        make_urbansim_postprocess_step(
+                    WorkflowStepSpec(
+                        name="urbansim_postprocess",
+                        step_func=make_urbansim_postprocess_step(
                             coupler=coupler,
                             outputs_holder=outputs_holder_year,
                         ),
-                        ["usim_datastore_h5"],
-                        None,
+                        input_keys=["usim_datastore_h5"],
                     ),
                 ]
-
-                for step_key, step_func, input_keys, inputs in urbansim_steps:
-                    validate_step_ready(step_key, outputs_holder_year)
-                    step_config = build_step_config(
-                        fn=step_func,
-                        name=f"{step_key}_{year}",
-                        model=step_key,
-                        state=state,
-                        iteration=0,
-                        inputs=inputs or None,
-                        input_keys=input_keys or None,
-                        output_paths=None,
-                        cache_hydration="inputs-missing",
-                        load_inputs=False,
-                        runtime_kwargs=common_runtime_kwargs(
-                            settings=settings,
-                            state=state,
-                            workspace=workspace,
-                        ),
-                        consist_kwargs=build_step_consist_kwargs(step_key, settings),
-                    )
-                    scenario.run(**step_config.to_kwargs())
+                WorkflowStage(
+                    name="land_use",
+                    stage_type=WorkflowState.Stage.land_use,
+                    steps=urbansim_steps,
+                ).run(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder_year,
+                    name_suffix=str(year),
+                )
 
                 postprocess_outputs = outputs_holder_year.urbansim_postprocess
                 run_outputs = outputs_holder_year.urbansim_run
@@ -480,59 +469,47 @@ def main():
                         ]
 
                     atlas_steps = [
-                        (
-                            "atlas_preprocess",
-                            make_atlas_preprocess_step(
+                        WorkflowStepSpec(
+                            name="atlas_preprocess",
+                            step_func=make_atlas_preprocess_step(
                                 coupler=coupler,
                                 outputs_holder=outputs_holder_atlas,
                             ),
-                            None,
-                            atlas_preprocess_inputs,
+                            inputs=atlas_preprocess_inputs,
                         ),
-                        (
-                            "atlas_run",
-                            make_atlas_run_step(
+                        WorkflowStepSpec(
+                            name="atlas_run",
+                            step_func=make_atlas_run_step(
                                 coupler=coupler,
                                 outputs_holder=outputs_holder_atlas,
                             ),
-                            ["usim_datastore_h5"],
-                            atlas_run_inputs or None,
+                            input_keys=["usim_datastore_h5"],
+                            inputs=atlas_run_inputs or None,
                         ),
-                        (
-                            "atlas_postprocess",
-                            make_atlas_postprocess_step(
+                        WorkflowStepSpec(
+                            name="atlas_postprocess",
+                            step_func=make_atlas_postprocess_step(
                                 coupler=coupler,
                                 outputs_holder=outputs_holder_atlas,
                             ),
-                            ["atlas_output_dir"],
-                            None,
+                            input_keys=["atlas_output_dir"],
                         ),
                     ]
 
                     try:
-                        for step_key, step_func, input_keys, inputs in atlas_steps:
-                            validate_step_ready(step_key, outputs_holder_atlas)
-                            step_config = build_step_config(
-                                fn=step_func,
-                                name=f"{step_key}_{atlas_year}",
-                                model=step_key,
-                                state=atlas_state,
-                                iteration=0,
-                                inputs=inputs or None,
-                                input_keys=input_keys or None,
-                                output_paths=None,
-                                cache_hydration="inputs-missing",
-                                load_inputs=False,
-                                runtime_kwargs=common_runtime_kwargs(
-                                    settings=settings,
-                                    state=atlas_state,
-                                    workspace=workspace,
-                                ),
-                                consist_kwargs=build_step_consist_kwargs(
-                                    step_key, settings
-                                ),
-                            )
-                            scenario.run(**step_config.to_kwargs())
+                        WorkflowStage(
+                            name="atlas",
+                            stage_type=WorkflowState.Stage.vehicle_ownership_model,
+                            steps=atlas_steps,
+                        ).run(
+                            scenario=scenario,
+                            state=atlas_state,
+                            settings=settings,
+                            workspace=workspace,
+                            coupler=coupler,
+                            outputs_holder=outputs_holder_atlas,
+                            name_suffix=str(atlas_year),
+                        )
                     except Exception:
                         from pilates.utils.failure_handling import (
                             persist_state_on_error,
@@ -863,61 +840,51 @@ def main():
                             beam_postprocess_input_keys.append("asim_output_dir")
 
                         beam_steps = [
-                            (
-                                "beam_preprocess",
-                                make_beam_preprocess_step(
+                            WorkflowStepSpec(
+                                name="beam_preprocess",
+                                step_func=make_beam_preprocess_step(
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                beam_preprocess_input_keys,
-                                beam_preprocess_inputs or None,
+                                input_keys=beam_preprocess_input_keys,
+                                inputs=beam_preprocess_inputs or None,
                             ),
-                            (
-                                "beam_run",
-                                make_beam_run_step(
+                            WorkflowStepSpec(
+                                name="beam_run",
+                                step_func=make_beam_run_step(
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                ["beam_mutable_data_dir", "zarr_skims"],
-                                None,
+                                input_keys=["beam_mutable_data_dir", "zarr_skims"],
                             ),
-                            (
-                                "beam_postprocess",
-                                make_beam_postprocess_step(
+                            WorkflowStepSpec(
+                                name="beam_postprocess",
+                                step_func=make_beam_postprocess_step(
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                beam_postprocess_input_keys,
-                                None,
+                                input_keys=beam_postprocess_input_keys,
                             ),
                         ]
 
-                        for step_key, step_func, input_keys, inputs in beam_steps:
-                            validate_step_ready(step_key, outputs_holder)
-                            step_config = build_step_config(
-                                fn=step_func,
-                                name=f"{step_key}_{year}_iter{i}",
-                                model=step_key,
-                                state=state,
-                                inputs=inputs or None,
-                                input_keys=input_keys or None,
-                                output_paths=None,
-                                cache_hydration="inputs-missing",
-                                load_inputs=False,
-                                runtime_kwargs=common_runtime_kwargs(
-                                    settings=settings,
-                                    state=state,
-                                    workspace=workspace,
-                                    activity_demand_outputs=activity_demand_outputs,
-                                    previous_beam_outputs=previous_beam_outputs,
-                                ),
-                                consist_kwargs=build_step_consist_kwargs(
-                                    step_key,
-                                    settings,
-                                    workspace_path=workspace.full_path,
-                                ),
-                            )
-                            scenario.run(**step_config.to_kwargs())
+                        WorkflowStage(
+                            name="beam",
+                            stage_type=WorkflowState.Stage.traffic_assignment,
+                            steps=beam_steps,
+                        ).run(
+                            scenario=scenario,
+                            state=state,
+                            settings=settings,
+                            workspace=workspace,
+                            coupler=coupler,
+                            outputs_holder=outputs_holder,
+                            name_suffix=f"{year}_iter{i}",
+                            iteration=i,
+                            runtime_kwargs_extra={
+                                "activity_demand_outputs": activity_demand_outputs,
+                                "previous_beam_outputs": previous_beam_outputs,
+                            },
+                        )
 
                         beam_run_outputs = outputs_holder.beam_run
                         beam_post_outputs = outputs_holder.beam_postprocess

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import (
@@ -19,6 +20,7 @@ from typing import (
 from pilates.generic.records import FileRecord, RecordStore
 
 StepOutputsT = TypeVar("StepOutputsT")
+logger = logging.getLogger(__name__)
 
 
 def _serialize_value(value: Any) -> Any:
@@ -197,6 +199,13 @@ class StepOutputsBase:
         """
         Validate that expected output paths exist.
         """
+        logger.debug(
+            "Validating %s: required=%s optional=%s dict=%s",
+            self.__class__.__name__,
+            self.required_path_fields,
+            self.optional_path_fields,
+            self.dict_path_fields,
+        )
         for field_name in self.required_path_fields:
             path = getattr(self, field_name, None)
             if path is None or not path.exists():

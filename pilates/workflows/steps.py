@@ -331,6 +331,7 @@ def _make_generic_step_function(
         workspace: Workspace,
         **kwargs: Any,
     ) -> None:
+        logger.debug("Starting %s %s step", model_name, phase)
         factory = ModelFactory()
         component = component_getter(factory, state)
 
@@ -338,6 +339,12 @@ def _make_generic_step_function(
         if input_logger is not None:
             extra_kwargs = (
                 input_logger(settings, state, workspace, outputs_holder) or {}
+            )
+            logger.debug(
+                "%s %s input logger keys: %s",
+                model_name,
+                phase,
+                list(extra_kwargs.keys()),
             )
 
         record_store = component_executor(
@@ -347,6 +354,17 @@ def _make_generic_step_function(
             **extra_kwargs,
             **kwargs,
         )
+        if record_store is not None:
+            try:
+                record_keys = list(record_store.to_mapping().keys())
+            except AttributeError:
+                record_keys = []
+            logger.debug(
+                "%s %s record store keys: %s",
+                model_name,
+                phase,
+                record_keys,
+            )
 
         step_outputs = record_store_to_outputs(
             record_store=record_store,
