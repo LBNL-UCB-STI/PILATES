@@ -2708,7 +2708,7 @@ def _merge_beam_skims_to_zarr(
         temp_path = f"{all_skims_path}_temp_merged"
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
-        skims_ds.to_zarr(temp_path, mode="w", consolidated=True)
+        skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
         if os.path.exists(all_skims_path):
             shutil.rmtree(all_skims_path)
         os.rename(temp_path, all_skims_path)

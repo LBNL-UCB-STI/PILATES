@@ -147,6 +147,14 @@ class GenericRunner(ABC, Model):
         Executes container with Consist if available, otherwise falls back to direct
         Docker/Singularity execution without provenance.
         """
+        if getattr(settings.run, "use_stubs", False):
+            logger.warning(
+                "[%s] use_stubs=True; skipping container execution for image=%s",
+                model_name,
+                image,
+            )
+            return True
+
         mounts = GenericRunner._extract_mounts(volumes)
         consist_volumes = {host: container for host, container, _mode in mounts}
 

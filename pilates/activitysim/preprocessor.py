@@ -3348,9 +3348,6 @@ def _create_land_use_table(
     zones.loc[:, "TERMINAL"] = 0  # FIXME
     zones.loc[:, "COUNTY"] = 1  # FIXME
 
-    logger.info(zones.head())
-    logger.info(zones.dtypes)
-
     for col in zones.columns:
         try:
             zones[col] = zones[col].fillna(0.0)

@@ -36,17 +36,8 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.atlas.inputs import build_atlas_inputs
-from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
-from pilates.utils.coupler_helpers import (
-    artifact_to_path,
-    clean_expected_outputs,
-    update_coupler_from_beam_outputs,
-    resolve_artifact_from_value,
-)
 from pilates.utils.input_logging import log_inputs
-from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.artifact_constants import (
     ASIM_MUTABLE_DATA_DIR,
     ASIM_OUTPUT_DIR,
@@ -59,36 +50,18 @@ from pilates.workflows.artifact_constants import (
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
-from pilates.workflows.orchestration import (
-    ManifestConfig,
-    WorkflowStage,
-    WorkflowStepSpec,
-    run_manifested_steps,
-)
 from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
-from pilates.workflows.step_io import build_outputs, merge_model_expected_inputs
+from pilates.workflows.stages import (
+    run_land_use_stage,
+    run_postprocessing_stage,
+    run_supply_demand_stage,
+    run_vehicle_ownership_stage,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
-from pilates.workflows.steps import (
-    make_activitysim_compile_step,
-    make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step,
-    make_activitysim_run_step,
-    make_atlas_postprocess_step,
-    make_atlas_preprocess_step,
-    make_atlas_run_step,
-    make_beam_postprocess_step,
-    make_beam_preprocess_step,
-    make_beam_run_step,
-    make_postprocessing_step,
-    make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step,
-    make_urbansim_run_step,
-    StepOutputsHolder,
-)
+from pilates.workflows.steps import StepOutputsHolder
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -317,562 +290,54 @@ def main():
             usim_inputs: Dict[str, Any] = {}
             outputs_holder_year = StepOutputsHolder()
 
-            # A. LAND USE FORECASTING
-            # Forecasts demographic and economic changes using UrbanSim long-term simulation.
-            # Outputs: Households, persons, jobs, land use → coupler → all later stages.
-            # Cached: If no land-use-sensitive inputs changed, skip this stage.
-            #
             if state.should_run(WorkflowState.Stage.land_use):
-                formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
-
-                usim_inputs, usim_input_descriptions = build_urbansim_inputs(
-                    settings, state, workspace, year
-                )
-                log_inputs(usim_inputs, usim_input_descriptions)
-                usim_inputs = merge_model_expected_inputs(
-                    "urbansim", usim_inputs, settings, state, workspace
-                )
-
-                urbansim_steps = [
-                    WorkflowStepSpec(
-                        name="urbansim_preprocess",
-                        step_func=make_urbansim_preprocess_step(
-                            coupler=coupler,
-                            outputs_holder=outputs_holder_year,
-                        ),
-                        inputs=usim_inputs,
-                    ),
-                    WorkflowStepSpec(
-                        name="urbansim_run",
-                        step_func=make_urbansim_run_step(
-                            coupler=coupler,
-                            outputs_holder=outputs_holder_year,
-                        ),
-                        input_keys=[USIM_MUTABLE_DATA_DIR, USIM_DATASTORE_H5],
-                    ),
-                    WorkflowStepSpec(
-                        name="urbansim_postprocess",
-                        step_func=make_urbansim_postprocess_step(
-                            coupler=coupler,
-                            outputs_holder=outputs_holder_year,
-                        ),
-                        input_keys=[USIM_DATASTORE_H5],
-                    ),
-                ]
-                WorkflowStage(
-                    name="land_use",
-                    stage_type=WorkflowState.Stage.land_use,
-                    steps=urbansim_steps,
-                ).run(
+                usim_inputs = run_land_use_stage(
                     scenario=scenario,
                     state=state,
                     settings=settings,
                     workspace=workspace,
                     coupler=coupler,
-                    outputs_holder=outputs_holder_year,
-                    name_suffix=str(year),
+                    year=year,
+                    outputs_holder_year=outputs_holder_year,
                 )
-
-                postprocess_outputs = outputs_holder_year.urbansim_postprocess
-                run_outputs = outputs_holder_year.urbansim_run
-                if (
-                    postprocess_outputs is not None
-                    and postprocess_outputs.usim_datastore_h5 is not None
-                ):
-                    usim_inputs[USIM_DATASTORE_H5] = str(
-                        postprocess_outputs.usim_datastore_h5
-                    )
-                elif (
-                    run_outputs is not None
-                    and run_outputs.usim_datastore_h5 is not None
-                ):
-                    usim_inputs[USIM_DATASTORE_H5] = str(
-                        run_outputs.usim_datastore_h5
-                    )
-
                 state.complete_step(WorkflowState.Stage.land_use)
 
-            # B. VEHICLE OWNERSHIP MODEL (ATLAS)
-            # ATLAS models vehicle fleet evolution between the current year and forecast year.
-            # It runs at multiple intermediate years (every 2 years by default) to capture
-            # gradual fleet turnover and policy impacts (e.g., vehicle electrification).
-            #
-            # Key pattern: Each ATLAS sub-year reads the UrbanSim output from the previous
-            # iteration, updates it, and passes the updated file to the next sub-year.
-            # This creates a sequential dependency chain for provenance clarity.
-            #
             if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
                 formatted_print(
                     f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
                 )
-                logger.info("[Main] Running ATLAS vehicle ownership model.")
-
-                # Explicitly thread the mutable UrbanSim datastore across ATLAS sub-years.
-                # This makes the sequential dependency clear (each sub-year reads the updated file
-                # produced by the previous sub-year) and improves provenance clarity.
-                coupler.pop(USIM_DATASTORE_H5, None)
-                if state.run_info_path and os.path.exists(state.run_info_path):
-                    previous_run_dir = os.path.dirname(state.run_info_path)
-                    urbansim_datastore_dir = os.path.join(
-                        previous_run_dir, "urbansim", "data"
-                    )
-                else:
-                    urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
-
-                if state.is_start_year():
-                    region = settings.run.region
-                    region_id = settings.urbansim.region_mappings[
-                        "region_to_region_id"
-                    ][region]
-                    usim_datastore_fname = settings.urbansim.input_file_template.format(
-                        region_id=region_id
-                    )
-                else:
-                    usim_datastore_fname = (
-                        settings.urbansim.output_file_template.format(
-                            year=state.forecast_year
-                        )
-                    )
-
-                usim_datastore_h5_path = os.path.join(
-                    urbansim_datastore_dir, usim_datastore_fname
+                run_vehicle_ownership_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    year=year,
+                    build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
                 )
-
-                forecast = True
-                yrs = (
-                    [state.year]
-                    + [y + 2 for y in range(state.year, state.forecast_year, 2)]
-                    if forecast
-                    else [state.year]
-                )
-                if not yrs and forecast:
-                    yrs = [state.forecast_year]
-
-                # ATLAS Sub-loop
-                for atlas_year in yrs:
-                    atlas_state = AtlasSubState(state, atlas_year)
-                    outputs_holder_atlas = StepOutputsHolder()
-
-                    step_inputs, step_input_descriptions = build_atlas_inputs(
-                        settings,
-                        atlas_state,
-                        workspace,
-                        atlas_year,
-                        coupler,
-                        usim_datastore_h5_path,
-                    )
-                    log_inputs(step_inputs, step_input_descriptions)
-                    step_inputs = merge_model_expected_inputs(
-                        "atlas", step_inputs, settings, atlas_state, workspace
-                    )
-                    atlas_preprocess_inputs = dict(step_inputs)
-                    atlas_static_inputs = workspace.input_data.get("atlas")
-                    if atlas_static_inputs is not None:
-                        for key, value in atlas_static_inputs.to_mapping().items():
-                            atlas_preprocess_inputs.setdefault(key, value)
-                    else:
-                        atlas_preprocess_inputs.update(
-                            build_atlas_static_inputs_fallback(workspace)
-                        )
-                    atlas_run_inputs = {}
-                    if "atlas_mutable_input_dir" in step_inputs:
-                        atlas_run_inputs["atlas_mutable_input_dir"] = step_inputs[
-                            "atlas_mutable_input_dir"
-                        ]
-
-                    atlas_steps = [
-                        WorkflowStepSpec(
-                            name="atlas_preprocess",
-                            step_func=make_atlas_preprocess_step(
-                                coupler=coupler,
-                                outputs_holder=outputs_holder_atlas,
-                            ),
-                            inputs=atlas_preprocess_inputs,
-                        ),
-                        WorkflowStepSpec(
-                            name="atlas_run",
-                            step_func=make_atlas_run_step(
-                                coupler=coupler,
-                                outputs_holder=outputs_holder_atlas,
-                            ),
-                            input_keys=[USIM_DATASTORE_H5],
-                            inputs=atlas_run_inputs or None,
-                        ),
-                        WorkflowStepSpec(
-                            name="atlas_postprocess",
-                            step_func=make_atlas_postprocess_step(
-                                coupler=coupler,
-                                outputs_holder=outputs_holder_atlas,
-                            ),
-                            input_keys=[ATLAS_OUTPUT_DIR],
-                        ),
-                    ]
-
-                    try:
-                        WorkflowStage(
-                            name="atlas",
-                            stage_type=WorkflowState.Stage.vehicle_ownership_model,
-                            steps=atlas_steps,
-                        ).run(
-                            scenario=scenario,
-                            state=atlas_state,
-                            settings=settings,
-                            workspace=workspace,
-                            coupler=coupler,
-                            outputs_holder=outputs_holder_atlas,
-                            name_suffix=str(atlas_year),
-                        )
-                    except Exception:
-                        from pilates.utils.failure_handling import (
-                            persist_state_on_error,
-                        )
-
-                        persist_state_on_error(state, f"ATLAS year {atlas_year}")
-                        sys.exit(1)
-
                 state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
-            # C. SUPPLY/DEMAND LOOP
-            # Iterates between activity demand generation (ActivitySim) and traffic
-            # assignment (BEAM) until convergence. Consist handles expensive computation
-            # caching across iterations:
-            #
-            # - ActivitySim Compilation (Iter 1 only): Preprocesses demand data.
-            #   - Cached: If UrbanSim output unchanged since last run, skip.
-            #   - Outputs: Compiled data passed to all iterations via compile_outputs_holder.
-            #
-            # - ActivitySim Main (All Iters): Generates activity schedules using compiled data.
-            #   - Depends on: UrbanSim outputs (from land use stage) + compiled data.
-            #   - Outputs: Activity plans → coupler → BEAM inputs.
-            #   - Cached: If activity model inputs unchanged, skip.
-            #
-            # - BEAM Traffic Assignment (All Iters): Simulates traffic network.
-            #   - Depends on: ActivitySim outputs (demand).
-            #   - Outputs: Skims (travel times) → coupler → next ActivitySim iteration.
-            #   - Cached: If demand unchanged, skip.
-            #
-            # Loop terminates when:
-            # - Supplied iterations exhausted (settings.run.supply_demand_iters)
-            #
             if state.should_run(WorkflowState.Stage.supply_demand_loop):
-                total_iters = settings.run.supply_demand_iters
-                previous_beam_outputs = None
+                run_supply_demand_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    year=year,
+                    usim_inputs=usim_inputs,
+                    build_manifest_path=build_manifest_path,
+                )
 
-                for i in range(state.iteration, total_iters):
-                    state.iteration = i
-                    formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
-                    activity_demand_outputs = None
-                    outputs_holder = StepOutputsHolder()
-                    manifest_path = build_manifest_path(workspace, year, i)
-                    manifest_config = ManifestConfig(path=manifest_path)
-
-                    # C1. ACTIVITY DEMAND
-                    if state.should_run(
-                        WorkflowState.Stage.supply_demand_loop,
-                        i,
-                        WorkflowState.Stage.activity_demand,
-                    ):
-                        formatted_print("ACTIVITY DEMAND MODEL")
-
-                        # ActivitySim runs in two manifest-checkpointed phases:
-                        # 1) Preprocess (per-iteration) to prepare compile inputs.
-                        # 2) Compile (per-year) outside manifest checkpointing.
-                        # 3) Run/Postprocess (per-iteration) for demand outputs.
-                        preprocess_specs = [
-                            WorkflowStepSpec(
-                                name="activitysim_preprocess",
-                                step_func=make_activitysim_preprocess_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=[USIM_DATASTORE_H5],
-                            )
-                        ]
-                        run_manifested_steps(
-                            stage_name="activity_demand_preprocess",
-                            steps=preprocess_specs,
-                            outputs_holder=outputs_holder,
-                            manifest_config=manifest_config,
-                            scenario=scenario,
-                            state=state,
-                            settings=settings,
-                            workspace=workspace,
-                            coupler=coupler,
-                            name_suffix=f"{year}_iter{i}",
-                            iteration=i,
-                        )
-
-                        # ActivitySim Compilation: run once per year after preprocess.
-                        if not state.asim_compiled:
-                            upstream = outputs_holder.activitysim_preprocess
-                            if upstream is None:
-                                raise RuntimeError(
-                                    "ActivitySim compile requires preprocess outputs."
-                                )
-                            compile_inputs = upstream.to_record_store().to_mapping()
-                            expected_compile_outputs = clean_expected_outputs(
-                                build_outputs(
-                                    "activitysim_compile",
-                                    settings,
-                                    state,
-                                    workspace,
-                                    components=("runner",),
-                                )
-                            )
-                            activitysim_compile_step = make_activitysim_compile_step(
-                                coupler=coupler,
-                                outputs_holder=outputs_holder,
-                            )
-                            compile_config = build_step_config(
-                                fn=activitysim_compile_step,
-                                name=f"activitysim_compile_{year}",
-                                model="activitysim_compile",
-                                state=state,
-                                iteration=-1,
-                                inputs=compile_inputs or None,
-                                output_paths=expected_compile_outputs or None,
-                                cache_mode="overwrite",
-                                load_inputs=False,
-                                runtime_kwargs=common_runtime_kwargs(
-                                    settings=settings,
-                                    state=state,
-                                    workspace=workspace,
-                                    expected_outputs=expected_compile_outputs,
-                                ),
-                                consist_kwargs=build_step_consist_kwargs(
-                                    "activitysim_compile",
-                                    settings,
-                                    workspace_path=workspace.full_path,
-                                ),
-                            )
-                            scenario.run(**compile_config.to_kwargs())
-                        else:
-                            zarr_value = None
-                            get_value = getattr(coupler, "get", None)
-                            if callable(get_value):
-                                zarr_value = resolve_artifact_from_value(
-                                    get_value(ZARR_SKIMS),
-                                    key=ZARR_SKIMS,
-                                    workspace=workspace,
-                                )
-                            zarr_path = artifact_to_path(zarr_value, workspace)
-                            if not zarr_path:
-                                candidate = os.path.join(
-                                    workspace.get_asim_output_dir(),
-                                    "cache",
-                                    "skims.zarr",
-                                )
-                                if os.path.exists(candidate):
-                                    zarr_path = candidate
-                            if not zarr_path or not os.path.exists(zarr_path):
-                                raise RuntimeError(
-                                    "ActivitySim run requires zarr_skims, "
-                                    "but none were found while asim_compiled=True."
-                                )
-
-                        activitysim_specs = [
-                            WorkflowStepSpec(
-                                name="activitysim_run",
-                                step_func=make_activitysim_run_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=[ASIM_MUTABLE_DATA_DIR, ZARR_SKIMS],
-                            ),
-                            WorkflowStepSpec(
-                                name="activitysim_postprocess",
-                                step_func=make_activitysim_postprocess_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=[ASIM_OUTPUT_DIR],
-                                inputs={
-                                    USIM_MUTABLE_DATA_DIR: workspace.get_usim_mutable_data_dir()
-                                },
-                            ),
-                        ]
-                        run_manifested_steps(
-                            stage_name="activity_demand_run_postprocess",
-                            steps=activitysim_specs,
-                            outputs_holder=outputs_holder,
-                            manifest_config=manifest_config,
-                            scenario=scenario,
-                            state=state,
-                            settings=settings,
-                            workspace=workspace,
-                            coupler=coupler,
-                            name_suffix=f"{year}_iter{i}",
-                            iteration=i,
-                        )
-
-                        state.complete_step(
-                            WorkflowState.Stage.supply_demand_loop,
-                            i,
-                            WorkflowState.Stage.activity_demand,
-                        )
-
-                    postprocess_outputs = outputs_holder.activitysim_postprocess
-                    activity_demand_outputs = (
-                        postprocess_outputs.to_record_store()
-                        if postprocess_outputs is not None
-                        else None
-                    )
-
-                    # C2. TRAFFIC ASSIGNMENT
-                    if state.should_run(
-                        WorkflowState.Stage.supply_demand_loop,
-                        i,
-                        WorkflowState.Stage.traffic_assignment,
-                    ):
-                        # Consist integration: scenario.run handles caching/provenance;
-                        # coupler bridges BEAM outputs into downstream stages.
-                        formatted_print("TRAFFIC ASSIGNMENT MODEL")
-                        beam_preprocess_inputs: Dict[str, Any] = {}
-                        if activity_demand_outputs is not None:
-                            beam_preprocess_inputs.update(
-                                activity_demand_outputs.to_mapping()
-                            )
-                        if previous_beam_outputs is not None:
-                            beam_preprocess_inputs.update(
-                                previous_beam_outputs.to_mapping()
-                            )
-                        if (
-                            getattr(settings, "vehicle_ownership_model_enabled", False)
-                            and i == 0
-                        ):
-                            if state.run_info_path and os.path.exists(
-                                state.run_info_path
-                            ):
-                                previous_run_dir = os.path.dirname(state.run_info_path)
-                                atlas_output_dir = os.path.join(
-                                    previous_run_dir, "atlas", "atlas_output"
-                                )
-                            else:
-                                atlas_output_dir = workspace.get_atlas_output_dir()
-                            atlas_vehicle_path = os.path.join(
-                                atlas_output_dir,
-                                f"vehicles2_{state.forecast_year}.csv",
-                            )
-                            if not os.path.exists(atlas_vehicle_path):
-                                atlas_vehicle_path = os.path.join(
-                                    atlas_output_dir,
-                                    f"vehicles2_{state.forecast_year - 1}.csv",
-                                )
-                            if os.path.exists(atlas_vehicle_path):
-                                beam_preprocess_inputs.setdefault(
-                                    ATLAS_VEHICLES2_INPUT, atlas_vehicle_path
-                                )
-
-                        beam_preprocess_input_keys = [ASIM_OUTPUT_DIR]
-                        if getattr(settings, "vehicle_ownership_model_enabled", False):
-                            beam_preprocess_input_keys.append(ATLAS_OUTPUT_DIR)
-
-                        beam_postprocess_input_keys = [BEAM_OUTPUT_DIR]
-                        if getattr(settings, "activity_demand_enabled", False):
-                            beam_postprocess_input_keys.append(ASIM_OUTPUT_DIR)
-
-                        beam_steps = [
-                            WorkflowStepSpec(
-                                name="beam_preprocess",
-                                step_func=make_beam_preprocess_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=beam_preprocess_input_keys,
-                                inputs=beam_preprocess_inputs or None,
-                            ),
-                            WorkflowStepSpec(
-                                name="beam_run",
-                                step_func=make_beam_run_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=[BEAM_MUTABLE_DATA_DIR, ZARR_SKIMS],
-                            ),
-                            WorkflowStepSpec(
-                                name="beam_postprocess",
-                                step_func=make_beam_postprocess_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                input_keys=beam_postprocess_input_keys,
-                            ),
-                        ]
-
-                        WorkflowStage(
-                            name="beam",
-                            stage_type=WorkflowState.Stage.traffic_assignment,
-                            steps=beam_steps,
-                        ).run(
-                            scenario=scenario,
-                            state=state,
-                            settings=settings,
-                            workspace=workspace,
-                            coupler=coupler,
-                            outputs_holder=outputs_holder,
-                            name_suffix=f"{year}_iter{i}",
-                            iteration=i,
-                            runtime_kwargs_extra={
-                                "activity_demand_outputs": activity_demand_outputs,
-                                "previous_beam_outputs": previous_beam_outputs,
-                            },
-                        )
-
-                        beam_run_outputs = outputs_holder.beam_run
-                        beam_post_outputs = outputs_holder.beam_postprocess
-                        combined_beam_outputs = None
-                        if (
-                            beam_run_outputs is not None
-                            or beam_post_outputs is not None
-                        ):
-                            combined_beam_outputs = RecordStore()
-                            if beam_run_outputs is not None:
-                                combined_beam_outputs += (
-                                    beam_run_outputs.to_record_store()
-                                )
-                            if beam_post_outputs is not None:
-                                combined_beam_outputs += (
-                                    beam_post_outputs.to_record_store()
-                                )
-                        previous_beam_outputs = combined_beam_outputs
-                        if combined_beam_outputs is not None:
-                            update_coupler_from_beam_outputs(
-                                combined_beam_outputs, coupler, workspace
-                            )
-
-                        state.complete_step(
-                            WorkflowState.Stage.supply_demand_loop,
-                            i,
-                            WorkflowState.Stage.traffic_assignment,
-                        )
-
-                state.complete_step(WorkflowState.Stage.supply_demand_loop)
-
-            # D. POST-PROCESSING
-            # Validation and output generation. Processes raw model outputs into
-            # final deliverables (e.g., travel metrics, visualization-ready data).
-            #
             if state.should_run(WorkflowState.Stage.postprocessing):
                 formatted_print("POST-PROCESSING")
-
-                postprocessing_step = make_postprocessing_step()
-                postprocessing_config = build_step_config(
-                    fn=postprocessing_step,
-                    name=f"postprocessing_{year}",
-                    model="postprocessing",
+                run_postprocessing_stage(
+                    scenario=scenario,
                     state=state,
-                    cache_mode="overwrite",
-                    load_inputs=False,
-                    runtime_kwargs=common_runtime_kwargs(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                    ),
-                    consist_kwargs=build_step_consist_kwargs(
-                        "postprocessing", settings
-                    ),
+                    settings=settings,
+                    workspace=workspace,
+                    year=year,
                 )
-                scenario.run(**postprocessing_config.to_kwargs())
                 state.complete_step(WorkflowState.Stage.postprocessing)
 
     formatted_print("SIMULATION COMPLETE")
