@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Set
 
 from pilates.utils.consist_config import build_step_consist_kwargs
@@ -136,7 +137,7 @@ class ManifestConfig:
     Configuration for manifest-based step checkpointing.
     """
 
-    path: Any
+    path: Path
 
 
 def run_manifested_steps(

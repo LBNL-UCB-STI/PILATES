@@ -562,6 +562,10 @@ def main():
                     ):
                         formatted_print("ACTIVITY DEMAND MODEL")
 
+                        # ActivitySim runs in two manifest-checkpointed phases:
+                        # 1) Preprocess (per-iteration) to prepare compile inputs.
+                        # 2) Compile (per-year) outside manifest checkpointing.
+                        # 3) Run/Postprocess (per-iteration) for demand outputs.
                         preprocess_specs = [
                             WorkflowStepSpec(
                                 name="activitysim_preprocess",
@@ -573,7 +577,7 @@ def main():
                             )
                         ]
                         run_manifested_steps(
-                            stage_name="activity_demand",
+                            stage_name="activity_demand_preprocess",
                             steps=preprocess_specs,
                             outputs_holder=outputs_holder,
                             manifest_config=manifest_config,
@@ -676,7 +680,7 @@ def main():
                             ),
                         ]
                         run_manifested_steps(
-                            stage_name="activity_demand",
+                            stage_name="activity_demand_run_postprocess",
                             steps=activitysim_specs,
                             outputs_holder=outputs_holder,
                             manifest_config=manifest_config,
