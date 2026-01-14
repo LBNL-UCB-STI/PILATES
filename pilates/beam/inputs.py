@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import resolve_artifact_from_value, log_coupler_value
+from pilates.workflows.artifact_constants import ZARR_SKIMS
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -73,27 +74,27 @@ def build_beam_inputs(
     zarr_skims_input = None
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
-        zarr_skims_input = get_value("zarr_skims")
+        zarr_skims_input = get_value(ZARR_SKIMS)
         log_coupler_value(
-            key="zarr_skims",
+            key=ZARR_SKIMS,
             value=zarr_skims_input,
             workspace=workspace,
             context="beam_inputs.get",
         )
         zarr_skims_input = resolve_artifact_from_value(
-            zarr_skims_input, key="zarr_skims", workspace=workspace
+            zarr_skims_input, key=ZARR_SKIMS, workspace=workspace
         )
         set_from_artifact = getattr(coupler, "set_from_artifact", None)
         if callable(set_from_artifact):
-            set_from_artifact("zarr_skims", zarr_skims_input)
+            set_from_artifact(ZARR_SKIMS, zarr_skims_input)
             log_coupler_value(
-                key="zarr_skims",
+                key=ZARR_SKIMS,
                 value=zarr_skims_input,
                 workspace=workspace,
                 context="beam_inputs.set",
             )
     if zarr_skims_input:
-        inputs["zarr_skims"] = zarr_skims_input
+        inputs[ZARR_SKIMS] = zarr_skims_input
 
     beam_mutable_dir = Path(workspace.get_beam_mutable_data_dir())
     if beam_mutable_dir.exists():

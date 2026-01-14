@@ -6,6 +6,7 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.workflows.artifact_constants import FINAL_SKIMS_OMX, ZARR_SKIMS
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -143,8 +144,8 @@ class BeamPostprocessOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
     record_keys: ClassVar[Dict[str, str]] = {
-        "zarr_skims": "zarr_skims",
-        "final_skims_omx": "final_skims_omx",
+        "zarr_skims": ZARR_SKIMS,
+        "final_skims_omx": FINAL_SKIMS_OMX,
     }
     record_descriptions: ClassVar[Dict[str, str]] = {
         "zarr_skims": "Zarr skims updated with BEAM outputs",

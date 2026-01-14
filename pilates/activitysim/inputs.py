@@ -8,6 +8,10 @@ from pilates.utils.coupler_helpers import (
     resolve_artifact_from_value,
     log_coupler_value,
 )
+from pilates.workflows.artifact_constants import (
+    USIM_DATASTORE_H5,
+    ZARR_SKIMS,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -91,42 +95,42 @@ def build_activitysim_inputs(
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 
-    if usim_inputs and "usim_datastore_h5" in usim_inputs:
-        inputs["usim_datastore_h5"] = usim_inputs["usim_datastore_h5"]
-        descriptions["usim_datastore_h5"] = (
+    if usim_inputs and USIM_DATASTORE_H5 in usim_inputs:
+        inputs[USIM_DATASTORE_H5] = usim_inputs[USIM_DATASTORE_H5]
+        descriptions[USIM_DATASTORE_H5] = (
             f"UrbanSim datastore for ActivitySim year {year}, iter {iteration}"
         )
 
     zarr_skims_input = None
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
-        zarr_skims_input = get_value("zarr_skims")
+        zarr_skims_input = get_value(ZARR_SKIMS)
         log_coupler_value(
-            key="zarr_skims",
+            key=ZARR_SKIMS,
             value=zarr_skims_input,
             workspace=workspace,
             context="activitysim_inputs.get",
         )
         zarr_skims_input = resolve_artifact_from_value(
-            zarr_skims_input, key="zarr_skims", workspace=workspace
+            zarr_skims_input, key=ZARR_SKIMS, workspace=workspace
         )
         set_from_artifact = getattr(coupler, "set_from_artifact", None)
         if callable(set_from_artifact):
-            set_from_artifact("zarr_skims", zarr_skims_input)
+            set_from_artifact(ZARR_SKIMS, zarr_skims_input)
             log_coupler_value(
-                key="zarr_skims",
+                key=ZARR_SKIMS,
                 value=zarr_skims_input,
                 workspace=workspace,
                 context="activitysim_inputs.set",
             )
     if zarr_skims_input:
-        inputs["zarr_skims"] = zarr_skims_input
+        inputs[ZARR_SKIMS] = zarr_skims_input
         zarr_skims_path = artifact_to_path(zarr_skims_input, workspace)
         if zarr_skims_path:
-            descriptions["zarr_skims"] = (
+            descriptions[ZARR_SKIMS] = (
                 f"ActivitySim compiled zarr skims for year {year}, iter {iteration}"
             )
         else:
-            descriptions["zarr_skims"] = None
+            descriptions[ZARR_SKIMS] = None
 
     return inputs, descriptions

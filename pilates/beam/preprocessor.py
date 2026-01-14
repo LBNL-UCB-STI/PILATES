@@ -19,6 +19,12 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.artifact_constants import (
+    ASIM_OUTPUT_DIR,
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_INPUT,
+    BEAM_MUTABLE_DATA_DIR,
+)
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -218,9 +224,9 @@ class BeamPreprocessor(GenericPreprocessor):
         if getattr(settings, "vehicle_ownership_model_enabled", False):
             atlas_output_dir = workspace.get_atlas_output_dir()
         return {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "asim_output_dir": asim_output_dir,
-            "atlas_output_dir": atlas_output_dir,
+            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            ASIM_OUTPUT_DIR: asim_output_dir,
+            ATLAS_OUTPUT_DIR: atlas_output_dir,
         }
 
     @staticmethod
@@ -503,7 +509,7 @@ class BeamPreprocessor(GenericPreprocessor):
         input_record = FileRecord(
             file_path=atlas_vehicle_file_loc,
             description="ATLAS vehicles2 input for BEAM",
-            short_name="atlas_vehicles2_input",
+            short_name=ATLAS_VEHICLES2_INPUT,
             year=getattr(self.state, "forecast_year", None),
             iteration=getattr(self.state, "current_inner_iter", None),
         )

@@ -29,6 +29,16 @@ from pilates.workflows.outputs_base import (
     deserialize_step_outputs,
     serialize_step_outputs,
 )
+from pilates.workflows.artifact_constants import (
+    ASIM_MUTABLE_DATA_DIR,
+    ASIM_OUTPUT_DIR,
+    ATLAS_OUTPUT_DIR,
+    BEAM_OUTPUT_DIR,
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    USIM_MUTABLE_DATA_DIR,
+    ZARR_SKIMS,
+)
 from pilates.workflows.step_exec import (
     Postprocessor,
     Preprocessor,
@@ -775,7 +785,7 @@ def make_urbansim_preprocess_step(
         usim_data_dir = outputs.usim_mutable_data_dir
         if usim_data_dir.exists():
             log_and_set_output(
-                key="usim_mutable_data_dir",
+                key=USIM_MUTABLE_DATA_DIR,
                 path=str(usim_data_dir),
                 description="UrbanSim mutable data directory",
                 coupler=coupler,
@@ -788,7 +798,7 @@ def make_urbansim_preprocess_step(
         usim_input_path = usim_data_dir / usim_input_fname
         if usim_input_path.exists():
             log_and_set_output(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=str(usim_input_path),
                 description="UrbanSim input datastore for preprocessing",
                 coupler=coupler,
@@ -845,7 +855,7 @@ def make_urbansim_run_step(
     ) -> None:
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     f"UrbanSim datastore output for year {state.forecast_year}"
@@ -903,7 +913,7 @@ def make_urbansim_postprocess_step(
     ) -> None:
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     "UrbanSim datastore prepared for next iteration "
@@ -1000,7 +1010,7 @@ def make_atlas_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="atlas_output_dir",
+            key=ATLAS_OUTPUT_DIR,
             path=str(outputs.atlas_output_dir),
             description=f"ATLAS output directory for year {state.forecast_year}",
             coupler=coupler,
@@ -1055,7 +1065,7 @@ def make_atlas_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="atlas_output_dir",
+            key=ATLAS_OUTPUT_DIR,
             path=str(outputs.atlas_output_dir),
             description=(
                 f"ATLAS output directory after postprocess for year {state.forecast_year}"
@@ -1064,7 +1074,7 @@ def make_atlas_postprocess_step(
         )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     "UrbanSim datastore updated by ATLAS for year "
@@ -1154,15 +1164,15 @@ def make_activitysim_compile_step(
         zarr_record = None
         if compile_outputs:
             for record in compile_outputs.all_records():
-                if record.short_name == "zarr_skims":
+                if record.short_name == ZARR_SKIMS:
                     zarr_record = record
                     break
-        zarr_output_path = expected_outputs.get("zarr_skims")
+        zarr_output_path = expected_outputs.get(ZARR_SKIMS)
         if not zarr_output_path and zarr_record is not None:
             zarr_output_path = zarr_record.file_path
         if zarr_output_path and os.path.exists(zarr_output_path):
             log_and_set_output(
-                key="zarr_skims",
+                key=ZARR_SKIMS,
                 path=zarr_output_path,
                 description="ActivitySim compiled zarr skims",
                 coupler=coupler,
@@ -1205,14 +1215,14 @@ def make_activitysim_preprocess_step(
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             usim_input = resolve_artifact_from_value(
-                get_value("usim_datastore_h5"),
-                key="usim_datastore_h5",
+                get_value(USIM_DATASTORE_H5),
+                key=USIM_DATASTORE_H5,
                 workspace=workspace,
             )
         usim_path = artifact_to_path(usim_input, workspace)
         if usim_path and os.path.exists(usim_path):
             log_and_set_input(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=usim_path,
                 description=(f"UrbanSim datastore for ActivitySim year {state.year}"),
                 coupler=coupler,
@@ -1227,7 +1237,7 @@ def make_activitysim_preprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="asim_mutable_data_dir",
+            key=ASIM_MUTABLE_DATA_DIR,
             path=str(outputs.mutable_data_dir),
             description="ActivitySim mutable data directory",
             coupler=coupler,
@@ -1286,7 +1296,7 @@ def make_activitysim_run_step(
             raise RuntimeError("ActivitySim preprocess must complete first")
 
         log_and_set_input(
-            key="asim_mutable_data_dir",
+            key=ASIM_MUTABLE_DATA_DIR,
             path=str(upstream.mutable_data_dir),
             description=(
                 f"ActivitySim mutable inputs for year {state.year}, iter {state.iteration}"
@@ -1299,8 +1309,8 @@ def make_activitysim_run_step(
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             zarr_value = resolve_artifact_from_value(
-                get_value("zarr_skims"),
-                key="zarr_skims",
+                get_value(ZARR_SKIMS),
+                key=ZARR_SKIMS,
                 workspace=workspace,
             )
         zarr_path = artifact_to_path(zarr_value, workspace)
@@ -1314,12 +1324,12 @@ def make_activitysim_run_step(
             extra_inputs.add_record(
                 FileRecord(
                     file_path=zarr_path,
-                    short_name="zarr_skims",
+                    short_name=ZARR_SKIMS,
                     description="Compiled ActivitySim skims (Zarr)",
                 )
             )
             log_and_set_input(
-                key="zarr_skims",
+                key=ZARR_SKIMS,
                 path=zarr_path,
                 description=(
                     f"ActivitySim compiled skims for year {state.year}, iter {state.iteration}"
@@ -1336,7 +1346,7 @@ def make_activitysim_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="asim_output_dir",
+            key=ASIM_OUTPUT_DIR,
             path=str(outputs.output_dir),
             description=(
                 f"ActivitySim output directory for year {state.year}, iter {state.iteration}"
@@ -1396,7 +1406,7 @@ def make_activitysim_postprocess_step(
         if upstream is None:
             raise RuntimeError("ActivitySim run must complete first")
         log_and_set_input(
-            key="asim_output_dir",
+            key=ASIM_OUTPUT_DIR,
             path=str(upstream.output_dir),
             description=(
                 f"ActivitySim outputs for year {state.year}, iter {state.iteration}"
@@ -1406,7 +1416,7 @@ def make_activitysim_postprocess_step(
         usim_dir = workspace.get_usim_mutable_data_dir()
         if os.path.exists(usim_dir):
             log_and_set_input(
-                key="usim_mutable_data_dir",
+                key=USIM_MUTABLE_DATA_DIR,
                 path=usim_dir,
                 description="UrbanSim mutable data directory",
                 coupler=coupler,
@@ -1422,7 +1432,7 @@ def make_activitysim_postprocess_step(
     ) -> None:
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
-                key="usim_datastore_h5",
+                key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     f"UrbanSim datastore updated by ActivitySim for year {state.forecast_year}"
@@ -1481,7 +1491,7 @@ def make_beam_preprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="beam_mutable_data_dir",
+            key=BEAM_MUTABLE_DATA_DIR,
             path=str(outputs.beam_mutable_data_dir),
             description=(
                 f"BEAM mutable data dir for year {state.year}, iter {state.iteration}"
@@ -1540,7 +1550,7 @@ def make_beam_run_step(
         if upstream is None:
             raise RuntimeError("BEAM preprocess must complete first")
         log_and_set_input(
-            key="beam_mutable_data_dir",
+            key=BEAM_MUTABLE_DATA_DIR,
             path=str(upstream.beam_mutable_data_dir),
             description=(
                 f"BEAM mutable inputs for year {state.year}, iter {state.iteration}"
@@ -1553,8 +1563,8 @@ def make_beam_run_step(
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             zarr_value = resolve_artifact_from_value(
-                get_value("zarr_skims"),
-                key="zarr_skims",
+                get_value(ZARR_SKIMS),
+                key=ZARR_SKIMS,
                 workspace=workspace,
             )
         zarr_path = artifact_to_path(zarr_value, workspace)
@@ -1562,12 +1572,12 @@ def make_beam_run_step(
             extra_inputs.add_record(
                 FileRecord(
                     file_path=zarr_path,
-                    short_name="zarr_skims",
+                    short_name=ZARR_SKIMS,
                     description="Current skims (Zarr) for BEAM",
                 )
             )
             log_and_set_input(
-                key="zarr_skims",
+                key=ZARR_SKIMS,
                 path=zarr_path,
                 description=(
                     f"Zarr skims input for BEAM year {state.year}, iter {state.iteration}"
@@ -1584,7 +1594,7 @@ def make_beam_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         log_and_set_output(
-            key="beam_output_dir",
+            key=BEAM_OUTPUT_DIR,
             path=str(outputs.beam_output_dir),
             description=(
                 f"BEAM output directory for year {state.year}, iter {state.iteration}"
@@ -1644,7 +1654,7 @@ def make_beam_postprocess_step(
         if upstream is None:
             raise RuntimeError("BEAM run must complete first")
         log_and_set_input(
-            key="beam_output_dir",
+            key=BEAM_OUTPUT_DIR,
             path=str(upstream.beam_output_dir),
             description=(f"BEAM outputs for year {state.year}, iter {state.iteration}"),
             coupler=coupler,

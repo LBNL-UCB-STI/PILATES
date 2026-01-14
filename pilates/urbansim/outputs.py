@@ -6,6 +6,10 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.workflows.artifact_constants import (
+    USIM_FORECAST_OUTPUT,
+    USIM_INPUT_MERGED_PREFIX,
+)
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -123,7 +127,7 @@ class UrbanSimRunOutputs(StepOutputsBase):
             if path is None:
                 continue
             raw_outputs[key] = Path(path)
-            if key == "usim_forecast_output":
+            if key == USIM_FORECAST_OUTPUT:
                 usim_datastore_h5 = Path(path)
         return cls(
             usim_datastore_h5=usim_datastore_h5,
@@ -184,7 +188,7 @@ class UrbanSimPostprocessOutputs(StepOutputsBase):
             if path is None:
                 continue
             processed_outputs[key] = Path(path)
-            if key.startswith("usim_input_merged_"):
+            if key.startswith(USIM_INPUT_MERGED_PREFIX):
                 usim_datastore_h5 = Path(path)
         return cls(
             usim_datastore_h5=usim_datastore_h5,

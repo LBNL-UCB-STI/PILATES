@@ -47,6 +47,18 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.artifact_constants import (
+    ASIM_MUTABLE_DATA_DIR,
+    ASIM_OUTPUT_DIR,
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_INPUT,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_OUTPUT_DIR,
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    USIM_MUTABLE_DATA_DIR,
+    ZARR_SKIMS,
+)
 from pilates.workflows.orchestration import (
     ManifestConfig,
     WorkflowStage,
@@ -245,13 +257,13 @@ def main():
             if schema_attr is not None:
                 coupler.schema = PILATES_COUPLER_SCHEMA
         scenario.declare_outputs(
-            "usim_datastore_h5",
-            "asim_mutable_data_dir",
-            "asim_output_dir",
-            "beam_output_dir",
-            "atlas_output_dir",
-            "zarr_skims",
-            "final_skims_omx",
+            USIM_DATASTORE_H5,
+            ASIM_MUTABLE_DATA_DIR,
+            ASIM_OUTPUT_DIR,
+            BEAM_OUTPUT_DIR,
+            ATLAS_OUTPUT_DIR,
+            ZARR_SKIMS,
+            FINAL_SKIMS_OMX,
         )
 
         # 6. DATA INITIALIZATION STEP
@@ -336,7 +348,7 @@ def main():
                             coupler=coupler,
                             outputs_holder=outputs_holder_year,
                         ),
-                        input_keys=["usim_mutable_data_dir", "usim_datastore_h5"],
+                        input_keys=[USIM_MUTABLE_DATA_DIR, USIM_DATASTORE_H5],
                     ),
                     WorkflowStepSpec(
                         name="urbansim_postprocess",
@@ -344,7 +356,7 @@ def main():
                             coupler=coupler,
                             outputs_holder=outputs_holder_year,
                         ),
-                        input_keys=["usim_datastore_h5"],
+                        input_keys=[USIM_DATASTORE_H5],
                     ),
                 ]
                 WorkflowStage(
@@ -367,14 +379,14 @@ def main():
                     postprocess_outputs is not None
                     and postprocess_outputs.usim_datastore_h5 is not None
                 ):
-                    usim_inputs["usim_datastore_h5"] = str(
+                    usim_inputs[USIM_DATASTORE_H5] = str(
                         postprocess_outputs.usim_datastore_h5
                     )
                 elif (
                     run_outputs is not None
                     and run_outputs.usim_datastore_h5 is not None
                 ):
-                    usim_inputs["usim_datastore_h5"] = str(
+                    usim_inputs[USIM_DATASTORE_H5] = str(
                         run_outputs.usim_datastore_h5
                     )
 
@@ -398,7 +410,7 @@ def main():
                 # Explicitly thread the mutable UrbanSim datastore across ATLAS sub-years.
                 # This makes the sequential dependency clear (each sub-year reads the updated file
                 # produced by the previous sub-year) and improves provenance clarity.
-                coupler.pop("usim_datastore_h5", None)
+                coupler.pop(USIM_DATASTORE_H5, None)
                 if state.run_info_path and os.path.exists(state.run_info_path):
                     previous_run_dir = os.path.dirname(state.run_info_path)
                     urbansim_datastore_dir = os.path.join(
@@ -483,7 +495,7 @@ def main():
                                 coupler=coupler,
                                 outputs_holder=outputs_holder_atlas,
                             ),
-                            input_keys=["usim_datastore_h5"],
+                            input_keys=[USIM_DATASTORE_H5],
                             inputs=atlas_run_inputs or None,
                         ),
                         WorkflowStepSpec(
@@ -492,7 +504,7 @@ def main():
                                 coupler=coupler,
                                 outputs_holder=outputs_holder_atlas,
                             ),
-                            input_keys=["atlas_output_dir"],
+                            input_keys=[ATLAS_OUTPUT_DIR],
                         ),
                     ]
 
@@ -573,7 +585,7 @@ def main():
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                input_keys=["usim_datastore_h5"],
+                                input_keys=[USIM_DATASTORE_H5],
                             )
                         ]
                         run_manifested_steps(
@@ -639,8 +651,8 @@ def main():
                             get_value = getattr(coupler, "get", None)
                             if callable(get_value):
                                 zarr_value = resolve_artifact_from_value(
-                                    get_value("zarr_skims"),
-                                    key="zarr_skims",
+                                    get_value(ZARR_SKIMS),
+                                    key=ZARR_SKIMS,
                                     workspace=workspace,
                                 )
                             zarr_path = artifact_to_path(zarr_value, workspace)
@@ -665,7 +677,7 @@ def main():
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                input_keys=["asim_mutable_data_dir", "zarr_skims"],
+                                input_keys=[ASIM_MUTABLE_DATA_DIR, ZARR_SKIMS],
                             ),
                             WorkflowStepSpec(
                                 name="activitysim_postprocess",
@@ -673,9 +685,9 @@ def main():
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                input_keys=["asim_output_dir"],
+                                input_keys=[ASIM_OUTPUT_DIR],
                                 inputs={
-                                    "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir()
+                                    USIM_MUTABLE_DATA_DIR: workspace.get_usim_mutable_data_dir()
                                 },
                             ),
                         ]
@@ -748,16 +760,16 @@ def main():
                                 )
                             if os.path.exists(atlas_vehicle_path):
                                 beam_preprocess_inputs.setdefault(
-                                    "atlas_vehicles2_input", atlas_vehicle_path
+                                    ATLAS_VEHICLES2_INPUT, atlas_vehicle_path
                                 )
 
-                        beam_preprocess_input_keys = ["asim_output_dir"]
+                        beam_preprocess_input_keys = [ASIM_OUTPUT_DIR]
                         if getattr(settings, "vehicle_ownership_model_enabled", False):
-                            beam_preprocess_input_keys.append("atlas_output_dir")
+                            beam_preprocess_input_keys.append(ATLAS_OUTPUT_DIR)
 
-                        beam_postprocess_input_keys = ["beam_output_dir"]
+                        beam_postprocess_input_keys = [BEAM_OUTPUT_DIR]
                         if getattr(settings, "activity_demand_enabled", False):
-                            beam_postprocess_input_keys.append("asim_output_dir")
+                            beam_postprocess_input_keys.append(ASIM_OUTPUT_DIR)
 
                         beam_steps = [
                             WorkflowStepSpec(
@@ -775,7 +787,7 @@ def main():
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                input_keys=["beam_mutable_data_dir", "zarr_skims"],
+                                input_keys=[BEAM_MUTABLE_DATA_DIR, ZARR_SKIMS],
                             ),
                             WorkflowStepSpec(
                                 name="beam_postprocess",

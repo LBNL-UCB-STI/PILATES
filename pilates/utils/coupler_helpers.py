@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING, Type
 
 from pilates.utils import consist_runtime as cr
+from pilates.workflows.artifact_constants import (
+    BEAM_PLANS_OUT,
+    FINAL_SKIMS_OMX,
+    LINKSTATS,
+    ZARR_SKIMS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,43 +165,43 @@ def update_coupler_from_beam_outputs(
     linkstats_record = None
     beam_plans_record = None
     for record in output_store.all_records():
-        if record.short_name == "zarr_skims":
+        if record.short_name == ZARR_SKIMS:
             zarr_path = artifact_to_path(record.file_path, workspace)
             if zarr_path and os.path.exists(zarr_path):
                 log_and_set_output(
-                    key="zarr_skims",
+                    key=ZARR_SKIMS,
                     path=zarr_path,
                     description="Zarr skims updated with BEAM outputs",
                     coupler=coupler,
                 )
-        elif record.short_name == "final_skims_omx":
+        elif record.short_name == FINAL_SKIMS_OMX:
             omx_path = artifact_to_path(record.file_path, workspace)
             if omx_path and os.path.exists(omx_path):
                 log_and_set_output(
-                    key="final_skims_omx",
+                    key=FINAL_SKIMS_OMX,
                     path=omx_path,
                     description="Final skims OMX for downstream models",
                     coupler=coupler,
                 )
-        elif record.short_name and record.short_name.startswith("linkstats"):
+        elif record.short_name and record.short_name.startswith(LINKSTATS):
             linkstats_record = _select_beam_output_record(
-                linkstats_record, record, "linkstats"
+                linkstats_record, record, LINKSTATS
             )
-        elif record.short_name and record.short_name.startswith("beam_plans_out"):
+        elif record.short_name and record.short_name.startswith(BEAM_PLANS_OUT):
             beam_plans_record = _select_beam_output_record(
-                beam_plans_record, record, "beam_plans_out"
+                beam_plans_record, record, BEAM_PLANS_OUT
             )
 
     _log_and_set_beam_record(
         linkstats_record,
-        key="linkstats",
+        key=LINKSTATS,
         description="BEAM linkstats output for downstream runs",
         coupler=coupler,
         workspace=workspace,
     )
     _log_and_set_beam_record(
         beam_plans_record,
-        key="beam_plans_out",
+        key=BEAM_PLANS_OUT,
         description="BEAM plans output for downstream runs",
         coupler=coupler,
         workspace=workspace,

@@ -3,6 +3,10 @@ from typing import Any, Dict, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.urbansim import postprocessor as usim_post
+from pilates.workflows.artifact_constants import (
+    USIM_DATASTORE_H5,
+    USIM_MUTABLE_DATA_DIR,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -55,21 +59,21 @@ def build_urbansim_inputs(
     usim_input_path = usim_data_dir / usim_input_fname
 
     if usim_input_path.exists():
-        inputs["usim_datastore_h5"] = str(usim_input_path)
+        inputs[USIM_DATASTORE_H5] = str(usim_input_path)
     elif not state.is_start_year():
         usim_output_fname = usim_post.get_usim_datastore_fname(
             settings, io="output", year=year
         )
         usim_output_path = usim_data_dir / usim_output_fname
         if usim_output_path.exists():
-            inputs["usim_datastore_h5"] = str(usim_output_path)
+            inputs[USIM_DATASTORE_H5] = str(usim_output_path)
 
     if usim_data_dir.exists():
-        inputs["usim_mutable_data_dir"] = str(usim_data_dir)
+        inputs[USIM_MUTABLE_DATA_DIR] = str(usim_data_dir)
 
-    if "usim_datastore_h5" in inputs:
-        descriptions["usim_datastore_h5"] = f"UrbanSim input datastore for year {year}"
-    if "usim_mutable_data_dir" in inputs:
-        descriptions["usim_mutable_data_dir"] = "UrbanSim mutable data directory"
+    if USIM_DATASTORE_H5 in inputs:
+        descriptions[USIM_DATASTORE_H5] = f"UrbanSim input datastore for year {year}"
+    if USIM_MUTABLE_DATA_DIR in inputs:
+        descriptions[USIM_MUTABLE_DATA_DIR] = "UrbanSim mutable data directory"
 
     return inputs, descriptions
