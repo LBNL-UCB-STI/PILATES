@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, TYPE_CHECKING
 
 from pilates.generic.model_factory import ModelFactory
 
@@ -95,11 +95,11 @@ def expected_outputs_for(
 
 
 def merge_expected_inputs(
-    target: Dict[str, Any],
-    expected: Dict[str, Any],
+    target: MutableMapping[str, Any],
+    expected: Mapping[str, Any],
     *,
     prefer_expected: bool = False,
-) -> Dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """
     Merge expected inputs into a target mapping with optional override behavior.
 
@@ -133,11 +133,11 @@ def merge_expected_inputs(
 
 
 def merge_expected_outputs(
-    target: Dict[str, Any],
-    expected: Dict[str, Any],
+    target: MutableMapping[str, Any],
+    expected: Mapping[str, Any],
     *,
     prefer_expected: bool = False,
-) -> Dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """
     Merge expected outputs into a target mapping with optional override behavior.
 
@@ -172,13 +172,13 @@ def merge_expected_outputs(
 
 def merge_model_expected_inputs(
     model_name: str,
-    base_inputs: Dict[str, Any],
+    base_inputs: MutableMapping[str, Any],
     settings: "PilatesConfig",
     state: "WorkflowState",
     workspace: "Workspace",
     *,
     prefer_expected: bool = False,
-) -> Dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """
     Merge model-declared expected inputs into a base input mapping.
 
@@ -208,13 +208,13 @@ def merge_model_expected_inputs(
 
 def merge_expected_model_inputs(
     model_names: Iterable[str],
-    base_inputs: Dict[str, Any],
+    base_inputs: MutableMapping[str, Any],
     settings: "PilatesConfig",
     state: "WorkflowState",
     workspace: "Workspace",
     *,
     prefer_expected: bool = False,
-) -> Dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """
     Merge expected inputs for multiple models in sequence.
 

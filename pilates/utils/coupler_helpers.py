@@ -1,7 +1,8 @@
 import os
 import logging
+from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING, Type
 
 from pilates.utils import consist_runtime as cr
 
@@ -380,3 +381,66 @@ def log_and_set_output(
     """
     artifact = cr.log_output(path, key=key, description=description)
     set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+
+def log_and_set_input(
+    *,
+    key: str,
+    path: str,
+    description: str,
+    coupler: Any,
+) -> None:
+    """
+    Log an input path and set it on the coupler.
+
+    Parameters
+    ----------
+    key : str
+        Coupler key to set.
+    path : str
+        Input path to log.
+    description : str
+        Description used in provenance logging.
+    coupler : object
+        Consist coupler or compatible interface.
+    """
+    artifact = cr.log_input(path, key=key, description=description)
+    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+
+def record_store_to_outputs(
+    record_store: "RecordStore",
+    output_class: Type[Any],
+    workspace: "Workspace",
+) -> Any:
+    """
+    Convert a RecordStore into a typed StepOutputs dataclass.
+
+    Parameters
+    ----------
+    record_store : RecordStore
+        RecordStore returned by a component execution.
+    output_class : type
+        Dataclass type to instantiate.
+    workspace : Workspace
+        Workspace used to resolve relative paths.
+    """
+    if hasattr(output_class, "from_record_store"):
+        return output_class.from_record_store(record_store, workspace)
+    if not is_dataclass(output_class):
+        raise TypeError("output_class must be a dataclass or implement from_record_store")
+
+    mapping = record_store.to_mapping() if record_store is not None else {}
+    record_keys = getattr(output_class, "record_keys", {}) or {}
+    values: Dict[str, Any] = {}
+
+    for field in fields(output_class):
+        key = record_keys.get(field.name, field.name)
+        if key not in mapping:
+            continue
+        path = artifact_to_path(mapping[key], workspace)
+        if path is None:
+            continue
+        values[field.name] = Path(path)
+
+    return output_class(**values)

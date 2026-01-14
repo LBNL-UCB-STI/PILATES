@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from typing import Optional
+from typing import Optional, Protocol
 
 from pilates.activitysim import postprocessor as asim_post
 from pilates.config.models import PilatesConfig
@@ -16,6 +16,96 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
+class Preprocessor(Protocol):
+    """Protocol for preprocessors that emit a RecordStore."""
+
+    def preprocess(self, workspace: Workspace) -> RecordStore:
+        """Run preprocessing for the given workspace."""
+
+
+class Runner(Protocol):
+    """Protocol for runners that consume and emit RecordStores."""
+
+    def run(self, input_store: RecordStore, workspace: Workspace) -> RecordStore:
+        """Run the model using the provided inputs."""
+
+
+class Postprocessor(Protocol):
+    """Protocol for postprocessors that emit a RecordStore."""
+
+    def postprocess(self, raw_outputs: RecordStore, workspace: Workspace) -> RecordStore:
+        """Postprocess model outputs."""
+
+
+def run_preprocessor(preprocessor: Preprocessor, workspace: Workspace) -> RecordStore:
+    """
+    Execute a preprocessor and return its RecordStore outputs.
+
+    Parameters
+    ----------
+    preprocessor : Preprocessor
+        Component providing a ``preprocess`` method.
+    workspace : Workspace
+        Workspace used to resolve inputs/outputs.
+
+    Returns
+    -------
+    RecordStore
+        Record store of preprocessor outputs.
+    """
+    return preprocessor.preprocess(workspace)
+
+
+def run_runner(
+    runner: Runner,
+    input_store: RecordStore,
+    workspace: Workspace,
+) -> RecordStore:
+    """
+    Execute a runner with provided inputs and return its RecordStore outputs.
+
+    Parameters
+    ----------
+    runner : Runner
+        Component providing a ``run`` method.
+    input_store : RecordStore
+        Inputs prepared by preprocessing.
+    workspace : Workspace
+        Workspace used to resolve inputs/outputs.
+
+    Returns
+    -------
+    RecordStore
+        Record store of runner outputs.
+    """
+    return runner.run(input_store, workspace)
+
+
+def run_postprocessor(
+    postprocessor: Postprocessor,
+    raw_outputs: RecordStore,
+    workspace: Workspace,
+) -> RecordStore:
+    """
+    Execute a postprocessor and return its RecordStore outputs.
+
+    Parameters
+    ----------
+    postprocessor : Postprocessor
+        Component providing a ``postprocess`` method.
+    raw_outputs : RecordStore
+        Raw outputs from a runner.
+    workspace : Workspace
+        Workspace used to resolve inputs/outputs.
+
+    Returns
+    -------
+    RecordStore
+        Record store of postprocessed outputs.
+    """
+    return postprocessor.postprocess(raw_outputs, workspace)
+
+
 def warm_start_activities(
     settings: PilatesConfig,
     state: WorkflowState,
@@ -23,6 +113,15 @@ def warm_start_activities(
 ) -> None:
     """
     Run ActivitySim warm-start to update UrbanSim inputs with long-term choices.
+
+    Parameters
+    ----------
+    settings : PilatesConfig
+        Simulation settings.
+    state : WorkflowState
+        Current workflow state.
+    workspace : Workspace
+        Workspace used to resolve paths.
     """
     factory = ModelFactory()
     activity_demand_model, _ = GenericRunner.get_model_and_image(
@@ -63,6 +162,17 @@ def forecast_land_use(
 ) -> None:
     """
     High-level wrapper to start an UrbanSim (land use) run.
+
+    Parameters
+    ----------
+    settings : PilatesConfig
+        Simulation settings.
+    year : int
+        Current simulation year.
+    workflow_state : WorkflowState
+        Workflow state for the run.
+    workspace : Workspace
+        Workspace used to resolve paths.
     """
     land_use_model, _ = GenericRunner.get_model_and_image(settings, "land_use_model")
 
@@ -98,6 +208,19 @@ def run_land_use(
 ) -> None:
     """
     Prepare inputs, run UrbanSim, and postprocess outputs for a land-use forecast.
+
+    Parameters
+    ----------
+    year : int
+        Base year for the land-use forecast.
+    forecast_year : int
+        Target forecast year.
+    land_use_model : str
+        Model key identifying the land-use backend.
+    state : WorkflowState
+        Workflow state for the run.
+    workspace : Workspace
+        Workspace used to resolve paths.
     """
     logger.info("Running land use")
 
@@ -126,6 +249,22 @@ def run_activity_demand(
 ) -> RecordStore:
     """
     Generate activity plans for the current year using the configured model.
+
+    Parameters
+    ----------
+    settings : PilatesConfig
+        Simulation settings.
+    state : WorkflowState
+        Workflow state for the run.
+    workspace : Workspace
+        Workspace used to resolve paths.
+    input_store : RecordStore, optional
+        Precomputed inputs; when omitted the preprocessor will be run.
+
+    Returns
+    -------
+    RecordStore
+        Postprocessed ActivitySim outputs.
     """
     factory = ModelFactory()
     activity_demand_model = settings.run.models.activity_demand
@@ -160,6 +299,24 @@ def run_traffic_assignment(
 ) -> RecordStore:
     """
     Run the configured traffic assignment (supply) model for the current year.
+
+    Parameters
+    ----------
+    settings : PilatesConfig
+        Simulation settings.
+    state : WorkflowState
+        Workflow state for the run.
+    workspace : Workspace
+        Workspace used to resolve paths.
+    activity_demand_outputs : RecordStore, optional
+        Activity demand outputs for the current iteration.
+    previous_beam_outputs : RecordStore, optional
+        Prior BEAM outputs for warm starts.
+
+    Returns
+    -------
+    RecordStore
+        Postprocessed BEAM outputs.
     """
     factory = ModelFactory()
     travel_model = settings.run.models.travel

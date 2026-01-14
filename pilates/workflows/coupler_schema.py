@@ -4,8 +4,13 @@ Workflow coupler schema for PILATES.
 This schema documents coupler keys that are explicitly set during the workflow.
 """
 
-PILATES_COUPLER_SCHEMA = {
+from typing import Dict
+
+
+PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "usim_datastore_h5": "UrbanSim datastore (H5) produced by land use/ATLAS.",
+    "usim_mutable_data_dir": "UrbanSim mutable data directory in workspace.",
+    "asim_mutable_data_dir": "ActivitySim mutable data directory from preprocess.",
     "atlas_output_dir": "ATLAS output directory for the current sub-year.",
     "asim_output_dir": "ActivitySim output directory for the current iteration.",
     "beam_output_dir": "BEAM output directory for the current iteration.",

@@ -43,6 +43,7 @@ from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
 from pilates.utils.coupler_helpers import clean_expected_outputs
 from pilates.utils.input_logging import log_inputs
+from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
 from pilates.workflows.step_io import (
@@ -57,11 +58,18 @@ from workflow_state import WorkflowState
 from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
 from pilates.workflows.steps import (
     make_activitysim_compile_step,
-    make_activitysim_step,
+    make_activitysim_postprocess_step,
+    make_activitysim_preprocess_step,
+    make_activitysim_run_step,
     make_atlas_step,
     make_beam_step,
     make_postprocessing_step,
     make_urbansim_step,
+    deserialize_step_outputs,
+    serialize_step_outputs,
+    validate_step_ready,
+    StepOutputsHolder,
+    STEP_OUTPUTS_CLASSES,
 )
 
 logging.basicConfig(
@@ -70,6 +78,14 @@ logging.basicConfig(
     format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
+    return (
+        Path(workspace.full_path)
+        / ".workflow"
+        / f"year_{year}_iteration_{iteration}.yaml"
+    )
 
 
 def main():
@@ -178,6 +194,15 @@ def main():
     if tracker is not None:
         cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
+    if consist_enabled:
+        try:
+            from consist import SchemaValidatingCoupler
+        except Exception:
+            SchemaValidatingCoupler = None  # type: ignore[assignment]
+        if SchemaValidatingCoupler is not None:
+            scenario_kwargs["coupler"] = SchemaValidatingCoupler(
+                schema=PILATES_COUPLER_SCHEMA
+            )
     with cr.scenario(
         run_name,
         tracker=tracker,
@@ -194,6 +219,7 @@ def main():
                 coupler.schema = PILATES_COUPLER_SCHEMA
         scenario.declare_outputs(
             "usim_datastore_h5",
+            "asim_mutable_data_dir",
             "asim_output_dir",
             "beam_output_dir",
             "atlas_output_dir",
@@ -455,41 +481,44 @@ def main():
                         i,
                         WorkflowState.Stage.activity_demand,
                     ):
-                        # Consist integration: scenario.run handles caching/provenance;
-                        # coupler bridges ActivitySim outputs into BEAM inputs.
                         formatted_print("ACTIVITY DEMAND MODEL")
-                        step_name = f"activitysim_{year}_iter{i}"
+                        manifest_path = build_manifest_path(workspace, year, i)
+                        manifest = load_step_manifest(manifest_path) or {}
 
-                        asim_inputs, asim_input_descriptions = build_activitysim_inputs(
-                            settings,
-                            state,
-                            workspace,
-                            year,
-                            i,
-                            coupler,
-                            usim_inputs=usim_inputs,
-                            include_omx_skims=not state.asim_compiled,
-                        )
-                        log_inputs(asim_inputs, asim_input_descriptions)
-                        asim_inputs = merge_expected_model_inputs(
-                            ("activitysim_compile", "activitysim"),
-                            asim_inputs,
-                            settings,
-                            state,
-                            workspace,
-                        )
+                        outputs_holder = StepOutputsHolder()
+                        for step_name, step_info in manifest.items():
+                            outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
+                            if outputs_class is None:
+                                continue
+                            outputs_data = step_info.get("outputs", {})
+                            outputs = deserialize_step_outputs(
+                                outputs_class, outputs_data
+                            )
+                            outputs_holder.set_attribute(step_name, outputs)
 
-                        compile_outputs_holder = {
-                            "input_store": None,
-                            "compile_outputs": None,
-                        }
-
-                        # ActivitySim Compilation: Expensive preprocessing step, run only once.
-                        # This uses Consist caching to skip recompilation if UrbanSim outputs
-                        # are unchanged from previous run. The compiled data is then reused
-                        # across all supply/demand iterations.
+                        # ActivitySim Compilation: run once per year when needed.
                         if not state.asim_compiled:
-                            compile_step_name = f"activitysim_compile_{year}"
+                            asim_inputs, asim_input_descriptions = (
+                                build_activitysim_inputs(
+                                    settings,
+                                    state,
+                                    workspace,
+                                    year,
+                                    i,
+                                    coupler,
+                                    usim_inputs=usim_inputs,
+                                    include_omx_skims=True,
+                                )
+                            )
+                            log_inputs(asim_inputs, asim_input_descriptions)
+                            asim_inputs = merge_expected_model_inputs(
+                                ("activitysim_compile",),
+                                asim_inputs,
+                                settings,
+                                state,
+                                workspace,
+                            )
+
                             expected_compile_outputs = clean_expected_outputs(
                                 build_outputs(
                                     "activitysim_compile",
@@ -499,13 +528,12 @@ def main():
                                     components=("runner",),
                                 )
                             )
-
                             activitysim_compile_step = make_activitysim_compile_step(
                                 coupler=coupler,
                             )
                             compile_config = build_step_config(
                                 fn=activitysim_compile_step,
-                                name=compile_step_name,
+                                name=f"activitysim_compile_{year}",
                                 model="activitysim_compile",
                                 state=state,
                                 iteration=-1,
@@ -517,7 +545,10 @@ def main():
                                     settings=settings,
                                     state=state,
                                     workspace=workspace,
-                                    compile_outputs_holder=compile_outputs_holder,
+                                    compile_outputs_holder={
+                                        "input_store": None,
+                                        "compile_outputs": None,
+                                    },
                                     expected_outputs=expected_compile_outputs,
                                 ),
                                 consist_kwargs=build_step_consist_kwargs(
@@ -528,68 +559,87 @@ def main():
                             )
                             scenario.run(**compile_config.to_kwargs())
 
-                        # Refresh inputs after compile so zarr_skims can be sourced
-                        # from the coupler as an Artifact (avoids re-hashing).
-                        asim_inputs, _ = build_activitysim_inputs(
-                            settings,
-                            state,
-                            workspace,
-                            year,
-                            i,
-                            coupler,
-                            usim_inputs=usim_inputs,
-                            include_omx_skims=False,
-                        )
-                        asim_inputs = merge_expected_model_inputs(
-                            ("activitysim_compile", "activitysim"),
-                            asim_inputs,
-                            settings,
-                            state,
-                            workspace,
-                        )
-
-                        # ActivitySim Main: Generate activity-based travel demand.
-                        # Uses both UrbanSim outputs (land use) and compiled ActivitySim data.
-                        # Outputs stored in holder so BEAM step can reference them.
-                        # Note: Holder pattern allows Consist to manage caching while we thread
-                        # outputs forward across conditions and loops.
-                        asim_outputs_holder = {"activity_demand_outputs": None}
-                        expected_asim_outputs = clean_expected_outputs(
-                            build_outputs("activitysim", settings, state, workspace)
-                        )
-                        activitysim_step = make_activitysim_step(
-                            coupler=coupler,
-                        )
-                        asim_config = build_step_config(
-                            fn=activitysim_step,
-                            name=step_name,
-                            model="activitysim",
-                            state=state,
-                            inputs=asim_inputs,
-                            output_paths=expected_asim_outputs or None,
-                            cache_mode="overwrite",
-                            load_inputs=False,
-                            runtime_kwargs=common_runtime_kwargs(
-                                settings=settings,
-                                state=state,
-                                workspace=workspace,
-                                asim_outputs_holder=asim_outputs_holder,
-                                input_store=compile_outputs_holder["input_store"],
-                                compile_outputs=compile_outputs_holder[
-                                    "compile_outputs"
-                                ],
-                                expected_outputs=expected_asim_outputs,
+                        activitysim_steps = [
+                            (
+                                "activitysim_preprocess",
+                                make_activitysim_preprocess_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                ["usim_datastore_h5"],
+                                None,
                             ),
-                            consist_kwargs=build_step_consist_kwargs(
-                                "activitysim",
-                                settings,
-                                workspace_path=workspace.full_path,
+                            (
+                                "activitysim_run",
+                                make_activitysim_run_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                ["asim_mutable_data_dir", "zarr_skims"],
+                                None,
                             ),
-                        )
-                        scenario.run(**asim_config.to_kwargs())
-                        activity_demand_outputs = asim_outputs_holder[
-                            "activity_demand_outputs"
+                            (
+                                "activitysim_postprocess",
+                                make_activitysim_postprocess_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                ["asim_output_dir"],
+                                {
+                                    "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir()
+                                },
+                            ),
                         ]
+
+                        for step_key, step_func, input_keys, inputs in activitysim_steps:
+                            if step_key in manifest:
+                                logger.info(
+                                    "%s already completed (skipping)", step_key
+                                )
+                                continue
+                            validate_step_ready(step_key, outputs_holder)
+                            step_config = build_step_config(
+                                fn=step_func,
+                                name=f"{step_key}_{year}_iter{i}",
+                                model=step_key,
+                                state=state,
+                                inputs=inputs or None,
+                                input_keys=input_keys or None,
+                                output_paths=None,
+                                cache_hydration="inputs-missing",
+                                load_inputs=False,
+                                runtime_kwargs=common_runtime_kwargs(
+                                    settings=settings,
+                                    state=state,
+                                    workspace=workspace,
+                                ),
+                                consist_kwargs=build_step_consist_kwargs(
+                                    step_key,
+                                    settings,
+                                    workspace_path=workspace.full_path,
+                                ),
+                            )
+                            result = scenario.run(**step_config.to_kwargs())
+                            outputs = outputs_holder.get_attribute(step_key)
+                            if outputs is None:
+                                raise RuntimeError(
+                                    f"{step_key} did not populate outputs_holder"
+                                )
+                            manifest[step_key] = {
+                                "completed_at": datetime.now().isoformat(),
+                                "cache_hit": bool(
+                                    getattr(result, "cache_hit", False)
+                                ),
+                                "outputs": serialize_step_outputs(outputs),
+                            }
+                            save_step_manifest(manifest, manifest_path)
+
+                        postprocess_outputs = outputs_holder.activitysim_postprocess
+                        activity_demand_outputs = (
+                            postprocess_outputs.to_record_store()
+                            if postprocess_outputs is not None
+                            else None
+                        )
 
                         state.complete_step(
                             WorkflowState.Stage.supply_demand_loop,

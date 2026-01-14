@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import RunResultLike, ScenarioLike
 
@@ -23,6 +23,8 @@ class StepConfig:
         Iteration index within a year.
     inputs : dict, optional
         Input artifacts mapping.
+    input_keys : list of str, optional
+        Coupler keys to use as inputs.
     outputs : list of str, optional
         Output keys to declare.
     output_paths : dict, optional
@@ -44,10 +46,11 @@ class StepConfig:
     model: str
     year: Optional[int] = None
     iteration: Optional[int] = None
-    inputs: Optional[Dict[str, Any]] = None
-    outputs: Optional[List[str]] = None
-    output_paths: Optional[Dict[str, Any]] = None
-    runtime_kwargs: Optional[Dict[str, Any]] = None
+    inputs: Optional[Mapping[str, Any]] = None
+    input_keys: Optional[Sequence[str]] = None
+    outputs: Optional[Sequence[str]] = None
+    output_paths: Optional[Mapping[str, Any]] = None
+    runtime_kwargs: Optional[Mapping[str, Any]] = None
     cache_mode: Optional[str] = None
     cache_hydration: Optional[str] = None
     load_inputs: Optional[bool] = None
@@ -73,6 +76,8 @@ class StepConfig:
             kwargs["iteration"] = self.iteration
         if self.inputs is not None:
             kwargs["inputs"] = self.inputs
+        if self.input_keys is not None:
+            kwargs["input_keys"] = self.input_keys
         if self.outputs is not None:
             kwargs["outputs"] = self.outputs
         if self.output_paths is not None:
@@ -150,10 +155,11 @@ def build_step_config(
     state: Optional[Any] = None,
     year: Optional[int] = None,
     iteration: Optional[int] = None,
-    inputs: Optional[Dict[str, Any]] = None,
-    outputs: Optional[List[str]] = None,
-    output_paths: Optional[Dict[str, Any]] = None,
-    runtime_kwargs: Optional[Dict[str, Any]] = None,
+    inputs: Optional[Mapping[str, Any]] = None,
+    input_keys: Optional[Sequence[str]] = None,
+    outputs: Optional[Sequence[str]] = None,
+    output_paths: Optional[Mapping[str, Any]] = None,
+    runtime_kwargs: Optional[Mapping[str, Any]] = None,
     cache_mode: Optional[str] = None,
     cache_hydration: Optional[str] = None,
     load_inputs: Optional[bool] = None,
@@ -178,6 +184,8 @@ def build_step_config(
         Iteration override. Defaults to `state.iteration` when available.
     inputs : dict, optional
         Input artifacts mapping.
+    input_keys : list of str, optional
+        Coupler keys to use as inputs.
     outputs : list of str, optional
         Output keys to declare.
     output_paths : dict, optional
@@ -213,6 +221,7 @@ def build_step_config(
         year=resolved_year,
         iteration=resolved_iteration,
         inputs=inputs,
+        input_keys=input_keys,
         outputs=outputs,
         output_paths=output_paths,
         runtime_kwargs=runtime_kwargs,
