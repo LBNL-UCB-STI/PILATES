@@ -46,9 +46,13 @@ from pilates.utils.coupler_helpers import (
     resolve_artifact_from_value,
 )
 from pilates.utils.input_logging import log_inputs
-from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
+from pilates.workflows.orchestration import (
+    ManifestConfig,
+    WorkflowStage,
+    WorkflowStepSpec,
+    run_manifested_steps,
+)
 from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
 from pilates.workflows.step_io import build_outputs, merge_model_expected_inputs
 
@@ -71,11 +75,7 @@ from pilates.workflows.steps import (
     make_urbansim_postprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
-    deserialize_step_outputs,
-    serialize_step_outputs,
-    validate_step_ready,
     StepOutputsHolder,
-    STEP_OUTPUTS_CLASSES,
 )
 
 logging.basicConfig(
@@ -552,34 +552,7 @@ def main():
                     activity_demand_outputs = None
                     outputs_holder = StepOutputsHolder()
                     manifest_path = build_manifest_path(workspace, year, i)
-                    manifest = load_step_manifest(manifest_path) or {}
-                    stale_steps = []
-                    for step_name, step_info in manifest.items():
-                        outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-                        if outputs_class is None:
-                            continue
-                        outputs_data = step_info.get("outputs", {})
-                        try:
-                            outputs = deserialize_step_outputs(
-                                outputs_class, outputs_data
-                            )
-                            validate = getattr(outputs, "validate", None)
-                            if callable(validate):
-                                validate()
-                        except (AssertionError, FileNotFoundError) as exc:
-                            logger.warning(
-                                "Manifest outputs for %s are stale; will re-run (%s)",
-                                step_name,
-                                exc,
-                            )
-                            stale_steps.append(step_name)
-                            continue
-                        outputs_holder.set_attribute(step_name, outputs)
-
-                    if stale_steps:
-                        for step_name in stale_steps:
-                            manifest.pop(step_name, None)
-                        save_step_manifest(manifest, manifest_path)
+                    manifest_config = ManifestConfig(path=manifest_path)
 
                     # C1. ACTIVITY DEMAND
                     if state.should_run(
@@ -589,54 +562,29 @@ def main():
                     ):
                         formatted_print("ACTIVITY DEMAND MODEL")
 
-                        preprocess_step = (
-                            "activitysim_preprocess",
-                            make_activitysim_preprocess_step(
-                                coupler=coupler,
-                                outputs_holder=outputs_holder,
-                            ),
-                            ["usim_datastore_h5"],
-                            None,
-                        )
-
-                        step_key, step_func, input_keys, inputs = preprocess_step
-                        if step_key not in manifest:
-                            validate_step_ready(step_key, outputs_holder)
-                            step_config = build_step_config(
-                                fn=step_func,
-                                name=f"{step_key}_{year}_iter{i}",
-                                model=step_key,
-                                state=state,
-                                inputs=inputs or None,
-                                input_keys=input_keys or None,
-                                output_paths=None,
-                                cache_hydration="inputs-missing",
-                                load_inputs=False,
-                                runtime_kwargs=common_runtime_kwargs(
-                                    settings=settings,
-                                    state=state,
-                                    workspace=workspace,
+                        preprocess_specs = [
+                            WorkflowStepSpec(
+                                name="activitysim_preprocess",
+                                step_func=make_activitysim_preprocess_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
                                 ),
-                                consist_kwargs=build_step_consist_kwargs(
-                                    step_key,
-                                    settings,
-                                    workspace_path=workspace.full_path,
-                                ),
+                                input_keys=["usim_datastore_h5"],
                             )
-                            result = scenario.run(**step_config.to_kwargs())
-                            outputs = outputs_holder.get_attribute(step_key)
-                            if outputs is None:
-                                raise RuntimeError(
-                                    f"{step_key} did not populate outputs_holder"
-                                )
-                            manifest[step_key] = {
-                                "completed_at": datetime.now().isoformat(),
-                                "cache_hit": bool(getattr(result, "cache_hit", False)),
-                                "outputs": serialize_step_outputs(outputs),
-                            }
-                            save_step_manifest(manifest, manifest_path)
-                        else:
-                            logger.info("%s already completed (skipping)", step_key)
+                        ]
+                        run_manifested_steps(
+                            stage_name="activity_demand",
+                            steps=preprocess_specs,
+                            outputs_holder=outputs_holder,
+                            manifest_config=manifest_config,
+                            scenario=scenario,
+                            state=state,
+                            settings=settings,
+                            workspace=workspace,
+                            coupler=coupler,
+                            name_suffix=f"{year}_iter{i}",
+                            iteration=i,
+                        )
 
                         # ActivitySim Compilation: run once per year after preprocess.
                         if not state.asim_compiled:
@@ -706,72 +654,40 @@ def main():
                                     "but none were found while asim_compiled=True."
                                 )
 
-                        activitysim_steps = [
-                            (
-                                "activitysim_run",
-                                make_activitysim_run_step(
+                        activitysim_specs = [
+                            WorkflowStepSpec(
+                                name="activitysim_run",
+                                step_func=make_activitysim_run_step(
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                ["asim_mutable_data_dir", "zarr_skims"],
-                                None,
+                                input_keys=["asim_mutable_data_dir", "zarr_skims"],
                             ),
-                            (
-                                "activitysim_postprocess",
-                                make_activitysim_postprocess_step(
+                            WorkflowStepSpec(
+                                name="activitysim_postprocess",
+                                step_func=make_activitysim_postprocess_step(
                                     coupler=coupler,
                                     outputs_holder=outputs_holder,
                                 ),
-                                ["asim_output_dir"],
-                                {
+                                input_keys=["asim_output_dir"],
+                                inputs={
                                     "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir()
                                 },
                             ),
                         ]
-
-                        for (
-                            step_key,
-                            step_func,
-                            input_keys,
-                            inputs,
-                        ) in activitysim_steps:
-                            if step_key in manifest:
-                                logger.info("%s already completed (skipping)", step_key)
-                                continue
-                            validate_step_ready(step_key, outputs_holder)
-                            step_config = build_step_config(
-                                fn=step_func,
-                                name=f"{step_key}_{year}_iter{i}",
-                                model=step_key,
-                                state=state,
-                                inputs=inputs or None,
-                                input_keys=input_keys or None,
-                                output_paths=None,
-                                cache_hydration="inputs-missing",
-                                load_inputs=False,
-                                runtime_kwargs=common_runtime_kwargs(
-                                    settings=settings,
-                                    state=state,
-                                    workspace=workspace,
-                                ),
-                                consist_kwargs=build_step_consist_kwargs(
-                                    step_key,
-                                    settings,
-                                    workspace_path=workspace.full_path,
-                                ),
-                            )
-                            result = scenario.run(**step_config.to_kwargs())
-                            outputs = outputs_holder.get_attribute(step_key)
-                            if outputs is None:
-                                raise RuntimeError(
-                                    f"{step_key} did not populate outputs_holder"
-                                )
-                            manifest[step_key] = {
-                                "completed_at": datetime.now().isoformat(),
-                                "cache_hit": bool(getattr(result, "cache_hit", False)),
-                                "outputs": serialize_step_outputs(outputs),
-                            }
-                            save_step_manifest(manifest, manifest_path)
+                        run_manifested_steps(
+                            stage_name="activity_demand",
+                            steps=activitysim_specs,
+                            outputs_holder=outputs_holder,
+                            manifest_config=manifest_config,
+                            scenario=scenario,
+                            state=state,
+                            settings=settings,
+                            workspace=workspace,
+                            coupler=coupler,
+                            name_suffix=f"{year}_iter{i}",
+                            iteration=i,
+                        )
 
                         state.complete_step(
                             WorkflowState.Stage.supply_demand_loop,
