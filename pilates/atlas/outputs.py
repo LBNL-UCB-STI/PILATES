@@ -26,21 +26,10 @@ class AtlasPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_mutable_input_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_mutable_input_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     atlas_mutable_input_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected input paths exist.
-        """
-        assert (
-            self.atlas_mutable_input_dir.exists()
-        ), f"atlas_mutable_input_dir missing: {self.atlas_mutable_input_dir}"
-        for key, path in self.prepared_inputs.items():
-            if not path.exists():
-                raise AssertionError(
-                    f"atlas preprocess input missing for {key}: {path}"
-                )
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -95,19 +84,10 @@ class AtlasRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_output_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     atlas_output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        assert (
-            self.atlas_output_dir.exists()
-        ), f"atlas_output_dir missing: {self.atlas_output_dir}"
-        for key, path in self.raw_outputs.items():
-            if not path.exists():
-                raise AssertionError(f"atlas run output missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -164,26 +144,12 @@ class AtlasPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     atlas_output_dir: Path
     usim_datastore_h5: Optional[Path]
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        assert (
-            self.atlas_output_dir.exists()
-        ), f"atlas_output_dir missing: {self.atlas_output_dir}"
-        if self.usim_datastore_h5 is not None:
-            assert (
-                self.usim_datastore_h5.exists()
-            ), f"usim_datastore_h5 missing: {self.usim_datastore_h5}"
-        for key, path in self.processed_outputs.items():
-            if not path.exists():
-                raise AssertionError(
-                    f"atlas postprocess output missing for {key}: {path}"
-                )
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

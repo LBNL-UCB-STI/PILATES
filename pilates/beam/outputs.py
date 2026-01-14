@@ -26,19 +26,10 @@ class BeamPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "beam_mutable_data_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     beam_mutable_data_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected input paths exist.
-        """
-        assert (
-            self.beam_mutable_data_dir.exists()
-        ), f"beam_mutable_data_dir missing: {self.beam_mutable_data_dir}"
-        for key, path in self.prepared_inputs.items():
-            if not path.exists():
-                raise AssertionError(f"beam preprocess input missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -93,19 +84,10 @@ class BeamRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "beam_output_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_output_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     beam_output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        assert (
-            self.beam_output_dir.exists()
-        ), f"beam_output_dir missing: {self.beam_output_dir}"
-        for key, path in self.raw_outputs.items():
-            if not path.exists():
-                raise AssertionError(f"beam run output missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -168,17 +150,10 @@ class BeamPostprocessOutputs(StepOutputsBase):
         "zarr_skims": "Zarr skims updated with BEAM outputs",
         "final_skims_omx": "Final skims OMX for downstream models",
     }
+    optional_path_fields: ClassVar[Tuple[str, ...]] = (
+        "zarr_skims",
+        "final_skims_omx",
+    )
 
     zarr_skims: Optional[Path]
     final_skims_omx: Optional[Path]
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        if self.zarr_skims is not None:
-            assert self.zarr_skims.exists(), f"zarr_skims missing: {self.zarr_skims}"
-        if self.final_skims_omx is not None:
-            assert (
-                self.final_skims_omx.exists()
-            ), f"final_skims_omx missing: {self.final_skims_omx}"

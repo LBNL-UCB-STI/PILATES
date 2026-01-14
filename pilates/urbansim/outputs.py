@@ -26,21 +26,10 @@ class UrbanSimPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_mutable_data_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("usim_mutable_data_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     usim_mutable_data_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected input paths exist.
-        """
-        assert (
-            self.usim_mutable_data_dir.exists()
-        ), f"usim_mutable_data_dir missing: {self.usim_mutable_data_dir}"
-        for key, path in self.prepared_inputs.items():
-            if not path.exists():
-                raise AssertionError(
-                    f"urbansim preprocess input missing for {key}: {path}"
-                )
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -95,20 +84,10 @@ class UrbanSimRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     usim_datastore_h5: Optional[Path]
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        if self.usim_datastore_h5 is not None:
-            assert (
-                self.usim_datastore_h5.exists()
-            ), f"usim_datastore_h5 missing: {self.usim_datastore_h5}"
-        for key, path in self.raw_outputs.items():
-            if not path.exists():
-                raise AssertionError(f"urbansim run output missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -166,22 +145,10 @@ class UrbanSimPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Optional[Path]
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        if self.usim_datastore_h5 is not None:
-            assert (
-                self.usim_datastore_h5.exists()
-            ), f"usim_datastore_h5 missing: {self.usim_datastore_h5}"
-        for key, path in self.processed_outputs.items():
-            if not path.exists():
-                raise AssertionError(
-                    f"urbansim postprocess output missing for {key}: {path}"
-                )
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

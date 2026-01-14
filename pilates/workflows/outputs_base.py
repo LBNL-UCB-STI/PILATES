@@ -151,6 +151,9 @@ class StepOutputsBase:
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ()
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ()
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ()
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -189,3 +192,25 @@ class StepOutputsBase:
                 )
             )
         return RecordStore(recordList=records)
+
+    def validate(self) -> None:
+        """
+        Validate that expected output paths exist.
+        """
+        for field_name in self.required_path_fields:
+            path = getattr(self, field_name, None)
+            if path is None or not path.exists():
+                raise AssertionError(f"{field_name} missing: {path}")
+
+        for field_name in self.optional_path_fields:
+            path = getattr(self, field_name, None)
+            if path is None:
+                continue
+            if not path.exists():
+                raise AssertionError(f"{field_name} missing: {path}")
+
+        for field_name in self.dict_path_fields:
+            paths_dict = getattr(self, field_name, {}) or {}
+            for key, path in paths_dict.items():
+                if path is None or not path.exists():
+                    raise AssertionError(f"{field_name}[{key}] missing: {path}")

@@ -44,31 +44,19 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         "persons_table": "ActivitySim persons input table",
         "omx_skims": "ActivitySim OMX skims input",
     }
+    required_path_fields: ClassVar[Tuple[str, ...]] = (
+        "mutable_data_dir",
+        "land_use_table",
+        "households_table",
+        "persons_table",
+    )
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("omx_skims",)
 
     mutable_data_dir: Path
     land_use_table: Path
     households_table: Path
     persons_table: Path
     omx_skims: Optional[Path] = None
-
-    def validate(self) -> None:
-        """
-        Validate that required outputs exist on disk.
-        """
-        assert (
-            self.mutable_data_dir.exists()
-        ), f"mutable_data_dir missing: {self.mutable_data_dir}"
-        assert (
-            self.land_use_table.exists()
-        ), f"land_use_table missing: {self.land_use_table}"
-        assert (
-            self.households_table.exists()
-        ), f"households_table missing: {self.households_table}"
-        assert (
-            self.persons_table.exists()
-        ), f"persons_table missing: {self.persons_table}"
-        if self.omx_skims is not None:
-            assert self.omx_skims.exists(), f"omx_skims missing: {self.omx_skims}"
 
     @classmethod
     def from_record_store(
@@ -113,17 +101,10 @@ class ActivitySimRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "output_dir"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        assert self.output_dir.exists(), f"output_dir missing: {self.output_dir}"
-        for key, path in self.raw_outputs.items():
-            if not path.exists():
-                raise AssertionError(f"run output missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -180,24 +161,12 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("asim_output_dir",)
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Optional[Path]
     asim_output_dir: Path
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
-
-    def validate(self) -> None:
-        """
-        Validate that expected output paths exist.
-        """
-        assert (
-            self.asim_output_dir.exists()
-        ), f"asim_output_dir missing: {self.asim_output_dir}"
-        if self.usim_datastore_h5 is not None:
-            assert (
-                self.usim_datastore_h5.exists()
-            ), f"usim_datastore_h5 missing: {self.usim_datastore_h5}"
-        for key, path in self.processed_outputs.items():
-            if not path.exists():
-                raise AssertionError(f"postprocess output missing for {key}: {path}")
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
