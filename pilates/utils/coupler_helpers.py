@@ -428,7 +428,9 @@ def record_store_to_outputs(
     if hasattr(output_class, "from_record_store"):
         return output_class.from_record_store(record_store, workspace)
     if not is_dataclass(output_class):
-        raise TypeError("output_class must be a dataclass or implement from_record_store")
+        raise TypeError(
+            "output_class must be a dataclass or implement from_record_store"
+        )
 
     mapping = record_store.to_mapping() if record_store is not None else {}
     record_keys = getattr(output_class, "record_keys", {}) or {}

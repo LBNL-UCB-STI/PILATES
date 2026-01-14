@@ -106,6 +106,14 @@ class Initialization(Model):
                     )
                     if result:
                         rec_in, rec_out = result
+                        if model_name in workspace.input_data:
+                            workspace.input_data[model_name] += rec_in
+                        else:
+                            workspace.input_data[model_name] = rec_in
+                        if model_name in workspace.output_data:
+                            workspace.output_data[model_name] += rec_out
+                        else:
+                            workspace.output_data[model_name] = rec_out
                         initialization_records_in += rec_in
                         initialization_records_out += rec_out
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)

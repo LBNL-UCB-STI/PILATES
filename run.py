@@ -26,7 +26,7 @@ except ImportError:  # Consist optional dependency
     consist = None
 
 # Legacy/PILATES Imports
-from pilates.generic.model_factory import ModelFactory
+from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.generic.initialization import Initialization
 from pilates.utils.formatting import formatted_print
@@ -36,21 +36,20 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.activitysim.inputs import build_activitysim_inputs
 from pilates.atlas.inputs import build_atlas_inputs
-from pilates.beam.inputs import build_beam_inputs
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
-from pilates.utils.coupler_helpers import clean_expected_outputs
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    clean_expected_outputs,
+    update_coupler_from_beam_outputs,
+    resolve_artifact_from_value,
+)
 from pilates.utils.input_logging import log_inputs
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
-from pilates.workflows.step_io import (
-    build_outputs,
-    merge_expected_model_inputs,
-    merge_model_expected_inputs,
-)
+from pilates.workflows.step_io import build_outputs, merge_model_expected_inputs
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -61,10 +60,16 @@ from pilates.workflows.steps import (
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
-    make_atlas_step,
-    make_beam_step,
+    make_atlas_postprocess_step,
+    make_atlas_preprocess_step,
+    make_atlas_run_step,
+    make_beam_postprocess_step,
+    make_beam_preprocess_step,
+    make_beam_run_step,
     make_postprocessing_step,
-    make_urbansim_step,
+    make_urbansim_postprocess_step,
+    make_urbansim_preprocess_step,
+    make_urbansim_run_step,
     deserialize_step_outputs,
     serialize_step_outputs,
     validate_step_ready,
@@ -86,6 +91,27 @@ def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path
         / ".workflow"
         / f"year_{year}_iteration_{iteration}.yaml"
     )
+
+
+def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
+    """
+    Enumerate static ATLAS inputs from the mutable input directory.
+
+    This fallback is used when Initialization was skipped (e.g., restart) and the
+    in-memory RecordStore of copied inputs is unavailable. It may include files
+    produced by prior ATLAS preprocess runs.
+    """
+    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+    if not os.path.exists(atlas_input_dir):
+        return {}
+    inputs: Dict[str, str] = {}
+    for root, _, files in os.walk(atlas_input_dir):
+        for filename in sorted(files):
+            path = os.path.join(root, filename)
+            relpath = os.path.relpath(path, atlas_input_dir)
+            key = f"atlas_static_{relpath.replace(os.sep, '__')}"
+            inputs.setdefault(key, path)
+    return inputs
 
 
 def main():
@@ -164,7 +190,7 @@ def main():
         mounts={
             "inputs": project_root_abs,  # Immutable Source
             "workspace": full_run_dir,  # Mutable Destination
-            "scratch": str(Path(output_path).resolve()), # For temp files
+            "scratch": str(Path(output_path).resolve()),  # For temp files
         },
         project_root=project_root_abs,
     )
@@ -276,6 +302,7 @@ def main():
         for year in state:
             formatted_print(f"STARTING YEAR {year}")
             usim_inputs: Dict[str, Any] = {}
+            outputs_holder_year = StepOutputsHolder()
 
             # A. LAND USE FORECASTING
             # Forecasts demographic and economic changes using UrbanSim long-term simulation.
@@ -285,9 +312,6 @@ def main():
             if state.should_run(WorkflowState.Stage.land_use):
                 formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
 
-                step_name = f"urbansim_{year}"
-
-                usim_data_dir = workspace.get_usim_mutable_data_dir()
                 usim_inputs, usim_input_descriptions = build_urbansim_inputs(
                     settings, state, workspace, year
                 )
@@ -295,33 +319,75 @@ def main():
                 usim_inputs = merge_model_expected_inputs(
                     "urbansim", usim_inputs, settings, state, workspace
                 )
-                expected_usim_outputs = clean_expected_outputs(
-                    build_outputs("urbansim", settings, state, workspace)
-                )
 
-                urbansim_step = make_urbansim_step(
-                    coupler=coupler,
-                    year=year,
-                )
-                urbansim_config = build_step_config(
-                    fn=urbansim_step,
-                    name=step_name,
-                    model="urbansim",
-                    state=state,
-                    iteration=0,
-                    inputs=usim_inputs,
-                    output_paths=expected_usim_outputs or None,
-                    load_inputs=False,
-                    runtime_kwargs=common_runtime_kwargs(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        usim_data_dir=usim_data_dir,
-                        expected_outputs=expected_usim_outputs,
+                urbansim_steps = [
+                    (
+                        "urbansim_preprocess",
+                        make_urbansim_preprocess_step(
+                            coupler=coupler,
+                            outputs_holder=outputs_holder_year,
+                        ),
+                        None,
+                        usim_inputs,
                     ),
-                    consist_kwargs=build_step_consist_kwargs("urbansim", settings),
-                )
-                scenario.run(**urbansim_config.to_kwargs())
+                    (
+                        "urbansim_run",
+                        make_urbansim_run_step(
+                            coupler=coupler,
+                            outputs_holder=outputs_holder_year,
+                        ),
+                        ["usim_mutable_data_dir", "usim_datastore_h5"],
+                        None,
+                    ),
+                    (
+                        "urbansim_postprocess",
+                        make_urbansim_postprocess_step(
+                            coupler=coupler,
+                            outputs_holder=outputs_holder_year,
+                        ),
+                        ["usim_datastore_h5"],
+                        None,
+                    ),
+                ]
+
+                for step_key, step_func, input_keys, inputs in urbansim_steps:
+                    validate_step_ready(step_key, outputs_holder_year)
+                    step_config = build_step_config(
+                        fn=step_func,
+                        name=f"{step_key}_{year}",
+                        model=step_key,
+                        state=state,
+                        iteration=0,
+                        inputs=inputs or None,
+                        input_keys=input_keys or None,
+                        output_paths=None,
+                        cache_hydration="inputs-missing",
+                        load_inputs=False,
+                        runtime_kwargs=common_runtime_kwargs(
+                            settings=settings,
+                            state=state,
+                            workspace=workspace,
+                        ),
+                        consist_kwargs=build_step_consist_kwargs(step_key, settings),
+                    )
+                    scenario.run(**step_config.to_kwargs())
+
+                postprocess_outputs = outputs_holder_year.urbansim_postprocess
+                run_outputs = outputs_holder_year.urbansim_run
+                if (
+                    postprocess_outputs is not None
+                    and postprocess_outputs.usim_datastore_h5 is not None
+                ):
+                    usim_inputs["usim_datastore_h5"] = str(
+                        postprocess_outputs.usim_datastore_h5
+                    )
+                elif (
+                    run_outputs is not None
+                    and run_outputs.usim_datastore_h5 is not None
+                ):
+                    usim_inputs["usim_datastore_h5"] = str(
+                        run_outputs.usim_datastore_h5
+                    )
 
                 state.complete_step(WorkflowState.Stage.land_use)
 
@@ -371,15 +437,6 @@ def main():
                     urbansim_datastore_dir, usim_datastore_fname
                 )
 
-                # ATLAS Logic extraction
-                factory = ModelFactory()
-                preprocessor, runner, postprocessor = factory.get_components(
-                    "atlas",
-                    state,
-                    major_stage=WorkflowState.Stage.vehicle_ownership_model,
-                )
-
-                warm_start_atlas = state.is_start_year()
                 forecast = True
                 yrs = (
                     [state.year]
@@ -393,7 +450,7 @@ def main():
                 # ATLAS Sub-loop
                 for atlas_year in yrs:
                     atlas_state = AtlasSubState(state, atlas_year)
-                    step_name = f"atlas_{atlas_year}"
+                    outputs_holder_atlas = StepOutputsHolder()
 
                     step_inputs, step_input_descriptions = build_atlas_inputs(
                         settings,
@@ -407,40 +464,82 @@ def main():
                     step_inputs = merge_model_expected_inputs(
                         "atlas", step_inputs, settings, atlas_state, workspace
                     )
-                    expected_atlas_outputs = clean_expected_outputs(
-                        build_outputs("atlas", settings, atlas_state, workspace)
-                    )
+                    atlas_preprocess_inputs = dict(step_inputs)
+                    atlas_static_inputs = workspace.input_data.get("atlas")
+                    if atlas_static_inputs is not None:
+                        for key, value in atlas_static_inputs.to_mapping().items():
+                            atlas_preprocess_inputs.setdefault(key, value)
+                    else:
+                        atlas_preprocess_inputs.update(
+                            build_atlas_static_inputs_fallback(workspace)
+                        )
+                    atlas_run_inputs = {}
+                    if "atlas_mutable_input_dir" in step_inputs:
+                        atlas_run_inputs["atlas_mutable_input_dir"] = step_inputs[
+                            "atlas_mutable_input_dir"
+                        ]
 
-                    atlas_step = make_atlas_step(
-                        coupler=coupler,
-                    )
-                    atlas_config = build_step_config(
-                        fn=atlas_step,
-                        name=step_name,
-                        model="atlas",
-                        state=atlas_state,
-                        iteration=0,
-                        inputs=step_inputs,
-                        outputs=list(expected_atlas_outputs.keys()) or None,
-                        output_paths=expected_atlas_outputs or None,
-                        cache_hydration="outputs-requested",
-                        load_inputs=False,
-                        runtime_kwargs=common_runtime_kwargs(
-                            settings=settings,
-                            state=atlas_state,
-                            workspace=workspace,
-                            atlas_state=atlas_state,
-                            base_state=state,
-                            preprocessor=preprocessor,
-                            runner=runner,
-                            postprocessor=postprocessor,
-                            usim_datastore_h5_path=usim_datastore_h5_path,
-                            atlas_year=atlas_year,
-                            expected_outputs=expected_atlas_outputs,
+                    atlas_steps = [
+                        (
+                            "atlas_preprocess",
+                            make_atlas_preprocess_step(
+                                coupler=coupler,
+                                outputs_holder=outputs_holder_atlas,
+                            ),
+                            None,
+                            atlas_preprocess_inputs,
                         ),
-                        consist_kwargs=build_step_consist_kwargs("atlas", settings),
-                    )
-                    scenario.run(**atlas_config.to_kwargs())
+                        (
+                            "atlas_run",
+                            make_atlas_run_step(
+                                coupler=coupler,
+                                outputs_holder=outputs_holder_atlas,
+                            ),
+                            ["usim_datastore_h5"],
+                            atlas_run_inputs or None,
+                        ),
+                        (
+                            "atlas_postprocess",
+                            make_atlas_postprocess_step(
+                                coupler=coupler,
+                                outputs_holder=outputs_holder_atlas,
+                            ),
+                            ["atlas_output_dir"],
+                            None,
+                        ),
+                    ]
+
+                    try:
+                        for step_key, step_func, input_keys, inputs in atlas_steps:
+                            validate_step_ready(step_key, outputs_holder_atlas)
+                            step_config = build_step_config(
+                                fn=step_func,
+                                name=f"{step_key}_{atlas_year}",
+                                model=step_key,
+                                state=atlas_state,
+                                iteration=0,
+                                inputs=inputs or None,
+                                input_keys=input_keys or None,
+                                output_paths=None,
+                                cache_hydration="inputs-missing",
+                                load_inputs=False,
+                                runtime_kwargs=common_runtime_kwargs(
+                                    settings=settings,
+                                    state=atlas_state,
+                                    workspace=workspace,
+                                ),
+                                consist_kwargs=build_step_consist_kwargs(
+                                    step_key, settings
+                                ),
+                            )
+                            scenario.run(**step_config.to_kwargs())
+                    except Exception:
+                        from pilates.utils.failure_handling import (
+                            persist_state_on_error,
+                        )
+
+                        persist_state_on_error(state, f"ATLAS year {atlas_year}")
+                        sys.exit(1)
 
                 state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
@@ -474,6 +573,36 @@ def main():
                     state.iteration = i
                     formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
                     activity_demand_outputs = None
+                    outputs_holder = StepOutputsHolder()
+                    manifest_path = build_manifest_path(workspace, year, i)
+                    manifest = load_step_manifest(manifest_path) or {}
+                    stale_steps = []
+                    for step_name, step_info in manifest.items():
+                        outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
+                        if outputs_class is None:
+                            continue
+                        outputs_data = step_info.get("outputs", {})
+                        try:
+                            outputs = deserialize_step_outputs(
+                                outputs_class, outputs_data
+                            )
+                            validate = getattr(outputs, "validate", None)
+                            if callable(validate):
+                                validate()
+                        except (AssertionError, FileNotFoundError) as exc:
+                            logger.warning(
+                                "Manifest outputs for %s are stale; will re-run (%s)",
+                                step_name,
+                                exc,
+                            )
+                            stale_steps.append(step_name)
+                            continue
+                        outputs_holder.set_attribute(step_name, outputs)
+
+                    if stale_steps:
+                        for step_name in stale_steps:
+                            manifest.pop(step_name, None)
+                        save_step_manifest(manifest, manifest_path)
 
                     # C1. ACTIVITY DEMAND
                     if state.should_run(
@@ -482,43 +611,64 @@ def main():
                         WorkflowState.Stage.activity_demand,
                     ):
                         formatted_print("ACTIVITY DEMAND MODEL")
-                        manifest_path = build_manifest_path(workspace, year, i)
-                        manifest = load_step_manifest(manifest_path) or {}
 
-                        outputs_holder = StepOutputsHolder()
-                        for step_name, step_info in manifest.items():
-                            outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-                            if outputs_class is None:
-                                continue
-                            outputs_data = step_info.get("outputs", {})
-                            outputs = deserialize_step_outputs(
-                                outputs_class, outputs_data
-                            )
-                            outputs_holder.set_attribute(step_name, outputs)
+                        preprocess_step = (
+                            "activitysim_preprocess",
+                            make_activitysim_preprocess_step(
+                                coupler=coupler,
+                                outputs_holder=outputs_holder,
+                            ),
+                            ["usim_datastore_h5"],
+                            None,
+                        )
 
-                        # ActivitySim Compilation: run once per year when needed.
-                        if not state.asim_compiled:
-                            asim_inputs, asim_input_descriptions = (
-                                build_activitysim_inputs(
+                        step_key, step_func, input_keys, inputs = preprocess_step
+                        if step_key not in manifest:
+                            validate_step_ready(step_key, outputs_holder)
+                            step_config = build_step_config(
+                                fn=step_func,
+                                name=f"{step_key}_{year}_iter{i}",
+                                model=step_key,
+                                state=state,
+                                inputs=inputs or None,
+                                input_keys=input_keys or None,
+                                output_paths=None,
+                                cache_hydration="inputs-missing",
+                                load_inputs=False,
+                                runtime_kwargs=common_runtime_kwargs(
+                                    settings=settings,
+                                    state=state,
+                                    workspace=workspace,
+                                ),
+                                consist_kwargs=build_step_consist_kwargs(
+                                    step_key,
                                     settings,
-                                    state,
-                                    workspace,
-                                    year,
-                                    i,
-                                    coupler,
-                                    usim_inputs=usim_inputs,
-                                    include_omx_skims=True,
+                                    workspace_path=workspace.full_path,
+                                ),
+                            )
+                            result = scenario.run(**step_config.to_kwargs())
+                            outputs = outputs_holder.get_attribute(step_key)
+                            if outputs is None:
+                                raise RuntimeError(
+                                    f"{step_key} did not populate outputs_holder"
                                 )
-                            )
-                            log_inputs(asim_inputs, asim_input_descriptions)
-                            asim_inputs = merge_expected_model_inputs(
-                                ("activitysim_compile",),
-                                asim_inputs,
-                                settings,
-                                state,
-                                workspace,
-                            )
+                            manifest[step_key] = {
+                                "completed_at": datetime.now().isoformat(),
+                                "cache_hit": bool(getattr(result, "cache_hit", False)),
+                                "outputs": serialize_step_outputs(outputs),
+                            }
+                            save_step_manifest(manifest, manifest_path)
+                        else:
+                            logger.info("%s already completed (skipping)", step_key)
 
+                        # ActivitySim Compilation: run once per year after preprocess.
+                        if not state.asim_compiled:
+                            upstream = outputs_holder.activitysim_preprocess
+                            if upstream is None:
+                                raise RuntimeError(
+                                    "ActivitySim compile requires preprocess outputs."
+                                )
+                            compile_inputs = upstream.to_record_store().to_mapping()
                             expected_compile_outputs = clean_expected_outputs(
                                 build_outputs(
                                     "activitysim_compile",
@@ -530,6 +680,7 @@ def main():
                             )
                             activitysim_compile_step = make_activitysim_compile_step(
                                 coupler=coupler,
+                                outputs_holder=outputs_holder,
                             )
                             compile_config = build_step_config(
                                 fn=activitysim_compile_step,
@@ -537,7 +688,7 @@ def main():
                                 model="activitysim_compile",
                                 state=state,
                                 iteration=-1,
-                                inputs=asim_inputs,
+                                inputs=compile_inputs or None,
                                 output_paths=expected_compile_outputs or None,
                                 cache_mode="overwrite",
                                 load_inputs=False,
@@ -545,10 +696,6 @@ def main():
                                     settings=settings,
                                     state=state,
                                     workspace=workspace,
-                                    compile_outputs_holder={
-                                        "input_store": None,
-                                        "compile_outputs": None,
-                                    },
                                     expected_outputs=expected_compile_outputs,
                                 ),
                                 consist_kwargs=build_step_consist_kwargs(
@@ -558,17 +705,31 @@ def main():
                                 ),
                             )
                             scenario.run(**compile_config.to_kwargs())
+                        else:
+                            zarr_value = None
+                            get_value = getattr(coupler, "get", None)
+                            if callable(get_value):
+                                zarr_value = resolve_artifact_from_value(
+                                    get_value("zarr_skims"),
+                                    key="zarr_skims",
+                                    workspace=workspace,
+                                )
+                            zarr_path = artifact_to_path(zarr_value, workspace)
+                            if not zarr_path:
+                                candidate = os.path.join(
+                                    workspace.get_asim_output_dir(),
+                                    "cache",
+                                    "skims.zarr",
+                                )
+                                if os.path.exists(candidate):
+                                    zarr_path = candidate
+                            if not zarr_path or not os.path.exists(zarr_path):
+                                raise RuntimeError(
+                                    "ActivitySim run requires zarr_skims, "
+                                    "but none were found while asim_compiled=True."
+                                )
 
                         activitysim_steps = [
-                            (
-                                "activitysim_preprocess",
-                                make_activitysim_preprocess_step(
-                                    coupler=coupler,
-                                    outputs_holder=outputs_holder,
-                                ),
-                                ["usim_datastore_h5"],
-                                None,
-                            ),
                             (
                                 "activitysim_run",
                                 make_activitysim_run_step(
@@ -591,11 +752,14 @@ def main():
                             ),
                         ]
 
-                        for step_key, step_func, input_keys, inputs in activitysim_steps:
+                        for (
+                            step_key,
+                            step_func,
+                            input_keys,
+                            inputs,
+                        ) in activitysim_steps:
                             if step_key in manifest:
-                                logger.info(
-                                    "%s already completed (skipping)", step_key
-                                )
+                                logger.info("%s already completed (skipping)", step_key)
                                 continue
                             validate_step_ready(step_key, outputs_holder)
                             step_config = build_step_config(
@@ -627,25 +791,23 @@ def main():
                                 )
                             manifest[step_key] = {
                                 "completed_at": datetime.now().isoformat(),
-                                "cache_hit": bool(
-                                    getattr(result, "cache_hit", False)
-                                ),
+                                "cache_hit": bool(getattr(result, "cache_hit", False)),
                                 "outputs": serialize_step_outputs(outputs),
                             }
                             save_step_manifest(manifest, manifest_path)
-
-                        postprocess_outputs = outputs_holder.activitysim_postprocess
-                        activity_demand_outputs = (
-                            postprocess_outputs.to_record_store()
-                            if postprocess_outputs is not None
-                            else None
-                        )
 
                         state.complete_step(
                             WorkflowState.Stage.supply_demand_loop,
                             i,
                             WorkflowState.Stage.activity_demand,
                         )
+
+                    postprocess_outputs = outputs_holder.activitysim_postprocess
+                    activity_demand_outputs = (
+                        postprocess_outputs.to_record_store()
+                        if postprocess_outputs is not None
+                        else None
+                    )
 
                     # C2. TRAFFIC ASSIGNMENT
                     if state.should_run(
@@ -656,67 +818,128 @@ def main():
                         # Consist integration: scenario.run handles caching/provenance;
                         # coupler bridges BEAM outputs into downstream stages.
                         formatted_print("TRAFFIC ASSIGNMENT MODEL")
-                        step_name = f"beam_{year}_iter{i}"
+                        beam_preprocess_inputs: Dict[str, Any] = {}
+                        if activity_demand_outputs is not None:
+                            beam_preprocess_inputs.update(
+                                activity_demand_outputs.to_mapping()
+                            )
+                        if previous_beam_outputs is not None:
+                            beam_preprocess_inputs.update(
+                                previous_beam_outputs.to_mapping()
+                            )
+                        if (
+                            getattr(settings, "vehicle_ownership_model_enabled", False)
+                            and i == 0
+                        ):
+                            if state.run_info_path and os.path.exists(
+                                state.run_info_path
+                            ):
+                                previous_run_dir = os.path.dirname(state.run_info_path)
+                                atlas_output_dir = os.path.join(
+                                    previous_run_dir, "atlas", "atlas_output"
+                                )
+                            else:
+                                atlas_output_dir = workspace.get_atlas_output_dir()
+                            atlas_vehicle_path = os.path.join(
+                                atlas_output_dir,
+                                f"vehicles2_{state.forecast_year}.csv",
+                            )
+                            if not os.path.exists(atlas_vehicle_path):
+                                atlas_vehicle_path = os.path.join(
+                                    atlas_output_dir,
+                                    f"vehicles2_{state.forecast_year - 1}.csv",
+                                )
+                            if os.path.exists(atlas_vehicle_path):
+                                beam_preprocess_inputs.setdefault(
+                                    "atlas_vehicles2_input", atlas_vehicle_path
+                                )
 
-                        (
-                            beam_inputs,
-                            beam_mutable_dir,
-                            beam_mutable_description,
-                        ) = build_beam_inputs(
-                            settings,
-                            state,
-                            workspace,
-                            year,
-                            i,
-                            coupler,
-                            activity_demand_outputs=activity_demand_outputs,
-                            previous_beam_outputs=previous_beam_outputs,
-                        )
-                        beam_inputs = merge_model_expected_inputs(
-                            "beam", beam_inputs, settings, state, workspace
-                        )
+                        beam_preprocess_input_keys = ["asim_output_dir"]
+                        if getattr(settings, "vehicle_ownership_model_enabled", False):
+                            beam_preprocess_input_keys.append("atlas_output_dir")
 
-                        # BEAM Traffic Assignment: Simulate network equilibration.
-                        # Uses activity demand from ActivitySim (via activity_demand_outputs).
-                        # Generates skims (travel times) that feed back to ActivitySim
-                        # for next iteration via coupler (coupler["zarr_skims"]).
-                        # Consist handles caching: if demand unchanged → skip BEAM.
-                        beam_outputs_holder = {"beam_outputs": None}
-                        expected_beam_outputs = clean_expected_outputs(
-                            build_outputs("beam", settings, state, workspace)
-                        )
-                        beam_step = make_beam_step(
-                            coupler=coupler,
-                        )
-                        beam_config = build_step_config(
-                            fn=beam_step,
-                            name=step_name,
-                            model="beam",
-                            state=state,
-                            inputs=beam_inputs or None,
-                            output_paths=expected_beam_outputs or None,
-                            cache_mode="overwrite",
-                            load_inputs=False,
-                            runtime_kwargs=common_runtime_kwargs(
-                                settings=settings,
+                        beam_postprocess_input_keys = ["beam_output_dir"]
+                        if getattr(settings, "activity_demand_enabled", False):
+                            beam_postprocess_input_keys.append("asim_output_dir")
+
+                        beam_steps = [
+                            (
+                                "beam_preprocess",
+                                make_beam_preprocess_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                beam_preprocess_input_keys,
+                                beam_preprocess_inputs or None,
+                            ),
+                            (
+                                "beam_run",
+                                make_beam_run_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                ["beam_mutable_data_dir", "zarr_skims"],
+                                None,
+                            ),
+                            (
+                                "beam_postprocess",
+                                make_beam_postprocess_step(
+                                    coupler=coupler,
+                                    outputs_holder=outputs_holder,
+                                ),
+                                beam_postprocess_input_keys,
+                                None,
+                            ),
+                        ]
+
+                        for step_key, step_func, input_keys, inputs in beam_steps:
+                            validate_step_ready(step_key, outputs_holder)
+                            step_config = build_step_config(
+                                fn=step_func,
+                                name=f"{step_key}_{year}_iter{i}",
+                                model=step_key,
                                 state=state,
-                                workspace=workspace,
-                                activity_demand_outputs=activity_demand_outputs,
-                                previous_beam_outputs=previous_beam_outputs,
-                                beam_inputs=beam_inputs,
-                                beam_mutable_dir=beam_mutable_dir,
-                                beam_mutable_description=beam_mutable_description,
-                                beam_outputs_holder=beam_outputs_holder,
-                                expected_outputs=expected_beam_outputs,
-                            ),
-                            consist_kwargs=build_step_consist_kwargs(
-                                "beam",
-                                settings,
-                                workspace_path=workspace.full_path,
-                            ),
-                        )
-                        scenario.run(**beam_config.to_kwargs())
-                        previous_beam_outputs = beam_outputs_holder["beam_outputs"]
+                                inputs=inputs or None,
+                                input_keys=input_keys or None,
+                                output_paths=None,
+                                cache_hydration="inputs-missing",
+                                load_inputs=False,
+                                runtime_kwargs=common_runtime_kwargs(
+                                    settings=settings,
+                                    state=state,
+                                    workspace=workspace,
+                                    activity_demand_outputs=activity_demand_outputs,
+                                    previous_beam_outputs=previous_beam_outputs,
+                                ),
+                                consist_kwargs=build_step_consist_kwargs(
+                                    step_key,
+                                    settings,
+                                    workspace_path=workspace.full_path,
+                                ),
+                            )
+                            scenario.run(**step_config.to_kwargs())
+
+                        beam_run_outputs = outputs_holder.beam_run
+                        beam_post_outputs = outputs_holder.beam_postprocess
+                        combined_beam_outputs = None
+                        if (
+                            beam_run_outputs is not None
+                            or beam_post_outputs is not None
+                        ):
+                            combined_beam_outputs = RecordStore()
+                            if beam_run_outputs is not None:
+                                combined_beam_outputs += (
+                                    beam_run_outputs.to_record_store()
+                                )
+                            if beam_post_outputs is not None:
+                                combined_beam_outputs += (
+                                    beam_post_outputs.to_record_store()
+                                )
+                        previous_beam_outputs = combined_beam_outputs
+                        if combined_beam_outputs is not None:
+                            update_coupler_from_beam_outputs(
+                                combined_beam_outputs, coupler, workspace
+                            )
 
                         state.complete_step(
                             WorkflowState.Stage.supply_demand_loop,

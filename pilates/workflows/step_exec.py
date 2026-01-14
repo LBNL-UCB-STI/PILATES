@@ -33,7 +33,9 @@ class Runner(Protocol):
 class Postprocessor(Protocol):
     """Protocol for postprocessors that emit a RecordStore."""
 
-    def postprocess(self, raw_outputs: RecordStore, workspace: Workspace) -> RecordStore:
+    def postprocess(
+        self, raw_outputs: RecordStore, workspace: Workspace
+    ) -> RecordStore:
         """Postprocess model outputs."""
 
 

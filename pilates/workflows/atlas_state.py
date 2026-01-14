@@ -48,9 +48,7 @@ class AtlasSubState:
         self.main_forecast_year = parent_state.forecast_year
         self.start_year = parent_state.start_year
         self.full_settings = parent_state.full_settings
-        self.is_start_year: Callable[[], bool] = (
-            lambda: year == parent_state.start_year
-        )
+        self.is_start_year: Callable[[], bool] = lambda: year == parent_state.start_year
         self._parent_state = parent_state
 
     def set_sub_stage_progress(self, sub_stage_progress: str) -> None:

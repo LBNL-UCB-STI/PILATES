@@ -35,9 +35,7 @@ class ActivitysimCompileRunner(GenericRunner):
 
     @staticmethod
     def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
-        return ActivitysimRunner.get_asim_docker_vols(
-            settings, working_dir=working_dir
-        )
+        return ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
 
     @staticmethod
     def expected_inputs(
@@ -46,8 +44,7 @@ class ActivitysimCompileRunner(GenericRunner):
         """
         Declare the input paths/artifacts this runner expects from the workflow.
         """
-        return {
-        }
+        return {}
 
     @staticmethod
     def expected_outputs(

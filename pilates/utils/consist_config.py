@@ -101,30 +101,57 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
 
-    if model_norm == "beam":
+    if model_norm in {
+        "beam",
+        "beam_preprocess",
+        "beam_run",
+        "beam_postprocess",
+    }:
         if workspace_path is None:
             raise ValueError("workspace_path is required for beam hash_inputs.")
         return {
             "config": build_beam_identity_config(settings),
             "facet": build_beam_facet(settings),
             "hash_inputs": build_beam_hash_inputs(settings, workspace_path),
-            "facet_schema_version": "beam_v1",
+            "facet_schema_version": {
+                "beam_preprocess": "beam_preprocess_v1",
+                "beam_run": "beam_run_v1",
+                "beam_postprocess": "beam_postprocess_v1",
+            }.get(model_norm, "beam_v1"),
             "facet_index": True,
         }
 
-    if model_norm == "urbansim":
+    if model_norm in {
+        "urbansim",
+        "urbansim_preprocess",
+        "urbansim_run",
+        "urbansim_postprocess",
+    }:
         return {
             "config": build_urbansim_identity_config(settings),
             "facet": build_urbansim_facet(settings),
-            "facet_schema_version": "urbansim_v1",
+            "facet_schema_version": {
+                "urbansim_preprocess": "urbansim_preprocess_v1",
+                "urbansim_run": "urbansim_run_v1",
+                "urbansim_postprocess": "urbansim_postprocess_v1",
+            }.get(model_norm, "urbansim_v1"),
             "facet_index": True,
         }
 
-    if model_norm == "atlas":
+    if model_norm in {
+        "atlas",
+        "atlas_preprocess",
+        "atlas_run",
+        "atlas_postprocess",
+    }:
         return {
             "config": build_atlas_identity_config(settings),
             "facet": build_atlas_facet(settings),
-            "facet_schema_version": "atlas_v1",
+            "facet_schema_version": {
+                "atlas_preprocess": "atlas_preprocess_v1",
+                "atlas_run": "atlas_run_v1",
+                "atlas_postprocess": "atlas_postprocess_v1",
+            }.get(model_norm, "atlas_v1"),
             "facet_index": True,
         }
 

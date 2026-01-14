@@ -284,6 +284,10 @@ class BeamPreprocessor(GenericPreprocessor):
         # For replanning iterations, inputs from the previous BEAM run should be
         # passed in explicitly by the caller.
         previous_beam_records: List[FileRecord] = []
+        for record in previous_records.all_records():
+            short_name = getattr(record, "short_name", "") or ""
+            if short_name.startswith("linkstats"):
+                previous_beam_records.append(record)
 
         # Update BEAM config based on settings
         self._update_beam_config(
@@ -294,15 +298,23 @@ class BeamPreprocessor(GenericPreprocessor):
         # Prepare the zone shapefile to ensure consistent zone ordering
         self.prepare_beam_zone_shapefile(workspace)
 
+        store = RecordStore()
+
         # Copy vehicle data from Atlas (only on first iteration)
         if (
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            self._copy_vehicles_from_atlas(workspace)
+            atlas_input_record, beam_output_record = self._copy_vehicles_from_atlas(
+                workspace
+            )
+            if atlas_input_record is not None:
+                store.add_record(atlas_input_record)
+            if beam_output_record is not None:
+                store.add_record(beam_output_record)
 
         # Copy and merge plans from ActivitySim
-        store = self._copy_plans_from_asim(input_records, workspace)
+        store += self._copy_plans_from_asim(input_records, workspace)
 
         store += output_records
 
@@ -437,8 +449,17 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         return output_shapefile_path
 
-    def _copy_vehicles_from_atlas(self, workspace: "Workspace"):
-        """Copies the vehicles file from the ATLAS output to the BEAM input scenario."""
+    def _copy_vehicles_from_atlas(
+        self, workspace: "Workspace"
+    ) -> Tuple[Optional[FileRecord], Optional[FileRecord]]:
+        """
+        Copies the vehicles file from the ATLAS output to the BEAM input scenario.
+
+        Returns
+        -------
+        tuple of FileRecord or None
+            (input_record, output_record) for lineage tracking.
+        """
         beam_scenario_folder = os.path.join(
             workspace.get_beam_mutable_data_dir(),
             self.settings.run.region,
@@ -466,12 +487,34 @@ class BeamPreprocessor(GenericPreprocessor):
                 atlas_output_data_dir, f"vehicles2_{self.state.forecast_year - 1}.csv"
             )
 
+        if not os.path.exists(atlas_vehicle_file_loc):
+            logger.warning(
+                "ATLAS vehicles2 file not found for BEAM input: %s",
+                atlas_vehicle_file_loc,
+            )
+            return None, None
+
         logger.info(
             f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
         )
 
         df = pd.read_csv(atlas_vehicle_file_loc)
         df.to_csv(beam_vehicles_path, compression="gzip", index=False)
+        input_record = FileRecord(
+            file_path=atlas_vehicle_file_loc,
+            description="ATLAS vehicles2 input for BEAM",
+            short_name="atlas_vehicles2_input",
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+        )
+        output_record = FileRecord(
+            file_path=beam_vehicles_path,
+            description="BEAM vehicles input derived from ATLAS vehicles2",
+            short_name="vehicles_beam_in",
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+        )
+        return input_record, output_record
 
     def _copy_plans_from_asim(
         self,
@@ -588,15 +631,15 @@ class BeamPreprocessor(GenericPreprocessor):
                 asim_name, (None, None)
             )
             if asim_file_path:
-                record = self._copy_with_compression_asim_file_to_beam(
+                records = self._copy_with_compression_asim_file_to_beam(
                     asim_file_path,
                     beam_name,
                     file_format,
                     beam_scenario_folder,
                     input_record=asim_file_record,
                 )
-                if record:
-                    record_list.append(record)
+                if records:
+                    record_list.extend(records)
             else:
                 logger.warning(f"ActivitySim output file not found: {asim_name}")
         return record_list
@@ -714,6 +757,11 @@ class BeamPreprocessor(GenericPreprocessor):
                     iteration=self.state.current_inner_iter,
                 )
             )
+            record_list.extend(
+                self._format_specific_output_records(
+                    name, path, file_format, "Merged BEAM input file"
+                )
+            )
 
         return record_list
 
@@ -724,7 +772,7 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         beam_scenario_folder: str,
         input_record: Optional[FileRecord] = None,
-    ) -> Optional[FileRecord]:
+    ) -> Optional[List[FileRecord]]:
         """Copies and compresses a single file from ActivitySim to BEAM."""
         beam_file_path = locate_beam_file(
             beam_scenario_folder, beam_file_name, file_format
@@ -735,13 +783,15 @@ class BeamPreprocessor(GenericPreprocessor):
 
         if not os.path.exists(asim_file_path):
             logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
-            return FileRecord(
-                file_path=beam_file_path,
-                description=f"Missing BEAM input file: {beam_file_name}",
-                short_name=f"{beam_file_name}_beam_in_missing",
-                year=self.state.current_year,
-                iteration=self.state.current_inner_iter,
-            )
+            return [
+                FileRecord(
+                    file_path=beam_file_path,
+                    description=f"Missing BEAM input file: {beam_file_name}",
+                    short_name=f"{beam_file_name}_beam_in_missing",
+                    year=self.state.current_year,
+                    iteration=self.state.current_inner_iter,
+                )
+            ]
 
         table_type = "plans" if "plans" in beam_file_name else beam_file_name
 
@@ -752,13 +802,67 @@ class BeamPreprocessor(GenericPreprocessor):
         else:
             df.to_csv(beam_file_path, compression="gzip", index=False)
 
-        return FileRecord(
-            file_path=beam_file_path,
-            description=f"Copied from ActivitySim output: {beam_file_name}",
-            short_name=beam_file_name + "_beam_in",
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
+        records = [
+            FileRecord(
+                file_path=beam_file_path,
+                description=f"Copied from ActivitySim output: {beam_file_name}",
+                short_name=beam_file_name + "_beam_in",
+                year=self.state.current_year,
+                iteration=self.state.current_inner_iter,
+            )
+        ]
+        records.extend(
+            self._format_specific_output_records(
+                beam_file_name,
+                beam_file_path,
+                file_format,
+                "BEAM input file",
+            )
         )
+        return records
+
+    @staticmethod
+    def _format_specific_output_records(
+        file_stem: str,
+        file_path: str,
+        file_format: str,
+        description_prefix: str,
+    ) -> List[FileRecord]:
+        """
+        Emit explicit output records for BEAM input files by format.
+
+        Parameters
+        ----------
+        file_stem : str
+            Base filename (e.g., "persons").
+        file_path : str
+            Full path to the output file.
+        file_format : str
+            File format ("csv" or "parquet").
+        description_prefix : str
+            Description prefix for the record.
+        """
+        if file_format == "parquet":
+            return [
+                FileRecord(
+                    file_path=file_path,
+                    description=f"{description_prefix} (parquet)",
+                    short_name=f"{file_stem}_parquet",
+                    year=getattr(self.state, "current_year", None),
+                    iteration=getattr(self.state, "current_inner_iter", None),
+                )
+            ]
+        if file_format == "csv":
+            return [
+                FileRecord(
+                    file_path=file_path,
+                    description=f"{description_prefix} (csv.gz)",
+                    short_name=f"{file_stem}_csv_gz",
+                    year=getattr(self.state, "current_year", None),
+                    iteration=getattr(self.state, "current_inner_iter", None),
+                )
+            ]
+        return []
 
     def _handle_linkstats(
         self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
