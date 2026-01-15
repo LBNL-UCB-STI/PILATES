@@ -33,7 +33,15 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_constants import (
+    ASIM_OMX_SKIMS,
     ATLAS_VEHICLES2_INPUT,
+    BEAM_HOUSEHOLDS_CSV_GZ,
+    BEAM_HOUSEHOLDS_PARQUET,
+    BEAM_PERSONS_CSV_GZ,
+    BEAM_PERSONS_PARQUET,
+    BEAM_PLANS_CSV_GZ,
+    BEAM_PLANS_PARQUET,
+    LINKSTATS_WARMSTART,
     USIM_DATASTORE_H5,
     ZARR_SKIMS,
 )
@@ -170,8 +178,8 @@ def run_supply_demand_stage(
                         "ActivitySim compile requires preprocess outputs."
                     )
                 compile_inputs = upstream.to_record_store().to_mapping()
-                if "omx_skims" in compile_inputs:
-                    compile_inputs = {"omx_skims": compile_inputs["omx_skims"]}
+                if ASIM_OMX_SKIMS in compile_inputs:
+                    compile_inputs = {ASIM_OMX_SKIMS: compile_inputs[ASIM_OMX_SKIMS]}
                 else:
                     compile_inputs = {}
                 expected_compile_outputs = clean_expected_outputs(
@@ -348,17 +356,17 @@ def run_supply_demand_stage(
                 zarr_input_keys = [ZARR_SKIMS]
                 if settings.activitysim.file_format == "parquet":
                     beam_prepared_input_keys = [
-                        "plans_parquet",
-                        "households_parquet",
-                        "persons_parquet",
+                        BEAM_PLANS_PARQUET,
+                        BEAM_HOUSEHOLDS_PARQUET,
+                        BEAM_PERSONS_PARQUET,
                     ]
                 else:
                     beam_prepared_input_keys = [
-                        "plans_csv_gz",
-                        "households_csv_gz",
-                        "persons_csv_gz",
+                        BEAM_PLANS_CSV_GZ,
+                        BEAM_HOUSEHOLDS_CSV_GZ,
+                        BEAM_PERSONS_CSV_GZ,
                     ]
-                beam_prepared_input_keys.append("linkstats_warmstart")
+                beam_prepared_input_keys.append(LINKSTATS_WARMSTART)
 
             beam_run_input_keys = []
             if zarr_input_keys:

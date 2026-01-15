@@ -389,6 +389,27 @@ def log_and_set_output(
     set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
+def log_output_only(
+    *,
+    key: str,
+    path: str,
+    description: str,
+) -> None:
+    """
+    Log an output path without writing to the coupler.
+
+    Parameters
+    ----------
+    key : str
+        Artifact key used for provenance logging.
+    path : str
+        Output path to log.
+    description : str
+        Description used in provenance logging.
+    """
+    cr.log_output(path, key=key, description=description)
+
+
 def log_and_set_input(
     *,
     key: str,
@@ -412,6 +433,27 @@ def log_and_set_input(
     """
     artifact = cr.log_input(path, key=key, description=description)
     set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+
+def log_input_only(
+    *,
+    key: str,
+    path: str,
+    description: str,
+) -> None:
+    """
+    Log an input path without writing to the coupler.
+
+    Parameters
+    ----------
+    key : str
+        Artifact key used for provenance logging.
+    path : str
+        Input path to log.
+    description : str
+        Description used in provenance logging.
+    """
+    cr.log_input(path, key=key, description=description)
 
 
 def record_store_to_outputs(

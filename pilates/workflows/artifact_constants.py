@@ -18,5 +18,23 @@ BEAM_MUTABLE_DATA_DIR = "beam_mutable_data_dir"
 LINKSTATS = "linkstats"
 BEAM_PLANS_OUT = "beam_plans_out"
 
+# ActivitySim preprocess inputs
+ASIM_LAND_USE_IN = "land_use_asim_in"
+ASIM_HOUSEHOLDS_IN = "households_asim_in"
+ASIM_PERSONS_IN = "persons_asim_in"
+ASIM_OMX_SKIMS = "omx_skims"
+
+# BEAM preprocess inputs
+BEAM_PLANS_IN = "plans_beam_in"
+BEAM_PLANS_PARQUET = "plans_parquet"
+BEAM_PLANS_CSV_GZ = "plans_csv_gz"
+BEAM_HOUSEHOLDS_IN = "households_beam_in"
+BEAM_HOUSEHOLDS_PARQUET = "households_parquet"
+BEAM_HOUSEHOLDS_CSV_GZ = "households_csv_gz"
+BEAM_PERSONS_IN = "persons_beam_in"
+BEAM_PERSONS_PARQUET = "persons_parquet"
+BEAM_PERSONS_CSV_GZ = "persons_csv_gz"
+LINKSTATS_WARMSTART = "linkstats_warmstart"
+
 ZARR_SKIMS = "zarr_skims"
 FINAL_SKIMS_OMX = "final_skims_omx"

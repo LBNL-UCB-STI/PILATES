@@ -21,6 +21,8 @@ from pilates.utils.coupler_helpers import (
     artifact_to_path,
     log_and_set_input,
     log_and_set_output,
+    log_input_only,
+    log_output_only,
     record_store_to_outputs,
     resolve_artifact_from_value,
 )
@@ -29,6 +31,7 @@ from pilates.workflows.outputs_base import (
     serialize_step_outputs,
 )
 from pilates.workflows.artifact_constants import (
+    ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     ZARR_SKIMS,
@@ -1143,7 +1146,7 @@ def make_activitysim_compile_step(
         omx_record = None
         if input_store:
             for record in input_store.all_records():
-                if getattr(record, "short_name", None) == "omx_skims":
+                if getattr(record, "short_name", None) == ASIM_OMX_SKIMS:
                     omx_record = record
                     break
         if omx_record is not None:
@@ -1155,7 +1158,7 @@ def make_activitysim_compile_step(
             if omx_path and os.path.exists(omx_path):
                 cr.log_input(
                     omx_path,
-                    key="omx_skims",
+                    key=ASIM_OMX_SKIMS,
                     description="ActivitySim compile input skims (OMX)",
                 )
         compile_outputs = compile_runner.run(input_store, workspace)
@@ -1345,11 +1348,10 @@ def make_activitysim_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
+            log_output_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
             )
 
     return _make_generic_step_function(
@@ -1404,11 +1406,10 @@ def make_activitysim_postprocess_step(
         if upstream is None:
             raise RuntimeError("ActivitySim run must complete first")
         for short_name, path, description in upstream._iter_record_items():
-            log_and_set_input(
+            log_input_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
             )
         usim_input_fname = get_usim_datastore_fname(settings, io="input")
         usim_input_path = os.path.join(
@@ -1594,11 +1595,10 @@ def make_beam_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
+            log_output_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
             )
 
     return _make_generic_step_function(

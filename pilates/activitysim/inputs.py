@@ -9,6 +9,10 @@ from pilates.utils.coupler_helpers import (
     log_coupler_value,
 )
 from pilates.workflows.artifact_constants import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
     USIM_DATASTORE_H5,
     ZARR_SKIMS,
 )
@@ -77,9 +81,9 @@ def build_activitysim_inputs(
     asim_data_dir = Path(workspace.get_asim_mutable_data_dir())
     if asim_data_dir.exists():
         explicit_inputs = {
-            "asim_households_csv": "households.csv",
-            "asim_persons_csv": "persons.csv",
-            "asim_land_use_csv": "land_use.csv",
+            ASIM_HOUSEHOLDS_IN: "households.csv",
+            ASIM_PERSONS_IN: "persons.csv",
+            ASIM_LAND_USE_IN: "land_use.csv",
         }
         for key, filename in explicit_inputs.items():
             file_path = asim_data_dir / filename
@@ -90,8 +94,8 @@ def build_activitysim_inputs(
         if include_omx_skims:
             omx_path = asim_data_dir / "skims.omx"
             if omx_path.exists():
-                inputs["omx_skims"] = str(omx_path)
-                descriptions["omx_skims"] = (
+                inputs[ASIM_OMX_SKIMS] = str(omx_path)
+                descriptions[ASIM_OMX_SKIMS] = (
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 

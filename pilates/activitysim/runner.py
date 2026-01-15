@@ -8,6 +8,12 @@ from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
+from pilates.workflows.artifact_constants import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +82,12 @@ class ActivitysimCompileRunner(GenericRunner):
     ):
         super().__init__(model_name, state, major_stage)
         self.required_input_files = [
-            "omx_skims",
+            ASIM_OMX_SKIMS,
             "asim_geoms",
             "asim_configs",
-            "persons_asim_in",
-            "households_asim_in",
-            "land_use_asim_in",
+            ASIM_PERSONS_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_LAND_USE_IN,
         ]
 
     def _run(
@@ -224,10 +230,10 @@ class ActivitysimRunner(GenericRunner):
     ):
         super().__init__(model_name, state, major_stage)
         self.required_input_files = [
-            "persons_asim_in",
-            "households_asim_in",
-            "land_use_asim_in",
-            "omx_skims",
+            ASIM_PERSONS_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_LAND_USE_IN,
+            ASIM_OMX_SKIMS,
             "zarr_skims",
             "asim_geoms",
             "asim_configs",
@@ -440,7 +446,7 @@ class ActivitysimRunner(GenericRunner):
             )
 
         if zarr_skims_rec:
-            filtered_store.remove_record_type("omx_skims")
+            filtered_store.remove_record_type(ASIM_OMX_SKIMS)
             if zarr_skims_rec.short_name != "zarr_skims":
                 zarr_skims_rec = FileRecord(
                     file_path=zarr_skims_rec.file_path,

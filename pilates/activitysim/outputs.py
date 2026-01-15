@@ -6,6 +6,12 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.workflows.artifact_constants import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+)
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -33,10 +39,10 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "mutable_data_dir"
     record_keys: ClassVar[Dict[str, str]] = {
-        "land_use_table": "land_use_asim_in",
-        "households_table": "households_asim_in",
-        "persons_table": "persons_asim_in",
-        "omx_skims": "omx_skims",
+        "land_use_table": ASIM_LAND_USE_IN,
+        "households_table": ASIM_HOUSEHOLDS_IN,
+        "persons_table": ASIM_PERSONS_IN,
+        "omx_skims": ASIM_OMX_SKIMS,
     }
     record_descriptions: ClassVar[Dict[str, str]] = {
         "land_use_table": "ActivitySim land use input table",
