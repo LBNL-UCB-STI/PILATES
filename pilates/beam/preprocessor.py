@@ -827,8 +827,8 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         return records
 
-    @staticmethod
     def _format_specific_output_records(
+        self,
         file_stem: str,
         file_path: str,
         file_format: str,
