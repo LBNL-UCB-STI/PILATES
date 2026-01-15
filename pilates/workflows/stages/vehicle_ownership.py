@@ -6,7 +6,7 @@ import sys
 from typing import Callable, Dict, Mapping, Union
 
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.atlas.inputs import build_atlas_inputs
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.atlas_state import AtlasSubState
@@ -31,7 +31,7 @@ def run_vehicle_ownership_stage(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
-    coupler: object,
+    coupler: CouplerProtocol,
     year: int,
     build_atlas_static_inputs_fallback: Callable[
         [Workspace], Mapping[str, Union[str, os.PathLike]]
@@ -55,7 +55,7 @@ def run_vehicle_ownership_stage(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : object
+    coupler : CouplerProtocol
         Coupler used to read/write artifacts across steps.
     year : int
         Forecast year being simulated.

@@ -57,8 +57,34 @@ except Exception:  # pragma: no cover - optional Consist dependency
 
 @runtime_checkable
 class ScenarioWithCoupler(ScenarioLike, Protocol):
-    coupler: Any
+    coupler: "CouplerProtocol"
 
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 
     def coupler_schema(self, schema: Any) -> Any: ...
+
+
+@runtime_checkable
+class CouplerProtocol(Protocol):
+    """
+    Protocol for artifact registry used to pass inputs/outputs between steps.
+    """
+
+    def set(self, key: str, value: Any) -> None: ...
+
+    def get(self, key: str, default: Optional[Any] = None) -> Any: ...
+
+    def pop(self, key: str, default: Optional[Any] = None) -> Any: ...
+
+    def update(self, mapping: Mapping[str, Any]) -> None: ...
+
+    def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
+
+    def adopt_cached_output(self, *args: Any, **kwargs: Any) -> None: ...
+
+    def collect_by_keys(
+        self,
+        artifacts: Dict[str, Any],
+        *keys: str,
+        prefix: str = "",
+    ) -> Dict[str, Any]: ...

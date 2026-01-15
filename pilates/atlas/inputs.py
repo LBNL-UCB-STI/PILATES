@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ def build_atlas_inputs(
     state: "WorkflowState",
     workspace: "Workspace",
     year: int,
-    coupler: Any,
+    coupler: CouplerProtocol,
     usim_datastore_h5_path: Optional[str],
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
@@ -29,7 +30,7 @@ def build_atlas_inputs(
         Workspace instance with paths.
     year : int
         ATLAS sub-year for labeling.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     usim_datastore_h5_path : str, optional
         Fallback UrbanSim datastore path when coupler has no value.

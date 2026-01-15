@@ -4,7 +4,7 @@ import os
 from typing import Dict, Union
 
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -28,7 +28,7 @@ def run_land_use_stage(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
-    coupler: object,
+    coupler: CouplerProtocol,
     year: int,
     outputs_holder_year: StepOutputsHolder,
 ) -> Dict[str, Union[str, os.PathLike]]:
@@ -51,7 +51,7 @@ def run_land_use_stage(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : ScenarioWithCoupler
+    coupler : CouplerProtocol
         Consist coupler for reading/writing artifacts across steps.
     year : int
         Forecast year being simulated.

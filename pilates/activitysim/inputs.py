@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     resolve_artifact_from_value,
@@ -28,7 +29,7 @@ def build_activitysim_inputs(
     workspace: "Workspace",
     year: int,
     iteration: int,
-    coupler: Any,
+    coupler: CouplerProtocol,
     usim_inputs: Optional[Dict[str, Any]] = None,
     *,
     include_omx_skims: bool = False,
@@ -48,7 +49,7 @@ def build_activitysim_inputs(
         Simulation year for labeling and input resolution.
     iteration : int
         Current supply-demand iteration.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     usim_inputs : dict, optional
         UrbanSim inputs mapping, used to source the datastore path.

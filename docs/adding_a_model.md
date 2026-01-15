@@ -1,7 +1,8 @@
 # Adding a Model to PILATES
 
 This guide describes the minimum steps to wire a new model into the PILATES
-workflow using the current step-based orchestration pattern.
+workflow using the current step-based orchestration pattern (stages + steps
+with Consist-backed provenance).
 
 ## Quick Checklist (In Order)
 
@@ -11,6 +12,7 @@ workflow using the current step-based orchestration pattern.
    - `runner.py` (class `ModelRunner`)
    - `postprocessor.py` (class `ModelPostprocessor`)
    - `outputs.py` (typed outputs dataclasses)
+   - Optional: `inputs.py` for model-specific input building
 
 2. Register components in `pilates/generic/model_factory.py`
    - Import the new preprocessor/runner/postprocessor.
@@ -27,17 +29,27 @@ workflow using the current step-based orchestration pattern.
    - `make_<model>_postprocess_step`
    - Add any custom input/output logging as needed.
 
-5. Add the stage in `run.py`
-   - Import step factories.
-   - Build `WorkflowStepSpec` list and call `WorkflowStage.run(...)`.
+5. Create a stage module in `pilates/workflows/stages/<model>.py`
+   - Build `WorkflowStepSpec` list(s) and call `WorkflowStage.run(...)`.
    - Use `WorkflowState.Stage` for gating and completion.
+   - Return or update any inputs that must flow to later stages.
+   - Add the stage import to `pilates/workflows/stages/__init__.py`.
 
-6. Add inputs builder (optional)
-   - If you need specialized inputs, add `pilates/<model_name>/inputs.py` and
-     `build_<model>_inputs(...)`.
-   - Update `run.py` to call it before preprocess.
+6. Add Consist config/facet mapping in `pilates/utils/consist_config.py`
+   - Create a `ConsistConfigBuilder` for your model (identity config, facet,
+     optional `hash_inputs`).
+   - Register it in `_CONFIG_BUILDERS` so step signatures are deterministic.
 
-7. Add or update tests
+7. Update provenance-facing metadata
+   - Add any new coupler keys to `pilates/workflows/artifact_constants.py`.
+   - If you set new keys on the coupler, update
+     `pilates/workflows/coupler_schema.py`.
+
+8. Wire the stage into `run.py`
+   - Import the stage from `pilates/workflows/stages`.
+   - Call it from the year loop at the appropriate point in the pipeline.
+
+9. Add or update tests
    - Reuse `tests/fixtures/` where possible.
    - Document any long-running tests in docstrings.
 
@@ -138,11 +150,104 @@ class ModelPostprocessOutputs(StepOutputsBase):
         )
 ```
 
+## Minimal Stage Template
+
+### `pilates/workflows/stages/<model>.py`
+
+```python
+from __future__ import annotations
+
+from os import PathLike
+from typing import Dict, Union
+
+from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.workspace import Workspace
+from workflow_state import WorkflowState
+from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_<model>_preprocess_step,
+    make_<model>_run_step,
+    make_<model>_postprocess_step,
+)
+
+
+def run_<model>_stage(
+    *,
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    year: int,
+    outputs_holder_year: StepOutputsHolder,
+) -> Dict[str, Union[str, PathLike]]:
+    preprocess_steps = [
+        WorkflowStepSpec(
+            name="<model>_preprocess",
+            step_func=make_<model>_preprocess_step(
+                coupler=coupler,
+                outputs_holder=outputs_holder_year,
+            ),
+            inputs=<model_inputs>,  # result of build_<model>_inputs(...)
+        ),
+    ]
+    WorkflowStage(
+        name="<model>",
+        stage_type=state.Stage.<model_stage_enum>,
+        steps=preprocess_steps,
+    ).run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder_year,
+        name_suffix=str(year),
+    )
+
+    run_steps = [
+        WorkflowStepSpec(
+            name="<model>_run",
+            step_func=make_<model>_run_step(
+                coupler=coupler,
+                outputs_holder=outputs_holder_year,
+            ),
+        ),
+        WorkflowStepSpec(
+            name="<model>_postprocess",
+            step_func=make_<model>_postprocess_step(
+                coupler=coupler,
+                outputs_holder=outputs_holder_year,
+            ),
+        ),
+    ]
+    WorkflowStage(
+        name="<model>",
+        stage_type=state.Stage.<model_stage_enum>,
+        steps=run_steps,
+    ).run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder_year,
+        name_suffix=str(year),
+    )
+    return {}
+```
+
 ## Common Gotchas
 
-- Forgetting to update `STEP_OUTPUTS_CLASSES` or `STEP_DEPENDENCIES`.
-- Missing `StepOutputsHolder` attributes for new steps.
-- Not wiring a stage in `run.py` (steps defined but never called).
+- Forgetting to update `STEP_OUTPUTS_CLASSES`, `STEP_DEPENDENCIES`, or
+  `StepOutputsHolder`.
+- Not registering a `ConsistConfigBuilder` for the model (cache identity/facets
+  become inconsistent).
+- Not adding the stage module to `pilates/workflows/stages/__init__.py`.
+- Not wiring the stage call in `run.py` (steps defined but never called).
+- Skipping `artifact_constants.py` and `coupler_schema.py` updates for new keys.
 - Using implicit file paths instead of `Workspace` helpers.
 - Missing provenance logging in step factories (inputs/outputs).
 
@@ -150,4 +255,4 @@ class ModelPostprocessOutputs(StepOutputsBase):
 
 - Run a single-year scenario with `-v` and check coupler keys.
 - Ensure step outputs validate and manifest entries deserialize.
-- Confirm outputs are visible in `docs/lineage_map.md` for the new model.
+- Confirm new coupler keys are visible in Consist outputs for the new model.

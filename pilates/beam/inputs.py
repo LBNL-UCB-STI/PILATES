@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import resolve_artifact_from_value, log_coupler_value
 from pilates.workflows.artifact_constants import ZARR_SKIMS
 
@@ -16,7 +17,7 @@ def build_beam_inputs(
     workspace: "Workspace",
     year: int,
     iteration: int,
-    coupler: Any,
+    coupler: CouplerProtocol,
     activity_demand_outputs: Optional[Any] = None,
     previous_beam_outputs: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Optional[str], Optional[str]]:
@@ -35,7 +36,7 @@ def build_beam_inputs(
         Simulation year for labeling.
     iteration : int
         Current supply-demand iteration.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     activity_demand_outputs : object, optional
         ActivitySim outputs holder with a ``to_mapping()`` method.

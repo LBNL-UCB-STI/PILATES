@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING, Type
 
 from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_constants import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
@@ -145,7 +146,7 @@ def log_coupler_value(
 
 def update_coupler_from_beam_outputs(
     output_store: Optional["RecordStore"],
-    coupler: Any,
+    coupler: CouplerProtocol,
     workspace: "Workspace",
 ) -> None:
     """
@@ -155,7 +156,7 @@ def update_coupler_from_beam_outputs(
     ----------
     output_store : RecordStore
         Output store from BEAM postprocessing.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     workspace : Workspace
         Workspace used to resolve output paths.
@@ -283,7 +284,7 @@ def _log_and_set_beam_record(
     *,
     key: str,
     description: str,
-    coupler: Any,
+    coupler: CouplerProtocol,
     workspace: "Workspace",
 ) -> None:
     """
@@ -297,7 +298,7 @@ def _log_and_set_beam_record(
         Coupler key to set.
     description : str
         Description used in provenance logging.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     workspace : Workspace
         Workspace used to resolve output paths.
@@ -333,7 +334,7 @@ def clean_expected_outputs(outputs: dict) -> dict:
 
 
 def set_coupler_from_artifact(
-    coupler: Any,
+    coupler: CouplerProtocol,
     key: str,
     artifact: Optional[Any],
     fallback: Optional[str] = None,
@@ -343,7 +344,7 @@ def set_coupler_from_artifact(
 
     Parameters
     ----------
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     key : str
         Coupler key to set.
@@ -369,7 +370,7 @@ def log_and_set_output(
     key: str,
     path: str,
     description: str,
-    coupler: Any,
+    coupler: CouplerProtocol,
 ) -> None:
     """
     Log an output path and set it on the coupler.
@@ -382,7 +383,7 @@ def log_and_set_output(
         Output path to log.
     description : str
         Description used in provenance logging.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
     artifact = cr.log_output(path, key=key, description=description)
@@ -415,7 +416,7 @@ def log_and_set_input(
     key: str,
     path: str,
     description: str,
-    coupler: Any,
+    coupler: CouplerProtocol,
 ) -> None:
     """
     Log an input path and set it on the coupler.
@@ -428,7 +429,7 @@ def log_and_set_input(
         Input path to log.
     description : str
         Description used in provenance logging.
-    coupler : object
+    coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
     artifact = cr.log_input(path, key=key, description=description)

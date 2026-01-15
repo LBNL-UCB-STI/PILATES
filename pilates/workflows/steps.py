@@ -17,6 +17,7 @@ from typing import (
 from pilates.generic.model_factory import ModelFactory
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     log_and_set_input,
@@ -284,7 +285,7 @@ def require_common_runtime(
 
 def _make_generic_step_function(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     model_name: str,
     phase: str,
@@ -739,7 +740,7 @@ def _execute_atlas_postprocess(
 
 def make_urbansim_preprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -822,7 +823,7 @@ def make_urbansim_preprocess_step(
 
 def make_urbansim_run_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -880,7 +881,7 @@ def make_urbansim_run_step(
 
 def make_urbansim_postprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -939,7 +940,7 @@ def make_urbansim_postprocess_step(
 
 def make_atlas_preprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -978,7 +979,7 @@ def make_atlas_preprocess_step(
 
 def make_atlas_run_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1034,7 +1035,7 @@ def make_atlas_run_step(
 
 def make_atlas_postprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1100,7 +1101,7 @@ def make_atlas_postprocess_step(
 
 def make_activitysim_compile_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1185,7 +1186,7 @@ def make_activitysim_compile_step(
 
 def make_activitysim_preprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1266,7 +1267,7 @@ def make_activitysim_preprocess_step(
 
 def make_activitysim_run_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1374,7 +1375,7 @@ def make_activitysim_run_step(
 
 def make_activitysim_postprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1461,7 +1462,7 @@ def make_activitysim_postprocess_step(
 
 def make_beam_preprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1520,7 +1521,7 @@ def make_beam_preprocess_step(
 
 def make_beam_run_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """
@@ -1621,7 +1622,7 @@ def make_beam_run_step(
 
 def make_beam_postprocess_step(
     *,
-    coupler: Any,
+    coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> Callable[..., None]:
     """

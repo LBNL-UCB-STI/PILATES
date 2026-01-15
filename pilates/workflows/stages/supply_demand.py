@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 
 from pilates.generic.records import RecordStore
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
 from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.coupler_helpers import (
@@ -143,7 +143,7 @@ def _run_activity_demand_phase(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
-    coupler: object,
+    coupler: CouplerProtocol,
     inputs: ActivityDemandPhaseInputs,
     outputs_holder: StepOutputsHolder,
     manifest_config: ManifestConfig,
@@ -166,7 +166,7 @@ def _run_activity_demand_phase(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : object
+    coupler : CouplerProtocol
         Coupler used to read/write artifacts across steps.
     inputs : ActivityDemandPhaseInputs
         Inputs required for this iteration.
@@ -383,7 +383,7 @@ def _run_traffic_assignment_phase(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
-    coupler: object,
+    coupler: CouplerProtocol,
     inputs: TrafficAssignmentPhaseInputs,
     outputs_holder: StepOutputsHolder,
 ) -> TrafficAssignmentPhaseOutputs:
@@ -404,7 +404,7 @@ def _run_traffic_assignment_phase(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : object
+    coupler : CouplerProtocol
         Coupler used to read/write artifacts across steps.
     inputs : TrafficAssignmentPhaseInputs
         Inputs required for this iteration.
@@ -555,7 +555,7 @@ def run_supply_demand_stage(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
-    coupler: object,
+    coupler: CouplerProtocol,
     year: int,
     usim_inputs: Mapping[str, Union[str, os.PathLike]],
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
@@ -581,7 +581,7 @@ def run_supply_demand_stage(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : object
+    coupler : CouplerProtocol
         Coupler used to read/write artifacts across steps.
     year : int
         Forecast year being simulated.

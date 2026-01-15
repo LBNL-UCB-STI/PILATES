@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Set
 
 from pilates.utils.consist_config import build_step_consist_kwargs
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     deserialize_step_outputs,
@@ -55,7 +56,7 @@ class WorkflowStage:
         state: Any,
         settings: Any,
         workspace: Any,
-        coupler: Any,
+        coupler: CouplerProtocol,
         outputs_holder: StepOutputsHolder,
         name_suffix: str,
         iteration: int = 0,
@@ -150,7 +151,7 @@ def run_manifested_steps(
     state: Any,
     settings: Any,
     workspace: Any,
-    coupler: Any,
+    coupler: CouplerProtocol,
     name_suffix: str,
     iteration: int = 0,
     runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
