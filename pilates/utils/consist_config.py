@@ -357,7 +357,7 @@ def build_beam_hash_inputs(
     if config_name:
         matches = sorted(root.rglob(config_name))
         if matches:
-            return [("beam_conf", matches[0])]
+            return [(f"beam_conf/{config_name}", matches[0])]
 
     conf_files = sorted([p for p in root.rglob("*.conf") if p.is_file()])
     if not conf_files:

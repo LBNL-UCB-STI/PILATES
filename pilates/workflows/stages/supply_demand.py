@@ -193,18 +193,8 @@ def _run_activity_demand_phase(
         preprocess_input_keys = None
     else:
         get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            if get_value(USIM_DATASTORE_H5) is not None:
-                preprocess_input_keys = [USIM_DATASTORE_H5]
-            else:
-                fallback_inputs, _ = build_urbansim_inputs(
-                    settings, state, workspace, inputs.year
-                )
-                if USIM_DATASTORE_H5 in fallback_inputs:
-                    preprocess_inputs = {
-                        USIM_DATASTORE_H5: fallback_inputs[USIM_DATASTORE_H5]
-                    }
-                    preprocess_input_keys = None
+        if callable(get_value) and get_value(USIM_DATASTORE_H5) is not None:
+            preprocess_input_keys = [USIM_DATASTORE_H5]
         else:
             fallback_inputs, _ = build_urbansim_inputs(
                 settings, state, workspace, inputs.year
@@ -417,6 +407,16 @@ def _run_traffic_assignment_phase(
         Combined BEAM outputs for warm-starting the next iteration.
     """
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
+    if (
+        inputs.activity_demand_outputs is None
+        and inputs.iteration == 0
+        and inputs.previous_beam_outputs is None
+    ):
+        raise RuntimeError(
+            "TrafficAssignment iteration 0 requires activity_demand_outputs "
+            "or previous_beam_outputs. Ensure ActivityDemand completed or "
+            "provide warm-start outputs before running BEAM."
+        )
     beam_preprocess_inputs: Dict[str, Any] = {}
     if inputs.activity_demand_outputs is not None:
         asim_input_keys = {
@@ -590,6 +590,35 @@ def run_supply_demand_stage(
         ActivitySim preprocessing when land use was not run.
     build_manifest_path : Callable[[Workspace, int, int], os.PathLike]
         Factory for per-year/per-iteration manifest file locations.
+
+    State Machine & Resume Behavior
+    -------------------------------
+    The stage maintains iteration state via ``state.iteration`` and records
+    per-step completion in a manifest under ``.workflow/``. On resume:
+
+    1. **ActivityDemand Phase**:
+       - If ``should_run(...)`` returns True, preprocess → compile (once per year)
+         → run/postprocess executes and updates coupler outputs.
+       - If it returns False, ActivitySim steps are skipped and downstream
+         phases must rely on previously-produced artifacts.
+
+    2. **TrafficAssignment Phase**:
+       - Requires ActivitySim outputs or prior BEAM outputs to seed inputs.
+         If neither is available on iteration 0, the stage raises an error.
+       - For later iterations, warm-start linkstats may be pulled from prior
+         BEAM outputs or from an initial warm-start file.
+
+    3. **Convergence Check**:
+       - Checked at each iteration boundary. If convergence is detected, the
+         loop exits early and the stage marks completion.
+
+    Warnings
+    --------
+    - Removing ``.workflow/`` manifests forces all iterations to re-run.
+    - If resuming mid-iteration, ensure coupler artifacts for ActivitySim
+      outputs are available before running BEAM.
+    - Do not mutate coupler keys between iterations; they carry warm-start
+      state to the next iteration.
     """
     total_iters = settings.run.supply_demand_iters
     previous_beam_outputs: Optional[RecordStore] = None
