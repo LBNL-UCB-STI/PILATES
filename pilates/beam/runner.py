@@ -110,9 +110,62 @@ class BeamRunner(GenericRunner):
             "raw_od_skims_zarr": (None, ".zarr"),
             "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
+            "linkstats_unmodified": ("linkstats_unmodified", ".csv.gz"),
+            "linkstats_parquet": ("linkstats", ".parquet"),
+            "linkstats_unmodified_parquet": ("linkstats_unmodified", ".parquet"),
             "beam_plans_out": ("plans", ".csv.gz"),
+            "beam_plans_xml": ("plans", ".xml.gz"),
+            "beam_experienced_plans_xml": ("experienced_plans", ".xml.gz"),
+            "beam_experienced_plans_scores": ("experienced_plans_scores", ".txt.gz"),
             "events": ("events", ".csv.gz"),
             "events_parquet": ("events", ".parquet"),
+            "legs": ("legs", ".csv.gz"),
+            "route_history": ("routeHistory", ".csv.gz"),
+            "final_vehicles": ("final_vehicles", ".csv.gz"),
+            "skims_taz": ("skimsTAZ", ".csv.gz"),
+            "skims_taz_agg": ("skimsTAZ_Aggregated", ".csv.gz"),
+            "skims_od": ("skimsOD", ".csv.gz"),
+            "skims_od_agg": ("skimsOD_Aggregated", ".csv.gz"),
+            "skims_od_vehicle_type": ("skimsODVehicleType", ".csv.gz"),
+            "skims_od_vehicle_type_agg": ("skimsODVehicleType_Aggregated", ".csv.gz"),
+            "skims_emissions": ("skimsEmissions", ".csv.gz"),
+            "skims_emissions_agg": ("skimsEmissions_Aggregated", ".csv.gz"),
+            "skims_ridehail_agg": ("skimsRidehail_Aggregated", ".csv.gz"),
+            "skims_parking": ("skimsParking", ".csv.gz"),
+            "skims_parking_agg": ("skimsParking_Aggregated", ".csv.gz"),
+            "skims_transit_crowding": ("skimsTransitCrowding", ".csv.gz"),
+            "skims_transit_crowding_agg": (
+                "skimsTransitCrowding_Aggregated",
+                ".csv.gz",
+            ),
+            "skims_freight": ("skimsFreight", ".csv.gz"),
+            "skims_freight_agg": ("skimsFreight_Aggregated", ".csv.gz"),
+            "skims_travel_time_obs_sim": (
+                "skimsTravelTimeObservedVsSimulated",
+                ".csv.gz",
+            ),
+            "skims_travel_time_obs_sim_agg": (
+                "skimsTravelTimeObservedVsSimulated_Aggregated",
+                ".csv.gz",
+            ),
+        }
+        top_level_files = {
+            "beam_plans_final": ("plans", ".csv.gz"),
+            "beam_vehicles_final": ("vehicles", ".csv.gz"),
+            "beam_households_final": ("households", ".csv.gz"),
+            "beam_persons_final": ("output_persons", ".csv.gz"),
+            "beam_population_final": ("population", ".csv.gz"),
+            "beam_network_final": ("network", ".csv.gz"),
+            "beam_output_plans_xml": ("output_plans", ".xml.gz"),
+            "beam_output_experienced_plans_xml": (
+                "output_experienced_plans",
+                ".xml.gz",
+            ),
+            "beam_output_vehicles_xml": ("output_vehicles", ".xml.gz"),
+            "beam_output_households_xml": ("output_households", ".xml.gz"),
+            "beam_output_facilities_xml": ("output_facilities", ".xml.gz"),
+            "beam_output_network_xml": ("output_network", ".xml.gz"),
+            "beam_output_counts_xml": ("output_counts", ".xml.gz"),
         }
 
         output_records = []
@@ -140,6 +193,24 @@ class BeamRunner(GenericRunner):
                             description=f"BEAM output artifact: {dataset_name}",
                         )
                     )
+
+        for short_name, (file_name, extension) in top_level_files.items():
+            full_path = os.path.join(
+                beam_local_output_folder, f"{file_name}{extension}"
+            )
+            if not os.path.exists(full_path):
+                continue
+            dataset_name = (
+                f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
+            )
+            output_records.append(
+                FileRecord(
+                    file_path=full_path,
+                    year=self.state.forecast_year,
+                    short_name=dataset_name,
+                    description=f"BEAM output artifact: {dataset_name}",
+                )
+            )
 
         return output_records
 

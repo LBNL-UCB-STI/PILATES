@@ -29,14 +29,8 @@ from pilates.workflows.outputs_base import (
     serialize_step_outputs,
 )
 from pilates.workflows.artifact_constants import (
-    ASIM_MUTABLE_DATA_DIR,
-    ASIM_OUTPUT_DIR,
-    ATLAS_OUTPUT_DIR,
-    BEAM_MUTABLE_DATA_DIR,
-    BEAM_OUTPUT_DIR,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
-    USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
 from pilates.workflows.step_exec import (
@@ -53,6 +47,7 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.beam.outputs import (
     BeamPostprocessOutputs,
     BeamPreprocessOutputs,
@@ -782,14 +777,14 @@ def make_urbansim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        usim_data_dir = outputs.usim_mutable_data_dir
-        if usim_data_dir.exists():
+        for short_name, path, description in outputs._iter_record_items():
             log_and_set_output(
-                key=USIM_MUTABLE_DATA_DIR,
-                path=str(usim_data_dir),
-                description="UrbanSim mutable data directory",
+                key=short_name,
+                path=str(path),
+                description=description,
                 coupler=coupler,
             )
+        usim_data_dir = outputs.usim_mutable_data_dir
         usim_input_fname = settings.urbansim.input_file_template.format(
             region_id=settings.urbansim.region_mappings["region_to_region_id"][
                 settings.run.region
@@ -1009,12 +1004,13 @@ def make_atlas_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=ATLAS_OUTPUT_DIR,
-            path=str(outputs.atlas_output_dir),
-            description=f"ATLAS output directory for year {state.forecast_year}",
-            coupler=coupler,
-        )
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1064,14 +1060,13 @@ def make_atlas_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=ATLAS_OUTPUT_DIR,
-            path=str(outputs.atlas_output_dir),
-            description=(
-                f"ATLAS output directory after postprocess for year {state.forecast_year}"
-            ),
-            coupler=coupler,
-        )
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -1236,12 +1231,13 @@ def make_activitysim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=ASIM_MUTABLE_DATA_DIR,
-            path=str(outputs.mutable_data_dir),
-            description="ActivitySim mutable data directory",
-            coupler=coupler,
-        )
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1295,14 +1291,13 @@ def make_activitysim_run_step(
         if upstream is None:
             raise RuntimeError("ActivitySim preprocess must complete first")
 
-        log_and_set_input(
-            key=ASIM_MUTABLE_DATA_DIR,
-            path=str(upstream.mutable_data_dir),
-            description=(
-                f"ActivitySim mutable inputs for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
+        for short_name, path, description in upstream._iter_record_items():
+            log_and_set_input(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
         extra_inputs = RecordStore()
         zarr_value = None
@@ -1345,14 +1340,13 @@ def make_activitysim_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=ASIM_OUTPUT_DIR,
-            path=str(outputs.output_dir),
-            description=(
-                f"ActivitySim output directory for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1405,20 +1399,22 @@ def make_activitysim_postprocess_step(
         upstream = holder.activitysim_run
         if upstream is None:
             raise RuntimeError("ActivitySim run must complete first")
-        log_and_set_input(
-            key=ASIM_OUTPUT_DIR,
-            path=str(upstream.output_dir),
-            description=(
-                f"ActivitySim outputs for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
-        usim_dir = workspace.get_usim_mutable_data_dir()
-        if os.path.exists(usim_dir):
+        for short_name, path, description in upstream._iter_record_items():
             log_and_set_input(
-                key=USIM_MUTABLE_DATA_DIR,
-                path=usim_dir,
-                description="UrbanSim mutable data directory",
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
+        usim_input_fname = get_usim_datastore_fname(settings, io="input")
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        if os.path.exists(usim_input_path):
+            log_and_set_input(
+                key=USIM_DATASTORE_H5,
+                path=usim_input_path,
+                description="UrbanSim datastore used by ActivitySim postprocess",
                 coupler=coupler,
             )
         return {}
@@ -1490,14 +1486,15 @@ def make_beam_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=BEAM_MUTABLE_DATA_DIR,
-            path=str(outputs.beam_mutable_data_dir),
-            description=(
-                f"BEAM mutable data dir for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
+        for key, path in outputs.prepared_inputs.items():
+            log_and_set_output(
+                key=key,
+                path=str(path),
+                description=(
+                    f"BEAM prepared input {key} for year {state.year}, iter {state.iteration}"
+                ),
+                coupler=coupler,
+            )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1549,14 +1546,13 @@ def make_beam_run_step(
         upstream = holder.beam_preprocess
         if upstream is None:
             raise RuntimeError("BEAM preprocess must complete first")
-        log_and_set_input(
-            key=BEAM_MUTABLE_DATA_DIR,
-            path=str(upstream.beam_mutable_data_dir),
-            description=(
-                f"BEAM mutable inputs for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
+        for short_name, path, description in upstream._iter_record_items():
+            log_and_set_input(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
         extra_inputs = RecordStore()
         zarr_value = None
@@ -1593,14 +1589,13 @@ def make_beam_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        log_and_set_output(
-            key=BEAM_OUTPUT_DIR,
-            path=str(outputs.beam_output_dir),
-            description=(
-                f"BEAM output directory for year {state.year}, iter {state.iteration}"
-            ),
-            coupler=coupler,
-        )
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1653,12 +1648,13 @@ def make_beam_postprocess_step(
         upstream = holder.beam_run
         if upstream is None:
             raise RuntimeError("BEAM run must complete first")
-        log_and_set_input(
-            key=BEAM_OUTPUT_DIR,
-            path=str(upstream.beam_output_dir),
-            description=(f"BEAM outputs for year {state.year}, iter {state.iteration}"),
-            coupler=coupler,
-        )
+        for short_name, path, description in upstream._iter_record_items():
+            log_and_set_input(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
         return {}
 
     return _make_generic_step_function(

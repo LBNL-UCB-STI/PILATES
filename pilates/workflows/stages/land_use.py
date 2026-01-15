@@ -18,7 +18,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5, USIM_MUTABLE_DATA_DIR
+from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
 from pilates.urbansim.inputs import build_urbansim_inputs
 
 
@@ -73,7 +73,7 @@ def run_land_use_stage(
         "urbansim", usim_inputs, settings, state, workspace
     )
 
-    urbansim_steps = [
+    preprocess_steps = [
         WorkflowStepSpec(
             name="urbansim_preprocess",
             step_func=make_urbansim_preprocess_step(
@@ -82,13 +82,42 @@ def run_land_use_stage(
             ),
             inputs=usim_inputs,
         ),
+    ]
+
+    WorkflowStage(
+        name="land_use",
+        stage_type=state.Stage.land_use,
+        steps=preprocess_steps,
+    ).run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder_year,
+        name_suffix=str(year),
+    )
+
+    upstream_preprocess = outputs_holder_year.urbansim_preprocess
+    if upstream_preprocess is None:
+        raise RuntimeError("UrbanSim preprocess must complete first")
+
+    run_input_keys = [
+        short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
+    ]
+    if USIM_DATASTORE_H5 in usim_inputs:
+        run_input_keys.append(USIM_DATASTORE_H5)
+    if not run_input_keys:
+        run_input_keys = None
+
+    run_steps = [
         WorkflowStepSpec(
             name="urbansim_run",
             step_func=make_urbansim_run_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=[USIM_MUTABLE_DATA_DIR, USIM_DATASTORE_H5],
+            input_keys=run_input_keys,
         ),
         WorkflowStepSpec(
             name="urbansim_postprocess",
@@ -103,7 +132,7 @@ def run_land_use_stage(
     WorkflowStage(
         name="land_use",
         stage_type=state.Stage.land_use,
-        steps=urbansim_steps,
+        steps=run_steps,
     ).run(
         scenario=scenario,
         state=state,

@@ -139,18 +139,11 @@ class BeamPostprocessOutputs(StepOutputsBase):
     zarr_skims : Path, optional
         Zarr skims updated by BEAM.
     final_skims_omx : Path, optional
-        Final OMX skims for downstream models.
+        Final OMX skims for downstream models. When present, it is treated as
+        the primary output to log.
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
-    record_keys: ClassVar[Dict[str, str]] = {
-        "zarr_skims": ZARR_SKIMS,
-        "final_skims_omx": FINAL_SKIMS_OMX,
-    }
-    record_descriptions: ClassVar[Dict[str, str]] = {
-        "zarr_skims": "Zarr skims updated with BEAM outputs",
-        "final_skims_omx": "Final skims OMX for downstream models",
-    }
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "zarr_skims",
         "final_skims_omx",
@@ -158,3 +151,21 @@ class BeamPostprocessOutputs(StepOutputsBase):
 
     zarr_skims: Optional[Path]
     final_skims_omx: Optional[Path]
+
+    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
+        """
+        Yield only the skim file updated for downstream use.
+        """
+        if self.final_skims_omx is not None:
+            yield (
+                FINAL_SKIMS_OMX,
+                self.final_skims_omx,
+                "Final skims OMX for downstream models",
+            )
+            return
+        if self.zarr_skims is not None:
+            yield (
+                ZARR_SKIMS,
+                self.zarr_skims,
+                "Zarr skims updated with BEAM outputs",
+            )

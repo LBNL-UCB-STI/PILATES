@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
@@ -63,12 +62,8 @@ def build_atlas_inputs(
     if atlas_usim_input is None:
         atlas_usim_input = usim_datastore_h5_path
 
-    atlas_mutable_input_dir = Path(workspace.get_atlas_mutable_input_dir())
-
     inputs[USIM_DATASTORE_H5] = atlas_usim_input
-    inputs["atlas_mutable_input_dir"] = str(atlas_mutable_input_dir)
 
     descriptions[USIM_DATASTORE_H5] = f"UrbanSim datastore for ATLAS year {year}"
-    descriptions["atlas_mutable_input_dir"] = "ATLAS mutable input directory"
 
     return inputs, descriptions

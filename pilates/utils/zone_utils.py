@@ -205,9 +205,7 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                 if os.path.exists(temp_path):
                     shutil.rmtree(temp_path)  # Clean up previous temp if any
 
-                skims_ds.to_zarr(
-                    temp_path, mode="w", consolidated=True, zarr_version=2
-                )
+                skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
 
                 # Atomically replace the original
                 if os.path.exists(skim_path):

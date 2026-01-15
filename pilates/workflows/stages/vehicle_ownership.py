@@ -18,7 +18,7 @@ from pilates.workflows.steps import (
     make_atlas_preprocess_step,
     make_atlas_run_step,
 )
-from pilates.workflows.artifact_constants import ATLAS_OUTPUT_DIR, USIM_DATASTORE_H5
+from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -33,7 +33,9 @@ def run_vehicle_ownership_stage(
     workspace: Workspace,
     coupler: object,
     year: int,
-    build_atlas_static_inputs_fallback: Callable[[Workspace], Mapping[str, Union[str, os.PathLike]]],
+    build_atlas_static_inputs_fallback: Callable[
+        [Workspace], Mapping[str, Union[str, os.PathLike]]
+    ],
 ) -> None:
     """
     Run the ATLAS vehicle ownership stage for the current forecast year.
@@ -85,8 +87,7 @@ def run_vehicle_ownership_stage(
 
     forecast = True
     yrs = (
-        [state.year]
-        + [y + 2 for y in range(state.year, state.forecast_year, 2)]
+        [state.year] + [y + 2 for y in range(state.year, state.forecast_year, 2)]
         if forecast
         else [state.year]
     )
@@ -119,12 +120,8 @@ def run_vehicle_ownership_stage(
                 build_atlas_static_inputs_fallback(workspace)
             )
         atlas_run_inputs: Dict[str, Any] = {}
-        if "atlas_mutable_input_dir" in step_inputs:
-            atlas_run_inputs["atlas_mutable_input_dir"] = step_inputs[
-                "atlas_mutable_input_dir"
-            ]
 
-        atlas_steps = [
+        preprocess_steps = [
             WorkflowStepSpec(
                 name="atlas_preprocess",
                 step_func=make_atlas_preprocess_step(
@@ -142,21 +139,46 @@ def run_vehicle_ownership_stage(
                 input_keys=[USIM_DATASTORE_H5],
                 inputs=atlas_run_inputs or None,
             ),
-            WorkflowStepSpec(
-                name="atlas_postprocess",
-                step_func=make_atlas_postprocess_step(
-                    coupler=coupler,
-                    outputs_holder=outputs_holder_atlas,
-                ),
-                input_keys=[ATLAS_OUTPUT_DIR],
-            ),
         ]
 
         try:
             WorkflowStage(
                 name="atlas",
                 stage_type=state.Stage.vehicle_ownership_model,
-                steps=atlas_steps,
+                steps=preprocess_steps,
+            ).run(
+                scenario=scenario,
+                state=atlas_state,
+                settings=settings,
+                workspace=workspace,
+                coupler=coupler,
+                outputs_holder=outputs_holder_atlas,
+                name_suffix=str(atlas_year),
+            )
+
+            upstream_run = outputs_holder_atlas.atlas_run
+            if upstream_run is None:
+                raise RuntimeError("ATLAS run must complete before postprocess")
+            postprocess_input_keys = [
+                short_name for short_name, _, _ in upstream_run._iter_record_items()
+            ]
+            if not postprocess_input_keys:
+                postprocess_input_keys = None
+
+            postprocess_steps = [
+                WorkflowStepSpec(
+                    name="atlas_postprocess",
+                    step_func=make_atlas_postprocess_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_atlas,
+                    ),
+                    input_keys=postprocess_input_keys,
+                )
+            ]
+            WorkflowStage(
+                name="atlas",
+                stage_type=state.Stage.vehicle_ownership_model,
+                steps=postprocess_steps,
             ).run(
                 scenario=scenario,
                 state=atlas_state,

@@ -176,9 +176,7 @@ def run_manifested_steps(
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
             if outputs_holder.get_attribute(spec.name) is None:
-                outputs = _restore_outputs_from_manifest(
-                    spec.name, manifest, workspace
-                )
+                outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
             continue

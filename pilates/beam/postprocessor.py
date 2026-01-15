@@ -3383,23 +3383,27 @@ class BeamPostprocessor(GenericPostprocessor):
         Notes
         -----
         Output keys
-            - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing.
             - ``final_skims_omx``: Final OMX skims written to the BEAM
-              mutable data directory.
+              mutable data directory when OMX output is enabled.
+            - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing
+              when OMX output is disabled.
         Related docs
             - See `pilates/beam/inputs.py` for the corresponding input
               descriptions used by BEAM and downstream models.
         """
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
-        region = settings.run.region
-        omx_name = settings.shared.skims.fname
-        final_omx_path = os.path.join(
-            workspace.get_beam_mutable_data_dir(), region, omx_name
+        write_omx = get_setting(settings, "write_skims_to_omx", False) or (
+            get_setting(settings, "run.models.land_use") == "urbansim"
         )
-        return {
-            "zarr_skims": zarr_path,
-            "final_skims_omx": final_omx_path,
-        }
+        if write_omx:
+            region = settings.run.region
+            omx_name = settings.shared.skims.fname
+            final_omx_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(), region, omx_name
+            )
+            return {"final_skims_omx": final_omx_path}
+
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        return {"zarr_skims": zarr_path}
 
     def __init__(
         self,

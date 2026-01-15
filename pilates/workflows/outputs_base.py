@@ -200,6 +200,7 @@ class StepOutputsBase:
         """
         Validate that expected output paths exist.
         """
+
         def _path_exists(path_value: Any) -> bool:
             if path_value is None:
                 return False

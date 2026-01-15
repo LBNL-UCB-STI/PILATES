@@ -33,15 +33,11 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_constants import (
-    ASIM_MUTABLE_DATA_DIR,
-    ASIM_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
-    BEAM_MUTABLE_DATA_DIR,
-    BEAM_OUTPUT_DIR,
     USIM_DATASTORE_H5,
-    USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
+from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -234,6 +230,23 @@ def run_supply_demand_stage(
                         "but none were found while asim_compiled=True."
                     )
 
+            upstream_preprocess = outputs_holder.activitysim_preprocess
+            if upstream_preprocess is None:
+                raise RuntimeError("ActivitySim preprocess must complete first")
+            asim_run_input_keys = [
+                short_name
+                for short_name, _, _ in upstream_preprocess._iter_record_items()
+            ]
+            asim_run_input_keys.append(ZARR_SKIMS)
+
+            activitysim_postprocess_inputs: Dict[str, str] = {}
+            usim_input_fname = get_usim_datastore_fname(settings, io="input")
+            usim_input_path = os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            )
+            if os.path.exists(usim_input_path):
+                activitysim_postprocess_inputs[USIM_DATASTORE_H5] = usim_input_path
+
             activitysim_specs = [
                 WorkflowStepSpec(
                     name="activitysim_run",
@@ -241,7 +254,7 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=[ASIM_MUTABLE_DATA_DIR, ZARR_SKIMS],
+                    input_keys=asim_run_input_keys or None,
                 ),
                 WorkflowStepSpec(
                     name="activitysim_postprocess",
@@ -249,10 +262,8 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=[ASIM_OUTPUT_DIR],
-                    inputs={
-                        USIM_MUTABLE_DATA_DIR: workspace.get_usim_mutable_data_dir()
-                    },
+                    input_keys=None,
+                    inputs=activitysim_postprocess_inputs or None,
                 ),
             ]
             run_manifested_steps(
@@ -328,8 +339,30 @@ def run_supply_demand_stage(
                     )
 
             zarr_input_keys = None
+            beam_prepared_input_keys = None
             if activity_demand_outputs is not None:
                 zarr_input_keys = [ZARR_SKIMS]
+                if settings.activitysim.file_format == "parquet":
+                    beam_prepared_input_keys = [
+                        "plans_parquet",
+                        "households_parquet",
+                        "persons_parquet",
+                    ]
+                else:
+                    beam_prepared_input_keys = [
+                        "plans_csv_gz",
+                        "households_csv_gz",
+                        "persons_csv_gz",
+                    ]
+                beam_prepared_input_keys.append("linkstats_warmstart")
+
+            beam_run_input_keys = []
+            if zarr_input_keys:
+                beam_run_input_keys.extend(zarr_input_keys)
+            if beam_prepared_input_keys:
+                beam_run_input_keys.extend(beam_prepared_input_keys)
+            if not beam_run_input_keys:
+                beam_run_input_keys = None
 
             beam_steps = [
                 WorkflowStepSpec(
@@ -347,7 +380,7 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=zarr_input_keys,
+                    input_keys=beam_run_input_keys,
                 ),
                 WorkflowStepSpec(
                     name="beam_postprocess",
