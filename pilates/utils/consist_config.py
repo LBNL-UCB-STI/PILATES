@@ -13,7 +13,7 @@ These helpers centralize how PILATES maps its Pydantic settings to Consist so
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from pilates.config.models import PilatesConfig
 
@@ -24,6 +24,159 @@ except Exception:  # pragma: no cover
 
 
 HashInput = Tuple[str, Path]
+
+
+class ConsistConfigBuilder(Protocol):
+    """
+    Protocol for building Consist step config/facet/hash inputs per model.
+
+    Each builder owns the identity config (hashed), facet (queryable), and any
+    hash-only inputs that should be folded into the step signature.
+    """
+
+    @property
+    def requires_workspace_path(self) -> bool:
+        """Whether hash input construction requires a workspace path."""
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        """Config dict that drives cache identity."""
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        """Facet dict stored for querying."""
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        """File/dir digests folded into identity."""
+
+    def get_facet_schema_version(self, model: str) -> str:
+        """Facet schema version for the step model identifier."""
+
+
+class ActivitySimConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return True
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_activitysim_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_activitysim_facet(settings)
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        return build_activitysim_hash_inputs(settings, workspace_path)
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return {
+            "activitysim_compile": "activitysim_compile_v1",
+            "activitysim_preprocess": "activitysim_preprocess_v1",
+            "activitysim_run": "activitysim_run_v1",
+            "activitysim_postprocess": "activitysim_postprocess_v1",
+        }.get(model, "activitysim_v1")
+
+
+class BeamConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return True
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_beam_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_beam_facet(settings)
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        return build_beam_hash_inputs(settings, workspace_path)
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return {
+            "beam_preprocess": "beam_preprocess_v1",
+            "beam_run": "beam_run_v1",
+            "beam_postprocess": "beam_postprocess_v1",
+        }.get(model, "beam_v1")
+
+
+class UrbanSimConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return False
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_urbansim_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_urbansim_facet(settings)
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        return []
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return {
+            "urbansim_preprocess": "urbansim_preprocess_v1",
+            "urbansim_run": "urbansim_run_v1",
+            "urbansim_postprocess": "urbansim_postprocess_v1",
+        }.get(model, "urbansim_v1")
+
+
+class AtlasConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return False
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_atlas_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_atlas_facet(settings)
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        return []
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return {
+            "atlas_preprocess": "atlas_preprocess_v1",
+            "atlas_run": "atlas_run_v1",
+            "atlas_postprocess": "atlas_postprocess_v1",
+        }.get(model, "atlas_v1")
+
+
+class PostprocessingConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return False
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_postprocessing_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_postprocessing_facet(settings)
+
+    def build_hash_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[HashInput]:
+        return []
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return "postprocessing_v1"
+
+
+_CONFIG_BUILDERS: Dict[str, ConsistConfigBuilder] = {
+    "activitysim": ActivitySimConfigBuilder(),
+    "beam": BeamConfigBuilder(),
+    "urbansim": UrbanSimConfigBuilder(),
+    "atlas": AtlasConfigBuilder(),
+    "postprocessing": PostprocessingConfigBuilder(),
+}
 
 
 def build_scenario_consist_kwargs(settings: PilatesConfig) -> Dict[str, Any]:
@@ -79,89 +232,23 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
 
-    if model_norm in {
-        "activitysim",
-        "activitysim_preprocess",
-        "activitysim_run",
-        "activitysim_postprocess",
-        "activitysim_compile",
-    }:
-        if workspace_path is None:
-            raise ValueError("workspace_path is required for activitysim hash_inputs.")
-        return {
-            "config": build_activitysim_identity_config(settings),
-            "facet": build_activitysim_facet(settings),
-            "hash_inputs": build_activitysim_hash_inputs(settings, workspace_path),
-            "facet_schema_version": {
-                "activitysim_compile": "activitysim_compile_v1",
-                "activitysim_preprocess": "activitysim_preprocess_v1",
-                "activitysim_run": "activitysim_run_v1",
-                "activitysim_postprocess": "activitysim_postprocess_v1",
-            }.get(model_norm, "activitysim_v1"),
+    builder = _CONFIG_BUILDERS.get(model_norm.split("_")[0])
+    if builder is not None:
+        if builder.requires_workspace_path and workspace_path is None:
+            raise ValueError(
+                f"workspace_path is required for {model_norm.split('_')[0]} hash_inputs."
+            )
+        result: Dict[str, Any] = {
+            "config": builder.build_identity_config(settings),
+            "facet": builder.build_facet(settings),
+            "facet_schema_version": builder.get_facet_schema_version(model_norm),
             "facet_index": True,
         }
-
-    if model_norm in {
-        "beam",
-        "beam_preprocess",
-        "beam_run",
-        "beam_postprocess",
-    }:
-        if workspace_path is None:
-            raise ValueError("workspace_path is required for beam hash_inputs.")
-        return {
-            "config": build_beam_identity_config(settings),
-            "facet": build_beam_facet(settings),
-            "hash_inputs": build_beam_hash_inputs(settings, workspace_path),
-            "facet_schema_version": {
-                "beam_preprocess": "beam_preprocess_v1",
-                "beam_run": "beam_run_v1",
-                "beam_postprocess": "beam_postprocess_v1",
-            }.get(model_norm, "beam_v1"),
-            "facet_index": True,
-        }
-
-    if model_norm in {
-        "urbansim",
-        "urbansim_preprocess",
-        "urbansim_run",
-        "urbansim_postprocess",
-    }:
-        return {
-            "config": build_urbansim_identity_config(settings),
-            "facet": build_urbansim_facet(settings),
-            "facet_schema_version": {
-                "urbansim_preprocess": "urbansim_preprocess_v1",
-                "urbansim_run": "urbansim_run_v1",
-                "urbansim_postprocess": "urbansim_postprocess_v1",
-            }.get(model_norm, "urbansim_v1"),
-            "facet_index": True,
-        }
-
-    if model_norm in {
-        "atlas",
-        "atlas_preprocess",
-        "atlas_run",
-        "atlas_postprocess",
-    }:
-        return {
-            "config": build_atlas_identity_config(settings),
-            "facet": build_atlas_facet(settings),
-            "facet_schema_version": {
-                "atlas_preprocess": "atlas_preprocess_v1",
-                "atlas_run": "atlas_run_v1",
-                "atlas_postprocess": "atlas_postprocess_v1",
-            }.get(model_norm, "atlas_v1"),
-            "facet_index": True,
-        }
-
-    if model_norm == "postprocessing":
-        return {
-            "config": build_postprocessing_identity_config(settings),
-            "facet": build_postprocessing_facet(settings),
-            "facet_schema_version": "postprocessing_v1",
-            "facet_index": True,
-        }
+        if workspace_path is not None:
+            hash_inputs = builder.build_hash_inputs(settings, workspace_path)
+            if hash_inputs:
+                result["hash_inputs"] = hash_inputs
+        return result
 
     # Default: no special config mapping yet.
     return {
