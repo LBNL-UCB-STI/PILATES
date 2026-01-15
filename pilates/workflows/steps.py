@@ -1147,6 +1147,10 @@ def make_activitysim_compile_step(
                     omx_record = record
                     break
         if omx_record is not None:
+            input_store = RecordStore(recordList=[omx_record])
+        else:
+            input_store = RecordStore()
+        if omx_record is not None:
             omx_path = omx_record.get_absolute_path(base_path=workspace.full_path)
             if omx_path and os.path.exists(omx_path):
                 cr.log_input(

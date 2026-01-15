@@ -170,6 +170,10 @@ def run_supply_demand_stage(
                         "ActivitySim compile requires preprocess outputs."
                     )
                 compile_inputs = upstream.to_record_store().to_mapping()
+                if "omx_skims" in compile_inputs:
+                    compile_inputs = {"omx_skims": compile_inputs["omx_skims"]}
+                else:
+                    compile_inputs = {}
                 expected_compile_outputs = clean_expected_outputs(
                     build_outputs(
                         "activitysim_compile",
