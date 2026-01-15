@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import (
@@ -199,6 +200,16 @@ class StepOutputsBase:
         """
         Validate that expected output paths exist.
         """
+        def _path_exists(path_value: Any) -> bool:
+            if path_value is None:
+                return False
+            exists_attr = getattr(path_value, "exists", None)
+            if callable(exists_attr):
+                return bool(exists_attr())
+            if isinstance(path_value, (str, os.PathLike)):
+                return Path(path_value).exists()
+            return False
+
         logger.debug(
             "Validating %s: required=%s optional=%s dict=%s",
             self.__class__.__name__,
@@ -208,18 +219,18 @@ class StepOutputsBase:
         )
         for field_name in self.required_path_fields:
             path = getattr(self, field_name, None)
-            if path is None or not path.exists():
+            if not _path_exists(path):
                 raise AssertionError(f"{field_name} missing: {path}")
 
         for field_name in self.optional_path_fields:
             path = getattr(self, field_name, None)
             if path is None:
                 continue
-            if not path.exists():
+            if not _path_exists(path):
                 raise AssertionError(f"{field_name} missing: {path}")
 
         for field_name in self.dict_path_fields:
             paths_dict = getattr(self, field_name, {}) or {}
             for key, path in paths_dict.items():
-                if path is None or not path.exists():
+                if not _path_exists(path):
                     raise AssertionError(f"{field_name}[{key}] missing: {path}")

@@ -266,6 +266,12 @@ def build_beam_hash_inputs(
     if not root.exists():
         raise FileNotFoundError(f"BEAM mutable data dir not found: {root}")
 
+    config_name = getattr(cfg, "config", None)
+    if config_name:
+        matches = sorted(root.rglob(config_name))
+        if matches:
+            return [("beam_conf", matches[0])]
+
     conf_files = sorted([p for p in root.rglob("*.conf") if p.is_file()])
     if not conf_files:
         # Fallback: hash the root itself so identity still captures "something".

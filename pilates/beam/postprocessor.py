@@ -3365,14 +3365,12 @@ class BeamPostprocessor(GenericPostprocessor):
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
         beam_output_dir = workspace.get_beam_output_dir()
-        asim_output_dir = workspace.get_asim_output_dir()
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         return {
             "beam_output_dir": (
                 beam_output_dir if os.path.exists(beam_output_dir) else None
             ),
-            "asim_output_dir": (
-                asim_output_dir if os.path.exists(asim_output_dir) else None
-            ),
+            "zarr_skims": (zarr_path if os.path.exists(zarr_path) else None),
         }
 
     @staticmethod

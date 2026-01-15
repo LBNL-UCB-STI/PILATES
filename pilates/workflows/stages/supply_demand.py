@@ -35,7 +35,6 @@ from pilates.workflows.steps import (
 from pilates.workflows.artifact_constants import (
     ASIM_MUTABLE_DATA_DIR,
     ASIM_OUTPUT_DIR,
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_OUTPUT_DIR,
@@ -292,9 +291,20 @@ def run_supply_demand_stage(
             formatted_print("TRAFFIC ASSIGNMENT MODEL")
             beam_preprocess_inputs: Dict[str, Any] = {}
             if activity_demand_outputs is not None:
-                beam_preprocess_inputs.update(activity_demand_outputs.to_mapping())
+                asim_input_keys = {
+                    "beam_plans",
+                    "beam_plans_out",
+                    "households",
+                    "linkstats",
+                    "persons",
+                }
+                for key, value in activity_demand_outputs.to_mapping().items():
+                    if key in asim_input_keys:
+                        beam_preprocess_inputs[key] = value
             if previous_beam_outputs is not None:
-                beam_preprocess_inputs.update(previous_beam_outputs.to_mapping())
+                for key, value in previous_beam_outputs.to_mapping().items():
+                    if key.startswith("linkstats"):
+                        beam_preprocess_inputs[key] = value
             if getattr(settings, "vehicle_ownership_model_enabled", False) and i == 0:
                 if state.run_info_path and os.path.exists(state.run_info_path):
                     previous_run_dir = os.path.dirname(state.run_info_path)
@@ -317,15 +327,9 @@ def run_supply_demand_stage(
                         ATLAS_VEHICLES2_INPUT, atlas_vehicle_path
                     )
 
-            beam_preprocess_input_keys = []
-            if getattr(settings, "activity_demand_enabled", False):
-                beam_preprocess_input_keys.append(ASIM_OUTPUT_DIR)
-            if getattr(settings, "vehicle_ownership_model_enabled", False):
-                beam_preprocess_input_keys.append(ATLAS_OUTPUT_DIR)
-
-            beam_postprocess_input_keys = [BEAM_OUTPUT_DIR]
-            if getattr(settings, "activity_demand_enabled", False):
-                beam_postprocess_input_keys.append(ASIM_OUTPUT_DIR)
+            zarr_input_keys = None
+            if activity_demand_outputs is not None:
+                zarr_input_keys = [ZARR_SKIMS]
 
             beam_steps = [
                 WorkflowStepSpec(
@@ -334,7 +338,7 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=beam_preprocess_input_keys or None,
+                    input_keys=None,
                     inputs=beam_preprocess_inputs or None,
                 ),
                 WorkflowStepSpec(
@@ -343,7 +347,7 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=[BEAM_MUTABLE_DATA_DIR, ZARR_SKIMS],
+                    input_keys=zarr_input_keys,
                 ),
                 WorkflowStepSpec(
                     name="beam_postprocess",
@@ -351,7 +355,7 @@ def run_supply_demand_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     ),
-                    input_keys=beam_postprocess_input_keys,
+                    input_keys=zarr_input_keys,
                 ),
             ]
 
