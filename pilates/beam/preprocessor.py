@@ -277,15 +277,21 @@ class BeamPreprocessor(GenericPreprocessor):
         # Collect necessary records from the previous (ActivitySim) step
         asim_post_records = previous_records.all_records()
         for record in asim_post_records:
-            if record.short_name:
-                short_name = record.short_name.rsplit("_", 2)[0].replace(
-                    "_asim_out", ""
-                )  # Updated to handle format e.g. beam_plans_asim_out_2018_0
-                if short_name in self.required_input_data:
-                    input_records.add_record(record)
-                    logger.info(f"Added {short_name} to beam inputs")
-                else:
-                    logger.info(f"Skipping {record.short_name} produced by activitysim")
+            raw_name = getattr(record, "short_name", "") or ""
+            if not raw_name:
+                continue
+            if raw_name in self.required_input_data:
+                short_name = raw_name
+            elif "_asim_out" in raw_name:
+                short_name = raw_name.split("_asim_out")[0]
+            else:
+                short_name = raw_name
+
+            if short_name in self.required_input_data:
+                input_records.add_record(record)
+                logger.info(f"Added {short_name} to beam inputs")
+            else:
+                logger.info(f"Skipping {raw_name} produced by activitysim")
 
         # For replanning iterations, inputs from the previous BEAM run should be
         # passed in explicitly by the caller.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -33,6 +32,7 @@ from pilates.workflows.artifact_constants import (
     ASIM_MUTABLE_DATA_DIR,
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
+    BEAM_MUTABLE_DATA_DIR,
     BEAM_OUTPUT_DIR,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
