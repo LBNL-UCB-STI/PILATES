@@ -26,14 +26,8 @@ ASIM_OMX_SKIMS = "omx_skims"
 
 # BEAM preprocess inputs
 BEAM_PLANS_IN = "plans_beam_in"
-BEAM_PLANS_PARQUET = "plans_parquet"
-BEAM_PLANS_CSV_GZ = "plans_csv_gz"
 BEAM_HOUSEHOLDS_IN = "households_beam_in"
-BEAM_HOUSEHOLDS_PARQUET = "households_parquet"
-BEAM_HOUSEHOLDS_CSV_GZ = "households_csv_gz"
 BEAM_PERSONS_IN = "persons_beam_in"
-BEAM_PERSONS_PARQUET = "persons_parquet"
-BEAM_PERSONS_CSV_GZ = "persons_csv_gz"
 LINKSTATS_WARMSTART = "linkstats_warmstart"
 
 ZARR_SKIMS = "zarr_skims"

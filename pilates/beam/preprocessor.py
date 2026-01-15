@@ -23,7 +23,10 @@ from pilates.workflows.artifact_constants import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
+    BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
 )
 from workflow_state import WorkflowState
 
@@ -757,18 +760,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if file_format != "parquet":
                 df.to_csv(path, index=False, compression="gzip")
 
-            record_list.append(
-                FileRecord(
-                    file_path=path,
-                    description=f"Merged {name} for BEAM input",
-                    short_name=(
-                        f"{name}_beam_in_{self.state.current_year}_"
-                        f"{self.state.current_inner_iter}"
-                    ),
-                    year=self.state.current_year,
-                    iteration=self.state.current_inner_iter,
-                )
-            )
             record_list.extend(
                 self._format_specific_output_records(
                     name, path, file_format, "Merged BEAM input file"
@@ -814,22 +805,11 @@ class BeamPreprocessor(GenericPreprocessor):
         else:
             df.to_csv(beam_file_path, compression="gzip", index=False)
 
-        records = [
-            FileRecord(
-                file_path=beam_file_path,
-                description=f"Copied from ActivitySim output: {beam_file_name}",
-                short_name=beam_file_name + "_beam_in",
-                year=self.state.current_year,
-                iteration=self.state.current_inner_iter,
-            )
-        ]
-        records.extend(
-            self._format_specific_output_records(
-                beam_file_name,
-                beam_file_path,
-                file_format,
-                "BEAM input file",
-            )
+        records = self._format_specific_output_records(
+            beam_file_name,
+            beam_file_path,
+            file_format,
+            f"Copied from ActivitySim output: {beam_file_name}",
         )
         return records
 
@@ -854,27 +834,21 @@ class BeamPreprocessor(GenericPreprocessor):
         description_prefix : str
             Description prefix for the record.
         """
-        if file_format == "parquet":
-            return [
-                FileRecord(
-                    file_path=file_path,
-                    description=f"{description_prefix} (parquet)",
-                    short_name=f"{file_stem}_parquet",
-                    year=getattr(self.state, "current_year", None),
-                    iteration=getattr(self.state, "current_inner_iter", None),
-                )
-            ]
-        if file_format == "csv":
-            return [
-                FileRecord(
-                    file_path=file_path,
-                    description=f"{description_prefix} (csv.gz)",
-                    short_name=f"{file_stem}_csv_gz",
-                    year=getattr(self.state, "current_year", None),
-                    iteration=getattr(self.state, "current_inner_iter", None),
-                )
-            ]
-        return []
+        short_name_map = {
+            "plans": BEAM_PLANS_IN,
+            "households": BEAM_HOUSEHOLDS_IN,
+            "persons": BEAM_PERSONS_IN,
+        }
+        short_name = short_name_map.get(file_stem, f"{file_stem}_beam_in")
+        return [
+            FileRecord(
+                file_path=file_path,
+                description=description_prefix,
+                short_name=short_name,
+                year=getattr(self.state, "current_year", None),
+                iteration=getattr(self.state, "current_inner_iter", None),
+            )
+        ]
 
     def _handle_linkstats(
         self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
@@ -938,12 +912,17 @@ class BeamPreprocessor(GenericPreprocessor):
             warmstart_source = "previous_beam_output"
 
         if warmstart_abs_path is None:
-            warmstart_abs_path = os.path.join(
+            base_dir = os.path.join(
                 str(workspace.get_beam_mutable_data_dir()),
                 self.settings.run.region,
                 self.settings.beam.router_directory,
-                "init.linkstats.csv.gz",
             )
+            parquet_candidate = os.path.join(base_dir, "init.linkstats.parquet")
+            csv_candidate = os.path.join(base_dir, "init.linkstats.csv.gz")
+            if os.path.exists(parquet_candidate):
+                warmstart_abs_path = parquet_candidate
+            else:
+                warmstart_abs_path = csv_candidate
             warmstart_source = "initial_inputs"
 
         if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):
