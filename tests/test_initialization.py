@@ -197,3 +197,80 @@ def test_initialization_handles_missing_models_gracefully(monkeypatch):
     # No data should have been added to workspace dictionaries
     assert workspace.input_data == {}
     assert workspace.output_data == {}
+
+
+def test_initialization_logs_copy_records(monkeypatch, tmp_path):
+    """
+    Initialization should log each copied input/output record via Consist
+    using the RecordStore keys (sanitized when needed).
+    """
+
+    class DummyLoggingPreprocessor:
+        def __init__(self, input_path, output_path):
+            self.input_path = input_path
+            self.output_path = output_path
+
+        def copy_data_to_mutable_location(self, settings, output_dir):
+            in_record = FileRecord(
+                unique_id="in1",
+                short_name="bad key",
+                file_path=str(self.input_path),
+            )
+            out_record = FileRecord(
+                unique_id="out1",
+                short_name="output_ok",
+                file_path=str(self.output_path),
+            )
+            return RecordStore(recordList=[in_record]), RecordStore(
+                recordList=[out_record]
+            )
+
+    class DummyLoggingModelFactory:
+        def __init__(self, input_path, output_path):
+            self.input_path = input_path
+            self.output_path = output_path
+
+        def get_preprocessor(self, model_name, state, major_stage=None):
+            return DummyLoggingPreprocessor(self.input_path, self.output_path)
+
+    input_path = tmp_path / "source.txt"
+    output_path = tmp_path / "dest.txt"
+    input_path.write_text("source")
+    output_path.write_text("dest")
+
+    factory = DummyLoggingModelFactory(input_path, output_path)
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", lambda: factory
+    )
+
+    logged_inputs = []
+    logged_outputs = []
+
+    def _log_input(path, key=None, **_kwargs):
+        logged_inputs.append((path, key))
+
+    def _log_output(path, key=None, **_kwargs):
+        logged_outputs.append((path, key))
+
+    monkeypatch.setattr("pilates.generic.initialization.cr.log_input", _log_input)
+    monkeypatch.setattr("pilates.generic.initialization.cr.log_output", _log_output)
+
+    init = Initialization("init", None)
+    workspace = DummyWorkspace()
+    workspace.full_path = str(tmp_path)
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="beam",
+                activity_demand=None,
+                vehicle_ownership=None,
+                land_use="urbansim",
+            ),
+            start_year=2020,
+        )
+    )
+
+    init.run(settings, workspace)
+
+    assert (str(input_path), "bad_key") in logged_inputs
+    assert (str(output_path), "output_ok") in logged_outputs

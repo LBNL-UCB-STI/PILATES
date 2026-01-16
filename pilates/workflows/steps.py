@@ -1214,6 +1214,57 @@ def make_activitysim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
+        tracker = cr.current_tracker()
+        if tracker is not None:
+            try:
+                from pathlib import Path
+
+                from consist.core.config_canonicalization import ConfigAdapterOptions
+                from consist.integrations.activitysim import ActivitySimConfigAdapter
+            except Exception:
+                logger.debug(
+                    "ActivitySim config adapter unavailable; skipping canonicalization."
+                )
+            else:
+                config_root = (
+                    Path(workspace.get_asim_mutable_configs_dir())
+                    / settings.activitysim.main_configs_dir
+                )
+                if config_root.exists():
+                    options = ConfigAdapterOptions(
+                        strict=False,
+                        bundle=True,
+                        ingest=True,
+                        allow_heuristic_refs=True,
+                    )
+                    current_run = cr.current_run()
+                    run_id = getattr(current_run, "id", None) if current_run else None
+                    try:
+                        if run_id:
+                            tracker.canonicalize_config(
+                                ActivitySimConfigAdapter(),
+                                [config_root],
+                                run_id=run_id,
+                                options=options,
+                            )
+                        else:
+                            tracker.canonicalize_config(
+                                ActivitySimConfigAdapter(),
+                                [config_root],
+                                options=options,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "ActivitySim config canonicalization failed; "
+                            "continuing without config ingestion.",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "ActivitySim config root not found for canonicalization: %s",
+                        config_root,
+                    )
+
         usim_input = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -1349,11 +1400,13 @@ def make_activitysim_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_output_only(
+            artifact = cr.log_output(
+                str(path),
                 key=short_name,
-                path=str(path),
                 description=description,
             )
+            if artifact is not None and getattr(artifact, "hash", None):
+                outputs.raw_output_hashes[short_name] = artifact.hash
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1432,6 +1485,17 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            meta: Dict[str, Any] = {}
+            content_hash = outputs.processed_output_hashes.get(short_name)
+            if content_hash:
+                meta["content_hash"] = content_hash
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description=description,
+                **meta,
+            )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,

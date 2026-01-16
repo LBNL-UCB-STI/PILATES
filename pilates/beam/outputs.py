@@ -149,8 +149,8 @@ class BeamPostprocessOutputs(StepOutputsBase):
         "final_skims_omx",
     )
 
-    zarr_skims: Optional[Path]
-    final_skims_omx: Optional[Path]
+    zarr_skims: Optional[Path] = None
+    final_skims_omx: Optional[Path] = None
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

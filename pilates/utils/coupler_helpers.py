@@ -371,6 +371,7 @@ def log_and_set_output(
     path: str,
     description: str,
     coupler: CouplerProtocol,
+    **meta: Any,
 ) -> None:
     """
     Log an output path and set it on the coupler.
@@ -386,7 +387,7 @@ def log_and_set_output(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    artifact = cr.log_output(path, key=key, description=description)
+    artifact = cr.log_output(path, key=key, description=description, **meta)
     set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
@@ -395,6 +396,7 @@ def log_output_only(
     key: str,
     path: str,
     description: str,
+    **meta: Any,
 ) -> None:
     """
     Log an output path without writing to the coupler.
@@ -408,7 +410,7 @@ def log_output_only(
     description : str
         Description used in provenance logging.
     """
-    cr.log_output(path, key=key, description=description)
+    cr.log_output(path, key=key, description=description, **meta)
 
 
 def log_and_set_input(

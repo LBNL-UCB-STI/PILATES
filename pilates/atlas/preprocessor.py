@@ -15,7 +15,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,33 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         input_records = []
         output_records = []
-        source_dir = "pilates/atlas/atlas_input"
+        source_dir = get_setting(settings, "atlas.host_input_folder", "pilates/atlas/atlas_input")
+        scenario = get_setting(settings, "atlas.scenario")
+        adscen = get_setting(settings, "atlas.adscen")
+        scenario_key = str(scenario).lower() if scenario else None
+        vehicle_type_mapping_by_scenario = {
+            "baseline": "vehicle_type_mapping_baseline.csv",
+            "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
+            "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
+        }
+        selected_vehicle_type_mapping = None
+        if scenario_key:
+            selected_vehicle_type_mapping = vehicle_type_mapping_by_scenario.get(
+                scenario_key
+            )
+            if selected_vehicle_type_mapping is None:
+                logger.warning(
+                    "[AtlasPreprocessor] Unknown atlas.scenario=%s; "
+                    "vehicle_type_mapping inputs will not be filtered.",
+                    scenario,
+                )
+        if adscen and scenario and adscen != scenario:
+            logger.warning(
+                "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
+                "using scenario for input selection.",
+                adscen,
+                scenario,
+            )
         logger.info(
             f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}"
         )
@@ -118,13 +144,24 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                 source_path = os.path.join(root, filename)
                 relative_path = os.path.relpath(source_path, source_dir)
+                if scenario:
+                    rel_parts = relative_path.split(os.sep)
+                    if rel_parts[0] == "adopt":
+                        if len(rel_parts) < 2 or rel_parts[1] != scenario:
+                            continue
+                if selected_vehicle_type_mapping:
+                    if filename.startswith("vehicle_type_mapping_"):
+                        if filename != selected_vehicle_type_mapping:
+                            continue
 
                 dest_path = os.path.join(output_dir, relative_path)
 
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy(source_path, dest_path)
 
-                short_name = os.path.splitext(filename)[0]
+                rel_no_ext = os.path.splitext(relative_path)[0]
+                rel_key = rel_no_ext.replace(os.sep, "/")
+                short_name = sanitize_artifact_key(rel_key) or rel_key
 
                 input_records.append(
                     FileRecord(

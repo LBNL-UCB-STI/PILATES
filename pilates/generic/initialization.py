@@ -1,15 +1,104 @@
-from typing import Optional
+from typing import Optional, Iterator, Tuple
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, sanitize_artifact_key
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils import consist_runtime as cr
 
 import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
+    used_keys = set()
+    for record in record_store.all_records():
+        key = getattr(record, "short_name", None) or getattr(
+            record, "unique_id", None
+        )
+        if not key:
+            logger.warning(
+                "Initialization record missing short_name/unique_id; skipping."
+            )
+            continue
+        sanitized = sanitize_artifact_key(key)
+        if sanitized is None:
+            fallback = getattr(record, "unique_id", None)
+            if not fallback:
+                logger.warning(
+                    "Initialization record key '%s' could not be sanitized; skipping.",
+                    key,
+                )
+                continue
+            logger.warning(
+                "Initialization record key '%s' invalid; using unique_id '%s'.",
+                key,
+                fallback,
+            )
+            key = fallback
+        else:
+            if sanitized != key:
+                logger.warning(
+                    "Initialization record key '%s' sanitized to '%s'.",
+                    key,
+                    sanitized,
+                )
+            key = sanitized
+
+        if key in used_keys:
+            fallback = getattr(record, "unique_id", None)
+            if not fallback or fallback in used_keys:
+                logger.warning(
+                    "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                    key,
+                )
+                continue
+            logger.warning(
+                "Duplicate initialization key '%s' detected; using unique_id '%s'.",
+                key,
+                fallback,
+            )
+            key = fallback
+
+        used_keys.add(key)
+        yield key, record
+
+
+def _log_record_store(
+    record_store: RecordStore,
+    *,
+    log_fn,
+    workspace: Workspace,
+    direction: str,
+) -> None:
+    for key, record in _iter_unique_records(record_store):
+        path = record.get_absolute_path(base_path=workspace.full_path)
+        if not path:
+            logger.warning(
+                "Initialization %s record '%s' missing path; skipping.",
+                direction,
+                key,
+            )
+            continue
+        if not os.path.exists(path):
+            logger.warning(
+                "Initialization %s path does not exist for key '%s': %s",
+                direction,
+                key,
+                path,
+            )
+            continue
+        artifact = log_fn(
+            path,
+            key=key,
+            description=getattr(record, "description", None),
+        )
+        if artifact is not None and hasattr(record, "content_hash"):
+            record_hash = getattr(artifact, "hash", None)
+            if record_hash:
+                record.content_hash = record_hash
 
 
 class Initialization(Model):
@@ -146,6 +235,19 @@ class Initialization(Model):
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             raise e
+
+        _log_record_store(
+            initialization_records_in,
+            log_fn=cr.log_input,
+            workspace=workspace,
+            direction="input",
+        )
+        _log_record_store(
+            initialization_records_out,
+            log_fn=cr.log_output,
+            workspace=workspace,
+            direction="output",
+        )
 
         combined_records = RecordStore()
         combined_records += initialization_records_in

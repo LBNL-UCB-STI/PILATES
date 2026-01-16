@@ -2387,6 +2387,12 @@ def _merge_beam_skims_to_zarr(
         logger.info(
             f"DEBUG: Partial (BEAM) skims otaz coords: {partial_skims_ds.coords['otaz'].values[:5]}...{partial_skims_ds.coords['otaz'].values[-5:]}"
         )
+        if "time_period" in partial_skims_ds.coords:
+            logger.debug(
+                "Partial BEAM skims time_period coords for %s: %s",
+                current_skims_path,
+                list(partial_skims_ds.coords["time_period"].values),
+            )
     else:
         input_format = "omx"
         partialSkims = omx.open_file(current_skims_path, mode="r")
@@ -2707,6 +2713,13 @@ def _merge_beam_skims_to_zarr(
 
         skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
 
+        if "time_period" in skims_ds.coords:
+            logger.debug(
+                "Pre-write time_period coords for %s: %s",
+                all_skims_path,
+                list(skims_ds.coords["time_period"].values),
+            )
+
         temp_path = f"{all_skims_path}_temp_merged"
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
@@ -2737,6 +2750,12 @@ def _merge_beam_skims_to_zarr(
             logger.info(
                 f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
             )
+            if "time_period" in verified_ds.coords:
+                logger.debug(
+                    "Post-write time_period coords for %s: %s",
+                    all_skims_path,
+                    list(verified_ds.coords["time_period"].values),
+                )
     except Exception as e:
         logger.error(
             f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}"
@@ -2750,13 +2769,13 @@ def _merge_beam_skims_to_zarr(
     if skims_ds:
         skims_ds.close()
 
-    # Return the path to the new OMX skims *if* a new one was found and processed.
-    # This is used by the caller to check if skims were updated.
-    if partialSkims is not None and merge_successful:
-        return current_skims_path
-    else:
-        logger.warning("No new OMX skims found, returning None.")
-        return None
+    # Return the updated Zarr skims path whenever we successfully wrote them.
+    # This ensures downstream logging captures the rewritten master skims even
+    # if no new OMX skims were found.
+    if merge_successful:
+        return all_skims_path
+    logger.warning("No new OMX skims found, returning None.")
+    return None
 
 
 def _process_all_tnc_logic_zarr(

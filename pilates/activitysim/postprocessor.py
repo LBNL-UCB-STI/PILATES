@@ -544,6 +544,34 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         processed_records = []
 
+        def _build_content_hash_map() -> Dict[str, str]:
+            hash_map: Dict[str, str] = {}
+            for record in raw_outputs.all_records():
+                path = record.get_absolute_path(base_path=workspace.full_path)
+                if not path:
+                    continue
+                record_hash = getattr(record, "content_hash", None)
+                if record_hash:
+                    hash_map[path] = record_hash
+            for store in (workspace.output_data or {}).values():
+                if not isinstance(store, RecordStore):
+                    continue
+                for record in store.all_records():
+                    path = record.get_absolute_path(base_path=workspace.full_path)
+                    if not path:
+                        continue
+                    record_hash = getattr(record, "content_hash", None)
+                    if record_hash:
+                        hash_map[path] = record_hash
+            return hash_map
+
+        content_hash_map = _build_content_hash_map()
+
+        def _resolve_content_hash(source_path: str) -> Optional[str]:
+            if not source_path:
+                return None
+            return content_hash_map.get(os.path.abspath(source_path))
+
         # Archive input files from activitysim/data/
         asim_data_dir = workspace.get_asim_mutable_data_dir()
         input_files_to_archive = [
@@ -558,6 +586,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if os.path.exists(source_path):
                 target_path = os.path.join(inputs_folder_path, input_file)
                 shutil.copy(source_path, target_path)
+                content_hash = _resolve_content_hash(source_path)
 
                 processed_records.append(
                     FileRecord(
@@ -566,6 +595,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         description=f"Archived ActivitySim input: {input_file}",
                         short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
                         iteration=self.state.current_inner_iter,
+                        content_hash=content_hash,
                     )
                 )
                 logger.info(f"Archived ActivitySim input: {input_file}")
@@ -581,6 +611,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if os.path.exists(zarr_target_path):
                 shutil.rmtree(zarr_target_path)
             shutil.copytree(zarr_source_path, zarr_target_path)
+            content_hash = _resolve_content_hash(zarr_source_path)
 
             processed_records.append(
                 FileRecord(
@@ -589,6 +620,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     description="Archived ActivitySim input: skims.zarr (snapshot)",
                     short_name="asim_input_skims_zarr_archived",
                     iteration=self.state.current_inner_iter,
+                    content_hash=content_hash,
                 )
             )
             logger.info("Archived ActivitySim input: skims.zarr")
@@ -605,6 +637,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                     clean_name + ".parquet",
                 )
                 shutil.move(source, target)
+                content_hash = _resolve_content_hash(source)
                 processed_records.append(
                     FileRecord(
                         file_path=target,
@@ -612,6 +645,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         description=f"ActivitySim output file: {clean_name}",
                         short_name=clean_name,
                         iteration=self.state.current_inner_iter,
+                        content_hash=content_hash,
                     )
                 )
 

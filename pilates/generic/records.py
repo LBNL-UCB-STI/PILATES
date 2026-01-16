@@ -14,10 +14,32 @@ These classes exist ONLY for inter-model data flow.
 import uuid
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+_ARTIFACT_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,255}$")
+
+
+def _sanitize_artifact_key(key: str) -> Optional[str]:
+    if _ARTIFACT_KEY_RE.match(key):
+        return key
+    sanitized = re.sub(r"[^A-Za-z0-9_.:/-]", "_", key)
+    if not sanitized:
+        return None
+    if not re.match(r"^[A-Za-z0-9_]", sanitized):
+        sanitized = f"_{sanitized}"
+    if len(sanitized) > 256:
+        sanitized = sanitized[:256]
+    return sanitized if _ARTIFACT_KEY_RE.match(sanitized) else None
+
+
+def sanitize_artifact_key(key: str) -> Optional[str]:
+    """
+    Normalize a string into a Consist-compatible artifact key.
+    """
+    return _sanitize_artifact_key(key)
 
 
 @dataclass(kw_only=True)
@@ -32,6 +54,7 @@ class FileRecord:
         year: Optional year tag for context
         iteration: Optional iteration index for context
         metadata: Arbitrary key/value metadata dict
+        content_hash: Optional content hash for the file contents
         unique_id: Stable identifier (auto-generated if not provided)
         uri: Optional Consist URI when available
     """
@@ -43,6 +66,7 @@ class FileRecord:
     iteration: Optional[int] = None
     sub_iteration: Optional[int] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    content_hash: Optional[str] = None
     unique_id: Optional[str] = None
     uri: Optional[str] = None
 
@@ -185,6 +209,21 @@ class RecordStore:
                     f"Record '{key}' missing uri/file_path/repo_path; skipping."
                 )
                 continue
+
+            sanitized_key = _sanitize_artifact_key(key)
+            if sanitized_key is None:
+                logger.warning(
+                    "Invalid artifact key '%s' could not be sanitized; using unique_id.",
+                    key,
+                )
+                sanitized_key = getattr(record, "unique_id", None)
+            elif sanitized_key != key:
+                logger.warning(
+                    "Invalid artifact key '%s' sanitized to '%s' for Consist compatibility.",
+                    key,
+                    sanitized_key,
+                )
+            key = sanitized_key or key
 
             if key in mapping:
                 fallback_key = getattr(record, "unique_id", None)

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_constants import (
     ASIM_HOUSEHOLDS_IN,
@@ -104,6 +104,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
         ActivitySim output directory.
     raw_outputs : dict
         Mapping of short_name to output path.
+    raw_output_hashes : dict
+        Mapping of short_name to known content hashes for raw outputs.
     """
 
     primary_output_attr: ClassVar[str] = "output_dir"
@@ -111,6 +113,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
+    raw_output_hashes: Dict[str, str] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -140,15 +143,37 @@ class ActivitySimRunOutputs(StepOutputsBase):
         """
         mapping = record_store.to_mapping() if record_store is not None else {}
         raw_outputs: Dict[str, Path] = {}
+        raw_output_hashes: Dict[str, str] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
             if path is None:
                 continue
             raw_outputs[key] = Path(path)
+            if hasattr(value, "content_hash"):
+                content_hash = getattr(value, "content_hash", None)
+                if content_hash:
+                    raw_output_hashes[key] = content_hash
         return cls(
             output_dir=Path(workspace.get_asim_output_dir()),
             raw_outputs=raw_outputs,
+            raw_output_hashes=raw_output_hashes,
         )
+
+    def to_record_store(self) -> RecordStore:
+        """
+        Convert outputs to a RecordStore with optional content hashes.
+        """
+        records = []
+        for short_name, path, description in self._iter_record_items():
+            records.append(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                    content_hash=self.raw_output_hashes.get(short_name),
+                )
+            )
+        return RecordStore(recordList=records)
 
 
 @dataclass
@@ -164,6 +189,8 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         ActivitySim output directory.
     processed_outputs : dict
         Mapping of short_name to postprocessed output path.
+    processed_output_hashes : dict
+        Mapping of short_name to known content hashes for copied outputs.
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
@@ -173,6 +200,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     usim_datastore_h5: Optional[Path]
     asim_output_dir: Path
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
+    processed_output_hashes: Dict[str, str] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -202,6 +230,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         """
         usim_path = None
         processed_outputs: Dict[str, Path] = {}
+        processed_output_hashes: Dict[str, str] = {}
         allowed_outputs = {
             "beam_plans",
             "disaggregate_accessibility",
@@ -232,14 +261,18 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
                 if short_name.startswith("usim_input_"):
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
-                if short_name in allowed_outputs:
+                if short_name.startswith("asim_input_") or short_name in allowed_outputs:
                     record_path = record.get_absolute_path(
                         base_path=workspace.full_path
                     )
                     if record_path:
                         processed_outputs[short_name] = Path(record_path)
+                        content_hash = getattr(record, "content_hash", None)
+                        if content_hash:
+                            processed_output_hashes[short_name] = content_hash
         return cls(
             usim_datastore_h5=Path(usim_path) if usim_path else None,
             asim_output_dir=Path(workspace.get_asim_output_dir()),
             processed_outputs=processed_outputs,
+            processed_output_hashes=processed_output_hashes,
         )
