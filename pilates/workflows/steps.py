@@ -1194,6 +1194,9 @@ def make_activitysim_preprocess_step(
 
     This step prepares ActivitySim inputs from UrbanSim outputs and ensures
     the mutable input directory contains the required tables and skims.
+    It also canonicalizes the ActivitySim configuration directory via Consist
+    when a tracker is active, so configuration parameters become queryable
+    and fully provenance-tracked without changing existing file edits.
 
     Parameters
     ----------
@@ -1206,6 +1209,23 @@ def make_activitysim_preprocess_step(
     -------
     callable
         Step function for ActivitySim preprocess.
+
+    Notes
+    -----
+    Config canonicalization
+        The step attempts to call ``tracker.canonicalize_config(...)`` using
+        ``ActivitySimConfigAdapter`` if a Consist tracker is available. It
+        targets the mutable config directory
+        ``<workspace>/activitysim/<main_configs_dir>`` after any local edits
+        have been applied.
+
+        The call is guarded and best-effort:
+        - If the adapter import fails, canonicalization is skipped.
+        - If the config root is missing or canonicalization fails, the step
+          logs a warning and continues with normal preprocessing.
+
+        This keeps the run behavior unchanged while enabling Consist to ingest
+        constants/coefficients/probabilities into queryable tables.
     """
 
     def _log_inputs(
@@ -1214,6 +1234,31 @@ def make_activitysim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
+        """
+        Log ActivitySim preprocess inputs and perform config canonicalization.
+
+        This helper does two things:
+        1) Attempts to canonicalize the ActivitySim config directory (if a
+           Consist tracker is active), so config parameters are captured as
+           queryable tables.
+        2) Logs the UrbanSim datastore input if it exists in the coupler.
+
+        Parameters
+        ----------
+        settings : PilatesConfig
+            Simulation settings for config root resolution.
+        state : WorkflowState
+            Current workflow state (used for log metadata only).
+        workspace : Workspace
+            Workspace used to resolve mutable config paths.
+        holder : StepOutputsHolder
+            Outputs holder (unused for this helper).
+
+        Returns
+        -------
+        dict
+            Extra runtime kwargs for the step executor (empty for this helper).
+        """
         tracker = cr.current_tracker()
         if tracker is not None:
             try:
@@ -1290,6 +1335,22 @@ def make_activitysim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        """
+        Log ActivitySim preprocess outputs and update the coupler.
+
+        Parameters
+        ----------
+        outputs : ActivitySimPreprocessOutputs
+            Typed outputs containing ActivitySim input tables and skims.
+        settings : PilatesConfig
+            Simulation settings (unused for output logging).
+        state : WorkflowState
+            Current workflow state (used for log metadata only).
+        workspace : Workspace
+            Workspace for path resolution.
+        holder : StepOutputsHolder
+            Outputs holder (unused for this helper).
+        """
         for short_name, path, description in outputs._iter_record_items():
             log_and_set_output(
                 key=short_name,
@@ -1535,6 +1596,9 @@ def make_beam_preprocess_step(
     This step builds the BEAM scenario inputs by transforming ActivitySim
     demand outputs, adding ATLAS vehicles (if enabled), and staging warm-start
     artifacts such as linkstats.
+    It also canonicalizes the BEAM HOCON configuration after preprocessing
+    mutates config values so the resolved key/value pairs are queryable
+    and provenance-tracked in Consist.
 
     Parameters
     ----------
@@ -1547,6 +1611,22 @@ def make_beam_preprocess_step(
     -------
     callable
         Step function for BEAM preprocess.
+
+    Notes
+    -----
+    Config canonicalization
+        The step attempts to call ``tracker.canonicalize_config(...)`` using
+        ``BeamConfigAdapter`` if a Consist tracker is available. It targets the
+        mutable BEAM config directory rooted at
+        ``<workspace>/beam/<region>`` and uses the configured primary ``.conf``.
+
+        The call is guarded and best-effort:
+        - If the adapter import fails, canonicalization is skipped.
+        - If the primary config is missing or canonicalization fails, the step
+          logs a warning and continues with normal preprocessing.
+
+        This keeps the run behavior unchanged while enabling Consist to ingest
+        resolved HOCON values into queryable tables.
     """
 
     def _log_outputs(
@@ -1556,6 +1636,82 @@ def make_beam_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        """
+        Log BEAM preprocess outputs, update the coupler, and canonicalize configs.
+
+        This helper:
+        1) Canonicalizes the BEAM HOCON config using Consist (if available) so
+           resolved keys are ingested into queryable tables.
+        2) Logs prepared BEAM input artifacts into the coupler for downstream
+           BEAM run and postprocess steps.
+
+        Parameters
+        ----------
+        outputs : BeamPreprocessOutputs
+            Typed outputs containing prepared BEAM inputs.
+        settings : PilatesConfig
+            Simulation settings for config root resolution.
+        state : WorkflowState
+            Current workflow state (used for log metadata only).
+        workspace : Workspace
+            Workspace used to resolve mutable BEAM config paths.
+        holder : StepOutputsHolder
+            Outputs holder (unused for this helper).
+        """
+        tracker = cr.current_tracker()
+        if tracker is not None:
+            try:
+                from pathlib import Path
+
+                from consist.core.config_canonicalization import ConfigAdapterOptions
+                from consist.integrations.beam import BeamConfigAdapter
+            except Exception:
+                logger.debug(
+                    "BEAM config adapter unavailable; skipping canonicalization."
+                )
+            else:
+                config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+                primary_config = config_root / settings.beam.config
+                if primary_config.exists():
+                    options = ConfigAdapterOptions(
+                        strict=False,
+                        bundle=False,
+                        ingest=True,
+                        allow_heuristic_refs=True,
+                    )
+                    current_run = cr.current_run()
+                    run_id = getattr(current_run, "id", None) if current_run else None
+                    env_overrides = {"PWD": str(config_root.parent)}
+                    try:
+                        adapter = BeamConfigAdapter(
+                            primary_config=primary_config,
+                            env_overrides=env_overrides,
+                        )
+                        if run_id:
+                            tracker.canonicalize_config(
+                                adapter,
+                                [config_root],
+                                run_id=run_id,
+                                options=options,
+                            )
+                        else:
+                            tracker.canonicalize_config(
+                                adapter,
+                                [config_root],
+                                options=options,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "BEAM config canonicalization failed; "
+                            "continuing without config ingestion.",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "BEAM primary config not found for canonicalization: %s",
+                        primary_config,
+                    )
+
         for key, path in outputs.prepared_inputs.items():
             log_and_set_output(
                 key=key,
