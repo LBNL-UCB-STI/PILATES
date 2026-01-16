@@ -152,7 +152,7 @@ def initial_main_zarr(tmp_path):
             "original_zone_ids": CANONICAL_GEOID_ORDER,  # Must have this for verification
         },
     )
-    ds.to_zarr(main_zarr_path, mode="w", consolidated=True)
+    ds.to_zarr(main_zarr_path, mode="w", consolidated=True, zarr_version=2)
     return str(main_zarr_path)
 
 
@@ -189,7 +189,7 @@ def beam_iteration_zarr_valid(beam_iteration_zarr_base):
     """Creates a valid BEAM Zarr with original_zone_ids in canonical order."""
     ds, path = beam_iteration_zarr_base
     ds.otaz.attrs["original_zone_ids"] = CANONICAL_GEOID_ORDER
-    ds.to_zarr(path, mode="w", consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
 
 
@@ -199,7 +199,7 @@ def beam_iteration_zarr_scrambled(beam_iteration_zarr_base):
     ds, path = beam_iteration_zarr_base
     scrambled_order = CANONICAL_GEOID_ORDER[::-1]  # Reverse order
     ds.otaz.attrs["original_zone_ids"] = scrambled_order
-    ds.to_zarr(path, mode="w", consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
 
 
@@ -208,7 +208,7 @@ def beam_iteration_zarr_missing_attr(beam_iteration_zarr_base):
     """Creates a BEAM Zarr without the original_zone_ids attribute."""
     ds, path = beam_iteration_zarr_base
     # Do not set ds.otaz.attrs['original_zone_ids']
-    ds.to_zarr(path, mode="w", consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
 
 
@@ -217,7 +217,7 @@ def beam_iteration_zarr_0_based_int_ids(beam_iteration_zarr_base):
     """Creates a BEAM Zarr with original_zone_ids as [0, 1, 2, ...]."""
     ds, path = beam_iteration_zarr_base
     ds.otaz.attrs["original_zone_ids"] = [str(i) for i in range(NUM_ZONES)]
-    ds.to_zarr(path, mode="w", consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
 
 
@@ -226,7 +226,7 @@ def beam_iteration_zarr_1_based_int_ids(beam_iteration_zarr_base):
     """Creates a BEAM Zarr with original_zone_ids as [1, 2, 3, ...]."""
     ds, path = beam_iteration_zarr_base
     ds.otaz.attrs["original_zone_ids"] = [str(i + 1) for i in range(NUM_ZONES)]
-    ds.to_zarr(path, mode="w", consolidated=True)
+    ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
 
 

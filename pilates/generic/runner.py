@@ -147,7 +147,11 @@ class GenericRunner(ABC, Model):
         Executes container with Consist if available, otherwise falls back to direct
         Docker/Singularity execution without provenance.
         """
-        if getattr(settings.run, "use_stubs", False):
+        run_cfg = getattr(settings, "run", None)
+        use_stubs = (
+            getattr(run_cfg, "use_stubs", False) if run_cfg is not None else False
+        )
+        if use_stubs is True:
             logger.warning(
                 "[%s] use_stubs=True; skipping container execution for image=%s",
                 model_name,

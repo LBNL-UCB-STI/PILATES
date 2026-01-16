@@ -205,7 +205,18 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                 if os.path.exists(temp_path):
                     shutil.rmtree(temp_path)  # Clean up previous temp if any
 
-                skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
+                for name in skims_ds.variables:
+                    skims_ds[name].encoding = {}
+                try:
+                    skims_ds.to_zarr(
+                        temp_path, mode="w", consolidated=True, zarr_version=2
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        "Failed to write skims in Zarr v2 format. ActivitySim "
+                        "requires Zarr v2; if that requirement changes, update "
+                        "the skims writer to allow newer formats."
+                    ) from e
 
                 # Atomically replace the original
                 if os.path.exists(skim_path):

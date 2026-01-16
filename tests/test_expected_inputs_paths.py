@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.beam.postprocessor import BeamPostprocessor
+from pilates.workflows.artifact_constants import ZARR_SKIMS
 
 
 class DummyWorkspace:
@@ -40,7 +41,7 @@ def test_beam_postprocessor_expected_inputs_skip_missing(tmp_path) -> None:
         workspace=workspace,
     )
     assert inputs["beam_output_dir"] is None
-    assert inputs["asim_output_dir"] is None
+    assert inputs[ZARR_SKIMS] is None
 
 
 def test_atlas_postprocessor_expected_inputs_skip_missing(tmp_path) -> None:

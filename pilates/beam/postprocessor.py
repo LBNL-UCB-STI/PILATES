@@ -1881,6 +1881,8 @@ def write_zarr_skim_as_omx_new(
     try:
         # Open the Zarr dataset
         skims_ds = xr.open_zarr(all_skims_path)
+        # Ensure arrays are in memory so in-place edits are captured before re-writing.
+        skims_ds = skims_ds.load()
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
 
         # Get zone IDs - simplified logic
@@ -2708,7 +2710,16 @@ def _merge_beam_skims_to_zarr(
         temp_path = f"{all_skims_path}_temp_merged"
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
-        skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
+        for name in skims_ds.variables:
+            skims_ds[name].encoding = {}
+        try:
+            skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to write skims in Zarr v2 format. ActivitySim requires "
+                "Zarr v2; if that requirement changes, update the skims writer "
+                "to allow newer formats."
+            ) from e
         if os.path.exists(all_skims_path):
             shutil.rmtree(all_skims_path)
         os.rename(temp_path, all_skims_path)
@@ -2718,7 +2729,7 @@ def _merge_beam_skims_to_zarr(
         )
     except Exception as e:
         logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
-        merge_successful = False  # Indicate failure
+        raise
 
         # Independent verification of the written Zarr file
     try:

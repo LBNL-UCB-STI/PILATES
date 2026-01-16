@@ -69,7 +69,7 @@ def create_minimal_zarr():
     os.environ["ZARR_V3_EXPERIMENTAL_API"] = "0"
 
     # Save with xarray (defaults to zarr v2 when v3 is not enabled)
-    ds.to_zarr(zarr_path, mode="w")
+    ds.to_zarr(zarr_path, mode="w", consolidated=True, zarr_version=2)
 
     # Verify
     ds_loaded = xr.open_zarr(zarr_path)

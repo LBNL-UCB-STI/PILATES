@@ -64,6 +64,7 @@ class ActivityDemandPhaseInputs:
         Pre-resolved UrbanSim datastore inputs, if land use already ran or
         fallback inputs were provided.
     """
+
     year: int
     iteration: int
     usim_inputs: Mapping[str, Union[str, os.PathLike]]
@@ -80,6 +81,7 @@ class ActivityDemandPhaseOutputs:
         RecordStore containing ActivitySim outputs needed downstream
         (e.g., households, persons, plans). None if not produced.
     """
+
     activity_demand_outputs: Optional[RecordStore]
 
 
@@ -99,6 +101,7 @@ class TrafficAssignmentPhaseInputs:
     previous_beam_outputs : Optional[RecordStore]
         Prior BEAM outputs (e.g., linkstats) used for warm-starting.
     """
+
     year: int
     iteration: int
     activity_demand_outputs: Optional[RecordStore]
@@ -116,6 +119,7 @@ class TrafficAssignmentPhaseOutputs:
         Combined BEAM run + postprocess outputs for warm-starting the
         next iteration, if available.
     """
+
     previous_beam_outputs: Optional[RecordStore]
 
 
@@ -362,9 +366,7 @@ def _run_activity_demand_phase(
         else None
     )
 
-    return ActivityDemandPhaseOutputs(
-        activity_demand_outputs=activity_demand_outputs
-    )
+    return ActivityDemandPhaseOutputs(activity_demand_outputs=activity_demand_outputs)
 
 
 def _run_traffic_assignment_phase(
@@ -433,17 +435,17 @@ def _run_traffic_assignment_phase(
         for key, value in inputs.previous_beam_outputs.to_mapping().items():
             if key.startswith("linkstats"):
                 beam_preprocess_inputs[key] = value
-    if (
-        inputs.previous_beam_outputs is None
-        or not any(
-            key.startswith("linkstats")
-            for key in inputs.previous_beam_outputs.to_mapping().keys()
-        )
+    if inputs.previous_beam_outputs is None or not any(
+        key.startswith("linkstats")
+        for key in inputs.previous_beam_outputs.to_mapping().keys()
     ):
         warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
         if warmstart_path:
             beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
-    if getattr(settings, "vehicle_ownership_model_enabled", False) and inputs.iteration == 0:
+    if (
+        getattr(settings, "vehicle_ownership_model_enabled", False)
+        and inputs.iteration == 0
+    ):
         if state.run_info_path and os.path.exists(state.run_info_path):
             previous_run_dir = os.path.dirname(state.run_info_path)
             atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
