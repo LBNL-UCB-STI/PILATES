@@ -65,7 +65,6 @@ def run_vehicle_ownership_stage(
     """
     logger.info("[Main] Running ATLAS vehicle ownership model.")
 
-    coupler.pop(USIM_DATASTORE_H5, None)
     if state.run_info_path and os.path.exists(state.run_info_path):
         previous_run_dir = os.path.dirname(state.run_info_path)
         urbansim_datastore_dir = os.path.join(previous_run_dir, "urbansim", "data")
