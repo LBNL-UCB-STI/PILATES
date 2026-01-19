@@ -18,7 +18,7 @@ except:
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -2377,7 +2377,7 @@ def _merge_beam_skims_to_zarr(
 
     if current_skims_path is None or not os.path.exists(current_skims_path):
         logger.warning("No current skims found. Skipping merge.")
-        return None, existing_zarr_manager
+        return None
 
     canonical_order = verify_skim_zone_order(settings, current_skims_path, workspace)
 
@@ -2402,7 +2402,7 @@ def _merge_beam_skims_to_zarr(
         ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
     except Exception as e:
         logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
-        return None, None  # Indicate failure
+        return all_skims_path
 
     # Open the Zarr dataset in append mode to modify it in place
     try:
@@ -2430,7 +2430,7 @@ def _merge_beam_skims_to_zarr(
         logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
         if partial_skims_ds:
             partial_skims_ds.close()
-        return None, None  # Indicate failure
+        return None
 
     timePeriods = get_setting(settings, "shared.skims.periods")
     consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)

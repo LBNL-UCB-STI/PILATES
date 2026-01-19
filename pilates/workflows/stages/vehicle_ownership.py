@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Callable, Dict, Mapping, Union
+from typing import Callable, Dict, Mapping, Union, Any
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
