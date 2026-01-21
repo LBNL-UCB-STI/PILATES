@@ -2,7 +2,12 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.atlas.static_inputs import (
+    ATLAS_STATIC_INPUTS_COMMON,
+    ATLAS_STATIC_INPUTS_BY_SCENARIO,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -68,3 +73,37 @@ def build_atlas_inputs(
     descriptions[USIM_DATASTORE_H5] = f"UrbanSim datastore for ATLAS year {year}"
 
     return inputs, descriptions
+
+
+def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
+    scenario = getattr(settings, "atlas", None)
+    scenario_name = None
+    if scenario is not None:
+        scenario_name = getattr(settings.atlas, "scenario", None)
+    scenario_key = str(scenario_name).lower() if scenario_name else None
+
+    vehicle_type_mapping_by_scenario = {
+        "baseline": "vehicle_type_mapping_baseline.csv",
+        "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
+        "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
+    }
+
+    relpaths = [
+        relpath
+        for relpath in ATLAS_STATIC_INPUTS_COMMON
+        if not relpath.startswith("vehicle_type_mapping_")
+    ]
+    selected_mapping = vehicle_type_mapping_by_scenario.get(scenario_key)
+    if selected_mapping is not None:
+        relpaths.append(selected_mapping)
+
+    if scenario_key:
+        relpaths.extend(ATLAS_STATIC_INPUTS_BY_SCENARIO.get(scenario_key, []))
+
+    keys = []
+    for relpath in relpaths:
+        rel_no_ext = relpath.rsplit(".", 1)[0]
+        candidate = rel_no_ext.replace("/", "_")
+        key = sanitize_artifact_key(candidate) or candidate
+        keys.append(key)
+    return tuple(keys)

@@ -13,7 +13,6 @@ from pilates.utils.coupler_helpers import (
     artifact_to_path,
     clean_expected_outputs,
     resolve_artifact_from_value,
-    update_coupler_from_beam_outputs,
 )
 from pilates.workflows.orchestration import (
     ManifestConfig,
@@ -39,8 +38,11 @@ from pilates.workflows.artifact_constants import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_H5,
+    USIM_H5_UPDATED,
     ZARR_SKIMS,
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
@@ -197,8 +199,12 @@ def _run_activity_demand_phase(
         preprocess_input_keys = None
     else:
         get_value = getattr(coupler, "get", None)
-        if callable(get_value) and get_value(USIM_DATASTORE_H5) is not None:
-            preprocess_input_keys = [USIM_DATASTORE_H5]
+        if callable(get_value):
+            updated_value = get_value(USIM_H5_UPDATED)
+            if updated_value is not None:
+                preprocess_input_keys = [USIM_H5_UPDATED]
+            elif get_value(USIM_DATASTORE_H5) is not None:
+                preprocess_input_keys = [USIM_DATASTORE_H5]
         else:
             fallback_inputs, _ = build_urbansim_inputs(
                 settings, state, workspace, inputs.year
@@ -240,6 +246,11 @@ def _run_activity_demand_phase(
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
         compile_inputs = upstream.to_record_store().to_mapping()
+        compile_input_keys = [
+            short_name for short_name, _, _ in upstream._iter_record_items()
+        ]
+        if not compile_input_keys:
+            compile_input_keys = None
         if ASIM_OMX_SKIMS in compile_inputs:
             compile_inputs = {ASIM_OMX_SKIMS: compile_inputs[ASIM_OMX_SKIMS]}
         else:
@@ -264,6 +275,7 @@ def _run_activity_demand_phase(
             state=state,
             iteration=-1,
             inputs=compile_inputs or None,
+            input_keys=compile_input_keys,
             output_paths=expected_compile_outputs or None,
             cache_mode="overwrite",
             load_inputs=False,
@@ -320,7 +332,7 @@ def _run_activity_demand_phase(
     if os.path.exists(usim_input_path):
         activitysim_postprocess_inputs[USIM_DATASTORE_H5] = usim_input_path
 
-    activitysim_specs = [
+    activitysim_run_specs = [
         WorkflowStepSpec(
             name="activitysim_run",
             step_func=make_activitysim_run_step(
@@ -329,19 +341,44 @@ def _run_activity_demand_phase(
             ),
             input_keys=asim_run_input_keys or None,
         ),
+    ]
+    run_manifested_steps(
+        stage_name="activity_demand_run",
+        steps=activitysim_run_specs,
+        outputs_holder=outputs_holder,
+        manifest_config=manifest_config,
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        iteration=inputs.iteration,
+    )
+
+    upstream_run = outputs_holder.activitysim_run
+    if upstream_run is None:
+        raise RuntimeError("ActivitySim run must complete first")
+    postprocess_input_keys = [
+        short_name for short_name, _, _ in upstream_run._iter_record_items()
+    ]
+    if not postprocess_input_keys:
+        postprocess_input_keys = None
+
+    activitysim_postprocess_specs = [
         WorkflowStepSpec(
             name="activitysim_postprocess",
             step_func=make_activitysim_postprocess_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            input_keys=None,
+            input_keys=postprocess_input_keys,
             inputs=activitysim_postprocess_inputs or None,
-        ),
+        )
     ]
     run_manifested_steps(
-        stage_name="activity_demand_run_postprocess",
-        steps=activitysim_specs,
+        stage_name="activity_demand_postprocess",
+        steps=activitysim_postprocess_specs,
         outputs_holder=outputs_holder,
         manifest_config=manifest_config,
         scenario=scenario,
@@ -431,13 +468,35 @@ def _run_traffic_assignment_phase(
         for key, value in inputs.activity_demand_outputs.to_mapping().items():
             if key in asim_input_keys:
                 beam_preprocess_inputs[key] = value
-    if inputs.previous_beam_outputs is not None:
-        for key, value in inputs.previous_beam_outputs.to_mapping().items():
+    previous_beam_outputs = inputs.previous_beam_outputs
+    if previous_beam_outputs is None:
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            promoted_store = RecordStore()
+            for key in (LINKSTATS, BEAM_PLANS_OUT):
+                value = get_value(key)
+                if value is None:
+                    continue
+                path = artifact_to_path(value, workspace)
+                if path and os.path.exists(path):
+                    promoted_store.add_record(
+                        FileRecord(
+                            file_path=path,
+                            short_name=key,
+                            description=f"Promoted BEAM output: {key}",
+                            year=state.forecast_year,
+                            iteration=inputs.iteration,
+                        )
+                    )
+            if promoted_store.all_records():
+                previous_beam_outputs = promoted_store
+
+    if previous_beam_outputs is not None:
+        for key, value in previous_beam_outputs.to_mapping().items():
             if key.startswith("linkstats"):
                 beam_preprocess_inputs[key] = value
-    if inputs.previous_beam_outputs is None or not any(
-        key.startswith("linkstats")
-        for key in inputs.previous_beam_outputs.to_mapping().keys()
+    if previous_beam_outputs is None or not any(
+        key.startswith("linkstats") for key in previous_beam_outputs.to_mapping().keys()
     ):
         warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
         if warmstart_path:
@@ -475,14 +534,12 @@ def _run_traffic_assignment_phase(
         ]
 
     beam_run_input_keys = []
-    if zarr_input_keys:
-        beam_run_input_keys.extend(zarr_input_keys)
     if beam_prepared_input_keys:
         beam_run_input_keys.extend(beam_prepared_input_keys)
     if not beam_run_input_keys:
         beam_run_input_keys = None
 
-    beam_steps = [
+    beam_pre_run_steps = [
         WorkflowStepSpec(
             name="beam_preprocess",
             step_func=make_beam_preprocess_step(
@@ -500,20 +557,12 @@ def _run_traffic_assignment_phase(
             ),
             input_keys=beam_run_input_keys,
         ),
-        WorkflowStepSpec(
-            name="beam_postprocess",
-            step_func=make_beam_postprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            input_keys=zarr_input_keys,
-        ),
     ]
 
     WorkflowStage(
         name="beam",
         stage_type=state.Stage.traffic_assignment,
-        steps=beam_steps,
+        steps=beam_pre_run_steps,
     ).run(
         scenario=scenario,
         state=state,
@@ -525,22 +574,56 @@ def _run_traffic_assignment_phase(
         iteration=inputs.iteration,
         runtime_kwargs_extra={
             "activity_demand_outputs": inputs.activity_demand_outputs,
-            "previous_beam_outputs": inputs.previous_beam_outputs,
+            "previous_beam_outputs": previous_beam_outputs,
         },
     )
 
-    beam_run_outputs = outputs_holder.beam_run
-    beam_post_outputs = outputs_holder.beam_postprocess
-    combined_beam_outputs = None
-    if beam_run_outputs is not None or beam_post_outputs is not None:
-        combined_beam_outputs = RecordStore()
-        if beam_run_outputs is not None:
-            combined_beam_outputs += beam_run_outputs.to_record_store()
-        if beam_post_outputs is not None:
-            combined_beam_outputs += beam_post_outputs.to_record_store()
+    upstream_run = outputs_holder.beam_run
+    if upstream_run is None:
+        raise RuntimeError("BEAM run must complete first")
+    beam_postprocess_input_keys = [
+        short_name for short_name, _, _ in upstream_run._iter_record_items()
+    ]
+    if zarr_input_keys:
+        beam_postprocess_input_keys.extend(zarr_input_keys)
+    if not beam_postprocess_input_keys:
+        beam_postprocess_input_keys = None
 
-    if combined_beam_outputs is not None:
-        update_coupler_from_beam_outputs(combined_beam_outputs, coupler, workspace)
+    WorkflowStage(
+        name="beam",
+        stage_type=state.Stage.traffic_assignment,
+        steps=[
+            WorkflowStepSpec(
+                name="beam_postprocess",
+                step_func=make_beam_postprocess_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                input_keys=beam_postprocess_input_keys,
+            )
+        ],
+    ).run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        iteration=inputs.iteration,
+        runtime_kwargs_extra={
+            "activity_demand_outputs": inputs.activity_demand_outputs,
+            "previous_beam_outputs": previous_beam_outputs,
+        },
+    )
+
+    combined_beam_outputs = None
+    if outputs_holder.beam_run is not None or outputs_holder.beam_postprocess is not None:
+        combined_beam_outputs = RecordStore()
+        if outputs_holder.beam_run is not None:
+            combined_beam_outputs += outputs_holder.beam_run.to_record_store()
+        if outputs_holder.beam_postprocess is not None:
+            combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
 
     state.complete_step(
         state.Stage.supply_demand_loop,

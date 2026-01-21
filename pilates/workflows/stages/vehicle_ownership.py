@@ -7,7 +7,7 @@ from typing import Callable, Dict, Mapping, Union, Any
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.atlas.inputs import build_atlas_inputs
+from pilates.atlas.inputs import build_atlas_inputs, atlas_static_input_keys
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
@@ -110,15 +110,21 @@ def run_vehicle_ownership_stage(
             "atlas", step_inputs, settings, atlas_state, workspace
         )
         atlas_preprocess_inputs = dict(step_inputs)
+        atlas_run_inputs: Dict[str, Any] = {}
         atlas_static_inputs = workspace.input_data.get("atlas")
         if atlas_static_inputs is not None:
             for key, value in atlas_static_inputs.to_mapping().items():
-                atlas_preprocess_inputs.setdefault(key, value)
+                atlas_run_inputs.setdefault(key, value)
         else:
-            atlas_preprocess_inputs.update(
-                build_atlas_static_inputs_fallback(workspace)
-            )
-        atlas_run_inputs: Dict[str, Any] = {}
+            atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
+
+        atlas_static_keys = atlas_static_input_keys(settings)
+        atlas_run_input_keys = [USIM_DATASTORE_H5]
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            for key in atlas_static_keys:
+                if get_value(key) is not None:
+                    atlas_run_input_keys.append(key)
 
         preprocess_steps = [
             WorkflowStepSpec(
@@ -135,7 +141,7 @@ def run_vehicle_ownership_stage(
                     coupler=coupler,
                     outputs_holder=outputs_holder_atlas,
                 ),
-                input_keys=[USIM_DATASTORE_H5],
+                input_keys=atlas_run_input_keys,
                 inputs=atlas_run_inputs or None,
             ),
         ]

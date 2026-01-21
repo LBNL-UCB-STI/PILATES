@@ -3,6 +3,7 @@ Central registry of artifact keys used for coupler and provenance logging.
 """
 
 USIM_DATASTORE_H5 = "usim_datastore_h5"
+USIM_H5_UPDATED = "usim_h5_updated"
 USIM_MUTABLE_DATA_DIR = "usim_mutable_data_dir"
 USIM_FORECAST_OUTPUT = "usim_forecast_output"
 USIM_INPUT_MERGED_PREFIX = "usim_input_merged_"

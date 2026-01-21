@@ -207,14 +207,7 @@ def main():
         cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
     if consist_enabled:
-        try:
-            from consist import SchemaValidatingCoupler
-        except Exception:
-            SchemaValidatingCoupler = None  # type: ignore[assignment]
-        if SchemaValidatingCoupler is not None:
-            scenario_kwargs["coupler"] = SchemaValidatingCoupler(
-                schema=PILATES_COUPLER_SCHEMA
-            )
+        scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
     with cr.scenario(
         run_name,
         tracker=tracker,
@@ -226,9 +219,13 @@ def main():
         scenario = cast(ScenarioWithCoupler, scenario)
         coupler = scenario.coupler
         if consist_enabled:
-            schema_attr = getattr(coupler, "schema", None)
-            if schema_attr is not None:
-                coupler.schema = PILATES_COUPLER_SCHEMA
+            require_outputs = getattr(scenario, "require_outputs", None)
+            if callable(require_outputs):
+                require_outputs(
+                    *PILATES_COUPLER_SCHEMA.keys(),
+                    warn_undocumented=True,
+                    description=PILATES_COUPLER_SCHEMA,
+                )
         scenario.declare_outputs(
             USIM_DATASTORE_H5,
             ASIM_MUTABLE_DATA_DIR,

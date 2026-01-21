@@ -7,6 +7,7 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.outputs_base import StepOutputsBase
+from pilates.workflows.artifact_constants import USIM_H5_UPDATED
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -185,7 +186,7 @@ class AtlasPostprocessOutputs(StepOutputsBase):
             if path is None:
                 continue
             processed_outputs[key] = Path(path)
-            if key == "usim_h5_updated":
+            if key == USIM_H5_UPDATED:
                 usim_datastore_h5 = Path(path)
         return cls(
             atlas_output_dir=Path(workspace.get_atlas_output_dir()),

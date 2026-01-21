@@ -1,5 +1,196 @@
 from __future__ import annotations
 
+# Coupler IO map (manual reference, update when wiring changes).
+#
+# Step                           Coupler inputs (input_keys)                                 Coupler outputs (keys written)
+# ------------------------------------------------------------------------------------------------ -----------------------------------------------
+# initialization                 (none)                                                      BEAM init outputs:
+#                                                                                              - beam_prod
+#                                                                                              - beam_common (if common/ exists)
+#
+#                                                                                              UrbanSim init outputs:
+#                                                                                              - usim_data
+#                                                                                              - omx_skims
+#                                                                                              - hh_size
+#                                                                                              - income_rates
+#                                                                                              - relmap
+#                                                                                              - schools
+#                                                                                              - school_districts
+#
+#                                                                                              ActivitySim init outputs:
+#                                                                                              - canonical_zones
+#                                                                                              - clipped_geoms (if exists)
+#                                                                                              - asim_configs
+#
+#                                                                                              ATLAS init outputs:
+#                                                                                              - one key per non-readme file copied from
+#                                                                                                atlas.host_input_folder (or pilates/atlas/atlas_input)
+#                                                                                                after scenario filtering. Key is sanitized relative path.
+#
+# ------------------------------------------------------------------------------------------------ -----------------------------------------------
+# urbansim_preprocess             (none)                                                      Prepared inputs (from UrbansimPreprocessor._preprocess):
+#                                                                                              - geoid_to_zone
+#                                                                                              - usim_skims_input_updated (if BEAM skims copied)
+#                                                                                              - plus pass-through of initialization inputs:
+#                                                                                                usim_data, omx_skims, hh_size, income_rates,
+#                                                                                                relmap, schools, school_districts, usim_data_reference
+#
+#                                                                                              Additionally logs:
+#                                                                                              - usim_datastore_h5 (if the input datastore exists)
+#
+# urbansim_run                    prepared_inputs keys + usim_datastore_h5 (if present)       Raw outputs:
+#                                                                                              - usim_forecast_output
+#
+#                                                                                              Additionally logs:
+#                                                                                              - usim_datastore_h5 (derived from usim_forecast_output)
+#
+# urbansim_postprocess            usim_datastore_h5                                            Processed outputs:
+#                                                                                              - usim_input_archive_<year>
+#                                                                                              - usim_input_merged_<year>
+#
+#                                                                                              Additionally logs:
+#                                                                                              - usim_datastore_h5 (mapped from usim_input_merged_<year>)
+#
+# ------------------------------------------------------------------------------------------------ -----------------------------------------------
+# atlas_preprocess                (none)                                                      (no coupler outputs logged in this step)
+#
+# atlas_run                       usim_datastore_h5                                            Raw outputs:
+#                               + all static atlas input keys (if present)                    - one key per ATLAS CSV filename stem
+#                               (input_keys)                                                    from expected_output_paths
+#
+#   Atlas static input keys (explicit; wildcards denote scenario/year variants):
+#   Common (always eligible):
+#   - accessbility2017
+#   - accessbility_2015
+#   - cpi
+#   - modeaccessibility
+#   - psid_names
+#   - sfb_baseline
+#   - taz_to_tract_sfbay
+#   - vehicle_type_mapping_ESS_const_220_price (only if scenario=ess_cons)
+#   - vehicle_type_mapping_baseline (only if scenario=baseline)
+#   - vehicle_type_mapping_evMandForced2 (only if scenario=zev_mandate)
+#
+#   Scenario-specific (adopt/<scenario>/...):
+#   - adopt_<scenario>_new_vehicle_annual_medians
+#   - adopt_<scenario>_new_vehicle_representative_vehicle
+#   - adopt_<scenario>_new_vehicles
+#   - adopt_<scenario>_new_vehicles_biannual_values_<year>
+#   - adopt_<scenario>_used_vehicles
+#   - adopt_<scenario>_used_vehicles_<year>
+#
+# atlas_postprocess               atlas_run raw outputs (all keys above)                       Processed outputs:
+#                                                                                              - usim_h5_updated
+#                                                                                              - atlas_vehicles2_output
+#
+#                                                                                              Additionally logs:
+#                                                                                              - usim_datastore_h5 (if updated H5 exists)
+#
+# ------------------------------------------------------------------------------------------------ -----------------------------------------------
+# activitysim_preprocess          input_keys: usim_h5_updated (if present) OR usim_datastore_h5 Outputs:
+#                               inputs (fallback): usim_datastore_h5 (path)                    - asim_land_use_in
+#                                                + asim_mutable_configs_dir                     - asim_households_in
+#                                                                                              - asim_persons_in
+#                                                                                              - asim_omx_skims (if present)
+#
+# activitysim_compile             (none)                                                      Outputs:
+#                                                                                              - zarr_skims
+#
+# activitysim_run                 activitysim_preprocess outputs + zarr_skims                 Raw outputs (parquet allowlist; keys as listed):
+#                                                                                              - households
+#                                                                                              - persons
+#                                                                                              - land_use
+#                                                                                              - tours
+#                                                                                              - trips
+#                                                                                              - joint_tour_participants
+#                                                                                              - person_windows
+#                                                                                              - disaggregate_accessibility
+#                                                                                              - proto_households
+#                                                                                              - proto_persons
+#                                                                                              - proto_persons_merged
+#                                                                                              - proto_tours
+#                                                                                              - proto_disaggregate_accessibility
+#                                                                                              - school_destination_size
+#                                                                                              - school_modeled_size
+#                                                                                              - school_shadow_prices
+#                                                                                              - workplace_destination_size
+#                                                                                              - workplace_location_accessibility
+#                                                                                              - workplace_modeled_size
+#                                                                                              - workplace_shadow_prices
+#
+# activitysim_postprocess         activitysim_run raw outputs (all keys above)                 Processed outputs:
+#                                                                                              - same allowlist as activitysim_run
+#                                                                                              Additionally logs:
+#                                                                                              - usim_datastore_h5 (if updated H5 exists)
+#
+# ------------------------------------------------------------------------------------------------ -----------------------------------------------
+# beam_preprocess                 (none)                                                      Prepared inputs (from BEAM preprocessor):
+#                                                                                              - BEAM_PLANS_IN
+#                                                                                              - BEAM_HOUSEHOLDS_IN
+#                                                                                              - BEAM_PERSONS_IN
+#                                                                                              - LINKSTATS_WARMSTART
+#                                                                                              - ATLAS_VEHICLES2_INPUT (if present)
+#                                                                                              - vehicles_beam_in (derived from ATLAS vehicles2)
+#                                                                                              - plus any {file_stem}_beam_in created by
+#                                                                                                preprocessor for other copied files
+#
+# beam_run                        beam_preprocess outputs (all keys above)                    Raw outputs (keys are base names below, with
+#                                                                                              suffix _<year>_<iteration> and optional _sub<it>):
+#                                                                                              Iteration-scoped outputs (files_to_get):
+#                                                                                              - raw_od_skims
+#                                                                                              - raw_od_skims_zarr
+#                                                                                              - raw_origin_skims
+#                                                                                              - linkstats
+#                                                                                              - linkstats_unmodified
+#                                                                                              - linkstats_parquet
+#                                                                                              - linkstats_unmodified_parquet
+#                                                                                              - beam_plans_out
+#                                                                                              - beam_plans_xml
+#                                                                                              - beam_experienced_plans_xml
+#                                                                                              - beam_experienced_plans_scores
+#                                                                                              - events
+#                                                                                              - events_parquet
+#                                                                                              - legs
+#                                                                                              - route_history
+#                                                                                              - final_vehicles
+#                                                                                              - skims_taz
+#                                                                                              - skims_taz_agg
+#                                                                                              - skims_od
+#                                                                                              - skims_od_agg
+#                                                                                              - skims_od_vehicle_type
+#                                                                                              - skims_od_vehicle_type_agg
+#                                                                                              - skims_emissions
+#                                                                                              - skims_emissions_agg
+#                                                                                              - skims_ridehail_agg
+#                                                                                              - skims_parking
+#                                                                                              - skims_parking_agg
+#                                                                                              - skims_transit_crowding
+#                                                                                              - skims_transit_crowding_agg
+#                                                                                              - skims_freight
+#                                                                                              - skims_freight_agg
+#                                                                                              - skims_travel_time_obs_sim
+#                                                                                              - skims_travel_time_obs_sim_agg
+#
+#                                                                                              Top-level outputs (top_level_files):
+#                                                                                              - beam_plans_final
+#                                                                                              - beam_vehicles_final
+#                                                                                              - beam_households_final
+#                                                                                              - beam_persons_final
+#                                                                                              - beam_population_final
+#                                                                                              - beam_network_final
+#                                                                                              - beam_output_plans_xml
+#                                                                                              - beam_output_experienced_plans_xml
+#                                                                                              - beam_output_vehicles_xml
+#                                                                                              - beam_output_households_xml
+#                                                                                              - beam_output_facilities_xml
+#                                                                                              - beam_output_network_xml
+#                                                                                              - beam_output_counts_xml
+#
+# beam_postprocess                beam_run raw outputs (all keys above)                        Outputs:
+#                               + zarr_skims (if present)                                     - final_skims_omx OR zarr_skims
+#                                                                                              - linkstats (promoted latest)
+#                                                                                              - beam_plans_out (promoted latest)
+#
 import logging
 import os
 from dataclasses import dataclass
@@ -22,10 +213,10 @@ from pilates.utils.coupler_helpers import (
     artifact_to_path,
     log_and_set_input,
     log_and_set_output,
-    log_input_only,
     log_output_only,
     record_store_to_outputs,
     resolve_artifact_from_value,
+    update_coupler_from_beam_outputs,
 )
 from pilates.workflows.outputs_base import (
     deserialize_step_outputs,
@@ -35,6 +226,7 @@ from pilates.workflows.artifact_constants import (
     ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
+    USIM_H5_UPDATED,
     ZARR_SKIMS,
 )
 from pilates.workflows.step_exec import (
@@ -1313,17 +1505,36 @@ def make_activitysim_preprocess_step(
         usim_input = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
+            updated_value = get_value(USIM_H5_UPDATED)
+            selected_key = (
+                USIM_H5_UPDATED if updated_value is not None else USIM_DATASTORE_H5
+            )
+            selected_value = (
+                updated_value
+                if updated_value is not None
+                else get_value(USIM_DATASTORE_H5)
+            )
             usim_input = resolve_artifact_from_value(
-                get_value(USIM_DATASTORE_H5),
-                key=USIM_DATASTORE_H5,
+                selected_value,
+                key=selected_key,
                 workspace=workspace,
             )
         usim_path = artifact_to_path(usim_input, workspace)
         if usim_path and os.path.exists(usim_path):
+            input_key = (
+                USIM_H5_UPDATED
+                if callable(get_value) and get_value(USIM_H5_UPDATED) is not None
+                else USIM_DATASTORE_H5
+            )
+            input_desc = (
+                f"UrbanSim datastore updated by ATLAS for ActivitySim year {state.year}"
+                if input_key == USIM_H5_UPDATED
+                else f"UrbanSim datastore for ActivitySim year {state.year}"
+            )
             log_and_set_input(
-                key=USIM_DATASTORE_H5,
+                key=input_key,
                 path=usim_path,
-                description=(f"UrbanSim datastore for ActivitySim year {state.year}"),
+                description=input_desc,
                 coupler=coupler,
             )
         return {}
@@ -1511,34 +1722,6 @@ def make_activitysim_postprocess_step(
         Step function for ActivitySim postprocess.
     """
 
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        upstream = holder.activitysim_run
-        if upstream is None:
-            raise RuntimeError("ActivitySim run must complete first")
-        for short_name, path, description in upstream._iter_record_items():
-            log_input_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-            )
-        usim_input_fname = get_usim_datastore_fname(settings, io="input")
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        if os.path.exists(usim_input_path):
-            log_and_set_input(
-                key=USIM_DATASTORE_H5,
-                path=usim_input_path,
-                description="UrbanSim datastore used by ActivitySim postprocess",
-                coupler=coupler,
-            )
-        return {}
-
     def _log_outputs(
         outputs: ActivitySimPostprocessOutputs,
         settings: PilatesConfig,
@@ -1580,7 +1763,6 @@ def make_activitysim_postprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_postprocess", outputs
         ),
-        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 
@@ -1779,34 +1961,7 @@ def make_beam_run_step(
                 description=description,
                 coupler=coupler,
             )
-
-        extra_inputs = RecordStore()
-        zarr_value = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            zarr_value = resolve_artifact_from_value(
-                get_value(ZARR_SKIMS),
-                key=ZARR_SKIMS,
-                workspace=workspace,
-            )
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if zarr_path and os.path.exists(zarr_path):
-            extra_inputs.add_record(
-                FileRecord(
-                    file_path=zarr_path,
-                    short_name=ZARR_SKIMS,
-                    description="Current skims (Zarr) for BEAM",
-                )
-            )
-            log_and_set_input(
-                key=ZARR_SKIMS,
-                path=zarr_path,
-                description=(
-                    f"Zarr skims input for BEAM year {state.year}, iter {state.iteration}"
-                ),
-                coupler=coupler,
-            )
-        return {"extra_inputs": extra_inputs}
+        return {}
 
     def _log_outputs(
         outputs: BeamRunOutputs,
@@ -1864,23 +2019,27 @@ def make_beam_postprocess_step(
         Step function for BEAM postprocess.
     """
 
-    def _log_inputs(
+    def _log_outputs(
+        outputs: BeamPostprocessOutputs,
         settings: PilatesConfig,
         state: WorkflowState,
         workspace: Workspace,
         holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        upstream = holder.beam_run
-        if upstream is None:
-            raise RuntimeError("BEAM run must complete first")
-        for short_name, path, description in upstream._iter_record_items():
-            log_and_set_input(
+    ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
             )
-        return {}
+        upstream = holder.beam_run
+        if upstream is None:
+            return
+        combined_outputs = RecordStore()
+        combined_outputs += upstream.to_record_store()
+        combined_outputs += outputs.to_record_store()
+        update_coupler_from_beam_outputs(combined_outputs, coupler, workspace)
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1895,7 +2054,7 @@ def make_beam_postprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_postprocess", outputs
         ),
-        input_logger=_log_inputs,
+        output_logger=_log_outputs,
     )
 
 

@@ -271,16 +271,10 @@ class _NoopCoupler:
     def get(self, key: str, default: Optional[Any] = None) -> Any:
         return self._store.get(key, default)
 
-    def pop(self, key: str, default: Optional[Any] = None) -> Any:
-        return self._store.pop(key, default)
-
     def update(self, mapping: Dict[str, Any]) -> None:
         self._store.update(mapping)
 
     def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    def adopt_cached_output(self, *args: Any, **kwargs: Any) -> None:
         return None
 
     def collect_by_keys(

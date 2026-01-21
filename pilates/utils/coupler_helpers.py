@@ -155,7 +155,7 @@ def update_coupler_from_beam_outputs(
     Parameters
     ----------
     output_store : RecordStore
-        Output store from BEAM postprocessing.
+        Output store from BEAM run + postprocess outputs.
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     workspace : Workspace
@@ -388,7 +388,8 @@ def log_and_set_output(
         Consist coupler or compatible interface.
     """
     artifact = cr.log_output(path, key=key, description=description, **meta)
-    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+    if cr.current_run() is None:
+        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_output_only(
@@ -435,7 +436,8 @@ def log_and_set_input(
         Consist coupler or compatible interface.
     """
     artifact = cr.log_input(path, key=key, description=description)
-    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+    if cr.current_run() is None:
+        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_input_only(
