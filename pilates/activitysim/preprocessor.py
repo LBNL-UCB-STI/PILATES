@@ -1911,7 +1911,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, major_stage)
-        self.required_input_data = ["usim_data", "beam_geoms", "asim_configs"]
+        self.required_input_data = ["usim_datastore_h5", "beam_geoms", "asim_configs"]
 
     def copy_data_to_mutable_location(
         self,
@@ -3396,7 +3396,7 @@ def create_asim_data_from_h5(
     # usim_data_in from UrbanSim is loaded directly from H5 in this path.
     #     "activitysim_preprocessor",
     #     usim_data_path,
-    #     short_name="usim_data",
+    #     short_name="usim_datastore_h5",
     #     description="UrbanSim H5 data",
     #     model_run_id=model_run_hash,
     # )

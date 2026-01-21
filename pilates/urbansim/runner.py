@@ -73,7 +73,7 @@ class UrbansimRunner(GenericRunner):
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, major_stage)
-        self.required_input_files = ["usim_data"]
+        self.required_input_files = ["usim_datastore_h5"]
 
     def get_usim_docker_vols(self, output_dir: str) -> dict:
         """Constructs the volume mappings for the UrbanSim Docker container.

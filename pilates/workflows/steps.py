@@ -9,7 +9,7 @@ from __future__ import annotations
 #                                                                                              - beam_common (if common/ exists)
 #
 #                                                                                              UrbanSim init outputs:
-#                                                                                              - usim_data
+#                                                                                              - usim_datastore_h5
 #                                                                                              - omx_skims
 #                                                                                              - hh_size
 #                                                                                              - income_rates
@@ -32,7 +32,7 @@ from __future__ import annotations
 #                                                                                              - geoid_to_zone
 #                                                                                              - usim_skims_input_updated (if BEAM skims copied)
 #                                                                                              - plus pass-through of initialization inputs:
-#                                                                                                usim_data, omx_skims, hh_size, income_rates,
+#                                                                                                usim_datastore_h5, omx_skims, hh_size, income_rates,
 #                                                                                                relmap, schools, school_districts, usim_data_reference
 #
 #                                                                                              Additionally logs:

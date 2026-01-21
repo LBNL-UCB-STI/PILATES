@@ -299,7 +299,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             FileRecord(
                 file_path=dest,
                 description="UrbanSim model data",
-                short_name="usim_data",
+                short_name="usim_datastore_h5",
             )
         ]
 
