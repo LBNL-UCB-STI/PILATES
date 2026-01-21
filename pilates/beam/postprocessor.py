@@ -1,11 +1,13 @@
 import logging
 import os
+import re
 import shutil
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import numpy as np
 import openmatrix as omx
+import pandas as pd
 
 from pilates.config import PilatesConfig
 import pilates.utils.zone_utils as zone_utils
@@ -77,6 +79,158 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     )
     logger.info("expecting skims at {0}".format(od_skims_path))
     return od_skims_path
+
+
+def _sanitize_event_type(event_type: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", str(event_type)).strip("_")
+    return safe or "unknown"
+
+
+def split_events_parquet_by_type(
+    events_path: str,
+    event_types: Optional[List[str]] = None,
+    *,
+    output_dir: Optional[str] = None,
+    output_prefix: Optional[str] = None,
+    create_path_traversal_links: bool = False,
+) -> Tuple[Dict[str, str], Optional[str]]:
+    """
+    Split a BEAM events parquet file into per-type parquet files.
+
+    Parameters
+    ----------
+    events_path : str
+        Path to the combined events parquet.
+    event_types : list[str], optional
+        Event types to split. When None, uses all types present.
+    output_dir : str, optional
+        Output directory for split files (defaults to events_path parent).
+    output_prefix : str, optional
+        Prefix for output filenames (defaults to events filename stem).
+    """
+    # NOTE: DuckDB could do this faster with predicate pushdown and Parquet COPY.
+    # Sketch:
+    #   COPY (
+    #     SELECT *, row_number() OVER () - 1 AS PathTraversalEventId
+    #     FROM read_parquet('events.parquet')
+    #     WHERE type = 'PathTraversal'
+    #   ) TO '...PathTraversal.parquet' (FORMAT 'parquet');
+    #   COPY (
+    #     SELECT
+    #       PathTraversalEventId,
+    #       UNNEST(STRING_SPLIT(links, ','))::BIGINT AS linkId,
+    #       UNNEST(STRING_SPLIT(linkTravelTime, ','))::DOUBLE AS travelTimeSeconds,
+    #       ROW_NUMBER() OVER (PARTITION BY PathTraversalEventId) - 1 AS link_index
+    #     FROM read_parquet('events.parquet')
+    #     WHERE type = 'PathTraversal'
+    #   ) TO '...PathTraversal.links.parquet' (FORMAT 'parquet');
+    if not os.path.exists(events_path):
+        logger.warning("Events parquet not found for split: %s", events_path)
+        return {}, None
+    if event_types is None:
+        try:
+            type_col = pd.read_parquet(events_path, columns=["type"])
+        except Exception:
+            logger.warning(
+                "Failed to read 'type' column from events parquet: %s",
+                events_path,
+                exc_info=True,
+            )
+            return {}, None
+        if "type" not in type_col.columns:
+            logger.warning("Events parquet missing 'type' column: %s", events_path)
+            return {}, None
+        event_types = sorted(type_col["type"].dropna().unique().tolist())
+    output_dir = output_dir or os.path.dirname(events_path)
+    prefix = output_prefix or os.path.splitext(os.path.basename(events_path))[0]
+    written_paths: Dict[str, str] = {}
+    path_traversal_links_path: Optional[str] = None
+    for event_type in event_types:
+        try:
+            subset = pd.read_parquet(
+                events_path,
+                filters=[("type", "==", event_type)],
+                engine="pyarrow",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to filter events parquet for type %s: %s",
+                event_type,
+                events_path,
+                exc_info=True,
+            )
+            continue
+        if subset.empty:
+            continue
+        subset = subset.reset_index(drop=True)
+        subset[f"{_sanitize_event_type(event_type)}EventId"] = subset.index
+        if create_path_traversal_links and event_type == "PathTraversal":
+            links = subset.get("links")
+            travel_times = subset.get("linkTravelTime")
+            if links is not None and travel_times is not None:
+                links_split = links.astype(str).str.split(",")
+                travel_times_split = travel_times.astype(str).str.split(",")
+                link_ids = links_split.explode()
+                tt_vals = travel_times_split.explode()
+                if len(link_ids) != len(tt_vals):
+                    logger.warning(
+                        "PathTraversal links and travel time lengths mismatch: %d vs %d",
+                        len(link_ids),
+                        len(tt_vals),
+                    )
+                link_table = pd.DataFrame(
+                    {
+                        "PathTraversalEventId": link_ids.index,
+                        "link_index": link_ids.groupby(level=0).cumcount(),
+                        "linkId": link_ids,
+                        "travelTimeSeconds": tt_vals,
+                    }
+                )
+                link_table["linkId"] = pd.to_numeric(
+                    link_table["linkId"], errors="coerce"
+                ).astype("Int64")
+                link_table["travelTimeSeconds"] = pd.to_numeric(
+                    link_table["travelTimeSeconds"], errors="coerce"
+                )
+                link_table = link_table.replace({"": pd.NA}).dropna(
+                    subset=["linkId", "travelTimeSeconds"]
+                )
+                path_traversal_links_path = os.path.join(
+                    output_dir,
+                    f"{prefix}.PathTraversal.links.parquet",
+                )
+                link_table.to_parquet(path_traversal_links_path, index=False)
+                subset = subset.drop(columns=["links", "linkTravelTime"])
+        subset = subset.dropna(axis=1, how="all")
+        safe_type = _sanitize_event_type(event_type)
+        out_path = os.path.join(output_dir, f"{prefix}.{safe_type}.parquet")
+        subset.to_parquet(out_path, index=False)
+        written_paths[event_type] = out_path
+    return written_paths, path_traversal_links_path
+
+
+def _select_last_events_parquet_record(
+    raw_outputs: RecordStore,
+    year: int,
+    iteration: int,
+) -> Optional[FileRecord]:
+    target_name = f"events_parquet_{year}_{iteration}"
+    best_sub = None
+    best_sub_idx = -1
+    for record in raw_outputs.all_records():
+        short_name = getattr(record, "short_name", "")
+        if short_name == target_name:
+            return record
+        if short_name.startswith(f"{target_name}_sub"):
+            suffix = short_name.split("_sub", 1)[-1]
+            try:
+                sub_idx = int(suffix)
+            except ValueError:
+                continue
+            if sub_idx > best_sub_idx:
+                best_sub_idx = sub_idx
+                best_sub = record
+    return best_sub
 
 
 def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
@@ -3461,6 +3615,56 @@ class BeamPostprocessor(GenericPostprocessor):
 
         raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
+
+        events_record = _select_last_events_parquet_record(
+            raw_outputs, self.state.forecast_year, self.state.iteration
+        )
+        if events_record is not None and getattr(events_record, "file_path", None):
+            events_path = events_record.file_path
+            try:
+                written_paths, links_path = split_events_parquet_by_type(
+                    events_path,
+                    create_path_traversal_links=True,
+                )
+                if written_paths:
+                    logger.info(
+                        "Wrote %d split events parquet files from %s",
+                        len(written_paths),
+                        events_path,
+                    )
+                    for event_type, out_path in written_paths.items():
+                        safe_type = _sanitize_event_type(event_type)
+                        short_name = (
+                            f"events_parquet_{self.state.forecast_year}_"
+                            f"{self.state.iteration}_type_{safe_type}"
+                        )
+                        processed_records.append(
+                            FileRecord(
+                                file_path=out_path,
+                                year=self.state.forecast_year,
+                                short_name=short_name,
+                                description=(
+                                    "BEAM events parquet (type: %s)" % event_type
+                                ),
+                            )
+                        )
+                if links_path:
+                    short_name = (
+                        f"path_traversal_links_{self.state.forecast_year}_"
+                        f"{self.state.iteration}"
+                    )
+                    processed_records.append(
+                        FileRecord(
+                            file_path=links_path,
+                            year=self.state.forecast_year,
+                            short_name=short_name,
+                            description="BEAM PathTraversal link travel times",
+                        )
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to split events parquet for %s", events_path, exc_info=True
+                )
 
         all_skims_path = os.path.join(
             workspace.get_asim_output_dir(), "cache", "skims.zarr"

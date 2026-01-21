@@ -13,11 +13,14 @@ from pilates.workflows.artifact_constants import (
     ASIM_PERSONS_IN,
     ASIM_MUTABLE_DATA_DIR,
     ATLAS_OUTPUT_DIR,
+    BEAM_EXPERIENCED_PLANS_XML,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PLANS_OUT,
     BEAM_PLANS_IN,
     BEAM_PERSONS_IN,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -47,4 +50,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     LINKSTATS_WARMSTART: "BEAM warm-start linkstats input (initial or prior run).",
     LINKSTATS: "BEAM linkstats output for downstream runs.",
     BEAM_PLANS_OUT: "BEAM plans output for downstream runs.",
+    BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
+    BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (
+        "BEAM output experienced plans XML (previous run warm-start source)."
+    ),
 }
