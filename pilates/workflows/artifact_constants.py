@@ -18,6 +18,9 @@ BEAM_OUTPUT_DIR = "beam_output_dir"
 BEAM_MUTABLE_DATA_DIR = "beam_mutable_data_dir"
 LINKSTATS = "linkstats"
 BEAM_PLANS_OUT = "beam_plans_out"
+BEAM_OUTPUT_PLANS_XML = "beam_output_plans_xml"
+BEAM_EXPERIENCED_PLANS_XML = "beam_experienced_plans_xml"
+BEAM_OUTPUT_EXPERIENCED_PLANS_XML = "beam_output_experienced_plans_xml"
 
 # ActivitySim preprocess inputs
 ASIM_LAND_USE_IN = "land_use_asim_in"

@@ -209,6 +209,7 @@ from pilates.generic.model_factory import ModelFactory
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.beam_warmstart import find_last_run_output_plans
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     log_and_set_input,
@@ -224,10 +225,17 @@ from pilates.workflows.outputs_base import (
 )
 from pilates.workflows.artifact_constants import (
     ASIM_OMX_SKIMS,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_PLANS_OUT,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
     ZARR_SKIMS,
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_PERSONS_IN,
+    ASIM_LAND_USE_IN,
 )
 from pilates.workflows.step_exec import (
     Postprocessor,
@@ -1562,12 +1570,17 @@ def make_activitysim_preprocess_step(
         holder : StepOutputsHolder
             Outputs holder (unused for this helper).
         """
+        profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in outputs._iter_record_items():
+            meta: Dict[str, Any] = {}
+            if short_name in profile_keys:
+                meta["profile_file_schema"] = True
             log_and_set_output(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                **meta,
             )
 
     return _make_generic_step_function(
@@ -1622,12 +1635,17 @@ def make_activitysim_run_step(
         if upstream is None:
             raise RuntimeError("ActivitySim preprocess must complete first")
 
+        profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in upstream._iter_record_items():
+            meta: Dict[str, Any] = {}
+            if short_name in profile_keys:
+                meta["profile_file_schema"] = True
             log_and_set_input(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                **meta,
             )
 
         extra_inputs = RecordStore()
@@ -1729,11 +1747,14 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        profile_keys = {"persons", "trips", "tours", "beam_plans", "households"}
         for short_name, path, description in outputs._iter_record_items():
             meta: Dict[str, Any] = {}
             content_hash = outputs.processed_output_hashes.get(short_name)
             if content_hash:
                 meta["content_hash"] = content_hash
+            if short_name in profile_keys:
+                meta["profile_file_schema"] = True
             log_output_only(
                 key=short_name,
                 path=str(path),
@@ -1961,6 +1982,39 @@ def make_beam_run_step(
                 description=description,
                 coupler=coupler,
             )
+
+        from pathlib import Path
+
+        output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
+        plans_path, experienced_path = find_last_run_output_plans(
+            output_root, "year-"
+        )
+        if plans_path is not None and plans_path.exists():
+            if plans_path.name == "output_plans.xml.gz":
+                plans_key = BEAM_OUTPUT_PLANS_XML
+            else:
+                plans_key = BEAM_PLANS_OUT
+            log_and_set_input(
+                key=plans_key,
+                path=str(plans_path),
+                description=(
+                    "BEAM warm-start plans (selected by BEAM from previous outputs)"
+                ),
+                coupler=coupler,
+            )
+        if experienced_path is not None and experienced_path.exists():
+            if experienced_path.name == "output_experienced_plans.xml.gz":
+                experienced_key = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+            else:
+                experienced_key = BEAM_EXPERIENCED_PLANS_XML
+            log_and_set_input(
+                key=experienced_key,
+                path=str(experienced_path),
+                description=(
+                    "BEAM warm-start experienced plans (selected by BEAM from previous outputs)"
+                ),
+                coupler=coupler,
+            )
         return {}
 
     def _log_outputs(
@@ -2032,6 +2086,20 @@ def make_beam_postprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+            )
+        for short_name, path in outputs.split_events.items():
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description=f"BEAM events parquet split ({short_name})",
+                profile_file_schema=True,
+            )
+        for short_name, path in outputs.split_event_links.items():
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description=f"BEAM events link table ({short_name})",
+                profile_file_schema=True,
             )
         upstream = holder.beam_run
         if upstream is None:

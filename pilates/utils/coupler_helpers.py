@@ -420,6 +420,7 @@ def log_and_set_input(
     path: str,
     description: str,
     coupler: CouplerProtocol,
+    **meta: Any,
 ) -> None:
     """
     Log an input path and set it on the coupler.
@@ -435,7 +436,7 @@ def log_and_set_input(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    artifact = cr.log_input(path, key=key, description=description)
+    artifact = cr.log_input(path, key=key, description=description, **meta)
     if cr.current_run() is None:
         set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
@@ -445,6 +446,7 @@ def log_input_only(
     key: str,
     path: str,
     description: str,
+    **meta: Any,
 ) -> None:
     """
     Log an input path without writing to the coupler.
@@ -458,7 +460,7 @@ def log_input_only(
     description : str
         Description used in provenance logging.
     """
-    cr.log_input(path, key=key, description=description)
+    cr.log_input(path, key=key, description=description, **meta)
 
 
 def record_store_to_outputs(

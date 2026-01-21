@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
+from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
@@ -141,6 +141,10 @@ class BeamPostprocessOutputs(StepOutputsBase):
     final_skims_omx : Path, optional
         Final OMX skims for downstream models. When present, it is treated as
         the primary output to log.
+    split_events : dict
+        Mapping of split BEAM events parquet short_names to paths.
+    split_event_links : dict
+        Mapping of derived link-level tables from split events.
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
@@ -148,9 +152,12 @@ class BeamPostprocessOutputs(StepOutputsBase):
         "zarr_skims",
         "final_skims_omx",
     )
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("split_events", "split_event_links")
 
     zarr_skims: Optional[Path] = None
     final_skims_omx: Optional[Path] = None
+    split_events: Dict[str, Path] = field(default_factory=dict)
+    split_event_links: Dict[str, Path] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -169,3 +176,39 @@ class BeamPostprocessOutputs(StepOutputsBase):
                 self.zarr_skims,
                 "Zarr skims updated with BEAM outputs",
             )
+
+    @classmethod
+    def from_record_store(
+        cls, record_store: RecordStore, workspace: "Workspace"
+    ) -> "BeamPostprocessOutputs":
+        """
+        Build outputs from a RecordStore.
+        """
+        mapping = record_store.to_mapping() if record_store is not None else {}
+        values: Dict[str, Any] = {}
+        zarr_path = artifact_to_path(mapping.get(ZARR_SKIMS), workspace)
+        if zarr_path is not None:
+            values["zarr_skims"] = Path(zarr_path)
+        omx_path = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
+        if omx_path is not None:
+            values["final_skims_omx"] = Path(omx_path)
+
+        split_events: Dict[str, Path] = {}
+        split_event_links: Dict[str, Path] = {}
+        for key, value in mapping.items():
+            if not key.startswith("events_parquet_") or "_type_" not in key:
+                continue
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            split_events[key] = Path(path)
+        for key, value in mapping.items():
+            if not key.startswith("path_traversal_links_"):
+                continue
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            split_event_links[key] = Path(path)
+        values["split_events"] = split_events
+        values["split_event_links"] = split_event_links
+        return cls(**values)

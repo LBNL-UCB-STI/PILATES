@@ -6,7 +6,12 @@ from unittest.mock import patch, MagicMock
 import json
 import pandas as pd
 
-from pilates.beam.postprocessor import _merge_beam_skims_to_zarr
+from pilates.beam.postprocessor import (
+    _merge_beam_skims_to_zarr,
+    split_events_parquet_by_type,
+)
+from pilates.beam.outputs import BeamPostprocessOutputs
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.config.models import load_config
 
 # Use the same canonical order as the preprocessor test for consistency
@@ -201,6 +206,99 @@ def beam_iteration_zarr_scrambled(beam_iteration_zarr_base):
     ds.otaz.attrs["original_zone_ids"] = scrambled_order
     ds.to_zarr(path, mode="w", consolidated=True, zarr_version=2)
     return path
+
+
+def test_split_events_parquet_by_type_filtered(tmp_path):
+    pytest.importorskip("pyarrow")
+
+    events_df = pd.DataFrame(
+        {
+            "type": ["EventA", "EventA", "EventB", "Event B", "PathTraversal"],
+            "col_a": [1.0, 2.0, None, None, None],
+            "col_b": [None, None, 3.0, 4.0, None],
+            "col_c": [None, None, None, 5.0, None],
+            "links": [None, None, None, None, "1,2,3"],
+            "linkTravelTime": [None, None, None, None, "10,20,30"],
+        }
+    )
+    events_path = tmp_path / "2.events.parquet"
+    events_df.to_parquet(events_path, index=False)
+
+    written, links_path = split_events_parquet_by_type(
+        str(events_path),
+        event_types=["EventA", "EventB", "Event B", "PathTraversal"],
+        create_path_traversal_links=True,
+    )
+
+    assert len(written) == 4
+    assert written["EventA"].endswith("2.events.EventA.parquet")
+    assert written["EventB"].endswith("2.events.EventB.parquet")
+    assert written["Event B"].endswith("2.events.Event_B.parquet")
+    assert written["PathTraversal"].endswith("2.events.PathTraversal.parquet")
+    assert links_path is not None
+    assert links_path.endswith("2.events.PathTraversal.links.parquet")
+
+    event_a_path = tmp_path / "2.events.EventA.parquet"
+    event_b_path = tmp_path / "2.events.EventB.parquet"
+    event_b_space_path = tmp_path / "2.events.Event_B.parquet"
+
+    event_a = pd.read_parquet(event_a_path)
+    assert event_a["type"].unique().tolist() == ["EventA"]
+    assert "col_a" in event_a.columns
+    assert "EventAEventId" in event_a.columns
+    assert event_a["EventAEventId"].tolist() == list(range(len(event_a)))
+    assert "col_b" not in event_a.columns
+    assert "col_c" not in event_a.columns
+
+    event_b = pd.read_parquet(event_b_path)
+    assert event_b["type"].unique().tolist() == ["EventB"]
+    assert "col_b" in event_b.columns
+    assert "EventBEventId" in event_b.columns
+    assert event_b["EventBEventId"].tolist() == list(range(len(event_b)))
+    assert "col_a" not in event_b.columns
+    assert "col_c" not in event_b.columns
+
+    event_b_space = pd.read_parquet(event_b_space_path)
+    assert event_b_space["type"].unique().tolist() == ["Event B"]
+    assert "col_b" in event_b_space.columns
+    assert "col_c" in event_b_space.columns
+    assert "Event_BEventId" in event_b_space.columns
+    assert event_b_space["Event_BEventId"].tolist() == list(range(len(event_b_space)))
+    assert "col_a" not in event_b_space.columns
+
+    path_traversal_path = tmp_path / "2.events.PathTraversal.parquet"
+    path_traversal = pd.read_parquet(path_traversal_path)
+    assert path_traversal["type"].unique().tolist() == ["PathTraversal"]
+    assert "PathTraversalEventId" in path_traversal.columns
+    assert "links" not in path_traversal.columns
+    assert "linkTravelTime" not in path_traversal.columns
+
+    link_table = pd.read_parquet(tmp_path / "2.events.PathTraversal.links.parquet")
+    assert link_table["PathTraversalEventId"].unique().tolist() == [0]
+    assert link_table["link_index"].tolist() == [0, 1, 2]
+    assert link_table["linkId"].tolist() == [1, 2, 3]
+    assert link_table["travelTimeSeconds"].tolist() == [10.0, 20.0, 30.0]
+
+    record_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=written["EventA"],
+                short_name="events_parquet_2018_1_type_EventA",
+            ),
+            FileRecord(
+                file_path=written["EventB"],
+                short_name="events_parquet_2018_1_type_EventB",
+            ),
+            FileRecord(
+                file_path=links_path,
+                short_name="path_traversal_links_2018_1",
+            ),
+        ]
+    )
+    outputs = BeamPostprocessOutputs.from_record_store(record_store, tmp_path)
+    assert "events_parquet_2018_1_type_EventA" in outputs.split_events
+    assert "events_parquet_2018_1_type_EventB" in outputs.split_events
+    assert "path_traversal_links_2018_1" in outputs.split_event_links
 
 
 @pytest.fixture
