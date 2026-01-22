@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Union
@@ -49,6 +50,8 @@ from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -524,14 +527,23 @@ def _run_traffic_assignment_phase(
 
     zarr_input_keys = None
     beam_prepared_input_keys = None
+    has_linkstats_warmstart = any(
+        key.startswith("linkstats") for key in (beam_preprocess_inputs or {}).keys()
+    )
     if inputs.activity_demand_outputs is not None:
         zarr_input_keys = [ZARR_SKIMS]
         beam_prepared_input_keys = [
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
-            LINKSTATS_WARMSTART,
         ]
+        if has_linkstats_warmstart:
+            beam_prepared_input_keys.append(LINKSTATS_WARMSTART)
+        else:
+            logger.debug(
+                "[BEAM] linkstats warmstart not available; omitting %s from inputs",
+                LINKSTATS_WARMSTART,
+            )
 
     beam_run_input_keys = []
     if beam_prepared_input_keys:
