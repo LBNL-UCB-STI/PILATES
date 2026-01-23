@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 from pilates.generic.records import RecordStore
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.io import locate_beam_file
 from pilates.utils.formatting import formatted_print
 from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.coupler_helpers import (
@@ -409,6 +410,20 @@ def _run_activity_demand_phase(
     return ActivityDemandPhaseOutputs(activity_demand_outputs=activity_demand_outputs)
 
 
+def _find_input_scenario_dir(
+    settings: PilatesConfig,
+    workspace: Workspace,
+    filename: str,
+    filetype: str = "parquet",
+) -> str:
+    scenario_dir = os.path.join(
+        workspace.get_beam_mutable_data_dir(),
+        settings.run.region,
+        settings.beam.scenario_folder,
+    )
+    return locate_beam_file(scenario_dir, filename, filetype)
+
+
 def _run_traffic_assignment_phase(
     *,
     scenario: ScenarioWithCoupler,
@@ -449,16 +464,7 @@ def _run_traffic_assignment_phase(
         Combined BEAM outputs for warm-starting the next iteration.
     """
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
-    if (
-        inputs.activity_demand_outputs is None
-        and inputs.iteration == 0
-        and inputs.previous_beam_outputs is None
-    ):
-        raise RuntimeError(
-            "TrafficAssignment iteration 0 requires activity_demand_outputs "
-            "or previous_beam_outputs. Ensure ActivityDemand completed or "
-            "provide warm-start outputs before running BEAM."
-        )
+
     beam_preprocess_inputs: Dict[str, Any] = {}
     if inputs.activity_demand_outputs is not None:
         asim_input_keys = {
@@ -471,6 +477,25 @@ def _run_traffic_assignment_phase(
         for key, value in inputs.activity_demand_outputs.to_mapping().items():
             if key in asim_input_keys:
                 beam_preprocess_inputs[key] = value
+    elif settings.run.models.activity_demand is None:
+        logger.info("Falling back on default inputs to BEAM")
+        default_inputs = {
+            BEAM_PLANS_IN: "plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+        }
+        for key, filename in default_inputs.items():
+            beam_preprocess_inputs[key] = _find_input_scenario_dir(
+                settings,
+                workspace,
+                filename,
+            )
+    elif inputs.previous_beam_outputs is None:
+        raise RuntimeError(
+            "TrafficAssignment iteration 0 requires activity_demand_outputs "
+            "or previous_beam_outputs. Ensure ActivityDemand completed or "
+            "provide warm-start outputs before running BEAM."
+        )
     previous_beam_outputs = inputs.previous_beam_outputs
     if previous_beam_outputs is None:
         get_value = getattr(coupler, "get", None)
