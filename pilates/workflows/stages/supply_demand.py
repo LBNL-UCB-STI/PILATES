@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional, Union
 
+from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.generic.records import RecordStore
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -774,6 +776,15 @@ def run_supply_demand_stage(
                 outputs_holder=outputs_holder,
                 manifest_config=manifest_config,
             ).activity_demand_outputs
+        elif (
+            settings.run.models.activity_demand is None
+            and outputs_holder.activitysim_postprocess is None
+        ):
+            # Satisfy BEAM preprocess dependencies when ActivitySim is disabled.
+            outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+                usim_datastore_h5=None,
+                asim_output_dir=Path(workspace.get_asim_output_dir()),
+            )
 
         # C2. TRAFFIC ASSIGNMENT
         if state.should_run(
