@@ -9,7 +9,7 @@ and provenance tracking.
 import os
 import logging
 from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -410,8 +410,7 @@ class PilatesConfig(BaseModel):
     This is the top-level model that encompasses all configuration sections.
     """
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
     run: RunConfig
     shared: SharedConfig

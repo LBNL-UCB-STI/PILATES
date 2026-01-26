@@ -17,7 +17,7 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
-def _load_asim_outputs(settings, workspace: Workspace):
+def _load_asim_outputs(settings, workspace: Workspace, fallback_dir: Optional[str] = None):
     prefix = settings.activitysim.output_tables["prefix"]
     output_tables = settings.activitysim.output_tables["tables"]
     asim_output_dict = {}
@@ -32,8 +32,20 @@ def _load_asim_outputs(settings, workspace: Workspace):
             try:
                 table = pd.read_parquet(file_path)
             except FileNotFoundError:
-                logger.warning("Parquet file not found: %s", file_path)
-                continue
+                if fallback_dir:
+                    fallback_path = os.path.join(fallback_dir, f"{table_name}.parquet")
+                    try:
+                        table = pd.read_parquet(fallback_path)
+                    except FileNotFoundError:
+                        logger.warning(
+                            "Parquet file not found: %s (fallback: %s)",
+                            file_path,
+                            fallback_path,
+                        )
+                        continue
+                else:
+                    logger.warning("Parquet file not found: %s", file_path)
+                    continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
             file_path = os.path.join(asim_output_dir, file_name)
@@ -627,34 +639,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         else:
             logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
 
-        # Record raw outputs as inputs to this post-processing run
-        for record in raw_outputs.all_records():
-            if hasattr(record, "file_path"):
-                source = record.get_absolute_path(base_path=workspace.full_path)
-                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
-                target = os.path.join(
-                    iteration_folder_path,
-                    clean_name + ".parquet",
-                )
-                shutil.move(source, target)
-                content_hash = _resolve_content_hash(source)
-                processed_records.append(
-                    FileRecord(
-                        file_path=target,
-                        year=self.state.forecast_year,
-                        description=f"ActivitySim output file: {clean_name}",
-                        short_name=clean_name,
-                        iteration=self.state.current_inner_iter,
-                        content_hash=content_hash,
-                    )
-                )
-
         if self.state.is_enabled(WorkflowState.Stage.land_use):
 
             # 1. Load raw ActivitySim outputs from files
             # The raw_outputs RecordStore contains the paths to these files.
             # TODO: update this to only grad tables_updated_by_asim
-            asim_output_dict = _load_asim_outputs(settings, workspace)
+            asim_output_dict = _load_asim_outputs(
+                settings, workspace, fallback_dir=iteration_folder_path
+            )
 
             # The raw output files are implicitly the source for all derived products in this post-processing step.
             source_file_paths = [
@@ -686,6 +678,38 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             )
             if usim_record:
                 processed_records.append(usim_record)
+
+        # Record raw outputs as inputs to this post-processing run
+        for record in raw_outputs.all_records():
+            if hasattr(record, "file_path"):
+                source = record.get_absolute_path(base_path=workspace.full_path)
+                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
+                target = os.path.join(
+                    iteration_folder_path,
+                    clean_name + ".parquet",
+                )
+                if not source:
+                    continue
+                if os.path.abspath(source) == os.path.abspath(target):
+                    continue
+                if not os.path.exists(source):
+                    logger.debug("ASim output missing, skipping move: %s", source)
+                    continue
+                if os.path.exists(target):
+                    logger.debug("ASim output already archived: %s", target)
+                    continue
+                shutil.move(source, target)
+                content_hash = _resolve_content_hash(source)
+                processed_records.append(
+                    FileRecord(
+                        file_path=target,
+                        year=self.state.forecast_year,
+                        description=f"ActivitySim output file: {clean_name}",
+                        short_name=clean_name,
+                        iteration=self.state.current_inner_iter,
+                        content_hash=content_hash,
+                    )
+                )
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)
