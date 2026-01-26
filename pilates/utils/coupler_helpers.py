@@ -83,7 +83,10 @@ def resolve_artifact_from_value(
         else:
             abs_path = os.path.abspath(path)
             uri = tracker.fs.virtualize_path(abs_path)
-        artifact = tracker.db.find_latest_artifact_at_uri(uri)
+        artifact = tracker.db.find_latest_artifact_at_uri(
+            uri,
+            include_inputs=True,
+        )
         if artifact is None:
             return value
         if key and getattr(artifact, "key", None) != key:
@@ -127,7 +130,13 @@ def log_coupler_value(
 
     if tracker is not None and getattr(tracker, "db", None) is not None and uri:
         try:
-            db_hit = tracker.db.find_latest_artifact_at_uri(uri) is not None
+            db_hit = (
+                tracker.db.find_latest_artifact_at_uri(
+                    uri,
+                    include_inputs=True,
+                )
+                is not None
+            )
         except Exception:
             db_hit = None
 
@@ -365,6 +374,31 @@ def set_coupler_from_artifact(
     coupler.set(key, artifact or fallback)
 
 
+def _log_with_optional_h5_container(
+    *,
+    direction: str,
+    key: str,
+    path: str,
+    description: str,
+    meta: Dict[str, Any],
+) -> Optional[Any]:
+    """
+    Log either an HDF5 container or a standard artifact based on meta flags.
+    """
+    h5_container = bool(meta.pop("h5_container", False))
+    if h5_container:
+        return cr.log_h5_container(
+            path,
+            key=key,
+            direction=direction,
+            description=description,
+            **meta,
+        )
+    if direction == "output":
+        return cr.log_output(path, key=key, description=description, **meta)
+    return cr.log_input(path, key=key, description=description, **meta)
+
+
 def log_and_set_output(
     *,
     key: str,
@@ -387,7 +421,13 @@ def log_and_set_output(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    artifact = cr.log_output(path, key=key, description=description, **meta)
+    artifact = _log_with_optional_h5_container(
+        direction="output",
+        key=key,
+        path=path,
+        description=description,
+        meta=meta,
+    )
     if cr.current_run() is None:
         set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
@@ -411,7 +451,13 @@ def log_output_only(
     description : str
         Description used in provenance logging.
     """
-    cr.log_output(path, key=key, description=description, **meta)
+    _log_with_optional_h5_container(
+        direction="output",
+        key=key,
+        path=path,
+        description=description,
+        meta=meta,
+    )
 
 
 def log_and_set_input(
@@ -436,7 +482,13 @@ def log_and_set_input(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    artifact = cr.log_input(path, key=key, description=description, **meta)
+    artifact = _log_with_optional_h5_container(
+        direction="input",
+        key=key,
+        path=path,
+        description=description,
+        meta=meta,
+    )
     if cr.current_run() is None:
         set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
@@ -460,7 +512,13 @@ def log_input_only(
     description : str
         Description used in provenance logging.
     """
-    cr.log_input(path, key=key, description=description, **meta)
+    _log_with_optional_h5_container(
+        direction="input",
+        key=key,
+        path=path,
+        description=description,
+        meta=meta,
+    )
 
 
 def record_store_to_outputs(

@@ -167,6 +167,52 @@ def log_output(
     return consist.log_output(path, key=key, enabled=resolved_enabled, **meta)
 
 
+def log_h5_container(
+    path: Any,
+    key: Optional[str] = None,
+    *,
+    direction: str = "input",
+    enabled: Optional[bool] = None,
+    **meta: Any,
+) -> Optional[ArtifactLike]:
+    """
+    Log an HDF5 container using the Tracker API when available.
+
+    Falls back to log_input/log_output if the Tracker method is unavailable.
+    """
+    resolved_enabled = _is_enabled(enabled)
+    if not resolved_enabled or consist is None:
+        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    tracker = current_tracker()
+    if tracker is None or not hasattr(tracker, "log_h5_container"):
+        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    return tracker.log_h5_container(path, key=key, direction=direction, **meta)
+
+
+def log_h5_table(
+    path: Any,
+    key: Optional[str] = None,
+    *,
+    table_path: str,
+    direction: str = "input",
+    enabled: Optional[bool] = None,
+    **meta: Any,
+) -> Optional[ArtifactLike]:
+    """
+    Log a single HDF5 dataset using the Tracker API when available.
+
+    Requires table_path for schema profiling. Falls back to log_input/log_output
+    if the Tracker method is unavailable.
+    """
+    resolved_enabled = _is_enabled(enabled)
+    if not resolved_enabled or consist is None:
+        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    tracker = current_tracker()
+    if tracker is None or not hasattr(tracker, "log_h5_table"):
+        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    return tracker.log_h5_table(path, key=key, table_path=table_path, direction=direction, **meta)
+
+
 def log_artifacts(
     mapping: Mapping[str, Any],
     *,

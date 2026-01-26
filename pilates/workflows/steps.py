@@ -1003,6 +1003,8 @@ def make_urbansim_preprocess_step(
                 description="UrbanSim input datastore for preprocessing",
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
 
     return _make_generic_step_function(
@@ -1063,6 +1065,8 @@ def make_urbansim_run_step(
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
 
     return _make_generic_step_function(
@@ -1123,6 +1127,8 @@ def make_urbansim_postprocess_step(
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
 
     return _make_generic_step_function(
@@ -1196,6 +1202,8 @@ def make_atlas_preprocess_step(
                     f"UrbanSim datastore for ATLAS year {state.forecast_year}"
                 ),
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
         return {}
 
@@ -1366,6 +1374,8 @@ def make_atlas_postprocess_step(
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
 
     return _make_generic_step_function(
@@ -1863,6 +1873,8 @@ def make_activitysim_postprocess_step(
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
             )
 
     return _make_generic_step_function(

@@ -269,6 +269,18 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
             start_year=2020,
         )
     )
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones_path.write_text("{}")
+    settings.shared = SimpleNamespace(
+        geography=SimpleNamespace(
+            zones=SimpleNamespace(
+                source_file=str(zones_path),
+                activitysim_index_col="TAZ",
+                zone_type="block_group",
+                canonical_id_col="zone_key",
+            )
+        )
+    )
 
     init.run(settings, workspace)
 
