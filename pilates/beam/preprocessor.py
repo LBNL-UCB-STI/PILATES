@@ -555,6 +555,8 @@ class BeamPreprocessor(GenericPreprocessor):
             shortened_name = (
                 splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
             )
+            if shortened_name.endswith("_asim_out"):
+                shortened_name = shortened_name.split("_asim_out")[0]
             if shortened_name in self.required_input_data:
                 asim_file_paths[shortened_name] = (
                     os.path.join(base_path, record.file_path),

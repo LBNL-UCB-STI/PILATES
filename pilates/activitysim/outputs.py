@@ -18,6 +18,38 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 
+# Map legacy ActivitySim output keys (file stems) to namespaced keys.
+ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
+    "accessibility": "accessibility_asim_out",
+    "beam_plans": "beam_plans_asim_out",
+    "disaggregate_accessibility": "disaggregate_accessibility_asim_out",
+    "households": "households_asim_out",
+    "joint_tour_participants": "joint_tour_participants_asim_out",
+    "land_use": "land_use_asim_out",
+    "non_mandatory_tour_destination_accessibility": "non_mandatory_tour_destination_accessibility_asim_out",
+    "person_windows": "person_windows_asim_out",
+    "persons": "persons_asim_out",
+    "proto_disaggregate_accessibility": "proto_disaggregate_accessibility_asim_out",
+    "proto_households": "proto_households_asim_out",
+    "proto_persons": "proto_persons_asim_out",
+    "proto_persons_merged": "proto_persons_merged_asim_out",
+    "proto_tours": "proto_tours_asim_out",
+    "school_destination_size": "school_destination_size_asim_out",
+    "school_modeled_size": "school_modeled_size_asim_out",
+    "school_shadow_prices": "school_shadow_prices_asim_out",
+    "tours": "tours_asim_out",
+    "trips": "trips_asim_out",
+    "workplace_destination_size": "workplace_destination_size_asim_out",
+    "workplace_location_accessibility": "workplace_location_accessibility_asim_out",
+    "workplace_modeled_size": "workplace_modeled_size_asim_out",
+    "workplace_shadow_prices": "workplace_shadow_prices_asim_out",
+}
+
+
+def normalize_asim_output_key(key: str) -> str:
+    return ASIM_OUTPUT_KEY_MAP.get(key, key)
+
+
 @dataclass
 class ActivitySimPreprocessOutputs(StepOutputsBase):
     """
@@ -231,45 +263,25 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         usim_path = None
         processed_outputs: Dict[str, Path] = {}
         processed_output_hashes: Dict[str, str] = {}
-        allowed_outputs = {
-            "beam_plans",
-            "disaggregate_accessibility",
-            "households",
-            "joint_tour_participants",
-            "land_use",
-            "non_mandatory_tour_destination_accessibility",
-            "person_windows",
-            "persons",
-            "proto_disaggregate_accessibility",
-            "proto_households",
-            "proto_persons",
-            "proto_persons_merged",
-            "proto_tours",
-            "school_destination_size",
-            "school_modeled_size",
-            "school_shadow_prices",
-            "tours",
-            "trips",
-            "workplace_destination_size",
-            "workplace_location_accessibility",
-            "workplace_modeled_size",
-            "workplace_shadow_prices",
-        }
+        allowed_outputs = set(ASIM_OUTPUT_KEY_MAP.values()) | set(
+            ASIM_OUTPUT_KEY_MAP.keys()
+        )
         if record_store is not None:
             for record in record_store.all_records():
                 short_name = getattr(record, "short_name", "") or ""
                 if short_name.startswith("usim_input_"):
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
-                if short_name.startswith("asim_input_") or short_name in allowed_outputs:
+                normalized_name = normalize_asim_output_key(short_name)
+                if short_name.startswith("asim_input_") or normalized_name in allowed_outputs:
                     record_path = record.get_absolute_path(
                         base_path=workspace.full_path
                     )
                     if record_path:
-                        processed_outputs[short_name] = Path(record_path)
+                        processed_outputs[normalized_name] = Path(record_path)
                         content_hash = getattr(record, "content_hash", None)
                         if content_hash:
-                            processed_output_hashes[short_name] = content_hash
+                            processed_output_hashes[normalized_name] = content_hash
         return cls(
             usim_datastore_h5=Path(usim_path) if usim_path else None,
             asim_output_dir=Path(workspace.get_asim_output_dir()),

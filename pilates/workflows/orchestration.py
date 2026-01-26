@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
+from pilates.activitysim.outputs import normalize_asim_output_key
 from pilates.workflows.artifact_constants import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -346,15 +347,23 @@ def _recover_cached_outputs(
         asim_output_dir = Path(workspace.get_asim_output_dir())
         iter_dir = asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
         if iter_dir.exists():
-            required_outputs = {"persons", "households", "beam_plans"}
-            available_outputs = {path.stem for path in iter_dir.glob("*.parquet")}
+            required_outputs = {
+                "persons_asim_out",
+                "households_asim_out",
+                "beam_plans_asim_out",
+            }
+            available_outputs = {
+                normalize_asim_output_key(path.stem)
+                for path in iter_dir.glob("*.parquet")
+            }
             if not required_outputs.issubset(available_outputs):
                 return None
             for fpath in iter_dir.glob("*.parquet"):
+                short_name = normalize_asim_output_key(fpath.stem)
                 record_store.add_record(
                     FileRecord(
                         file_path=str(fpath),
-                        short_name=fpath.stem,
+                        short_name=short_name,
                         description=f"ActivitySim output file: {fpath.stem}",
                     )
                 )

@@ -1834,7 +1834,13 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        profile_keys = {"persons", "trips", "tours", "beam_plans", "households"}
+        profile_keys = {
+            "persons_asim_out",
+            "trips_asim_out",
+            "tours_asim_out",
+            "beam_plans_asim_out",
+            "households_asim_out",
+        }
         for short_name, path, description in outputs._iter_record_items():
             meta: Dict[str, Any] = {}
             content_hash = outputs.processed_output_hashes.get(short_name)

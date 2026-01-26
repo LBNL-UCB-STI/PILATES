@@ -10,6 +10,7 @@ from typing import Tuple, Optional, Dict, Any
 from pilates.config import PilatesConfig
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.activitysim.outputs import normalize_asim_output_key
 from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -684,6 +685,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             if hasattr(record, "file_path"):
                 source = record.get_absolute_path(base_path=workspace.full_path)
                 clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
+                output_key = normalize_asim_output_key(clean_name)
                 target = os.path.join(
                     iteration_folder_path,
                     clean_name + ".parquet",
@@ -705,7 +707,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                         file_path=target,
                         year=self.state.forecast_year,
                         description=f"ActivitySim output file: {clean_name}",
-                        short_name=clean_name,
+                        short_name=output_key,
                         iteration=self.state.current_inner_iter,
                         content_hash=content_hash,
                     )

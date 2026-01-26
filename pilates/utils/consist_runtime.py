@@ -131,6 +131,10 @@ def log_input(
     **meta: Any,
 ) -> Optional[ArtifactLike]:
     resolved_enabled = _is_enabled(enabled)
+    if key and "schema" not in meta:
+        schema = _schema_for_key(key)
+        if schema is not None:
+            meta = {**meta, "schema": schema}
     if consist is None:
         _warn_disabled()
         return _NoopArtifact(path)
@@ -147,6 +151,10 @@ def log_output(
     **meta: Any,
 ) -> Optional[ArtifactLike]:
     resolved_enabled = _is_enabled(enabled)
+    if key and "schema" not in meta:
+        schema = _schema_for_key(key)
+        if schema is not None:
+            meta = {**meta, "schema": schema}
     if not resolved_enabled or consist is None:
         resolved_path = _resolve_artifact_path(path)
         if resolved_path and not os.path.exists(resolved_path):
@@ -175,6 +183,14 @@ def log_artifacts(
     if not resolved_enabled:
         _warn_disabled()
     return consist.log_artifacts(mapping, enabled=resolved_enabled, **meta)
+
+
+def _schema_for_key(key: str) -> Optional[Any]:
+    try:
+        from pilates.database.schema.registry import get_schema_for_key
+    except Exception:
+        return None
+    return get_schema_for_key(key)
 
 
 def log_meta(**meta: Any) -> None:

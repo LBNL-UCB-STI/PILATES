@@ -71,6 +71,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _get_consist_schemas() -> Optional[list[type]]:
+    try:
+        from pilates.database.schema.registry import get_consist_schemas
+
+        return get_consist_schemas()
+    except Exception:
+        return None
+
+
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
     return (
         Path(workspace.full_path)
@@ -179,6 +188,7 @@ def main():
             "scratch": str(Path(output_path).resolve()),  # For temp files
         },
         project_root=project_root_abs,
+        schemas=_get_consist_schemas(),
     )
     if tracker is None and consist_enabled:
         raise RuntimeError(

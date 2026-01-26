@@ -470,11 +470,11 @@ def _run_traffic_assignment_phase(
     beam_preprocess_inputs: Dict[str, Any] = {}
     if inputs.activity_demand_outputs is not None:
         asim_input_keys = {
-            "beam_plans",
+            "beam_plans_asim_out",
             "beam_plans_out",
-            "households",
+            "households_asim_out",
             "linkstats",
-            "persons",
+            "persons_asim_out",
         }
         for key, value in inputs.activity_demand_outputs.to_mapping().items():
             if key in asim_input_keys:
