@@ -214,6 +214,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_path,
     log_and_set_input,
     log_and_set_output,
+    log_input_only,
     log_output_only,
     record_store_to_outputs,
     resolve_artifact_from_value,
@@ -1001,6 +1002,7 @@ def make_urbansim_preprocess_step(
                 path=str(usim_input_path),
                 description="UrbanSim input datastore for preprocessing",
                 coupler=coupler,
+                profile_file_schema=True,
             )
 
     return _make_generic_step_function(
@@ -1060,6 +1062,7 @@ def make_urbansim_run_step(
                     f"UrbanSim datastore output for year {state.forecast_year}"
                 ),
                 coupler=coupler,
+                profile_file_schema=True,
             )
 
     return _make_generic_step_function(
@@ -1119,6 +1122,7 @@ def make_urbansim_postprocess_step(
                     f"(year {state.forecast_year})"
                 ),
                 coupler=coupler,
+                profile_file_schema=True,
             )
 
     return _make_generic_step_function(
@@ -1161,6 +1165,58 @@ def make_atlas_preprocess_step(
     callable
         Step function for ATLAS preprocess.
     """
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        usim_dir = workspace.get_usim_mutable_data_dir()
+        usim_path = None
+        if state.is_start_year():
+            region_id = settings.urbansim.region_id
+            if not region_id:
+                region_map = settings.urbansim.region_mappings.get(
+                    "region_to_region_id", {}
+                )
+                region_id = region_map.get(settings.run.region)
+            if region_id:
+                fname = settings.urbansim.input_file_template.format(region_id=region_id)
+                usim_path = os.path.join(usim_dir, fname)
+        else:
+            fname = settings.urbansim.output_file_template.format(
+                year=state.forecast_year
+            )
+            usim_path = os.path.join(usim_dir, fname)
+        if usim_path and os.path.exists(usim_path):
+            log_input_only(
+                key=USIM_DATASTORE_H5,
+                path=usim_path,
+                description=(
+                    f"UrbanSim datastore for ATLAS year {state.forecast_year}"
+                ),
+                profile_file_schema=True,
+            )
+        return {}
+
+    def _log_outputs(
+        outputs: AtlasPreprocessOutputs,
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            meta: Dict[str, Any] = {}
+            if str(path).endswith((".csv", ".parquet")):
+                meta["profile_file_schema"] = True
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description=description,
+                **meta,
+            )
+
     return _make_generic_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
@@ -1174,6 +1230,8 @@ def make_atlas_preprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_preprocess", outputs
         ),
+        input_logger=_log_inputs,
+        output_logger=_log_outputs,
     )
 
 
@@ -1200,6 +1258,26 @@ def make_atlas_run_step(
     callable
         Step function for ATLAS run.
     """
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        upstream = holder.atlas_preprocess
+        if upstream is None:
+            raise RuntimeError("ATLAS preprocess must complete first")
+        for short_name, path, description in upstream._iter_record_items():
+            meta: Dict[str, Any] = {}
+            if str(path).endswith((".csv", ".parquet")):
+                meta["profile_file_schema"] = True
+            log_input_only(
+                key=short_name,
+                path=str(path),
+                description=description,
+                **meta,
+            )
+        return {}
 
     def _log_outputs(
         outputs: AtlasRunOutputs,
@@ -1209,11 +1287,14 @@ def make_atlas_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
+            meta: Dict[str, Any] = {}
+            if str(path).endswith((".csv", ".parquet")):
+                meta["profile_file_schema"] = True
+            log_output_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
+                **meta,
             )
 
     return _make_generic_step_function(
@@ -1229,6 +1310,7 @@ def make_atlas_run_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_run", outputs
         ),
+        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 
@@ -1265,11 +1347,14 @@ def make_atlas_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
+            meta: Dict[str, Any] = {}
+            if str(path).endswith((".csv", ".parquet")):
+                meta["profile_file_schema"] = True
+            log_output_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
+                **meta,
             )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
@@ -1280,6 +1365,7 @@ def make_atlas_postprocess_step(
                     f"{state.forecast_year}"
                 ),
                 coupler=coupler,
+                profile_file_schema=True,
             )
 
     return _make_generic_step_function(
@@ -1544,6 +1630,7 @@ def make_activitysim_preprocess_step(
                 path=usim_path,
                 description=input_desc,
                 coupler=coupler,
+                profile_file_schema=True,
             )
         return {}
 
@@ -1769,6 +1856,7 @@ def make_activitysim_postprocess_step(
                     f"UrbanSim datastore updated by ActivitySim for year {state.forecast_year}"
                 ),
                 coupler=coupler,
+                profile_file_schema=True,
             )
 
     return _make_generic_step_function(
