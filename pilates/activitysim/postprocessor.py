@@ -112,6 +112,55 @@ def _prepare_updated_tables(
 
     # ensure we preserve all columns originally in the urbansim outputs
     required_cols = {}
+    usim_tables = {}
+
+    def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
+        if df.index.name == index_col:
+            return df
+        if index_col in df.columns:
+            return df.set_index(index_col)
+        return df
+
+    def _align_persons_for_join(
+        persons: pd.DataFrame, usim_persons: pd.DataFrame
+    ) -> pd.DataFrame:
+        if persons.index.name == "person_id" or "person_id" in persons.columns:
+            persons = _ensure_index(persons, "person_id")
+            return persons
+
+        if "member_id" not in persons.columns and "PNUM" in persons.columns:
+            persons = persons.copy()
+            persons["member_id"] = persons["PNUM"]
+
+        if "household_id" in persons.columns and "member_id" in persons.columns:
+            persons = persons.copy()
+            persons["household_id"] = pd.to_numeric(
+                persons["household_id"], errors="coerce"
+            ).astype("Int64")
+            persons["member_id"] = pd.to_numeric(
+                persons["member_id"], errors="coerce"
+            ).astype("Int64")
+            usim_persons = usim_persons.copy()
+            if "person_id" in usim_persons.columns:
+                usim_persons = usim_persons.set_index("person_id", drop=False)
+            usim_persons["household_id"] = pd.to_numeric(
+                usim_persons["household_id"], errors="coerce"
+            ).astype("Int64")
+            usim_persons["member_id"] = pd.to_numeric(
+                usim_persons["member_id"], errors="coerce"
+            ).astype("Int64")
+            return persons, usim_persons, ["household_id", "member_id"]
+
+        return persons
+
+    def _get_usim_table(table_name: str) -> pd.DataFrame:
+        if table_name not in usim_tables:
+            h5_key = table_name
+            if prefix:
+                h5_key = os.path.join(str(prefix), h5_key)
+            usim_tables[table_name] = usim_output_store[h5_key].copy()
+        return usim_tables[table_name]
+
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
@@ -121,30 +170,72 @@ def _prepare_updated_tables(
 
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols["persons"]
-    p_cols_to_replace = ["work_zone_id", "school_zone_id"]
-    p_names_dict = {
-        "PNUM": "member_id",
-        "workplace_taz": "work_zone_id",
-        "school_taz": "school_zone_id",
-    }
+    def _set_from_source(df: pd.DataFrame, target: str, sources) -> bool:
+        for source in sources:
+            if source in df.columns:
+                df[target] = df[source]
+                return True
+        return False
+
+    p_names_dict = {"PNUM": "member_id"}
     if "persons" in asim_output_dict.keys():
         logger.info("Preparing persons table!")
-        for col in p_cols_to_replace:
-            # Double check that work_zone_id and school_zone_id are included
-            # bc these aren't native columns to UrbanSim but should be there
-            # if "warm start" activities were generated
-            if col not in required_cols["persons"]:
-                p_cols_to_include.append(col)
-            if col in asim_output_dict["persons"].columns:
-                del asim_output_dict["persons"][col]
+        persons = asim_output_dict["persons"]
+        usim_persons = _get_usim_table("persons")
+        aligned = _align_persons_for_join(persons, usim_persons)
+        join_keys = None
+        if isinstance(aligned, tuple):
+            persons, usim_persons, join_keys = aligned
+        else:
+            persons = aligned
+            usim_persons = _ensure_index(usim_persons, "person_id")
         for fromCol, toCol in p_names_dict.items():
             if (toCol in p_cols_to_include) & (
-                fromCol in asim_output_dict["persons"].columns
+                fromCol in persons.columns
             ):
-                asim_output_dict["persons"].loc[:, toCol] = (
-                    asim_output_dict["persons"].loc[:, fromCol].copy()
+                persons.loc[:, toCol] = persons.loc[:, fromCol].copy()
+        # Prefer ASim zone IDs where available.
+        work_zone_source = None
+        if _set_from_source(
+            persons, "work_zone_id", ["workplace_zone_id", "workplace_taz"]
+        ):
+            work_zone_source = "workplace_zone_id"
+            if "workplace_zone_id" not in persons.columns:
+                work_zone_source = "workplace_taz"
+        school_zone_source = None
+        if "school_zone_id" in persons.columns:
+            school_zone_source = "school_zone_id"
+        elif _set_from_source(persons, "school_zone_id", ["school_taz"]):
+            school_zone_source = "school_taz"
+        if work_zone_source or school_zone_source:
+            logger.debug(
+                "ASim persons zone mapping: work_zone_id <- %s, school_zone_id <- %s",
+                work_zone_source,
+                school_zone_source,
+            )
+        if "workplace_taz" not in persons.columns and "work_zone_id" in persons.columns:
+            persons["workplace_taz"] = persons["work_zone_id"]
+        if "school_taz" not in persons.columns and "school_zone_id" in persons.columns:
+            persons["school_taz"] = persons["school_zone_id"]
+        missing_person_cols = [
+            col
+            for col in p_cols_to_include
+            if col not in persons.columns
+        ]
+        if missing_person_cols:
+            logger.warning(
+                "ASim persons missing columns; backfilling from UrbanSim: %s",
+                missing_person_cols,
+            )
+            if join_keys:
+                persons = persons.merge(
+                    usim_persons[join_keys + missing_person_cols],
+                    on=join_keys,
+                    how="left",
                 )
-        asim_output_dict["persons"] = asim_output_dict["persons"][p_cols_to_include]
+            else:
+                persons = aligned.join(usim_persons[missing_person_cols], how="left")
+        asim_output_dict["persons"] = persons[p_cols_to_include]
 
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
@@ -157,12 +248,31 @@ def _prepare_updated_tables(
     hh_cols_to_replace = ["cars"]
     hh_cols_to_include = required_cols["households"]
     if "households" in asim_output_dict.keys():
+        asim_output_dict["households"] = _ensure_index(
+            asim_output_dict["households"], "household_id"
+        )
         for col in hh_cols_to_replace:
             if col not in required_cols["households"]:
                 hh_cols_to_include.append(col)
             if col in asim_output_dict["households"].columns:
                 del asim_output_dict["households"][col]
         asim_output_dict["households"].rename(columns=hh_names_dict, inplace=True)
+        missing_household_cols = [
+            col
+            for col in required_cols["households"]
+            if col not in asim_output_dict["households"].columns
+        ]
+        if missing_household_cols:
+            logger.warning(
+                "ASim households missing columns; backfilling from UrbanSim: %s",
+                missing_household_cols,
+            )
+            usim_households = _ensure_index(
+                _get_usim_table("households"), "household_id"
+            )
+            asim_output_dict["households"] = asim_output_dict["households"].join(
+                usim_households[missing_household_cols], how="left"
+            )
         # only preserve original usim columns
         asim_output_dict["households"] = asim_output_dict["households"][
             required_cols["households"]
