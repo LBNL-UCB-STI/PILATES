@@ -21,6 +21,7 @@ BEAM_PLANS_OUT = "beam_plans_out"
 BEAM_OUTPUT_PLANS_XML = "beam_output_plans_xml"
 BEAM_EXPERIENCED_PLANS_XML = "beam_experienced_plans_xml"
 BEAM_OUTPUT_EXPERIENCED_PLANS_XML = "beam_output_experienced_plans_xml"
+BEAM_R5_OSM_FILE = "beam_r5_osm_file"
 
 # ActivitySim preprocess inputs
 ASIM_LAND_USE_IN = "land_use_asim_in"

@@ -75,6 +75,7 @@ def _log_record_store(
     workspace: Workspace,
     direction: str,
 ) -> None:
+    schema_keys = {"canonical_zones_source", "omx_skims"}
     for key, record in _iter_unique_records(record_store):
         path = record.get_absolute_path(base_path=workspace.full_path)
         if not path:
@@ -92,10 +93,14 @@ def _log_record_store(
                 path,
             )
             continue
+        meta = {}
+        if key in schema_keys:
+            meta["profile_file_schema"] = "if_changed"
         artifact = log_fn(
             path,
             key=key,
             description=getattr(record, "description", None),
+            **meta,
         )
         if artifact is not None and hasattr(record, "content_hash"):
             record_hash = getattr(artifact, "hash", None)

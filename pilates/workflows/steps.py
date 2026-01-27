@@ -230,6 +230,7 @@ from pilates.workflows.artifact_constants import (
     BEAM_PLANS_OUT,
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
     BEAM_OUTPUT_PLANS_XML,
+    BEAM_R5_OSM_FILE,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
@@ -1969,9 +1970,10 @@ def make_beam_preprocess_step(
         """
         tracker = cr.current_tracker()
         if tracker is not None:
-            try:
-                from pathlib import Path
+            from pathlib import Path
 
+            config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+            try:
                 from consist.core.config_canonicalization import ConfigAdapterOptions
                 from consist.integrations.beam import BeamConfigAdapter
             except Exception:
@@ -1979,7 +1981,6 @@ def make_beam_preprocess_step(
                     "BEAM config adapter unavailable; skipping canonicalization."
                 )
             else:
-                config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
                 primary_config = config_root / settings.beam.config
                 if primary_config.exists():
                     options = ConfigAdapterOptions(
@@ -1990,7 +1991,18 @@ def make_beam_preprocess_step(
                     )
                     current_run = cr.current_run()
                     run_id = getattr(current_run, "id", None) if current_run else None
-                    env_overrides = {"PWD": str(config_root.parent)}
+                    beam_input_root = Path(workspace.get_beam_mutable_data_dir()).resolve()
+                    pwd_candidates = [
+                        beam_input_root.parent,
+                        beam_input_root,
+                        beam_input_root.parent.parent,
+                    ]
+                    expected_suffix = Path("input") / settings.run.region
+                    pwd_root = next(
+                        (root for root in pwd_candidates if (root / expected_suffix).exists()),
+                        beam_input_root.parent,
+                    )
+                    env_overrides = {"PWD": str(pwd_root)}
                     try:
                         adapter = BeamConfigAdapter(
                             primary_config=primary_config,
@@ -2021,7 +2033,65 @@ def make_beam_preprocess_step(
                         primary_config,
                     )
 
+            # Log the BEAM R5 OSM file referenced in the resolved config if available.
+            try:
+                from sqlmodel import Session, select
+                from consist.models.beam import BeamConfigCache, BeamConfigIngestRunLink
+            except Exception:
+                logger.debug("SQLModel/Consist beam models unavailable; skipping OSM logging.")
+            else:
+                current_run = cr.current_run()
+                run_id = getattr(current_run, "id", None) if current_run else None
+                if run_id and tracker.db is not None:
+                    try:
+                        with Session(tracker.db.engine) as session:
+                            base_stmt = (
+                                select(BeamConfigCache.value_str)
+                                .join(
+                                    BeamConfigIngestRunLink,
+                                    BeamConfigCache.content_hash
+                                    == BeamConfigIngestRunLink.content_hash,
+                                )
+                                .where(BeamConfigIngestRunLink.run_id == run_id)
+                            )
+                            osm_row = session.exec(
+                                base_stmt.where(
+                                    BeamConfigCache.key == "beam.routing.r5.osmFile"
+                                )
+                            ).first()
+                            osm_value = osm_row[0] if osm_row else None
+                            if osm_value and "${" not in osm_value:
+                                if not os.path.isabs(osm_value):
+                                    osm_value = str((config_root / osm_value).resolve())
+                                if os.path.exists(osm_value):
+                                    cr.log_input(
+                                        osm_value,
+                                        key=BEAM_R5_OSM_FILE,
+                                        description=(
+                                            "BEAM R5 OSM input referenced by config"
+                                        ),
+                                    )
+                                else:
+                                    logger.debug(
+                                        "Resolved BEAM R5 OSM path does not exist: %s",
+                                        osm_value,
+                                    )
+                    except Exception:
+                        logger.debug(
+                            "Failed to resolve/log BEAM R5 OSM file from config.",
+                            exc_info=True,
+                        )
+
+        profile_schema_keys = {
+            "households_beam_in",
+            "persons_beam_in",
+            "plans_beam_in",
+        }
+
         for key, path in outputs.prepared_inputs.items():
+            meta: Dict[str, Any] = {}
+            if key in profile_schema_keys:
+                meta["profile_file_schema"] = True
             log_and_set_output(
                 key=key,
                 path=str(path),
@@ -2029,6 +2099,7 @@ def make_beam_preprocess_step(
                     f"BEAM prepared input {key} for year {state.year}, iter {state.iteration}"
                 ),
                 coupler=coupler,
+                **meta,
             )
 
     return _make_generic_step_function(
@@ -2131,10 +2202,22 @@ def make_beam_run_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
+            meta: Dict[str, Any] = {}
+            if short_name.startswith("beam_network_final"):
+                meta["profile_file_schema"] = "if_changed"
+                meta["reuse_if_unchanged"] = True
+                meta["reuse_scope"] = "any_uri"
+                try:
+                    from pilates.database.schema.beam_schema import BeamNetworkFinal
+                except Exception:
+                    BeamNetworkFinal = None
+                if BeamNetworkFinal is not None:
+                    meta["schema"] = BeamNetworkFinal
             log_output_only(
                 key=short_name,
                 path=str(path),
                 description=description,
+                **meta,
             )
 
     return _make_generic_step_function(
