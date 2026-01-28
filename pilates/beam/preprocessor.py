@@ -28,6 +28,7 @@ from pilates.workflows.artifact_constants import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
 )
+from pilates.activitysim.outputs import has_asim_run_marker
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -573,42 +574,82 @@ class BeamPreprocessor(GenericPreprocessor):
             "persons",
             "beam_plans",  # ActivitySim outputs beam_plans
         ]
+        asim_output_dir = workspace.get_asim_output_dir()
+        if base_path and os.path.isabs(base_path):
+            rel_asim_output_dir = os.path.relpath(asim_output_dir, workspace.full_path)
+            asim_output_dir = os.path.join(base_path, rel_asim_output_dir)
+
+        allow_final_pipeline = has_asim_run_marker(
+            asim_output_dir, self.state.current_year, self.state.current_inner_iter
+        )
+        if not allow_final_pipeline:
+            logger.warning(
+                "ASim success marker not found for year %s iteration %s; "
+                "skipping final_pipeline fallback for BEAM inputs.",
+                self.state.current_year,
+                self.state.current_inner_iter,
+            )
+
         # Construct the full path to the year-iteration specific output directory
         asim_output_iter_dir = os.path.join(
-            workspace.get_asim_output_dir(),
+            asim_output_dir,
             f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
         )
 
         for base_name in required_asim_base_names:
             if base_name not in asim_file_paths:
-                # Construct the full filename including the format extension
                 expected_file_name = f"{base_name}.{file_format}"
-                expected_full_path = os.path.join(
-                    asim_output_iter_dir, expected_file_name
+                candidate_paths = [
+                    os.path.join(asim_output_iter_dir, expected_file_name),
+                    os.path.join(
+                        asim_output_iter_dir,
+                        base_name,
+                        f"final.{file_format}",
+                    ),
+                ]
+                if allow_final_pipeline:
+                    candidate_paths.append(
+                        os.path.join(
+                            asim_output_dir,
+                            "final_pipeline",
+                            base_name,
+                            f"final.{file_format}",
+                        )
+                    )
+                found_path = next(
+                    (path for path in candidate_paths if os.path.exists(path)), None
                 )
 
-                if os.path.exists(expected_full_path):
+                if found_path:
                     logger.warning(
-                        f"ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
-                        f"not found in input records. Falling back to filesystem at: {expected_full_path}"
+                        "ActivitySim output file '%s' (expected: %s) not found in input records. "
+                        "Falling back to filesystem at: %s",
+                        base_name,
+                        expected_file_name,
+                        found_path,
                     )
-                    # Create a dummy FileRecord for consistency, linking it to the current run
-                    # A more complete FileRecord could be created by parsing file properties if needed,
-                    # but for basic path retrieval, this is sufficient.
+                    dummy_path = (
+                        os.path.relpath(found_path, base_path)
+                        if base_path and os.path.isabs(base_path)
+                        else found_path
+                    )
                     dummy_record = FileRecord(
-                        file_path=os.path.relpath(expected_full_path, base_path),
+                        file_path=dummy_path,
                         short_name=base_name,
                         description=(
                             "ActivitySim output file found via filesystem fallback "
-                            f"({expected_file_name})"
+                            f"({os.path.basename(found_path)})"
                         ),
                         year=self.state.current_year,
                     )
-                    asim_file_paths[base_name] = (expected_full_path, dummy_record)
+                    asim_file_paths[base_name] = (found_path, dummy_record)
                 else:
                     logger.warning(
-                        f"Required ActivitySim output file '{base_name}' (expected: {expected_file_name}) "
-                        f"not found in input records AND not found on filesystem at: {expected_full_path}"
+                        "Required ActivitySim output file '%s' (expected: %s) not found in input "
+                        "records AND not found on filesystem at any of: %s",
+                        base_name,
+                        expected_file_name,
+                        ", ".join(candidate_paths),
                     )
 
         if self.state.current_inner_iter <= 0:

@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
-from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
 from pilates.workflows.artifact_constants import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -318,7 +318,10 @@ def _recover_cached_outputs(
         record_store = RecordStore()
         asim_output_dir = Path(workspace.get_asim_output_dir())
         final_pipeline = asim_output_dir / "final_pipeline"
-        if final_pipeline.exists():
+        allow_final_pipeline = has_asim_run_marker(
+            asim_output_dir, state.year, state.iteration
+        )
+        if final_pipeline.exists() and allow_final_pipeline:
             for child in final_pipeline.iterdir():
                 fpath = child / "final.parquet"
                 if fpath.is_file():
@@ -329,6 +332,13 @@ def _recover_cached_outputs(
                             description=f"ActivitySim raw output: {child.name}",
                         )
                     )
+        elif final_pipeline.exists() and not allow_final_pipeline:
+            logger.warning(
+                "Skipping ActivitySim final_pipeline cache recovery for year %s iteration %s "
+                "because success marker is missing.",
+                state.year,
+                state.iteration,
+            )
         if not record_store.all_records():
             iter_dir = asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
             if iter_dir.exists():

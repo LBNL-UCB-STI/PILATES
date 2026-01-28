@@ -10,7 +10,10 @@ from typing import Tuple, Optional, Dict, Any
 from pilates.config import PilatesConfig
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.activitysim.outputs import (
+    normalize_asim_output_key,
+    has_asim_run_marker,
+)
 from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -18,11 +21,26 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
-def _load_asim_outputs(settings, workspace: Workspace, fallback_dir: Optional[str] = None):
+def _load_asim_outputs(
+    settings,
+    workspace: Workspace,
+    state: WorkflowState,
+    fallback_dir: Optional[str] = None,
+):
     prefix = settings.activitysim.output_tables["prefix"]
     output_tables = settings.activitysim.output_tables["tables"]
     asim_output_dict = {}
     asim_output_dir = workspace.get_asim_output_dir()
+    allow_final_pipeline = has_asim_run_marker(
+        asim_output_dir, state.current_year, state.current_inner_iter
+    )
+    if not allow_final_pipeline:
+        logger.warning(
+            "ASim success marker not found for year %s iteration %s; "
+            "skipping final_pipeline outputs.",
+            state.current_year,
+            state.current_inner_iter,
+        )
     for table_name in output_tables:
         file_format = settings.activitysim.file_format
         if file_format == "parquet":
@@ -30,22 +48,42 @@ def _load_asim_outputs(settings, workspace: Workspace, fallback_dir: Optional[st
             file_path = os.path.join(
                 asim_output_dir, "final_pipeline", table_name, "final.parquet"
             )
-            try:
-                table = pd.read_parquet(file_path)
-            except FileNotFoundError:
+            if allow_final_pipeline:
+                try:
+                    table = pd.read_parquet(file_path)
+                except FileNotFoundError:
+                    if fallback_dir:
+                        fallback_path = os.path.join(
+                            fallback_dir, f"{table_name}.parquet"
+                        )
+                        try:
+                            table = pd.read_parquet(fallback_path)
+                        except FileNotFoundError:
+                            logger.warning(
+                                "Parquet file not found: %s (fallback: %s)",
+                                file_path,
+                                fallback_path,
+                            )
+                            continue
+                    else:
+                        logger.warning("Parquet file not found: %s", file_path)
+                        continue
+            else:
                 if fallback_dir:
                     fallback_path = os.path.join(fallback_dir, f"{table_name}.parquet")
                     try:
                         table = pd.read_parquet(fallback_path)
                     except FileNotFoundError:
                         logger.warning(
-                            "Parquet file not found: %s (fallback: %s)",
-                            file_path,
+                            "Parquet file not found (final_pipeline ignored): %s",
                             fallback_path,
                         )
                         continue
                 else:
-                    logger.warning("Parquet file not found: %s", file_path)
+                    logger.warning(
+                        "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
+                        file_path,
+                    )
                     continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
@@ -756,7 +794,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             # The raw_outputs RecordStore contains the paths to these files.
             # TODO: update this to only grad tables_updated_by_asim
             asim_output_dict = _load_asim_outputs(
-                settings, workspace, fallback_dir=iteration_folder_path
+                settings,
+                workspace,
+                self.state,
+                fallback_dir=iteration_folder_path,
             )
 
             # The raw output files are implicitly the source for all derived products in this post-processing step.

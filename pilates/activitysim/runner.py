@@ -8,6 +8,10 @@ from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
+from pilates.activitysim.outputs import (
+    write_asim_run_marker,
+    clear_asim_run_marker,
+)
 from pilates.workflows.artifact_constants import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -470,6 +474,13 @@ class ActivitysimRunner(GenericRunner):
             settings, asim_docker_vols, False
         )
 
+        # Clear any stale success marker before running ActivitySim.
+        clear_asim_run_marker(
+            workspace.get_asim_output_dir(),
+            self.state.current_year,
+            self.state.current_inner_iter,
+        )
+
         success = self.run_container(
             client=client,
             settings=settings,
@@ -511,6 +522,24 @@ class ActivitysimRunner(GenericRunner):
                         iteration=self.state.current_inner_iter,
                     )
                     output_records.append(output_rec)
+
+        if output_records:
+            write_asim_run_marker(
+                workspace.get_asim_output_dir(),
+                self.state.current_year,
+                self.state.current_inner_iter,
+                meta={
+                    "model": "activitysim",
+                    "output_tables": [r.short_name for r in output_records],
+                },
+            )
+        else:
+            logger.warning(
+                "ASIM run succeeded but no final_pipeline outputs were found; "
+                "skipping success marker for year %s iteration %s.",
+                self.state.current_year,
+                self.state.current_inner_iter,
+            )
 
         output_store = RecordStore(recordList=output_records)
         return output_store

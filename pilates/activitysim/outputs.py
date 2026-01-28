@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
+from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING, Union
+import json
 
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
@@ -48,6 +50,45 @@ ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
 
 def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
+
+
+def _asim_run_marker_filename(year: int, iteration: int) -> str:
+    return f".pilates_asim_run_success_year_{year}_iter_{iteration}.json"
+
+
+def get_asim_run_marker_path(output_dir: Union[str, Path], year: int, iteration: int) -> Path:
+    return Path(output_dir) / _asim_run_marker_filename(year, iteration)
+
+
+def has_asim_run_marker(output_dir: Union[str, Path], year: int, iteration: int) -> bool:
+    return get_asim_run_marker_path(output_dir, year, iteration).exists()
+
+
+def clear_asim_run_marker(output_dir: Union[str, Path], year: int, iteration: int) -> bool:
+    path = get_asim_run_marker_path(output_dir, year, iteration)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def write_asim_run_marker(
+    output_dir: Union[str, Path],
+    year: int,
+    iteration: int,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Path:
+    path = get_asim_run_marker_path(output_dir, year, iteration)
+    payload = {
+        "year": year,
+        "iteration": iteration,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if meta:
+        payload["meta"] = meta
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    return path
 
 
 @dataclass
