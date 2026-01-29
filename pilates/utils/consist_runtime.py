@@ -135,6 +135,7 @@ def log_input(
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
+    path = _normalize_path(path)
     if consist is None:
         _warn_disabled()
         return _NoopArtifact(path)
@@ -155,6 +156,7 @@ def log_output(
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
+    path = _normalize_path(path)
     if not resolved_enabled or consist is None:
         resolved_path = _resolve_artifact_path(path)
         if resolved_path and not os.path.exists(resolved_path):
@@ -220,15 +222,16 @@ def log_artifacts(
     **meta: Any,
 ) -> Optional[Dict[str, ArtifactLike]]:
     resolved_enabled = _is_enabled(enabled)
+    normalized = {key: _normalize_path(value) for key, value in mapping.items()}
     if consist is None:
         _warn_disabled()
         return {
             key: _NoopArtifact(_resolve_artifact_path(value) or value)
-            for key, value in mapping.items()
+            for key, value in normalized.items()
         }
     if not resolved_enabled:
         _warn_disabled()
-    return consist.log_artifacts(mapping, enabled=resolved_enabled, **meta)
+    return consist.log_artifacts(normalized, enabled=resolved_enabled, **meta)
 
 
 def _schema_for_key(key: str) -> Optional[Any]:
@@ -296,13 +299,29 @@ def _noop_require_runtime_kwargs(
     return decorator
 
 
+def _normalize_path(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, os.PathLike):
+        path = os.fspath(value)
+    elif isinstance(value, str):
+        path = value
+    else:
+        return value
+    if "://" in path:
+        return value
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+    return value
+
+
 def _resolve_artifact_path(value: Any) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, os.PathLike):
-        return os.fspath(value)
+        return os.fspath(_normalize_path(value))
     if isinstance(value, str):
-        return value
+        return _normalize_path(value)
     if hasattr(value, "path"):
         return os.fspath(getattr(value, "path"))
     if hasattr(value, "container_uri"):

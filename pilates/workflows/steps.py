@@ -2114,36 +2114,25 @@ def make_beam_run_step(
                                     resolved_osm_path = None
 
                             if resolved_osm_path is None:
-                                dir_row = session.exec(
+                                mapdb_row = session.exec(
                                     base_stmt.where(
-                                        BeamConfigCache.key == "beam.routing.r5.directory"
+                                        BeamConfigCache.key
+                                        == "beam.routing.r5.osmMapdbFile"
                                     )
                                 ).first()
-                                dir_value = dir_row[0] if dir_row else None
+                                mapdb_value = mapdb_row[0] if mapdb_row else None
                                 logger.debug(
-                                    "BEAM config r5.directory resolved value: %s",
-                                    dir_value,
+                                    "BEAM config osmMapdbFile resolved value: %s",
+                                    mapdb_value,
                                 )
-                                if dir_value and "${" not in dir_value:
-                                    if not os.path.isabs(dir_value):
-                                        dir_value = str((config_root / dir_value).resolve())
-                                    if os.path.isdir(dir_value):
-                                        candidates = sorted(
-                                            Path(dir_value).rglob("*.osm.pbf")
+                                if mapdb_value and "${" not in mapdb_value:
+                                    resolved_osm_path = mapdb_value
+                                    if not os.path.isabs(resolved_osm_path):
+                                        resolved_osm_path = str(
+                                            (config_root / resolved_osm_path).resolve()
                                         )
-                                        if candidates:
-                                            if len(candidates) > 1:
-                                                logger.debug(
-                                                    "Multiple OSM PBF files found under %s; using %s",
-                                                    dir_value,
-                                                    candidates[0],
-                                                )
-                                            resolved_osm_path = str(candidates[0])
-                                        else:
-                                            logger.debug(
-                                                "No OSM PBF files found under %s.",
-                                                dir_value,
-                                            )
+                                    if not os.path.exists(resolved_osm_path):
+                                        resolved_osm_path = None
 
                             if resolved_osm_path:
                                 cr.log_input(
