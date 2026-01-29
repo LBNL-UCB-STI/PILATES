@@ -40,7 +40,12 @@ def artifact_to_path(
     """
     if value is None:
         return None
-    path = getattr(value, "path", None) or getattr(value, "uri", None) or value
+    path = (
+        getattr(value, "path", None)
+        or getattr(value, "container_uri", None)
+        or getattr(value, "uri", None)
+        or value
+    )
     if isinstance(path, Path):
         path = os.fspath(path)
     elif isinstance(path, os.PathLike):
@@ -61,11 +66,13 @@ def resolve_artifact_from_value(
     Resolve a coupler value to a Consist Artifact when possible.
 
     If the value is already an Artifact, it is returned unchanged. If it is a
-    path-like value, we attempt to locate a previously-logged Artifact by URI
+    path-like value, we attempt to locate a previously-logged Artifact by container URI
     (without re-hashing). Falls back to the original value when unavailable.
     """
     if value is None:
         return None
+    if hasattr(value, "container_uri") and getattr(value, "key", None):
+        return value
     if hasattr(value, "uri") and getattr(value, "key", None):
         return value
 
@@ -79,12 +86,12 @@ def resolve_artifact_from_value(
 
     try:
         if "://" in str(path):
-            uri = str(path)
+            container_uri = str(path)
         else:
             abs_path = os.path.abspath(path)
-            uri = tracker.fs.virtualize_path(abs_path)
+            container_uri = tracker.fs.virtualize_path(abs_path)
         artifact = tracker.db.find_latest_artifact_at_uri(
-            uri,
+            container_uri,
             include_inputs=True,
         )
         if artifact is None:
@@ -110,29 +117,33 @@ def log_coupler_value(
         return
 
     value_type = type(value).__name__
-    has_uri = hasattr(value, "uri")
+    has_container_uri = hasattr(value, "container_uri")
     has_key = hasattr(value, "key")
     path = artifact_to_path(value, workspace)
 
     tracker = cr.current_tracker()
-    uri = None
+    container_uri = None
     db_hit = None
-    if has_uri:
-        uri = getattr(value, "uri", None)
+    if has_container_uri:
+        container_uri = getattr(value, "container_uri", None)
     elif path:
         if tracker is not None:
             if "://" in str(path):
-                uri = str(path)
+                container_uri = str(path)
             else:
-                uri = tracker.fs.virtualize_path(os.path.abspath(path))
+                container_uri = tracker.fs.virtualize_path(os.path.abspath(path))
         else:
-            uri = str(path)
+            container_uri = str(path)
 
-    if tracker is not None and getattr(tracker, "db", None) is not None and uri:
+    if (
+        tracker is not None
+        and getattr(tracker, "db", None) is not None
+        and container_uri
+    ):
         try:
             db_hit = (
                 tracker.db.find_latest_artifact_at_uri(
-                    uri,
+                    container_uri,
                     include_inputs=True,
                 )
                 is not None
@@ -141,14 +152,14 @@ def log_coupler_value(
             db_hit = None
 
     logger.debug(
-        "[CouplerDebug] %s key=%s type=%s has_uri=%s has_key=%s path=%s uri=%s db_hit=%s",
+        "[CouplerDebug] %s key=%s type=%s has_container_uri=%s has_key=%s path=%s container_uri=%s db_hit=%s",
         context,
         key,
         value_type,
-        has_uri,
+        has_container_uri,
         has_key,
         path,
-        uri,
+        container_uri,
         db_hit,
     )
 

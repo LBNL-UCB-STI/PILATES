@@ -9,7 +9,12 @@ logger = logging.getLogger(__name__)
 def resolve_input_path(value):
     if value is None:
         return None
-    return getattr(value, "path", None) or getattr(value, "uri", None) or value
+    return (
+        getattr(value, "path", None)
+        or getattr(value, "container_uri", None)
+        or getattr(value, "uri", None)
+        or value
+    )
 
 
 def _is_uri(path) -> bool:

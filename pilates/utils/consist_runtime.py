@@ -305,6 +305,8 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
         return value
     if hasattr(value, "path"):
         return os.fspath(getattr(value, "path"))
+    if hasattr(value, "container_uri"):
+        return str(getattr(value, "container_uri"))
     if hasattr(value, "uri"):
         return str(getattr(value, "uri"))
     return None
@@ -316,6 +318,10 @@ class _NoopArtifact:
 
     @property
     def path(self) -> str:
+        return self._path
+
+    @property
+    def container_uri(self) -> str:
         return self._path
 
     @property

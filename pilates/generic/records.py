@@ -56,7 +56,8 @@ class FileRecord:
         metadata: Arbitrary key/value metadata dict
         content_hash: Optional content hash for the file contents
         unique_id: Stable identifier (auto-generated if not provided)
-        uri: Optional Consist URI when available
+        container_uri: Optional Consist container URI when available
+        uri: Optional legacy Consist URI when available
     """
 
     file_path: str
@@ -68,6 +69,7 @@ class FileRecord:
     metadata: Dict[str, Any] = field(default_factory=dict)
     content_hash: Optional[str] = None
     unique_id: Optional[str] = None
+    container_uri: Optional[str] = None
     uri: Optional[str] = None
 
     def __post_init__(self):
@@ -184,9 +186,10 @@ class RecordStore:
 
     def to_mapping(self) -> Dict[str, str]:
         """
-        Return a key -> path/uri mapping for Consist log_artifacts.
+        Return a key -> path/container URI mapping for Consist log_artifacts.
 
-        Prefers record.uri when present, otherwise falls back to file_path/repo_path.
+        Prefers record.container_uri (or legacy uri) when present, otherwise falls back
+        to file_path/repo_path.
         If short_name is missing or collides, unique_id is used for the key.
         """
         mapping: Dict[str, str] = {}
@@ -198,7 +201,7 @@ class RecordStore:
                 logger.warning("Record missing short_name and unique_id; skipping.")
                 continue
 
-            path = getattr(record, "uri", None)
+            path = getattr(record, "container_uri", None) or getattr(record, "uri", None)
             if not path:
                 path = getattr(record, "file_path", None) or getattr(
                     record, "repo_path", None
@@ -206,7 +209,8 @@ class RecordStore:
 
             if not path:
                 logger.warning(
-                    f"Record '{key}' missing uri/file_path/repo_path; skipping."
+                    "Record '%s' missing container_uri/uri/file_path/repo_path; skipping.",
+                    key,
                 )
                 continue
 
