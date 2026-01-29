@@ -2094,14 +2094,29 @@ def make_beam_run_step(
                                 )
                                 .where(BeamConfigIngestRunLink.run_id == run_id)
                             )
-                            osm_row = session.exec(
+                            config_name = settings.beam.config
+                            if config_name:
+                                base_stmt = base_stmt.where(
+                                    BeamConfigIngestRunLink.config_name == config_name
+                                )
+                            osm_rows = session.exec(
                                 base_stmt.where(
                                     BeamConfigCache.key == "beam.routing.r5.osmFile"
                                 )
-                            ).first()
-                            osm_value = osm_row[0] if osm_row else None
+                            ).all()
+                            if len(osm_rows) > 1:
+                                logger.warning(
+                                    "Multiple BEAM osmFile rows found for run_id=%s config=%s",
+                                    run_id,
+                                    config_name,
+                                )
+                            osm_value = osm_rows[0][0] if osm_rows else None
                             logger.debug(
-                                "BEAM config osmFile resolved value: %s", osm_value
+                                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s)",
+                                osm_value,
+                                run_id,
+                                tracker.db.engine.url,
+                                config_name,
                             )
                             resolved_osm_path = None
                             if osm_value and "${" not in osm_value:
