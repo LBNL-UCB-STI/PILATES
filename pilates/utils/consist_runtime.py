@@ -82,6 +82,9 @@ def create_tracker(
         if resolved_enabled:
             _warn_disabled()
         return None
+    if "hashing_strategy" not in tracker_kwargs:
+        # Avoid expensive full-directory hashing by default.
+        tracker_kwargs["hashing_strategy"] = "fast"
 
     if tracker_factory is None:
         tracker_factory = lambda: consist.Tracker(**tracker_kwargs)

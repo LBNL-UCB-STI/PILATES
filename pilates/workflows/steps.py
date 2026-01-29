@@ -2043,6 +2043,50 @@ def make_beam_run_step(
                         beam_input_root.parent,
                     )
                     env_overrides = {"PWD": str(pwd_root)}
+                    logger.debug(
+                        "BEAM config canonicalization context: run_id=%s db=%s config_root=%s primary_config=%s env_overrides=%s",
+                        run_id,
+                        getattr(tracker.db.engine, "url", None),
+                        config_root,
+                        primary_config,
+                        env_overrides,
+                    )
+                    try:
+                        from pyhocon import ConfigFactory
+                    except Exception:
+                        logger.debug(
+                            "pyhocon unavailable; skipping resolved config debug logs."
+                        )
+                    else:
+                        original_env = {}
+                        for key, value in env_overrides.items():
+                            original_env[key] = os.environ.get(key)
+                            os.environ[key] = value
+                        try:
+                            resolved_config = ConfigFactory.parse_file(
+                                str(primary_config), resolve=True
+                            )
+                            resolved_input_dir = resolved_config.get(
+                                "beam.inputDirectory", None
+                            )
+                            resolved_osm = resolved_config.get(
+                                "beam.routing.r5.osmFile", None
+                            )
+                            resolved_mapdb = resolved_config.get(
+                                "beam.routing.r5.osmMapdbFile", None
+                            )
+                            logger.debug(
+                                "BEAM resolved config values: inputDirectory=%s osmFile=%s osmMapdbFile=%s",
+                                resolved_input_dir,
+                                resolved_osm,
+                                resolved_mapdb,
+                            )
+                        finally:
+                            for key, original in original_env.items():
+                                if original is None:
+                                    os.environ.pop(key, None)
+                                else:
+                                    os.environ[key] = original
                     try:
                         adapter = BeamConfigAdapter(
                             primary_config=primary_config,
@@ -2086,7 +2130,10 @@ def make_beam_run_step(
                     try:
                         with Session(tracker.db.engine) as session:
                             base_stmt = (
-                                select(BeamConfigCache.value_str)
+                                select(
+                                    BeamConfigCache.value_str,
+                                    BeamConfigCache.content_hash,
+                                )
                                 .join(
                                     BeamConfigIngestRunLink,
                                     BeamConfigCache.content_hash
@@ -2111,13 +2158,35 @@ def make_beam_run_step(
                                     config_name,
                                 )
                             osm_value = osm_rows[0][0] if osm_rows else None
+                            osm_hash = osm_rows[0][1] if osm_rows else None
                             logger.debug(
-                                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s)",
+                                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s, hash=%s)",
                                 osm_value,
                                 run_id,
                                 tracker.db.engine.url,
                                 config_name,
+                                osm_hash,
                             )
+                            if osm_value == "/":
+                                all_osm_rows = session.exec(
+                                    select(
+                                        BeamConfigIngestRunLink.config_name,
+                                        BeamConfigCache.value_str,
+                                        BeamConfigCache.content_hash,
+                                    )
+                                    .join(
+                                        BeamConfigCache,
+                                        BeamConfigCache.content_hash
+                                        == BeamConfigIngestRunLink.content_hash,
+                                    )
+                                    .where(BeamConfigIngestRunLink.run_id == run_id)
+                                    .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
+                                ).all()
+                                logger.warning(
+                                    "BEAM osmFile resolved to '/' for run_id=%s; rows=%s",
+                                    run_id,
+                                    all_osm_rows,
+                                )
                             resolved_osm_path = None
                             if osm_value and "${" not in osm_value:
                                 resolved_osm_path = osm_value
