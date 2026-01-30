@@ -590,6 +590,8 @@ def _make_generic_step_function(
             component,
             workspace,
             outputs_holder,
+            coupler=coupler,
+            context=f"{model_name}_{phase}",
             **extra_kwargs,
             **kwargs,
         )
@@ -619,28 +621,6 @@ def _make_generic_step_function(
         logger.info("%s %s completed successfully", model_name, phase)
 
     return _step_func
-
-
-def _bind_coupler_executor(
-    executor: Callable[..., RecordStore],
-    *,
-    coupler: CouplerProtocol,
-    context: str,
-) -> Callable[..., RecordStore]:
-    """
-    Bind coupler/context into a step executor to keep step wiring compact.
-    """
-    def _wrapped(component: Any, workspace: Workspace, outputs_holder: StepOutputsHolder, **kwargs: Any) -> RecordStore:
-        return executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=context,
-            **kwargs,
-        )
-
-    return _wrapped
 
 
 def _execute_preprocess(
@@ -1154,9 +1134,7 @@ def make_urbansim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_urbansim_run, coupler=coupler, context="urbansim_run"
-        ),
+        component_executor=_execute_urbansim_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_run", outputs
         ),
@@ -1228,9 +1206,7 @@ def make_urbansim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_urbansim_postprocess, coupler=coupler, context="urbansim_postprocess"
-        ),
+        component_executor=_execute_urbansim_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_postprocess", outputs
         ),
@@ -1404,9 +1380,7 @@ def make_atlas_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_atlas_run, coupler=coupler, context="atlas_run"
-        ),
+        component_executor=_execute_atlas_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_run", outputs
         ),
@@ -1479,9 +1453,7 @@ def make_atlas_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_atlas_postprocess, coupler=coupler, context="atlas_postprocess"
-        ),
+        component_executor=_execute_atlas_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_postprocess", outputs
         ),
@@ -1882,9 +1854,7 @@ def make_activitysim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "activitysim", state, WorkflowState.Stage.activity_demand
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_run, coupler=coupler, context="activitysim_run"
-        ),
+        component_executor=_execute_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_run", outputs
         ),
@@ -2060,9 +2030,7 @@ def make_beam_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "beam", state, WorkflowState.Stage.traffic_assignment
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_beam_preprocess, coupler=coupler, context="beam_preprocess"
-        ),
+        component_executor=_execute_beam_preprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
@@ -2405,9 +2373,7 @@ def make_beam_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "beam", state, WorkflowState.Stage.traffic_assignment
         ),
-        component_executor=_bind_coupler_executor(
-            _execute_beam_run, coupler=coupler, context="beam_run"
-        ),
+        component_executor=_execute_beam_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_run", outputs
         ),
