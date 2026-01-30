@@ -75,5 +75,5 @@ echo "=========================="
 
 # --- 6. Run Python Script ---
 # 'python' now refers to the binary inside PILATES-env
+export DLT__RUNTIME__DLTHUB_TELEMETRY=false
 python run.py -c "$1" -S "$2"
-
