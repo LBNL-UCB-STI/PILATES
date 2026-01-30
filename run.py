@@ -39,6 +39,7 @@ from pilates.utils.consist_config import (
     build_step_consist_kwargs,
 )
 from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
+from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.artifact_constants import (
     ASIM_MUTABLE_DATA_DIR,
@@ -229,6 +230,15 @@ def main():
     if not output_directory:
         raise ValueError("output_directory not found in config")
     output_path = os.path.realpath(os.path.expandvars(output_directory))
+    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
+    if local_workspace_root:
+        local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
+    else:
+        local_root = output_path
+
+    # Split run roots:
+    # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
+    # - local_run_dir (node-local) holds mutable workspace during execution
 
     if state.run_info_path:
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
@@ -238,8 +248,17 @@ def main():
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
 
-    full_run_dir = os.path.join(output_path, run_name)
-    os.makedirs(full_run_dir, exist_ok=True)
+    archive_run_dir = os.path.join(output_path, run_name)
+    local_run_dir = os.path.join(local_root, run_name)
+    os.makedirs(local_run_dir, exist_ok=True)
+    if archive_run_dir != local_run_dir:
+        os.makedirs(archive_run_dir, exist_ok=True)
+
+    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
+    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
+    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = (
+        "1" if settings.run.enable_archive_copy else "0"
+    )
 
     # 3. INITIALIZE CONSIST TRACKER (OPTIONAL)
     # Consist provides provenance tracking and computation caching. It's optional; PILATES
@@ -257,20 +276,20 @@ def main():
     consist_enabled = cr.consist_available(settings)
     tracker: Optional[TrackerLike] = None
     if consist_enabled:
-        logger.info(f"Initializing Consist Tracker in {full_run_dir}")
+        logger.info(f"Initializing Consist Tracker in {archive_run_dir}")
     else:
         logger.info("Consist disabled/unavailable; running without Consist tracker.")
 
     tracker = cr.create_tracker(
         settings=settings,
         enabled=consist_enabled,
-        run_dir=full_run_dir,
+        run_dir=archive_run_dir,
         db_path=(
             settings.shared.database.path if settings.shared.database.enabled else None
         ),
         mounts={
             "inputs": project_root_abs,  # Immutable Source
-            "workspace": full_run_dir,  # Mutable Destination
+            "workspace": local_run_dir,  # Mutable Destination
             "scratch": str(Path(output_path).resolve()),  # For temp files
         },
         project_root=project_root_abs,
@@ -287,7 +306,7 @@ def main():
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
         settings,
-        output_path,
+        local_root,
         folder_name=run_name,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
@@ -306,137 +325,141 @@ def main():
     scenario_kwargs = build_scenario_consist_kwargs(settings)
     if consist_enabled:
         scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
-    with cr.scenario(
-        run_name,
-        tracker=tracker,
-        enabled=consist_enabled,
-        tags=["pilates_simulation"],
-        model="pilates_orchestrator",
-        **scenario_kwargs,
-    ) as scenario:
-        scenario = cast(ScenarioWithCoupler, scenario)
-        coupler = scenario.coupler
-        if consist_enabled:
-            require_outputs = getattr(scenario, "require_outputs", None)
-            if callable(require_outputs):
-                require_outputs(
-                    *PILATES_COUPLER_SCHEMA.keys(),
-                    warn_undocumented=True,
-                    description=PILATES_COUPLER_SCHEMA,
-                )
-        scenario.declare_outputs(
-            USIM_DATASTORE_H5,
-            ASIM_MUTABLE_DATA_DIR,
-            ASIM_OUTPUT_DIR,
-            BEAM_OUTPUT_DIR,
-            ATLAS_OUTPUT_DIR,
-            ZARR_SKIMS,
-            FINAL_SKIMS_OMX,
-        )
-
-        # 6. DATA INITIALIZATION STEP
-        # Copies immutable input data to the mutable workspace. This is the critical
-        # "data initialization" event in provenance: it links original sources (inputs://)
-        # to the working copies (workspace://). Only runs if state.data_initialized is
-        # False (first run) or if resuming from a checkpoint (uses previous workspace).
-        #
-        # ProvenanceNote: scenario.trace() logs this step, creating a provenance entry
-        # that later steps reference as inputs.
-        if not state.data_initialized:
-            logger.info("Running Initialization Step (Copying mutable data)")
-
-            with scenario.trace(
-                "initialization",
-                model="initialization",
-                year=state.start_year,
-                iteration=0,
-                tags=["init"],
-                **build_step_consist_kwargs(
-                    "initialization", settings, workspace_path=workspace.full_path
-                ),
-            ):
-                init_model = Initialization("initialization", state)
-
-                # This performs the copy.
-                # Source files -> recorded as inputs (inputs://...)
-                # Dest files -> recorded as outputs (workspace://...)
-                init_model.run(settings, workspace)
-
-            state.set_data_initialized(True)
-        else:
-            logger.info(
-                "Restarting from a previous state. Skipping data initialization."
+    try:
+        with cr.scenario(
+            run_name,
+            tracker=tracker,
+            enabled=consist_enabled,
+            tags=["pilates_simulation"],
+            model="pilates_orchestrator",
+            **scenario_kwargs,
+        ) as scenario:
+            scenario = cast(ScenarioWithCoupler, scenario)
+            coupler = scenario.coupler
+            if consist_enabled:
+                require_outputs = getattr(scenario, "require_outputs", None)
+                if callable(require_outputs):
+                    require_outputs(
+                        *PILATES_COUPLER_SCHEMA.keys(),
+                        warn_undocumented=True,
+                        description=PILATES_COUPLER_SCHEMA,
+                    )
+            scenario.declare_outputs(
+                USIM_DATASTORE_H5,
+                ASIM_MUTABLE_DATA_DIR,
+                ASIM_OUTPUT_DIR,
+                BEAM_OUTPUT_DIR,
+                ATLAS_OUTPUT_DIR,
+                ZARR_SKIMS,
+                FINAL_SKIMS_OMX,
             )
 
-        # 6. MAIN WORKFLOW LOOP
-        # Iterates through forecast years. For each year, runs sequential stages:
-        # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
-        #
-        # Step Pattern (used for all stages):
-        #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
-        #   2. log_inputs(...)          - Log for provenance
-        #   3. build_*_outputs(...)     - Declare what we expect to produce
-        #   4. make_*_step(...)         - Create step function with coupler refs
-        #   5. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
-        #   6. scenario.run(...)        - Execute via Consist (handles caching + provenance)
-        #
-        for year in state:
-            formatted_print(f"STARTING YEAR {year}")
-            usim_inputs: Dict[str, Any] = {}
-            outputs_holder_year = StepOutputsHolder()
+            # 6. DATA INITIALIZATION STEP
+            # Copies immutable input data to the mutable workspace. This is the critical
+            # "data initialization" event in provenance: it links original sources (inputs://)
+            # to the working copies (workspace://). Only runs if state.data_initialized is
+            # False (first run) or if resuming from a checkpoint (uses previous workspace).
+            #
+            # ProvenanceNote: scenario.trace() logs this step, creating a provenance entry
+            # that later steps reference as inputs.
+            if not state.data_initialized:
+                logger.info("Running Initialization Step (Copying mutable data)")
 
-            if state.should_run(WorkflowState.Stage.land_use):
-                usim_inputs = run_land_use_stage(
-                    scenario=scenario,
-                    state=state,
-                    settings=settings,
-                    workspace=workspace,
-                    coupler=coupler,
-                    year=year,
-                    outputs_holder_year=outputs_holder_year,
-                )
-                state.complete_step(WorkflowState.Stage.land_use)
+                with scenario.trace(
+                    "initialization",
+                    model="initialization",
+                    year=state.start_year,
+                    iteration=0,
+                    tags=["init"],
+                    **build_step_consist_kwargs(
+                        "initialization", settings, workspace_path=workspace.full_path
+                    ),
+                ):
+                    init_model = Initialization("initialization", state)
 
-            if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-                formatted_print(
-                    f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
-                )
-                run_vehicle_ownership_stage(
-                    scenario=scenario,
-                    state=state,
-                    settings=settings,
-                    workspace=workspace,
-                    coupler=coupler,
-                    year=year,
-                    build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
-                )
-                state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+                    # This performs the copy.
+                    # Source files -> recorded as inputs (inputs://...)
+                    # Dest files -> recorded as outputs (workspace://...)
+                    init_model.run(settings, workspace)
 
-            if state.should_run(WorkflowState.Stage.supply_demand_loop):
-                run_supply_demand_stage(
-                    scenario=scenario,
-                    state=state,
-                    settings=settings,
-                    workspace=workspace,
-                    coupler=coupler,
-                    year=year,
-                    usim_inputs=usim_inputs,
-                    build_manifest_path=build_manifest_path,
+                state.set_data_initialized(True)
+            else:
+                logger.info(
+                    "Restarting from a previous state. Skipping data initialization."
                 )
 
-            if state.should_run(WorkflowState.Stage.postprocessing):
-                formatted_print("POST-PROCESSING")
-                run_postprocessing_stage(
-                    scenario=scenario,
-                    state=state,
-                    settings=settings,
-                    workspace=workspace,
-                    year=year,
-                )
-                state.complete_step(WorkflowState.Stage.postprocessing)
+            # 6. MAIN WORKFLOW LOOP
+            # Iterates through forecast years. For each year, runs sequential stages:
+            # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
+            #
+            # Step Pattern (used for all stages):
+            #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
+            #   2. log_inputs(...)          - Log for provenance
+            #   3. build_*_outputs(...)     - Declare what we expect to produce
+            #   4. make_*_step(...)         - Create step function with coupler refs
+            #   5. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
+            #   6. scenario.run(...)        - Execute via Consist (handles caching + provenance)
+            #
+            for year in state:
+                formatted_print(f"STARTING YEAR {year}")
+                usim_inputs: Dict[str, Any] = {}
+                outputs_holder_year = StepOutputsHolder()
 
-    formatted_print("SIMULATION COMPLETE")
-    logger.info("[Main] Simulation complete.")
+                if state.should_run(WorkflowState.Stage.land_use):
+                    usim_inputs = run_land_use_stage(
+                        scenario=scenario,
+                        state=state,
+                        settings=settings,
+                        workspace=workspace,
+                        coupler=coupler,
+                        year=year,
+                        outputs_holder_year=outputs_holder_year,
+                    )
+                    state.complete_step(WorkflowState.Stage.land_use)
+
+                if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
+                    formatted_print(
+                        f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+                    )
+                    run_vehicle_ownership_stage(
+                        scenario=scenario,
+                        state=state,
+                        settings=settings,
+                        workspace=workspace,
+                        coupler=coupler,
+                        year=year,
+                        build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
+                    )
+                    state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+
+                if state.should_run(WorkflowState.Stage.supply_demand_loop):
+                    run_supply_demand_stage(
+                        scenario=scenario,
+                        state=state,
+                        settings=settings,
+                        workspace=workspace,
+                        coupler=coupler,
+                        year=year,
+                        usim_inputs=usim_inputs,
+                        build_manifest_path=build_manifest_path,
+                    )
+
+                if state.should_run(WorkflowState.Stage.postprocessing):
+                    formatted_print("POST-PROCESSING")
+                    run_postprocessing_stage(
+                        scenario=scenario,
+                        state=state,
+                        settings=settings,
+                        workspace=workspace,
+                        year=year,
+                    )
+                    state.complete_step(WorkflowState.Stage.postprocessing)
+
+        formatted_print("SIMULATION COMPLETE")
+        logger.info("[Main] Simulation complete.")
+    finally:
+        flush_archive_queue(timeout=300)
+        stop_archive_worker(timeout=30)
 
 
 if __name__ == "__main__":

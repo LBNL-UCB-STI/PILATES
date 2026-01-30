@@ -234,6 +234,7 @@ from pilates.workflows.artifact_constants import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
+    USIM_INPUT_ARCHIVE_PREFIX,
     ZARR_SKIMS,
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
@@ -277,6 +278,33 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_missing_coupler_inputs(
+    coupler: Optional[CouplerProtocol],
+    input_store: Optional[RecordStore],
+    context: str,
+) -> None:
+    if coupler is None or input_store is None:
+        return
+    keys_attr = getattr(coupler, "keys", None)
+    if not callable(keys_attr):
+        return
+    try:
+        coupler_keys = set(keys_attr())
+    except Exception:
+        return
+    missing = []
+    for record in input_store.all_records():
+        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
+        if key and key not in coupler_keys:
+            missing.append(key)
+    if missing:
+        logger.warning(
+            "[%s] Input RecordStore keys missing from coupler: %s",
+            context,
+            sorted(set(missing)),
+        )
 
 StepOutputsT = TypeVar("StepOutputsT")
 InputLogger = Callable[
@@ -627,6 +655,8 @@ def _execute_run(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "runner",
     extra_inputs: Optional[RecordStore] = None,
     **kwargs: Any,
 ) -> RecordStore:
@@ -658,6 +688,7 @@ def _execute_run(
     input_store = upstream.to_record_store()
     if extra_inputs is not None:
         input_store += extra_inputs
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -699,6 +730,8 @@ def _execute_beam_preprocess(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_preprocess",
     activity_demand_outputs: Optional[RecordStore] = None,
     previous_beam_outputs: Optional[RecordStore] = None,
     **kwargs: Any,
@@ -733,6 +766,7 @@ def _execute_beam_preprocess(
         combined += activity_demand_outputs
     if previous_beam_outputs is not None:
         combined += previous_beam_outputs
+    _warn_missing_coupler_inputs(coupler, combined, context)
     return preprocessor.preprocess(workspace, combined)
 
 
@@ -741,6 +775,8 @@ def _execute_beam_run(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_run",
     extra_inputs: Optional[RecordStore] = None,
     **kwargs: Any,
 ) -> RecordStore:
@@ -772,6 +808,7 @@ def _execute_beam_run(
     input_store = upstream.to_record_store()
     if extra_inputs is not None:
         input_store += extra_inputs
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -812,6 +849,9 @@ def _execute_urbansim_run(
     runner: Runner,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "urbansim_run",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -838,6 +878,7 @@ def _execute_urbansim_run(
     if upstream is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
     input_store = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -845,6 +886,9 @@ def _execute_urbansim_postprocess(
     postprocessor: Postprocessor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "urbansim_postprocess",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -871,6 +915,7 @@ def _execute_urbansim_postprocess(
     if upstream is None:
         raise RuntimeError("UrbanSim run must complete first")
     raw_outputs = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -878,6 +923,9 @@ def _execute_atlas_run(
     runner: Runner,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "atlas_run",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -904,6 +952,7 @@ def _execute_atlas_run(
     if upstream is None:
         raise RuntimeError("ATLAS preprocess must complete first")
     input_store = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -911,6 +960,9 @@ def _execute_atlas_postprocess(
     postprocessor: Postprocessor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "atlas_postprocess",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -937,6 +989,7 @@ def _execute_atlas_postprocess(
     if upstream is None:
         raise RuntimeError("ATLAS run must complete first")
     raw_outputs = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -1079,7 +1132,14 @@ def make_urbansim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_execute_urbansim_run,
+        component_executor=lambda runner, workspace, outputs_holder, **kwargs: _execute_urbansim_run(
+            runner,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="urbansim_run",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_run", outputs
         ),
@@ -1118,6 +1178,16 @@ def make_urbansim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
+                log_output_only(
+                    key=short_name,
+                    path=str(path),
+                    description=description,
+                    profile_file_schema=True,
+                    h5_container=True,
+                    hash_tables="if_unchanged",
+                )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -1141,7 +1211,14 @@ def make_urbansim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_execute_urbansim_postprocess,
+        component_executor=lambda postprocessor, workspace, outputs_holder, **kwargs: _execute_urbansim_postprocess(
+            postprocessor,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="urbansim_postprocess",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_postprocess", outputs
         ),
@@ -1315,7 +1392,14 @@ def make_atlas_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_execute_atlas_run,
+        component_executor=lambda runner, workspace, outputs_holder, **kwargs: _execute_atlas_run(
+            runner,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="atlas_run",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_run", outputs
         ),
@@ -1388,7 +1472,14 @@ def make_atlas_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_execute_atlas_postprocess,
+        component_executor=lambda postprocessor, workspace, outputs_holder, **kwargs: _execute_atlas_postprocess(
+            postprocessor,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="atlas_postprocess",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_postprocess", outputs
         ),
@@ -1789,7 +1880,14 @@ def make_activitysim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "activitysim", state, WorkflowState.Stage.activity_demand
         ),
-        component_executor=_execute_run,
+        component_executor=lambda runner, workspace, outputs_holder, **kwargs: _execute_run(
+            runner,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="activitysim_run",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_run", outputs
         ),
@@ -1965,7 +2063,14 @@ def make_beam_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "beam", state, WorkflowState.Stage.traffic_assignment
         ),
-        component_executor=_execute_beam_preprocess,
+        component_executor=lambda preprocessor, workspace, outputs_holder, **kwargs: _execute_beam_preprocess(
+            preprocessor,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="beam_preprocess",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
@@ -2308,7 +2413,14 @@ def make_beam_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "beam", state, WorkflowState.Stage.traffic_assignment
         ),
-        component_executor=_execute_beam_run,
+        component_executor=lambda runner, workspace, outputs_holder, **kwargs: _execute_beam_run(
+            runner,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context="beam_run",
+            **kwargs,
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_run", outputs
         ),

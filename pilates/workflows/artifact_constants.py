@@ -7,6 +7,7 @@ USIM_H5_UPDATED = "usim_h5_updated"
 USIM_MUTABLE_DATA_DIR = "usim_mutable_data_dir"
 USIM_FORECAST_OUTPUT = "usim_forecast_output"
 USIM_INPUT_MERGED_PREFIX = "usim_input_merged_"
+USIM_INPUT_ARCHIVE_PREFIX = "usim_input_archive_"
 
 ATLAS_OUTPUT_DIR = "atlas_output_dir"
 ATLAS_VEHICLES2_INPUT = "atlas_vehicles2_input"
