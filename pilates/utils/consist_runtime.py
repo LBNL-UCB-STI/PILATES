@@ -139,6 +139,7 @@ def log_input(
         if schema is not None:
             meta = {**meta, "schema": schema}
     path = _normalize_path(path)
+    meta = _maybe_fast_hash_h5(path, meta)
     if consist is None:
         _warn_disabled()
         return _NoopArtifact(path)
@@ -160,6 +161,7 @@ def log_output(
         if schema is not None:
             meta = {**meta, "schema": schema}
     path = _normalize_path(path)
+    meta = _maybe_fast_hash_h5(path, meta)
     if not resolved_enabled or consist is None:
         resolved_path = _resolve_artifact_path(path)
         if resolved_path and not os.path.exists(resolved_path):
@@ -316,6 +318,18 @@ def _normalize_path(value: Any) -> Any:
     if os.path.isabs(path):
         return os.path.realpath(path)
     return value
+
+
+def _maybe_fast_hash_h5(path: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
+    if "hashing_strategy" in meta:
+        return meta
+    resolved = _resolve_artifact_path(path)
+    if not resolved:
+        return meta
+    lowered = resolved.lower()
+    if lowered.endswith((".h5", ".hdf5")):
+        return {**meta, "hashing_strategy": "fast"}
+    return meta
 
 
 def _resolve_artifact_path(value: Any) -> Optional[str]:

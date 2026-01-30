@@ -16,6 +16,8 @@ from datetime import datetime
 import os
 import logging
 import sys
+import shutil
+import socket
 from pathlib import Path
 from typing import Optional, cast, Dict, Any
 
@@ -109,6 +111,88 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
     return inputs
 
 
+def _read_mount_table() -> Dict[str, str]:
+    mounts: Dict[str, str] = {}
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 3:
+                    mountpoint = parts[1]
+                    fstype = parts[2]
+                    mounts[mountpoint] = fstype
+    except OSError:
+        return {}
+    return mounts
+
+
+def _mount_for_path(path: str, mounts: Dict[str, str]) -> str:
+    path = os.path.realpath(path)
+    best_match = ""
+    for mountpoint in mounts:
+        if path == mountpoint or path.startswith(mountpoint.rstrip("/") + "/"):
+            if len(mountpoint) > len(best_match):
+                best_match = mountpoint
+    return best_match
+
+
+def _format_bytes(value: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if value < 1024:
+            return f"{value:.1f}{unit}"
+        value /= 1024.0
+    return f"{value:.1f}EiB"
+
+
+def _log_local_storage_info() -> None:
+    mounts = _read_mount_table()
+    hostname = socket.gethostname()
+    job_id = os.environ.get("SLURM_JOB_ID")
+    node_list = os.environ.get("SLURM_NODELIST")
+    logger.info(
+        "Storage probe: host=%s job_id=%s nodelist=%s",
+        hostname,
+        job_id or "n/a",
+        node_list or "n/a",
+    )
+
+    candidates = []
+    for var in ("SLURM_TMPDIR", "TMPDIR", "TMP", "TEMP"):
+        value = os.environ.get(var)
+        if value:
+            candidates.append(value)
+    candidates += [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/scratch",
+        "/local",
+        "/local_scratch",
+        "/lscratch",
+        "/mnt",
+    ]
+
+    seen = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not os.path.exists(path):
+            continue
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError:
+            continue
+        mountpoint = _mount_for_path(path, mounts)
+        fstype = mounts.get(mountpoint, "unknown")
+        logger.info(
+            "Storage candidate: path=%s mount=%s fstype=%s free=%s total=%s",
+            os.path.realpath(path),
+            mountpoint or "unknown",
+            fstype,
+            _format_bytes(usage.free),
+            _format_bytes(usage.total),
+        )
 def main():
     """
     Main entrypoint for PILATES simulation orchestration using Consist Scenario API.
@@ -137,6 +221,8 @@ def main():
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
     state = WorkflowState.from_settings(settings)
+
+    _log_local_storage_info()
 
     # 2. SETUP PATHS
     output_directory = settings.run.output_directory
