@@ -230,6 +230,34 @@ class GenericRunner(ABC, Model):
                         lineage_mode=lineage_mode,
                         allow_external_paths=allow_external_paths,
                     )
+                except TypeError as exc:
+                    if "allow_external_paths" not in str(exc):
+                        raise
+                    logger.warning(
+                        "[%s] Consist run_container does not support allow_external_paths; "
+                        "retrying without it.",
+                        model_name,
+                    )
+                    try:
+                        return consist_run_container(
+                            tracker=tracker,
+                            run_id=f"{model_name}_container",
+                            image=image,
+                            command=full_command_list,
+                            volumes=consist_volumes,
+                            inputs=input_artifacts or [],
+                            outputs=output_paths or [],
+                            environment=environment or {},
+                            working_dir=working_dir,
+                            backend_type=backend_type,
+                            pull_latest=pull_latest,
+                            lineage_mode=lineage_mode,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Consist container execution failed: {e}",
+                            exc_info=True,
+                        )
                 except Exception as e:
                     logger.error(
                         f"Consist container execution failed: {e}",
