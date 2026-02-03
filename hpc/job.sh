@@ -184,7 +184,34 @@ echo "Starting PILATES execution..."
 
 cd "$PILATES_DIR" || exit 1
 
-echo "Config: $1"
+# ==============================================================================
+# CONFIG MIGRATION (if needed)
+# ==============================================================================
+
+CONFIG_FILE="$1"
+
+# Check if config needs migration
+# New format has: run:, shared:, infrastructure: as top-level keys
+# Old format has: region, start_year, etc. at top level (not nested)
+is_new_format() {
+    grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
+}
+
+if ! is_new_format "$CONFIG_FILE"; then
+    echo "Detected legacy config format. Migrating to new format..."
+    MIGRATED_CONFIG="${CONFIG_FILE%.yaml}_migrated.yaml"
+
+    if python scripts/migrate_config.py "$CONFIG_FILE" "$MIGRATED_CONFIG" --no-validate; then
+        echo "Config migration successful: $MIGRATED_CONFIG"
+        CONFIG_FILE="$MIGRATED_CONFIG"
+    else
+        echo "WARNING: Config migration failed. Attempting to run with original config..."
+    fi
+else
+    echo "Config already in new format, no migration needed."
+fi
+
+echo "Config: $CONFIG_FILE"
 echo "Scenario: $2"
 echo ""
 
@@ -193,4 +220,4 @@ show_system_info
 echo ""
 echo "Running PILATES model..."
 
-python run.py -c "$1" -S "$2"
+python run.py -c "$CONFIG_FILE" -S "$2"
