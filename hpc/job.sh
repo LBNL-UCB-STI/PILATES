@@ -5,7 +5,7 @@
 #
 # Usage: sbatch job.sh <config_file> <scenario>
 #
-# Note: Do NOT set PYTHONPATH manually. The conda environment handles imports
+# Note: Do NOT set PYTHONPATH manually. The venv handles imports
 # automatically. Setting PYTHONPATH can leak system packages into your environment.
 #
 
@@ -14,20 +14,16 @@
 # ==============================================================================
 
 PILATES_DIR="/global/scratch/users/$USER/sources/PILATES"
-
-# Uncomment to force clean singularity cache (not recommended for routine use)
-#singularity cache clean --force
+ENV_PATH="$PILATES_DIR/PILATES-env"
 
 # ==============================================================================
 # FUNCTION DEFINITIONS
 # ==============================================================================
 
-# Display system information
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
     free -h
     grep MemTotal /proc/meminfo || true
-    grep -i numa /proc/cpuinfo || true
     echo "=========================="
 
     echo "=== NODE USAGE INFORMATION ==="
@@ -44,71 +40,56 @@ echo "Setting up environment..."
 # Load required modules
 module load python/3.11.6
 module load gcc/11.4.0
-module load miniconda3/22.11.1-gcc-11.4.0  # Load conda for environment management
 module load proj/9.2.1
 
-# Configure system libraries - use GCC 11.4.0 libraries first
+# Configure system libraries
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-
-# ==============================================================================
-# CONDA ENVIRONMENT SETUP
-# ==============================================================================
-
-echo "Setting up conda environment..."
-
-# Initialize conda for non-interactive shell
-CONDA_BASE=$(conda info --base 2>/dev/null)
-if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
-    source "$CONDA_BASE/etc/profile.d/conda.sh"
-else
-    echo "ERROR: Could not find conda.sh at $CONDA_BASE/etc/profile.d/conda.sh"
-    exit 1
-fi
-
-# Store full path to conda executable (needed after activation)
-CONDA_EXE="$CONDA_BASE/bin/conda"
 
 # Change to PILATES directory
 cd "$PILATES_DIR" || exit 1
 
-# Define conda environment path
-CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
+# ==============================================================================
+# PYTHON VENV SETUP (faster than conda)
+# ==============================================================================
 
-# Create environment if it doesn't exist
-if [ ! -d "$CONDA_ENV_DIR" ]; then
-    echo "Creating new conda environment from environment.yml..."
-    "$CONDA_EXE" env create -f environment.yml --prefix "$CONDA_ENV_DIR" --solver=libmamba
+# Create venv if it doesn't exist
+if [ ! -d "$ENV_PATH" ]; then
+    echo "Creating Python virtual environment..."
+    python -m venv "$ENV_PATH"
 fi
 
-# Update environment if environment.yml changed (do this BEFORE activation)
-UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
-if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
-    echo "Updating environment from environment.yml..."
-    if ! "$CONDA_EXE" env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune --solver=libmamba; then
-        echo "ERROR: Failed to update conda environment"
+# Activate the environment
+echo "Activating virtual environment at $ENV_PATH..."
+source "$ENV_PATH/bin/activate"
+
+# Verify activation
+if [ "$VIRTUAL_ENV" != "$ENV_PATH" ]; then
+    echo "ERROR: Failed to activate virtual environment"
+    exit 1
+fi
+
+# Install/update dependencies if requirements changed
+UPDATE_MARKER="$ENV_PATH/.last_update"
+if [ ! -f "$UPDATE_MARKER" ] || [ requirements.txt -nt "$UPDATE_MARKER" ]; then
+    echo "Installing/updating dependencies from requirements.txt..."
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to install dependencies"
         exit 1
     fi
     touch "$UPDATE_MARKER"
 else
-    echo "Environment is up to date, skipping update (environment.yml unchanged)"
-fi
-
-# Now activate the environment
-echo "Activating conda environment at $CONDA_ENV_DIR..."
-conda activate "$CONDA_ENV_DIR"
-
-# Verify activation worked
-if [ "$CONDA_PREFIX" != "$CONDA_ENV_DIR" ]; then
-    echo "ERROR: Failed to activate conda environment"
-    echo "CONDA_PREFIX: $CONDA_PREFIX"
-    echo "Expected: $CONDA_ENV_DIR"
-    exit 1
+    echo "Dependencies up to date, skipping install"
 fi
 
 echo "Environment setup complete!"
 
-# Install consist library in editable mode if not already installed
+# ==============================================================================
+# CONSIST LIBRARY SETUP
+# ==============================================================================
+
 CONSIST_DIR="$PILATES_DIR/consist"
 if [ ! -d "$CONSIST_DIR" ]; then
     echo "Cloning consist library..."
@@ -124,7 +105,7 @@ fi
 
 # Verify environment
 echo "Python version: $(python --version)"
-echo "Conda environment: $CONDA_DEFAULT_ENV"
+echo "Virtual env: $VIRTUAL_ENV"
 
 # ==============================================================================
 # EXECUTION
@@ -132,19 +113,15 @@ echo "Conda environment: $CONDA_DEFAULT_ENV"
 
 echo "Starting PILATES execution..."
 
-# Change to working directory
 cd "$PILATES_DIR" || exit 1
 
-# Display job parameters
 echo "Config: $1"
 echo "Scenario: $2"
 echo ""
 
-# Show system information
 show_system_info
 
 echo ""
 echo "Running PILATES model..."
 
-# Execute the model
 python run.py -c "$1" -S "$2"
