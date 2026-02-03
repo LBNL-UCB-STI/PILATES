@@ -185,7 +185,7 @@ class GenericRunner(ABC, Model):
                     "A Consist tracker must be active for container execution. "
                     "Ensure the call occurs within a Consist scenario/run context."
                 )
-            allow_external_paths = False
+            strict_mounts = True
             local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
             archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
             if output_paths and local_root and archive_root:
@@ -202,7 +202,7 @@ class GenericRunner(ABC, Model):
                         except ValueError:
                             continue
                         if in_local and not in_archive:
-                            allow_external_paths = True
+                            strict_mounts = False
                             break
             try:
                 from consist.integrations.containers import (
@@ -228,36 +228,8 @@ class GenericRunner(ABC, Model):
                         backend_type=backend_type,
                         pull_latest=pull_latest,
                         lineage_mode=lineage_mode,
-                        allow_external_paths=allow_external_paths,
+                        strict_mounts=strict_mounts,
                     )
-                except TypeError as exc:
-                    if "allow_external_paths" not in str(exc):
-                        raise
-                    logger.warning(
-                        "[%s] Consist run_container does not support allow_external_paths; "
-                        "retrying without it.",
-                        model_name,
-                    )
-                    try:
-                        return consist_run_container(
-                            tracker=tracker,
-                            run_id=f"{model_name}_container",
-                            image=image,
-                            command=full_command_list,
-                            volumes=consist_volumes,
-                            inputs=input_artifacts or [],
-                            outputs=output_paths or [],
-                            environment=environment or {},
-                            working_dir=working_dir,
-                            backend_type=backend_type,
-                            pull_latest=pull_latest,
-                            lineage_mode=lineage_mode,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Consist container execution failed: {e}",
-                            exc_info=True,
-                        )
                 except Exception as e:
                     logger.error(
                         f"Consist container execution failed: {e}",
