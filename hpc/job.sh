@@ -46,7 +46,7 @@ setup_venv() {
 
     if [ ! -d "$VENV_PATH" ]; then
         echo "Creating Python virtual environment..."
-        python -m venv "$VENV_PATH"
+        python3 -m venv "$VENV_PATH"
     fi
 
     echo "Activating virtual environment at $VENV_PATH..."
@@ -165,7 +165,7 @@ if [ ! -d "$CONSIST_DIR" ]; then
     git clone https://github.com/LBNL-UCB-STI/consist.git "$CONSIST_DIR"
 fi
 
-if ! python -c "import consist" 2>/dev/null; then
+if ! python3 -c "import consist" 2>/dev/null; then
     echo "Installing consist library in editable mode..."
     pip install -e "$CONSIST_DIR"
 else
@@ -201,7 +201,7 @@ if ! is_new_format "$CONFIG_FILE"; then
     echo "Detected legacy config format. Migrating to new format..."
     MIGRATED_CONFIG="${CONFIG_FILE%.yaml}_migrated.yaml"
 
-    if python scripts/migrate_config.py "$CONFIG_FILE" "$MIGRATED_CONFIG" --no-validate; then
+    if python3 scripts/migrate_config.py "$CONFIG_FILE" "$MIGRATED_CONFIG" --no-validate; then
         echo "Config migration successful: $MIGRATED_CONFIG"
         CONFIG_FILE="$MIGRATED_CONFIG"
     else
@@ -220,4 +220,4 @@ show_system_info
 echo ""
 echo "Running PILATES model..."
 
-python run.py -c "$CONFIG_FILE" -S "$2"
+python3 run.py -c "$CONFIG_FILE" -S "$2"
