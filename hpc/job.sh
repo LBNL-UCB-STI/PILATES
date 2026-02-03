@@ -75,6 +75,9 @@ setup_venv() {
 setup_conda_fast() {
     echo "Using conda with libmamba solver (fast)..."
 
+    # Load miniconda module only for conda approach
+    module load miniconda3/22.11.1-gcc-11.4.0
+
     CONDA_BASE=$(conda info --base 2>/dev/null)
     source "$CONDA_BASE/etc/profile.d/conda.sh"
     CONDA_EXE="$CONDA_BASE/bin/conda"
@@ -112,12 +115,9 @@ setup_conda_fast() {
 echo "Setting up environment..."
 
 # Load required modules
-module load python/3.11.6
 module load gcc/11.4.0
 module load proj/9.2.1
-
-# Try to load conda module (may or may not be available)
-module load miniconda3/22.11.1-gcc-11.4.0 2>/dev/null || true
+module load python/3.11.6  # Load Python LAST to ensure it takes precedence
 
 # Configure system libraries
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
