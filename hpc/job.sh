@@ -57,6 +57,16 @@ echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
 echo "Setting up conda environment..."
 
+# Initialize conda for non-interactive shell
+# Find and source conda.sh to enable conda activate
+CONDA_BASE=$(conda info --base 2>/dev/null)
+if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+else
+    echo "ERROR: Could not find conda.sh at $CONDA_BASE/etc/profile.d/conda.sh"
+    exit 1
+fi
+
 # Change to PILATES directory
 cd "$PILATES_DIR" || exit 1
 
@@ -67,30 +77,38 @@ CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
 if [ ! -d "$CONDA_ENV_DIR" ]; then
     echo "Creating new conda environment from environment.yml..."
     conda env create -f environment.yml --prefix "$CONDA_ENV_DIR"
+fi
 
-    # Activate environment and install mamba for faster future updates
-    conda activate "$CONDA_ENV_DIR"
-    echo "Installing mamba in user environment for faster future updates..."
-    conda install mamba -c conda-forge -y
-else
-    # Activate environment first
-    conda activate "$CONDA_ENV_DIR"
+# Activate the environment
+echo "Activating conda environment at $CONDA_ENV_DIR..."
+conda activate "$CONDA_ENV_DIR"
 
-    # Install mamba if not in this environment
-    if ! command -v mamba &> /dev/null; then
-        echo "Installing mamba for faster dependency resolution..."
-        conda install mamba -c conda-forge -y
-    fi
+# Verify activation worked
+if [ "$CONDA_PREFIX" != "$CONDA_ENV_DIR" ]; then
+    echo "ERROR: Failed to activate conda environment"
+    echo "CONDA_PREFIX: $CONDA_PREFIX"
+    echo "Expected: $CONDA_ENV_DIR"
+    exit 1
+fi
 
-    # Only update if environment.yml has changed since last update
-    UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
-    if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
-        echo "Updating environment from environment.yml (using mamba)..."
+# Install mamba if not in this environment (install to user env, not system)
+if ! command -v mamba &> /dev/null; then
+    echo "Installing mamba for faster dependency resolution..."
+    conda install -n pilates mamba -c conda-forge -y --prefix "$CONDA_ENV_DIR"
+fi
+
+# Only update if environment.yml has changed since last update
+UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
+if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
+    echo "Updating environment from environment.yml..."
+    if command -v mamba &> /dev/null; then
         mamba env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
-        touch "$UPDATE_MARKER"
     else
-        echo "Environment is up to date, skipping update (environment.yml unchanged)"
+        conda env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
     fi
+    touch "$UPDATE_MARKER"
+else
+    echo "Environment is up to date, skipping update (environment.yml unchanged)"
 fi
 
 echo "Environment setup complete!"
