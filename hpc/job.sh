@@ -58,7 +58,6 @@ echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 echo "Setting up conda environment..."
 
 # Initialize conda for non-interactive shell
-# Find and source conda.sh to enable conda activate
 CONDA_BASE=$(conda info --base 2>/dev/null)
 if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
     source "$CONDA_BASE/etc/profile.d/conda.sh"
@@ -67,19 +66,35 @@ else
     exit 1
 fi
 
+# Store full path to conda executable (needed after activation)
+CONDA_EXE="$CONDA_BASE/bin/conda"
+
 # Change to PILATES directory
 cd "$PILATES_DIR" || exit 1
 
 # Define conda environment path
 CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
 
-# Create or update conda environment
+# Create environment if it doesn't exist
 if [ ! -d "$CONDA_ENV_DIR" ]; then
     echo "Creating new conda environment from environment.yml..."
-    conda env create -f environment.yml --prefix "$CONDA_ENV_DIR"
+    "$CONDA_EXE" env create -f environment.yml --prefix "$CONDA_ENV_DIR"
 fi
 
-# Activate the environment
+# Update environment if environment.yml changed (do this BEFORE activation)
+UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
+if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
+    echo "Updating environment from environment.yml..."
+    if ! "$CONDA_EXE" env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune; then
+        echo "ERROR: Failed to update conda environment"
+        exit 1
+    fi
+    touch "$UPDATE_MARKER"
+else
+    echo "Environment is up to date, skipping update (environment.yml unchanged)"
+fi
+
+# Now activate the environment
 echo "Activating conda environment at $CONDA_ENV_DIR..."
 conda activate "$CONDA_ENV_DIR"
 
@@ -89,20 +104,6 @@ if [ "$CONDA_PREFIX" != "$CONDA_ENV_DIR" ]; then
     echo "CONDA_PREFIX: $CONDA_PREFIX"
     echo "Expected: $CONDA_ENV_DIR"
     exit 1
-fi
-
-# Only update if environment.yml has changed since last update
-UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
-if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
-    echo "Updating environment from environment.yml..."
-    conda env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to update conda environment"
-        exit 1
-    fi
-    touch "$UPDATE_MARKER"
-else
-    echo "Environment is up to date, skipping update (environment.yml unchanged)"
 fi
 
 echo "Environment setup complete!"
