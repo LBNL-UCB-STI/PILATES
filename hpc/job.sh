@@ -78,14 +78,14 @@ CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
 # Create environment if it doesn't exist
 if [ ! -d "$CONDA_ENV_DIR" ]; then
     echo "Creating new conda environment from environment.yml..."
-    "$CONDA_EXE" env create -f environment.yml --prefix "$CONDA_ENV_DIR"
+    "$CONDA_EXE" env create -f environment.yml --prefix "$CONDA_ENV_DIR" --solver=libmamba
 fi
 
 # Update environment if environment.yml changed (do this BEFORE activation)
 UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
 if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
     echo "Updating environment from environment.yml..."
-    if ! "$CONDA_EXE" env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune; then
+    if ! "$CONDA_EXE" env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune --solver=libmamba; then
         echo "ERROR: Failed to update conda environment"
         exit 1
     fi
