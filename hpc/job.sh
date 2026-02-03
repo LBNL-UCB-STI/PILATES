@@ -91,20 +91,14 @@ if [ "$CONDA_PREFIX" != "$CONDA_ENV_DIR" ]; then
     exit 1
 fi
 
-# Install mamba if not in this environment (install to user env, not system)
-if ! command -v mamba &> /dev/null; then
-    echo "Installing mamba for faster dependency resolution..."
-    conda install -n pilates mamba -c conda-forge -y --prefix "$CONDA_ENV_DIR"
-fi
-
 # Only update if environment.yml has changed since last update
 UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
 if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
     echo "Updating environment from environment.yml..."
-    if command -v mamba &> /dev/null; then
-        mamba env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
-    else
-        conda env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
+    conda env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to update conda environment"
+        exit 1
     fi
     touch "$UPDATE_MARKER"
 else
