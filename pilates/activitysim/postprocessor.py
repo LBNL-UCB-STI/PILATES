@@ -770,8 +770,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if os.path.exists(zarr_source_path):
             zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
             if os.path.exists(zarr_target_path):
-                shutil.rmtree(zarr_target_path)
-            shutil.copytree(zarr_source_path, zarr_target_path)
+                if os.path.isdir(zarr_target_path):
+                    shutil.rmtree(zarr_target_path)
+                else:
+                    os.remove(zarr_target_path)
+            if os.path.isdir(zarr_source_path):
+                shutil.copytree(zarr_source_path, zarr_target_path)
+            else:
+                shutil.copy2(zarr_source_path, zarr_target_path)
             content_hash = _resolve_content_hash(zarr_source_path)
 
             processed_records.append(
