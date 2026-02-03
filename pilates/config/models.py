@@ -388,6 +388,15 @@ class BeamConfig(BaseModel):
     ridehail_path_map: Dict[str, str] = Field(
         default_factory=dict, description="Ridehail path mappings"
     )
+    skim_previous_weight: float = Field(
+        0.9,
+        description=(
+            "Weight on previous skims when blending trip counts. "
+            "New counts are always fully applied."
+        ),
+        ge=0.0,
+        le=1.0,
+    )
 
 
 # =============================================================================

@@ -75,6 +75,16 @@ def _log_record_store(
     workspace: Workspace,
     direction: str,
 ) -> None:
+    def _h5_table_filter_from_list(tables_used):
+        normalized = {name if name.startswith("/") else f"/{name}" for name in tables_used if name}
+
+        def _filter(table_name: str) -> bool:
+            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+                return False
+            return table_name in normalized
+
+        return _filter
+
     schema_keys = {"canonical_zones_source", "omx_skims"}
     for key, record in _iter_unique_records(record_store):
         path = record.get_absolute_path(base_path=workspace.full_path)
@@ -96,12 +106,23 @@ def _log_record_store(
         meta = {}
         if key in schema_keys:
             meta["profile_file_schema"] = "if_changed"
-        artifact = log_fn(
-            path,
-            key=key,
-            description=getattr(record, "description", None),
-            **meta,
-        )
+        tables_used = getattr(record, "h5_tables_used", None)
+        if tables_used:
+            artifact = cr.log_h5_container(
+                path,
+                key=key,
+                direction=direction,
+                table_filter=_h5_table_filter_from_list(tables_used),
+                description=getattr(record, "description", None),
+                **meta,
+            )
+        else:
+            artifact = log_fn(
+                path,
+                key=key,
+                description=getattr(record, "description", None),
+                **meta,
+            )
         if artifact is not None and hasattr(record, "content_hash"):
             record_hash = getattr(artifact, "hash", None)
             if record_hash:

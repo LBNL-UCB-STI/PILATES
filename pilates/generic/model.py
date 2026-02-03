@@ -14,6 +14,68 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_H5_INTERNAL_TOKENS = ("_axis", "_block", "_level", "_label")
+
+
+def _normalize_h5_table_name(name: str) -> str:
+    if name.startswith("/"):
+        return name
+    return f"/{name}"
+
+
+def _h5_table_filter_from_list(tables_used):
+    normalized = {_normalize_h5_table_name(name) for name in tables_used if name}
+
+    def _filter(table_name: str) -> bool:
+        if any(tok in table_name for tok in _H5_INTERNAL_TOKENS):
+            return False
+        return table_name in normalized
+
+    return _filter
+
+
+def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
+    from pilates.generic.records import RecordStore as _RecordStore
+
+    if not isinstance(record_store, _RecordStore):
+        return
+
+    for record in record_store.all_records():
+        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
+        if not key:
+            continue
+
+        tables_used = getattr(record, "h5_tables_used", None)
+        if tables_used:
+            path = getattr(record, "file_path", None) or getattr(
+                record, "repo_path", None
+            )
+        else:
+            path = getattr(record, "container_uri", None) or getattr(record, "uri", None)
+            if not path:
+                path = getattr(record, "file_path", None) or getattr(
+                    record, "repo_path", None
+                )
+        if not path:
+            continue
+
+        description = getattr(record, "description", None)
+        if tables_used:
+            table_filter = _h5_table_filter_from_list(tables_used)
+            cr.log_h5_container(
+                path,
+                key=key,
+                direction=direction,
+                table_filter=table_filter,
+                description=description,
+            )
+        else:
+            if direction == "input":
+                cr.log_input(path, key=key, description=description)
+            else:
+                cr.log_output(path, key=key, description=description)
+
+
 def provenance_logging(func):
     """
     Thin PILATES-specific provenance bridge.
@@ -90,13 +152,13 @@ def provenance_logging(func):
                 ),
             )
             if input_record_store:
-                cr.log_artifacts(input_record_store.to_mapping(), direction="input")
+                _log_record_store(input_record_store, direction="input")
 
         func_result = func(self, *args, **kwargs)
 
         if cr.current_run():
             if isinstance(func_result, RecordStore):
-                cr.log_artifacts(func_result.to_mapping(), direction="output")
+                _log_record_store(func_result, direction="output")
             elif func_result is not None:
                 logger.warning(
                     f"Decorated method {func.__name__} returned unexpected type: "

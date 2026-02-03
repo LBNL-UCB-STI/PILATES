@@ -296,10 +296,27 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.info(
                 f"[AtlasPreprocessor] Recording UrbanSim HDF5 container as input: {urbansim_output}"
             )
+            tables_used = []
+            for year in (self.state.year, self.state.year - 1):
+                if year < self.state.start_year:
+                    continue
+                year_prefix = "" if year == self.state.start_year else f"/{year}"
+                tables_used.extend(
+                    [
+                        f"{year_prefix}/households",
+                        f"{year_prefix}/blocks",
+                        f"{year_prefix}/persons",
+                        f"{year_prefix}/residential_units",
+                        f"{year_prefix}/jobs",
+                    ]
+                )
+                if year != self.state.start_year:
+                    tables_used.append(f"{year_prefix}/graveyard")
             h5_file_record = FileRecord(
                 file_path=urbansim_output,
                 description="UrbanSim output HDF5 container for Atlas input preparation",
                 short_name="usim_h5_container",
+                h5_tables_used=tables_used or None,
             )
             input_records.append(h5_file_record)
         else:

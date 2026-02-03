@@ -364,7 +364,11 @@ def copy_skims_for_unobserved_modes(mapping, skims_ds):
 
 
 def _postprocess_tnc_zarr(
-    skims_ds, timePeriods, settings, completed_failed_dict, use_rh_modes=False
+    skims_ds,
+    timePeriods,
+    settings,
+    completed_failed_dict,
+    use_rh_modes=False,
 ):
     """
     Applies TNC/RH-specific post-processing rules (REJECTIONPROB, IWAIT filling,
@@ -1110,7 +1114,13 @@ def _transform_measure(
 
 
 def _merge_one_zarr_measure_from_zarr(
-    partial_skims_ds, skims_ds, path, measure, timePeriods, completed_3d, failed_3d
+    partial_skims_ds,
+    skims_ds,
+    path,
+    measure,
+    timePeriods,
+    completed_3d,
+    failed_3d,
 ):
     """
     Merges a single measure's data from Zarr partial skims into the master Zarr dataset.
@@ -1166,7 +1176,13 @@ def _merge_one_zarr_measure_from_zarr(
 
 
 def _merge_one_zarr_measure(
-    partialSkims, skims_ds, path, measure, timePeriods, completed_3d, failed_3d
+    partialSkims,
+    skims_ds,
+    path,
+    measure,
+    timePeriods,
+    completed_3d,
+    failed_3d,
 ):
     """
     Merges a single measure's data for a given path and all time periods
@@ -1288,7 +1304,13 @@ def _merge_one_zarr_measure(
     return path, measure
 
 
-def _merge_zarr_trip_counts(allSkims, path, completed, failed):
+def _merge_zarr_trip_counts(
+    allSkims,
+    path,
+    completed,
+    failed,
+    previous_weight=0.9,
+):
     key_completed = f"{path}_TRIPS"
     key_failed = f"{path}_FAILURES"
     any_observed = (completed + failed) > 0
@@ -1299,8 +1321,10 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
         logger.info(
             f"For {path} previously had {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips"
         )
-        prev_completed = np.ceil(0.9 * prev_completed + completed).astype(int)
-        prev_failed = np.ceil(0.9 * prev_failed + failed).astype(int)
+        prev_completed = np.ceil(previous_weight * prev_completed + completed).astype(
+            int
+        )
+        prev_failed = np.ceil(previous_weight * prev_failed + failed).astype(int)
         allSkims[key_completed].data[
             :
         ] = prev_completed  # Use [:] to modify data in place
@@ -1311,6 +1335,33 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
     else:
         logger.warning(
             f"Skipping trip counts merge for {path} as {key_completed} or {key_failed} does not exist in target skims file"
+        )
+
+
+def _merge_zarr_trip_counts_slice(
+    allSkims,
+    path,
+    completed_tp,
+    failed_tp,
+    tp_idx,
+    previous_weight=0.9,
+):
+    key_completed = f"{path}_TRIPS"
+    key_failed = f"{path}_FAILURES"
+    if key_completed in allSkims and key_failed in allSkims:
+        prev_completed_tp = np.nan_to_num(allSkims[key_completed].data[:, :, tp_idx])
+        prev_failed_tp = np.nan_to_num(allSkims[key_failed].data[:, :, tp_idx])
+        prev_completed_tp = np.ceil(
+            previous_weight * prev_completed_tp + completed_tp
+        ).astype(int)
+        prev_failed_tp = np.ceil(
+            previous_weight * prev_failed_tp + failed_tp
+        ).astype(int)
+        allSkims[key_completed].data[:, :, tp_idx] = prev_completed_tp
+        allSkims[key_failed].data[:, :, tp_idx] = prev_failed_tp
+    else:
+        logger.warning(
+            f"Skipping trip counts merge for {path} at time index {tp_idx} as {key_completed} or {key_failed} does not exist in target skims file"
         )
 
 
@@ -1437,7 +1488,11 @@ def _handle_transit_mode_availability(skims_ds, timePeriods):
 
 
 def _consolidate_tnc_data_zarr(
-    partialSkims, skims_ds, timePeriods, completed_failed_dict_providers, settings
+    partialSkims,
+    skims_ds,
+    timePeriods,
+    completed_failed_dict_providers,
+    settings,
 ):
     """
     Consolidates skims from multiple TNC providers (e.g., TNC_SINGLE_UBER, TNC_SINGLE_LYFT)
@@ -1461,9 +1516,8 @@ def _consolidate_tnc_data_zarr(
 
     Returns:
     --------
-    dict
-        A dictionary containing consolidated completed/failed trip counts (3D arrays)
-        for the RH_SOLO and RH_SHARED modes.
+    set
+        A set containing consolidated RH mode names.
     """
     logger.info("Starting TNC fleet consolidation from OMX to Zarr...")
 
@@ -1576,7 +1630,7 @@ def _consolidate_tnc_data_zarr(
 
     logger.debug(f"Grouped TNC sources from OMX: {grouped_sources}")
 
-    consolidated_completed_failed_dict = {}  # Store consolidated counts for RH_ modes
+    consolidated_modes = set()
 
     # First, consolidate TRIPS and FAILURES to get total counts per RH_ mode
     for base_mode_key, measure in [(k[0], k[1]) for k in grouped_sources.keys()]:
@@ -1599,51 +1653,32 @@ def _consolidate_tnc_data_zarr(
             )
         target_da = skims_ds[target_var_name]
 
-        # Initialize accumulation array for this measure
-        consolidated_data_3d = np.zeros(zarr_shape, dtype=np.float32)
-
-        # Accumulate data from all relevant provider sources
-        for provider, period, omx_key in grouped_sources.get(
-            (base_mode_key, measure), []
-        ):
-            if omx_key in partialSkims:
-                try:
-                    tp_idx = tp_to_idx[period]
-                    input_vals_tp = np.nan_to_num(
-                        partialSkims[omx_key][:]
-                    )  # Get 2D numpy array for this period
-                    # Ensure shape compatibility before summing
-                    if input_vals_tp.shape == zarr_shape[:2]:  # Compare (zones, zones)
-                        consolidated_data_3d[:, :, tp_idx] += input_vals_tp
-                    else:
-                        logger.warning(
-                            f"Shape mismatch for partial skim {omx_key}. Expected {zarr_shape[:2]}, got {input_vals_tp.shape}. Skipping sum."
+        for tp_idx, period in enumerate(timePeriods):
+            consolidated_tp = np.zeros(zarr_shape[:2], dtype=np.float32)
+            for provider, period_key, omx_key in grouped_sources.get(
+                (base_mode_key, measure), []
+            ):
+                if period_key != period:
+                    continue
+                if omx_key in partialSkims:
+                    try:
+                        input_vals_tp = np.nan_to_num(
+                            partialSkims[omx_key][:]
+                        )  # 2D numpy array for this period
+                        if input_vals_tp.shape == zarr_shape[:2]:
+                            consolidated_tp += input_vals_tp
+                        else:
+                            logger.warning(
+                                f"Shape mismatch for partial skim {omx_key}. Expected {zarr_shape[:2]}, got {input_vals_tp.shape}. Skipping sum."
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Error reading partial skim {omx_key} for consolidation: {e}"
                         )
-                except Exception as e:
-                    logger.error(
-                        f"Error reading partial skim {omx_key} for consolidation: {e}"
-                    )
-            else:
-                logger.debug(f"Partial skim {omx_key} not found. Skipping.")
-
-        # Assign the summed data to the target Zarr variable
-        target_da.data[:] = consolidated_data_3d
-        logger.debug(
-            f"Summed {measure} into '{target_var_name}'. Total: {consolidated_data_3d.sum():.0f}"
-        )
-
-        # Store the consolidated counts
-        if target_mode not in consolidated_completed_failed_dict:
-            # Initialize with zeros of the correct shape
-            consolidated_completed_failed_dict[target_mode] = [
-                np.zeros(zarr_shape, dtype=np.float32),
-                np.zeros(zarr_shape, dtype=np.float32),
-            ]
-
-        if measure == "TRIPS":
-            consolidated_completed_failed_dict[target_mode][0][:] = consolidated_data_3d
-        elif measure == "FAILURES":
-            consolidated_completed_failed_dict[target_mode][1][:] = consolidated_data_3d
+                else:
+                    logger.debug(f"Partial skim {omx_key} not found. Skipping.")
+            target_da.data[:, :, tp_idx] = consolidated_tp
+        consolidated_modes.add(target_mode)
 
     # Now, consolidate other measures using weighted average
     for (base_mode_key, measure), sources in grouped_sources.items():
@@ -1666,95 +1701,68 @@ def _consolidate_tnc_data_zarr(
             )
         target_da = skims_ds[target_var_name]
 
-        # Initialize accumulation arrays (weighted sum and sum of weights) for this measure
-        sum_weighted_values_3d = np.zeros(zarr_shape, dtype=np.float32)
-        sum_weights_3d = np.zeros(
-            zarr_shape, dtype=np.float32
-        )  # Sum of completed trips
-
-        # Accumulate data from all relevant provider sources
-        for provider, period, omx_key in sources:
-            if omx_key in partialSkims:
-                try:
-                    tp_idx = tp_to_idx[period]
-                    input_vals_tp = np.nan_to_num(
-                        partialSkims[omx_key][:]
-                    )  # Get 2D data
-
-                    # Get corresponding TRIPS data for this provider and period from the provider dict
-                    provider_mode_key = (
-                        f"TNC_{base_mode}_{provider}"  # e.g. TNC_SINGLE_UBER
-                    )
-                    if provider_mode_key in completed_failed_dict_providers:
-                        provider_completed_3d, _ = completed_failed_dict_providers[
-                            provider_mode_key
-                        ]
-                        completed_tp = np.nan_to_num(
-                            provider_completed_3d[:, :, tp_idx]
-                        )  # Get 2D completed trips for this provider/period
-
-                        # Ensure shapes match
-                        if (
-                            input_vals_tp.shape == zarr_shape[:2]
-                            and completed_tp.shape == zarr_shape[:2]
-                        ):
-                            # Handle negative values in input_vals_tp before weighting
-                            input_vals_tp[input_vals_tp < 0] = 0.0
-
-                            # Weighted value = measure_value * completed_trips
-                            weighted_values_tp = input_vals_tp * completed_tp
-                            sum_weighted_values_3d[:, :, tp_idx] += weighted_values_tp
-                            sum_weights_3d[
-                                :, :, tp_idx
-                            ] += completed_tp  # Sum of completed trips are the weights
-                        else:
-                            logger.warning(
-                                f"Shape mismatch for partial skim {omx_key} or its trips data. Skipping weighted average contribution."
+        for tp_idx, period in enumerate(timePeriods):
+            sum_weighted_values_tp = np.zeros(zarr_shape[:2], dtype=np.float32)
+            sum_weights_tp = np.zeros(zarr_shape[:2], dtype=np.float32)
+            for provider, period_key, omx_key in sources:
+                if period_key != period:
+                    continue
+                if omx_key in partialSkims:
+                    try:
+                        input_vals_tp = np.nan_to_num(partialSkims[omx_key][:])
+                        provider_mode_key = f"TNC_{base_mode}_{provider}"
+                        if provider_mode_key in completed_failed_dict_providers:
+                            provider_completed_3d, _ = completed_failed_dict_providers[
+                                provider_mode_key
+                            ]
+                            completed_tp = np.nan_to_num(
+                                provider_completed_3d[:, :, tp_idx]
                             )
-                    else:
-                        logger.debug(
-                            f"Completed trip data for provider mode {provider_mode_key} not found in provider dict. Skipping weighted average contribution for {omx_key}."
+                            if (
+                                input_vals_tp.shape == zarr_shape[:2]
+                                and completed_tp.shape == zarr_shape[:2]
+                            ):
+                                input_vals_tp[input_vals_tp < 0] = 0.0
+                                sum_weighted_values_tp += input_vals_tp * completed_tp
+                                sum_weights_tp += completed_tp
+                            else:
+                                logger.warning(
+                                    f"Shape mismatch for partial skim {omx_key} or its trips data. Skipping weighted average contribution."
+                                )
+                        else:
+                            logger.debug(
+                                f"Completed trip data for provider mode {provider_mode_key} not found in provider dict. Skipping weighted average contribution for {omx_key}."
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Error processing partial skim {omx_key} for weighted consolidation: {e}"
                         )
-                except Exception as e:
-                    logger.error(
-                        f"Error processing partial skim {omx_key} for weighted consolidation: {e}"
-                    )
-            else:
-                logger.debug(f"Partial skim {omx_key} not found. Skipping.")
+                else:
+                    logger.debug(f"Partial skim {omx_key} not found. Skipping.")
 
-        # Calculate the weighted average for the entire 3D array
-        consolidated_data_3d = np.zeros(
-            zarr_shape, dtype=np.float32
-        )  # Initialize with zeros
-        valid_weights_mask_3d = sum_weights_3d != 0
-        # Use np.divide with 'where' and 'out' for safe division
-        np.divide(
-            sum_weighted_values_3d,
-            sum_weights_3d,
-            out=consolidated_data_3d,  # Write results into the consolidated data array
-            where=valid_weights_mask_3d,
-        )
-
-        # Assign the calculated data to the target Zarr variable
-        target_da.data[:] = consolidated_data_3d
-        mean_weighted_avg = (
-            np.nanmean(consolidated_data_3d[valid_weights_mask_3d])
-            if valid_weights_mask_3d.any()
-            else np.nan
-        )
-        logger.debug(
-            f"Calculated weighted average for {measure} into '{target_var_name}'. Mean (weighted): {mean_weighted_avg:.4f}"
-        )
+            consolidated_tp = np.zeros(zarr_shape[:2], dtype=np.float32)
+            valid_weights_mask = sum_weights_tp != 0
+            np.divide(
+                sum_weighted_values_tp,
+                sum_weights_tp,
+                out=consolidated_tp,
+                where=valid_weights_mask,
+            )
+            target_da.data[:, :, tp_idx] = consolidated_tp
 
     logger.info("Completed TNC fleet consolidation from OMX to Zarr.")
 
     # Return consolidated counts for use in post-processing
-    return consolidated_completed_failed_dict
+    return consolidated_modes
 
 
 # New function to transfer TNC provider data from OMX to Zarr without consolidation
 def _transfer_tnc_provider_data_zarr(
-    partialSkims, skims_ds, timePeriods, completed_failed_dict_providers, settings
+    partialSkims,
+    skims_ds,
+    timePeriods,
+    completed_failed_dict_providers,
+    settings,
 ):
     """
     Transfers provider-specific TNC skims from partialSkims (OMX) to skims_ds (Zarr).
@@ -2600,9 +2608,13 @@ def _merge_beam_skims_to_zarr(
             partialSkims, timePeriods
         )
 
+    previous_weight = get_setting(settings, "beam.skim_previous_weight", 0.9)
+
     # Merge trip counts
     for path, (completed, failed) in completed_failed_dict_all.items():
-        _merge_zarr_trip_counts(skims_ds, path, completed, failed)
+        _merge_zarr_trip_counts(
+            skims_ds, path, completed, failed, previous_weight=previous_weight
+        )
 
     if partial_skims_ds or partialSkims:
         try:
@@ -2614,6 +2626,7 @@ def _merge_beam_skims_to_zarr(
                     timePeriods,
                     settings,
                     completed_failed_dict_all,
+                    previous_weight=previous_weight,
                 )
             else:
                 tnc_modes_processed = _process_all_tnc_logic(
@@ -2848,48 +2861,41 @@ def _merge_beam_skims_to_zarr(
 
     # Step 6: Save the updated Zarr dataset
     logger.info(f"Started writing updated zarr skims to {all_skims_path}")
-    # Use mode='w' to overwrite with the updated data, consolidated=True for performance
-    # Ensure zarr_version=2 for compatibility
     try:
         # Defensively ensure coordinates are correct before saving, to counteract any
         # potential corruption or misalignment that may have occurred during the merge.
         expected_coords = np.arange(len(canonical_order))
+        otaz_corrected = False
+        dtaz_corrected = False
         if not np.array_equal(skims_ds.coords["otaz"].values, expected_coords):
             logger.warning(
                 "Correcting 'otaz' coordinates to be 0-based before final save."
             )
-            skims_ds = skims_ds.assign_coords(otaz=expected_coords)
+            skims_ds.coords["otaz"].data[:] = expected_coords
+            otaz_corrected = True
         if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
             logger.warning(
                 "Correcting 'dtaz' coordinates to be 0-based before final save."
             )
-            skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
+            skims_ds.coords["dtaz"].data[:] = expected_coords
+            dtaz_corrected = True
 
-        skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
+        skims_ds.to_zarr(
+            all_skims_path, mode="a", consolidated=False, zarr_format=2
+        )
 
-        if "time_period" in skims_ds.coords:
-            logger.debug(
-                "Pre-write time_period coords for %s: %s",
-                all_skims_path,
-                list(skims_ds.coords["time_period"].values),
-            )
+        import zarr
 
-        temp_path = f"{all_skims_path}_temp_merged"
-        if os.path.exists(temp_path):
-            shutil.rmtree(temp_path)
-        for name in skims_ds.variables:
-            skims_ds[name].encoding = {}
-        try:
-            skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to write skims in Zarr v2 format. ActivitySim requires "
-                "Zarr v2; if that requirement changes, update the skims writer "
-                "to allow newer formats."
-            ) from e
-        if os.path.exists(all_skims_path):
-            shutil.rmtree(all_skims_path)
-        os.rename(temp_path, all_skims_path)
+        zgroup = zarr.open_group(all_skims_path, mode="a")
+        if otaz_corrected and "otaz" in zgroup:
+            zgroup["otaz"][:] = expected_coords
+        if dtaz_corrected and "dtaz" in zgroup:
+            zgroup["dtaz"][:] = expected_coords
+        zgroup.attrs["ZARR_WRITE_TIME"] = time.time()
+        if "original_zone_ids" in skims_ds.attrs:
+            zgroup.attrs["original_zone_ids"] = skims_ds.attrs["original_zone_ids"]
+
+        zarr.consolidate_metadata(all_skims_path)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (
             True  # Indicate merge/post-processing was attempted successfully
@@ -2933,7 +2939,12 @@ def _merge_beam_skims_to_zarr(
 
 
 def _process_all_tnc_logic_zarr(
-    partial_skims_ds, skims_ds, timePeriods, settings, completed_failed_dict_all
+    partial_skims_ds,
+    skims_ds,
+    timePeriods,
+    settings,
+    completed_failed_dict_all,
+    previous_weight=0.9,
 ):
     """
     Process TNC/RH logic for Zarr format partial skims.
@@ -2959,20 +2970,25 @@ def _process_all_tnc_logic_zarr(
         for target_mode, provider_modes in rh_consolidation.items():
             logger.info(f"Consolidating {provider_modes} into {target_mode}")
 
-            # Accumulate trip counts across providers
-            shape = completed_failed_dict_all[provider_modes[0]][0].shape
-            consolidated_completed = np.zeros(shape, dtype=np.float32)
-            consolidated_failed = np.zeros(shape, dtype=np.float32)
-
-            for provider_mode in provider_modes:
-                completed, failed = completed_failed_dict_all[provider_mode]
-                consolidated_completed += completed
-                consolidated_failed += failed
-
-            # Update trip counts in target dataset
-            _merge_zarr_trip_counts(
-                skims_ds, target_mode, consolidated_completed, consolidated_failed
-            )
+            # Accumulate trip counts across providers per time period
+            for tp_idx in range(len(timePeriods)):
+                consolidated_completed_tp = np.zeros(
+                    completed_failed_dict_all[provider_modes[0]][0].shape[:2],
+                    dtype=np.float32,
+                )
+                consolidated_failed_tp = np.zeros_like(consolidated_completed_tp)
+                for provider_mode in provider_modes:
+                    completed, failed = completed_failed_dict_all[provider_mode]
+                    consolidated_completed_tp += completed[:, :, tp_idx]
+                    consolidated_failed_tp += failed[:, :, tp_idx]
+                _merge_zarr_trip_counts_slice(
+                    skims_ds,
+                    target_mode,
+                    consolidated_completed_tp,
+                    consolidated_failed_tp,
+                    tp_idx,
+                    previous_weight=previous_weight,
+                )
 
             # Process each measure for this RH mode
             # Get all measures from the first provider as a template
@@ -2997,8 +3013,8 @@ def _process_all_tnc_logic_zarr(
                     template_var = f"{first_provider}_{measure}"
                     if template_var in partial_skims_ds.data_vars:
                         skims_ds[target_var_name] = xr.DataArray(
-                            np.zeros_like(
-                                partial_skims_ds[template_var].values, dtype=np.float32
+                            np.zeros(
+                                partial_skims_ds[template_var].shape, dtype=np.float32
                             ),
                             coords=partial_skims_ds[template_var].coords,
                             dims=partial_skims_ds[template_var].dims,
@@ -3007,47 +3023,55 @@ def _process_all_tnc_logic_zarr(
 
                 # Consolidate data from all providers
                 if target_var_name in skims_ds.data_vars:
-                    consolidated_data = np.zeros_like(skims_ds[target_var_name].values)
-                    total_weights = np.zeros_like(consolidated_completed)
+                    for tp_idx in range(len(timePeriods)):
+                        consolidated_data_tp = np.zeros(
+                            skims_ds[target_var_name].shape[:2], dtype=np.float32
+                        )
+                        total_weights_tp = np.zeros_like(consolidated_data_tp)
 
-                    for provider_mode in provider_modes:
-                        provider_var = f"{provider_mode}_{measure}"
-                        if provider_var in partial_skims_ds.data_vars:
-                            provider_data = partial_skims_ds[provider_var].values
-                            provider_completed = completed_failed_dict_all[
-                                provider_mode
-                            ][0]
+                        for provider_mode in provider_modes:
+                            provider_var = f"{provider_mode}_{measure}"
+                            if provider_var in partial_skims_ds.data_vars:
+                                provider_data_tp = partial_skims_ds[
+                                    provider_var
+                                ].data[:, :, tp_idx]
+                                provider_completed_tp = completed_failed_dict_all[
+                                    provider_mode
+                                ][0][:, :, tp_idx]
 
-                            # Weight by completed trips
-                            mask = provider_completed > 0
-                            consolidated_data[mask] += (
-                                provider_data[mask] * provider_completed[mask]
-                            )
-                            total_weights[mask] += provider_completed[mask]
+                                mask = provider_completed_tp > 0
+                                consolidated_data_tp[mask] += (
+                                    provider_data_tp[mask] * provider_completed_tp[mask]
+                                )
+                                total_weights_tp[mask] += provider_completed_tp[mask]
 
-                    # Compute weighted average
-                    mask = total_weights > 0
-                    consolidated_data[mask] = (
-                        consolidated_data[mask] / total_weights[mask]
-                    )
+                        mask = total_weights_tp > 0
+                        consolidated_data_tp[mask] = (
+                            consolidated_data_tp[mask] / total_weights_tp[mask]
+                        )
 
-                    # Apply transformations
-                    for tpIdx in range(consolidated_data.shape[2]):
+                        completed_tp = skims_ds[f"{target_mode}_TRIPS"].data[
+                            :, :, tp_idx
+                        ]
+                        failed_tp = skims_ds[f"{target_mode}_FAILURES"].data[
+                            :, :, tp_idx
+                        ]
+
                         mask_update, vals_update, to_cancel = _transform_measure(
-                            consolidated_data[:, :, tpIdx],
-                            consolidated_completed[:, :, tpIdx],
-                            consolidated_failed[:, :, tpIdx],
+                            consolidated_data_tp,
+                            completed_tp,
+                            failed_tp,
                             measure,
                             target_mode,
                         )
 
                         if mask_update.any():
-                            skims_ds[target_var_name].data[:, :, tpIdx][
+                            skims_ds[target_var_name].data[:, :, tp_idx][
                                 mask_update
                             ] = vals_update
 
                         if to_cancel is not None and to_cancel.any():
-                            skims_ds[target_var_name].data[:, :, tpIdx][to_cancel] = 0.0
+                            skims_ds[target_var_name].data[:, :, tp_idx][to_cancel] = 0.0
 
             tnc_modes_processed.add(target_mode)
 
@@ -3123,7 +3147,11 @@ def _process_all_tnc_logic_zarr(
 
 
 def _process_all_tnc_logic(
-    partialSkims, skims_ds, timePeriods, settings, completed_failed_dict_all
+    partialSkims,
+    skims_ds,
+    timePeriods,
+    settings,
+    completed_failed_dict_all,
 ):
     """
     Handles all TNC/RH related skim processing:
@@ -3159,18 +3187,20 @@ def _process_all_tnc_logic(
     if consolidate_tnc_fleets:
         logger.info("TNC fleet consolidation enabled.")
         # Step 2a: Consolidate TNC provider data into RH_* variables in skims_ds
-        # This function also returns the consolidated RH counts
-        consolidated_completed_failed_dict = _consolidate_tnc_data_zarr(
-            partialSkims, skims_ds, timePeriods, completed_failed_dict_all, settings
+        # This function returns the consolidated RH modes
+        consolidated_modes = _consolidate_tnc_data_zarr(
+            partialSkims,
+            skims_ds,
+            timePeriods,
+            completed_failed_dict_all,
+            settings,
         )
         # Add consolidated RH modes to the list for post-processing
-        tnc_modes_to_postprocess.update(consolidated_completed_failed_dict.keys())
-        # Use the consolidated counts for post-processing
-        completed_failed_dict_for_postprocess = consolidated_completed_failed_dict
+        tnc_modes_to_postprocess.update(consolidated_modes)
 
         # The consolidated variables (RH_*) are now in skims_ds.
         # We need to get their names to return them as handled.
-        for target_mode in consolidated_completed_failed_dict.keys():
+        for target_mode in consolidated_modes:
             for (
                 measure
             ) in (
@@ -3184,7 +3214,11 @@ def _process_all_tnc_logic(
         # Step 2a: Transfer TNC provider data into TNC_* variables in skims_ds
         # This function returns the names of variables transferred.
         transferred_vars = _transfer_tnc_provider_data_zarr(
-            partialSkims, skims_ds, timePeriods, completed_failed_dict_all, settings
+            partialSkims,
+            skims_ds,
+            timePeriods,
+            completed_failed_dict_all,
+            settings,
         )
         processed_vars.update(transferred_vars)
 
@@ -3525,7 +3559,7 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
     )
     try:
         skims.to_zarr(
-            all_skims_path, mode="w", consolidated=True, zarr_version=2
+            all_skims_path, mode="w", consolidated=True, zarr_format=2
         )  # Use mode='w' to overwrite
         logger.info("Completed writing zarr skims after trimming successfully.")
     except Exception as e:

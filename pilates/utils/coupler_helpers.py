@@ -556,13 +556,31 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
-    h5_container = bool(meta.pop("h5_container", False))
+    def _h5_table_filter_from_list(tables_used):
+        normalized = {
+            name if name.startswith("/") else f"/{name}"
+            for name in tables_used
+            if name
+        }
+
+        def _filter(table_name: str) -> bool:
+            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+                return False
+            return table_name in normalized
+
+        return _filter
+
+    tables_used = meta.pop("h5_tables_used", None)
+    h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
         return cr.log_h5_container(
             path,
             key=key,
             direction=direction,
             description=description,
+            table_filter=_h5_table_filter_from_list(tables_used)
+            if tables_used
+            else None,
             **meta,
         )
     if direction == "output":

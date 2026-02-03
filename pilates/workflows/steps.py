@@ -1634,12 +1634,30 @@ def make_activitysim_preprocess_step(
                 if input_key == USIM_H5_UPDATED
                 else f"UrbanSim datastore for ActivitySim year {state.year}"
             )
+            h5_tables_used = [
+                "households",
+                "persons",
+                "jobs",
+                "blocks",
+            ]
+            start_year = state.start_year
+            if start_year is not None:
+                h5_tables_used.extend(
+                    [
+                        f"/{start_year}/households",
+                        f"/{start_year}/persons",
+                        f"/{start_year}/jobs",
+                        f"/{start_year}/blocks",
+                    ]
+                )
             log_and_set_input(
                 key=input_key,
                 path=usim_path,
                 description=input_desc,
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                h5_tables_used=h5_tables_used,
             )
         return {}
 

@@ -209,7 +209,7 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                     skims_ds[name].encoding = {}
                 try:
                     skims_ds.to_zarr(
-                        temp_path, mode="w", consolidated=True, zarr_version=2
+                        temp_path, mode="w", consolidated=True, zarr_format=2
                     )
                 except Exception as e:
                     raise RuntimeError(
