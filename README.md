@@ -1,144 +1,174 @@
 <p align="center"><img src="logo_multi.png" width="700" alt="PILATES Logo"></p>
 
-# PILATES
+**PILATES** (**P**latform for **I**ntegrated **L**anduse **A**nd **T**ransportation **E**xperiments and **S**imulation) is a framework for orchestrating containerized microsimulation models to study the co-evolution of land use and transportation systems. Designed for long-term regional forecasting, PILATES enables researchers and planners to simulate complex urban dynamics over multi-decade periods by linking specialized models that operate at different time scales.
 
-**Platform for Integrated Landuse And Transportation Experiments and Simulation**
+Rather than tightly coupling models within a single software process, PILATES orchestrates them in a containerized environment. This modular architecture allows it to leverage the behavioral sophistication of existing specialized models with minimal modification, while providing robust state management and reproducibility.
 
-PILATES is a containerized microsimulation framework that orchestrates multiple transportation and land use models to study long-term urban dynamics. It enables researchers and planners to simulate complex feedback loops between transportation systems, land use patterns, and technology adoption over decades.
+-----
 
-## Why PILATES?
+## Integrated Simulation Models
 
-Traditional transportation models often operate in isolation, missing critical feedback loops between land use and transportation. PILATES solves this by orchestrating specialized models in containers, preserving their individual strengths while enabling integrated analysis.
+PILATES integrates several leading microsimulation models to create a comprehensive forecasting platform:
 
-**Key Benefits:**
-- **Modular**: Leverage existing models (UrbanSim, ActivitySim, BEAM) without modification
-- **Flexible**: Configure different model combinations and execution frequencies
-- **Reproducible**: Complete provenance tracking and state management
-- **Scalable**: Built for high-performance computing environments
+  * **[UrbanSim](https://github.com/UDST/urbansim)**: Models long-term metropolitan evolution by simulating household and business location choices, real estate development, and land use changes over periods of years or decades.
 
-## Supported Models
+  * **[ATLAS](https://doi.org/10.1080/03081060.2024.2353784)**: Simulates household vehicle fleet dynamics, including vehicle purchase, replacement, and technology adoption (e.g., electric vs. internal combustion vehicles).
 
-| Model | Purpose | Integration |
-|-------|---------|-------------|
-| **[UrbanSim](https://github.com/UDST/urbansim)** | Long-term land use evolution | Household/business location choices, real estate development |
-| **[ATLAS](https://doi.org/10.1080/03081060.2024.2353784)** | Vehicle fleet dynamics | Fleet turnover, technology adoption (EV/ICE) |
-| **[ActivitySim](https://github.com/ActivitySim/activitysim)** | Daily travel demand | Agent-based activity and travel pattern generation |
-| **[BEAM](https://github.com/LBNL-UCB-STI/beam)** | Transportation network simulation | Traffic, transit, emerging mobility modes |
+  * **[ActivitySim](https://github.com/ActivitySim/activitysim)**: Generates daily activity-based travel demand by simulating individual travel decisions including trip purpose, destination, time of day, and mode choice for a synthetic population.
+
+  * **[BEAM](https://github.com/LBNL-UCB-STI/beam)**: The **B**ehavior, **E**nergy, **A**utonomy, and **M**obility framework simulates agent-based transportation on detailed road networks, modeling traffic congestion, transit operations, and emerging mobility services to produce network performance metrics.
+
+-----
 
 ## Simulation Scenarios
 
-PILATES supports multiple configuration levels:
+PILATES supports various simulation configurations to match different research and planning needs:
 
-1. **Network Analysis** (`BEAM only`) - Study infrastructure impacts with fixed demand
-2. **Travel Demand** (`ActivitySim + BEAM`) - Standard agent-based model with feedback loops
-3. **Land Use + Transport** (`UrbanSim + ActivitySim + BEAM`) - Long-term accessibility feedback
-4. **Full Integration** (`UrbanSim + ATLAS + ActivitySim + BEAM`) - Complete urban system evolution
+1.  **BEAM Only**: Detailed network performance analysis using fixed travel plans. Ideal for studying infrastructure impacts, operational strategies, or new mobility services.
 
-## Quick Start
+2.  **ActivitySim + BEAM**: Agent-based travel demand modeling with network feedback. ActivitySim generates daily travel demand, BEAM simulates it on the network, and the resulting travel times feed back until equilibrium is reached.
+
+3.  **UrbanSim + ActivitySim + BEAM**: Long-term land use and transportation co-evolution. UrbanSim simulates multi-year changes, which inform ActivitySim/BEAM travel demand modeling. Changes in accessibility from the transport model inform the next UrbanSim period.
+
+4.  **UrbanSim + ATLAS + ActivitySim + BEAM**: Comprehensive modeling of land use, transportation, and vehicle technology co-evolution, including how system changes influence household vehicle choices and their effects on energy consumption and emissions.
+
+-----
+
+## Key Features
+
+  * **Modular Architecture**: Containerized models (Docker/Singularity) can be mixed and matched to create custom simulation workflows
+  * **Flexible Temporal Coupling**: Configure execution frequency of different models to study various feedback loops and time horizons
+  * **State Management**: Automated tracking and persistence of simulation state across model runs and time steps
+  * **Reproducibility**: Complete provenance tracking of data transformations and model executions
+  * **High-Performance Computing**: Optimized for HPC environments with parallel processing support
+  * **Database Integration**: Optional analytical database backend for improved performance and data management
+
+-----
+
+## Getting Started
 
 ### Prerequisites
 
-- Docker or Singularity
-- Anaconda/Miniconda
+  * Container runtime: **Docker** or **Singularity**
+  * **Anaconda** or **Miniconda** for Python environment management
 
 ### Installation
 
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/LBNL-UCB-STI/PILATES.git
+    cd PILATES
+    ```
+
+2.  **Create and activate the conda environment:**
+
+    ```bash
+    conda env create -f environment.yml
+    conda activate pilates
+    ```
+
+3.  **Download input data:**
+
+    Various raw input data files are required for the different models. See [lawrencium-setup.md](lawrencium-setup.md#download-data) for instructions.
+
+### Configuration
+
+1.  Edit `settings.yaml` to configure your simulation:
+    - Set container preference: `container_manager: "docker"` or `"singularity"`
+    - Update region-specific parameters
+    - Adjust computational settings (`num_processors`, `chunk_size`, etc.)
+
+### Running a Simulation
+
+Execute the main script from the root directory. Use the `-p` flag to pull the latest container images before the first run:
+
 ```bash
-# Clone and setup environment
-git clone https://github.com/LBNL-UCB-STI/PILATES.git
-cd PILATES
-conda env create -f environment.yml
-conda activate pilates
-```
-
-### Download Data
-
-See [`lawrencium-setup.md`](lawrencium-setup.md#download-data) for data preparation instructions.
-
-### Configure and Run
-
-```bash
-# Edit settings.yaml for your setup
-# Set container_manager: "docker" or "singularity"
-# Adjust region-specific parameters
-
-# Run simulation (use -p flag for first run to pull containers)
 python run.py -v -p
 ```
 
-### Background Execution
+## Advanced Features
 
-```bash
-# For long-running simulations
-nohup python run.py -v &
-```
+### Database Integration
 
-## Architecture
+PILATES includes an optional database backend for improved performance and scalability. The database system supports:
 
-PILATES uses a consistent preprocessor/runner/postprocessor pattern for model execution:
+- Direct database input to ActivitySim, eliminating expensive H5 preprocessing
+- Dual storage architecture preserving both raw and processed data
+- Parallel data uploads for large-scale simulations
+- Complete data lineage tracking with OpenLineage metadata
+- Automatic schema documentation and data quality validation
 
-```mermaid
-flowchart TD
-    A[WorkflowState] -->|Initialize| B[Preprocessor]
-    B -->|Prepare Data| C[Runner]
-    C -->|Execute Model| D[Postprocessor]
-    D -->|Process Results| E[Workspace]
-    E -->|Update State| F[Provenance Tracker]
-    F --> G[Next Iteration]
-    G --> A
-    
-    style A fill:#e1f5fe
-    style E fill:#f3e5f5
-    style F fill:#fff3e0
-```
+For detailed setup and usage instructions, see [docs/database-setup.md](docs/database-setup.md) and [docs/database_documentation_guide.md](docs/database_documentation_guide.md).
 
-**Pattern Benefits:**
-- **Modularity**: Independent component development and testing
-- **Reproducibility**: Complete provenance tracking
-- **Flexibility**: Easy model integration and customization
+### HPC Execution
 
-## HPC Usage
-
-For cluster environments:
+For high-performance computing environments, specialized scripts are available in the `hpc/` directory. For detailed instructions on setting up PILATES on the Lawrencium cluster, see [lawrencium-setup.md](lawrencium-setup.md).
 
 ```bash
 cd hpc
 ./job_runner.sh [options]
 ```
 
-See [`lawrencium-setup.md`](lawrencium-setup.md) for detailed HPC setup instructions.
+### Background Execution
+
+To run PILATES as a background process:
+
+```bash
+nohup python run.py -v &
+```
+
+Output will be saved to `nohup.out`.
+
+-----
+
+## Architecture
+
+PILATES uses a consistent preprocessor/runner/postprocessor pattern for model execution, providing a structured approach to data preparation, model execution, and output processing. This pattern enables:
+
+- Modular development and testing of individual components
+- Reusability across different simulation models
+- Clear separation of concerns for maintainability
+- Integrated provenance tracking for reproducibility
+
+For implementation details and guidance on integrating new models, see [docs/architecture.md](docs/architecture.md).
+
+-----
 
 ## Contributing
 
-We welcome contributions! Please:
+We welcome contributions! Please use the [GitHub issue tracker](https://github.com/LBNL-UCB-STI/PILATES/issues) for bug reports, feature requests, and support questions.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### How to Contribute
 
-**Report Issues:** [GitHub Issues](https://github.com/LBNL-UCB-STI/PILATES/issues)
+1.  Fork the repository
+2.  Create a feature branch (`git checkout -b feature/my-feature`)
+3.  Commit your changes (`git commit -m 'Add new feature'`)
+4.  Push to the branch (`git push origin feature/my-feature`)
+5.  Open a Pull Request
 
-**Guidelines:** See `CONTRIBUTING.md` (coming soon)
+Please see our (forthcoming) `CONTRIBUTING.md` for detailed guidelines.
+
+-----
 
 ## Citation
 
+If you use PILATES in your research, please cite:
+
 ```bibtex
 @misc{pilates_2024,
-  author = {Needell, Zachary and Waddell, Paul and Caicedo, Juan and 
-            Laarabi, Haitam and Wang, Yuhan and Poliziani, Cristian and 
-            Lazarus, Jessica and Openkov, Dmitrii and Gardner, Max and 
-            Rezaei, Nazanin and others},
-  title = {Platform for Integrated Land use And Transportation 
-           Experiments and Simulation (PILATES) v1.0},
-  doi = {10.11578/dc.20240613.2},
-  url = {https://www.osti.gov/biblio/2373117},
-  year = {2024},
-  month = {05}
+  author       = {Needell, Zachary and Waddell, Paul and Caicedo, Juan and Laarabi, Haitam and Wang, Yuhan and Poliziani, Cristian and Lazarus, Jessica and Openkov, Dmitrii and Gardner, Max and Rezaei, Nazanin and others},
+  title        = {Platform for Integrated Land use And Transportation Experiments and Simulation (PILATES) v1.0},
+  doi          = {10.11578/dc.20240613.2},
+  url          = {https://www.osti.gov/biblio/2373117},
+  place        = {United States},
+  year         = {2024},
+  month        = {05}
 }
 ```
 
+-----
+
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

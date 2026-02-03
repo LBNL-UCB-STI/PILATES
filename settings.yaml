@@ -71,11 +71,28 @@ usim_local_data_input_folder: pilates/urbansim/data/
 usim_local_mutable_data_folder: urbansim/data/
 usim_client_base_folder: /base/demos_urbansim
 usim_client_data_folder: /base/demos_urbansim/data/
-usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data_2017.h5"
+usim_formattable_input_file_name: "custom_mpo_{region_id}_model_data.h5"
 usim_formattable_input_file_name_year: "custom_mpo_{region_id}_model_data_{start_year}.h5"
 usim_formattable_output_file_name: "model_data_{year}.h5"
 usim_formattable_command: "-r {0} -i {1} -y {2} -f {3} -t {4}"
 warm_start_activities: False
+
+# NESTED CONFIG: UrbanSim
+urbansim:
+  region_id: "06197001"
+  local_data_input_folder: pilates/urbansim/data/
+  local_mutable_data_folder: urbansim/data/
+  client_base_folder: /base/demos_urbansim
+  client_data_folder: /base/demos_urbansim/data/
+  input_file_template: "custom_mpo_{region_id}_model_data.h5"
+  input_file_template_year: "custom_mpo_{region_id}_model_data_{start_year}.h5"
+  output_file_template: "model_data_{year}.h5"
+  command_template: "-r {0} -i {1} -y {2} -f {3} -t {4}"
+  region_mappings:
+    region_to_region_id:
+      sfbay: "06197001"
+      austin: "48197301"
+      seattle: "53199100"
 
 ## ATLAS: vehicle simulation (may call usim somewhere) - Ling/Tin/Yuhan
 ## Docker bind mounts: host == local; container == remote == client

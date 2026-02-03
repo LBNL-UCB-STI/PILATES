@@ -5,6 +5,9 @@
 #
 # Usage: sbatch job.sh <config_file> <scenario>
 #
+# Note: Do NOT set PYTHONPATH manually. The conda environment handles imports
+# automatically. Setting PYTHONPATH can leak system packages into your environment.
+#
 
 # ==============================================================================
 # CONFIGURATION
@@ -28,7 +31,7 @@ show_system_info() {
     echo "=========================="
 
     echo "=== NODE USAGE INFORMATION ==="
-    squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep "$(hostname)" || true
+    squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep "$(hostname)" || echo "Node info not found in squeue"
     echo "=========================="
 }
 
@@ -39,9 +42,14 @@ show_system_info() {
 echo "Setting up environment..."
 
 # Load required modules
+module load python/3.11.6
 module load gcc/11.4.0
 module load miniconda3/22.11.1-gcc-11.4.0  # Load conda for environment management
 module load proj/9.2.1
+
+# Configure system libraries - use GCC 11.4.0 libraries first
+export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
+echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
 # ==============================================================================
 # CONDA ENVIRONMENT SETUP
@@ -86,6 +94,20 @@ else
 fi
 
 echo "Environment setup complete!"
+
+# Install consist library in editable mode if not already installed
+CONSIST_DIR="$PILATES_DIR/consist"
+if [ ! -d "$CONSIST_DIR" ]; then
+    echo "Cloning consist library..."
+    git clone https://github.com/LBNL-UCB-STI/consist.git "$CONSIST_DIR"
+fi
+
+if ! python -c "import consist" 2>/dev/null; then
+    echo "Installing consist library in editable mode..."
+    pip install -e "$CONSIST_DIR"
+else
+    echo "consist library already installed"
+fi
 
 # Verify environment
 echo "Python version: $(python --version)"

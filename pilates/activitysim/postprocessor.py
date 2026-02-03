@@ -1,40 +1,90 @@
-import gzip
 import logging
+import re
 import shutil
 
 import pandas as pd
 import zipfile
 import os
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
+from pilates.config import PilatesConfig
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo, FileRecord
-from pilates.utils.io import read_datastore, locate_asim_file
+from pilates.generic.records import RecordStore, FileRecord
+from pilates.activitysim.outputs import (
+    normalize_asim_output_key,
+    has_asim_run_marker,
+)
+from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.provenance import FileProvenanceTracker
 
 logger = logging.getLogger(__name__)
 
 
-def _load_asim_outputs(settings, workspace: Workspace):
-    output_tables_settings = settings["asim_output_tables"]
-    prefix = output_tables_settings["prefix"]
-    output_tables = output_tables_settings["tables"]
+def _load_asim_outputs(
+    settings,
+    workspace: Workspace,
+    state: WorkflowState,
+    fallback_dir: Optional[str] = None,
+):
+    prefix = settings.activitysim.output_tables["prefix"]
+    output_tables = settings.activitysim.output_tables["tables"]
     asim_output_dict = {}
     asim_output_dir = workspace.get_asim_output_dir()
+    allow_final_pipeline = has_asim_run_marker(
+        asim_output_dir, state.current_year, state.current_inner_iter
+    )
+    if not allow_final_pipeline:
+        logger.warning(
+            "ASim success marker not found for year %s iteration %s; "
+            "skipping final_pipeline outputs.",
+            state.current_year,
+            state.current_inner_iter,
+        )
     for table_name in output_tables:
-        file_format = settings.get("file_format", "csv")
+        file_format = settings.activitysim.file_format
         if file_format == "parquet":
             file_name = "%s%s.parquet" % (prefix, table_name)
             file_path = os.path.join(
                 asim_output_dir, "final_pipeline", table_name, "final.parquet"
             )
-            try:
-                table = pd.read_parquet(file_path)
-            except FileNotFoundError:
-                logger.warning("Parquet file not found: %s", file_path)
-                continue
+            if allow_final_pipeline:
+                try:
+                    table = pd.read_parquet(file_path)
+                except FileNotFoundError:
+                    if fallback_dir:
+                        fallback_path = os.path.join(
+                            fallback_dir, f"{table_name}.parquet"
+                        )
+                        try:
+                            table = pd.read_parquet(fallback_path)
+                        except FileNotFoundError:
+                            logger.warning(
+                                "Parquet file not found: %s (fallback: %s)",
+                                file_path,
+                                fallback_path,
+                            )
+                            continue
+                    else:
+                        logger.warning("Parquet file not found: %s", file_path)
+                        continue
+            else:
+                if fallback_dir:
+                    fallback_path = os.path.join(fallback_dir, f"{table_name}.parquet")
+                    try:
+                        table = pd.read_parquet(fallback_path)
+                    except FileNotFoundError:
+                        logger.warning(
+                            "Parquet file not found (final_pipeline ignored): %s",
+                            fallback_path,
+                        )
+                        continue
+                else:
+                    logger.warning(
+                        "Parquet file not found; final_pipeline ignored and no fallback provided: %s",
+                        file_path,
+                    )
+                    continue
         else:
             file_name = "%s%s.csv" % (prefix, table_name)
             file_path = os.path.join(asim_output_dir, file_name)
@@ -62,11 +112,11 @@ def _load_asim_outputs(settings, workspace: Workspace):
 
 def get_usim_datastore_fname(settings, io, year=None):
     if io == "output":
-        datastore_name = settings["usim_formattable_output_file_name"].format(year=year)
+        datastore_name = settings.urbansim.output_file_template.format(year=year)
     elif io == "input":
-        region = settings["region"]
-        region_id = settings["region_to_region_id"][region]
-        usim_base_fname = settings["usim_formattable_input_file_name"]
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_base_fname = settings.urbansim.input_file_template
         datastore_name = usim_base_fname.format(region_id=region_id)
 
     return datastore_name
@@ -100,6 +150,55 @@ def _prepare_updated_tables(
 
     # ensure we preserve all columns originally in the urbansim outputs
     required_cols = {}
+    usim_tables = {}
+
+    def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
+        if df.index.name == index_col:
+            return df
+        if index_col in df.columns:
+            return df.set_index(index_col)
+        return df
+
+    def _align_persons_for_join(
+        persons: pd.DataFrame, usim_persons: pd.DataFrame
+    ) -> pd.DataFrame:
+        if persons.index.name == "person_id" or "person_id" in persons.columns:
+            persons = _ensure_index(persons, "person_id")
+            return persons
+
+        if "member_id" not in persons.columns and "PNUM" in persons.columns:
+            persons = persons.copy()
+            persons["member_id"] = persons["PNUM"]
+
+        if "household_id" in persons.columns and "member_id" in persons.columns:
+            persons = persons.copy()
+            persons["household_id"] = pd.to_numeric(
+                persons["household_id"], errors="coerce"
+            ).astype("Int64")
+            persons["member_id"] = pd.to_numeric(
+                persons["member_id"], errors="coerce"
+            ).astype("Int64")
+            usim_persons = usim_persons.copy()
+            if "person_id" in usim_persons.columns:
+                usim_persons = usim_persons.set_index("person_id", drop=False)
+            usim_persons["household_id"] = pd.to_numeric(
+                usim_persons["household_id"], errors="coerce"
+            ).astype("Int64")
+            usim_persons["member_id"] = pd.to_numeric(
+                usim_persons["member_id"], errors="coerce"
+            ).astype("Int64")
+            return persons, usim_persons, ["household_id", "member_id"]
+
+        return persons
+
+    def _get_usim_table(table_name: str) -> pd.DataFrame:
+        if table_name not in usim_tables:
+            h5_key = table_name
+            if prefix:
+                h5_key = os.path.join(str(prefix), h5_key)
+            usim_tables[table_name] = usim_output_store[h5_key].copy()
+        return usim_tables[table_name]
+
     for table_name in tables_updated_by_asim:
         h5_key = table_name
         if prefix:
@@ -109,30 +208,72 @@ def _prepare_updated_tables(
 
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols["persons"]
-    p_cols_to_replace = ["work_zone_id", "school_zone_id"]
-    p_names_dict = {
-        "PNUM": "member_id",
-        "workplace_taz": "work_zone_id",
-        "school_taz": "school_zone_id",
-    }
+    def _set_from_source(df: pd.DataFrame, target: str, sources) -> bool:
+        for source in sources:
+            if source in df.columns:
+                df[target] = df[source]
+                return True
+        return False
+
+    p_names_dict = {"PNUM": "member_id"}
     if "persons" in asim_output_dict.keys():
         logger.info("Preparing persons table!")
-        for col in p_cols_to_replace:
-            # Double check that work_zone_id and school_zone_id are included
-            # bc these aren't native columns to UrbanSim but should be there
-            # if "warm start" activities were generated
-            if col not in required_cols["persons"]:
-                p_cols_to_include.append(col)
-            if col in asim_output_dict["persons"].columns:
-                del asim_output_dict["persons"][col]
+        persons = asim_output_dict["persons"]
+        usim_persons = _get_usim_table("persons")
+        aligned = _align_persons_for_join(persons, usim_persons)
+        join_keys = None
+        if isinstance(aligned, tuple):
+            persons, usim_persons, join_keys = aligned
+        else:
+            persons = aligned
+            usim_persons = _ensure_index(usim_persons, "person_id")
         for fromCol, toCol in p_names_dict.items():
             if (toCol in p_cols_to_include) & (
-                fromCol in asim_output_dict["persons"].columns
+                fromCol in persons.columns
             ):
-                asim_output_dict["persons"].loc[:, toCol] = (
-                    asim_output_dict["persons"].loc[:, fromCol].copy()
+                persons.loc[:, toCol] = persons.loc[:, fromCol].copy()
+        # Prefer ASim zone IDs where available.
+        work_zone_source = None
+        if _set_from_source(
+            persons, "work_zone_id", ["workplace_zone_id", "workplace_taz"]
+        ):
+            work_zone_source = "workplace_zone_id"
+            if "workplace_zone_id" not in persons.columns:
+                work_zone_source = "workplace_taz"
+        school_zone_source = None
+        if "school_zone_id" in persons.columns:
+            school_zone_source = "school_zone_id"
+        elif _set_from_source(persons, "school_zone_id", ["school_taz"]):
+            school_zone_source = "school_taz"
+        if work_zone_source or school_zone_source:
+            logger.debug(
+                "ASim persons zone mapping: work_zone_id <- %s, school_zone_id <- %s",
+                work_zone_source,
+                school_zone_source,
+            )
+        if "workplace_taz" not in persons.columns and "work_zone_id" in persons.columns:
+            persons["workplace_taz"] = persons["work_zone_id"]
+        if "school_taz" not in persons.columns and "school_zone_id" in persons.columns:
+            persons["school_taz"] = persons["school_zone_id"]
+        missing_person_cols = [
+            col
+            for col in p_cols_to_include
+            if col not in persons.columns
+        ]
+        if missing_person_cols:
+            logger.warning(
+                "ASim persons missing columns; backfilling from UrbanSim: %s",
+                missing_person_cols,
+            )
+            if join_keys:
+                persons = persons.merge(
+                    usim_persons[join_keys + missing_person_cols],
+                    on=join_keys,
+                    how="left",
                 )
-        asim_output_dict["persons"] = asim_output_dict["persons"][p_cols_to_include]
+            else:
+                persons = aligned.join(usim_persons[missing_person_cols], how="left")
+        asim_output_dict["persons"] = persons[p_cols_to_include]
 
     logger.info("Preparing households table!")
     # This is the inverse process of asim_pre._update_households_table()
@@ -145,12 +286,31 @@ def _prepare_updated_tables(
     hh_cols_to_replace = ["cars"]
     hh_cols_to_include = required_cols["households"]
     if "households" in asim_output_dict.keys():
+        asim_output_dict["households"] = _ensure_index(
+            asim_output_dict["households"], "household_id"
+        )
         for col in hh_cols_to_replace:
             if col not in required_cols["households"]:
                 hh_cols_to_include.append(col)
             if col in asim_output_dict["households"].columns:
                 del asim_output_dict["households"][col]
         asim_output_dict["households"].rename(columns=hh_names_dict, inplace=True)
+        missing_household_cols = [
+            col
+            for col in required_cols["households"]
+            if col not in asim_output_dict["households"].columns
+        ]
+        if missing_household_cols:
+            logger.warning(
+                "ASim households missing columns; backfilling from UrbanSim: %s",
+                missing_household_cols,
+            )
+            usim_households = _ensure_index(
+                _get_usim_table("households"), "household_id"
+            )
+            asim_output_dict["households"] = asim_output_dict["households"].join(
+                usim_households[missing_household_cols], how="left"
+            )
         # only preserve original usim columns
         asim_output_dict["households"] = asim_output_dict["households"][
             required_cols["households"]
@@ -201,86 +361,18 @@ def _prepare_updated_tables(
     return asim_output_dict
 
 
-# def _copy_with_compression_asim_file_to_asim_archive(
-#     file_path,
-#     file_name,
-#     year,
-#     replanning_iteration_number,
-#     fmt,
-#     provenance_tracker: "FileProvenanceTracker",
-# ):
-#     iteration_folder_name = "year-{0}-iteration-{1}".format(
-#         year, replanning_iteration_number
-#     )
-#     iteration_folder_path = os.path.join(asim_output_data_dir, iteration_folder_name)
-#     if not os.path.exists(os.path.abspath(iteration_folder_path)):
-#         os.makedirs(iteration_folder_path, exist_ok=True)
-#     input_file_path = locate_asim_file(file_name, fmt)
-#     target_file_path = os.path.join(iteration_folder_path, file_name)
-#     if target_file_path.endswith(".csv"):
-#         target_file_path += ".gz"
-#         if os.path.exists(file_path):
-#             with open(input_file_path, "rb") as f_in, gzip.open(
-#                 target_file_path, "wb"
-#             ) as f_out:
-#                 f_out.writelines(f_in)
-#             # Record the archived file path
-#             provenance_tracker.record_output_file(
-#                 "activitysim",
-#                 target_file_path,
-#                 year=year,
-#                 description=f"Archived ActivitySim output: {file_name}",
-#             )
-#     elif os.path.isdir(os.path.abspath(input_file_path)):
-#         logger.warning(
-#             "Skipping compression for directory: {0}".format(input_file_path)
-#         )
-#         # make_archive(input_file_path, target_file_path + ".zip")
-#         # # Record the archived file path
-#         # provenance_tracker.record_output_file(
-#         #     "activitysim",
-#         #     target_file_path + ".zip",
-#         #     year=year,
-#         #     description=f"Archived ActivitySim output: {file_name}",
-#         # )
-#     else:
-#         shutil.copy(input_file_path, target_file_path + ".parquet")
-#         # Record the archived file path
-#         provenance_tracker.record_output_file(
-#             "activitysim",
-#             target_file_path + ".parquet",
-#             year=year,
-#             description=f"Archived ActivitySim output: {file_name}",
-#         )
-
-
 def create_beam_input_data(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
     asim_output_dict,
     source_file_paths: list,
-    model_run_hash: str,
 ) -> Tuple[str, Optional[FileRecord]]:
     forecast_year = state.forecast_year
     asim_output_data_dir = workspace.get_asim_output_dir()
     archive_name = "asim_outputs_{0}.zip".format(forecast_year)
     outpath = os.path.join(asim_output_data_dir, archive_name)
     logger.info("Merging results back into UrbanSim format and storing as .zip!")
-
-    # A virtual model name for this step to distinguish it in provenance
-    model_name = "activitysim_postprocessor"
-
-    # Record the source files (raw asim outputs) as inputs to this step
-    for source_path in source_file_paths:
-        provenance_tracker.record_input_file(
-            model_name,
-            source_path,
-            description="Raw ActivitySim output for BEAM zip creation",
-            model_run_id=model_run_hash,
-        )
 
     with zipfile.ZipFile(outpath, "w") as csv_zip:
         # copy asim outputs into archive
@@ -289,15 +381,11 @@ def create_beam_input_data(
             csv_zip.writestr(table_name + ".csv", asim_output_dict[table_name].to_csv())
     logger.info("Done creating .zip archive!")
 
-    # Record the created zip file as an output
-    output_record = provenance_tracker.record_output_file(
-        model_name,
-        outpath,
+    output_record = FileRecord(
+        file_path=outpath,
         year=forecast_year,
         description="Zipped ActivitySim outputs for BEAM",
-        model_run_id=model_run_hash,
-        source_file_paths=source_file_paths,
-        state=state,
+        short_name="asim_outputs_zip",
     )
     return outpath, output_record
 
@@ -306,12 +394,9 @@ def create_usim_input_data(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
     asim_output_dict,
     tables_updated_by_asim,
     asim_source_paths: list,
-    model_run_hash: str,
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -326,20 +411,8 @@ def create_usim_input_data(
     """
     input_year = state.year
     forecast_year = state.forecast_year
-    model_name = "activitysim_postprocessor"  # Virtual model name
-
     # parse settings
     data_dir = workspace.get_usim_mutable_data_dir()
-
-    # --- Record Inputs ---
-    # 1. Raw ActivitySim outputs (passed via asim_source_paths)
-    for source_path in asim_source_paths:
-        provenance_tracker.record_input_file(
-            model_name,
-            source_path,
-            description="Raw ActivitySim output for next UrbanSim input creation",
-            model_run_id=model_run_hash,
-        )
 
     # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
     # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
@@ -364,14 +437,6 @@ def create_usim_input_data(
         )
         return None, None
 
-    # 2. Previous UrbanSim input data (now archived)
-    provenance_tracker.record_input_file(
-        model_name,
-        archive_path,
-        description=f"Previous UrbanSim input data (for year {input_year})",
-        model_run_id=model_run_hash,
-    )
-
     # 3. Previous UrbanSim output data
     usim_output_datastore_name = get_usim_datastore_fname(
         settings, "output", forecast_year
@@ -384,13 +449,6 @@ def create_usim_input_data(
             )
         )
         return None, None
-    provenance_tracker.record_input_file(
-        model_name,
-        usim_output_store_path,
-        description=f"Previous UrbanSim output data (for year {forecast_year})",
-        model_run_id=model_run_hash,
-    )
-
     # --- Perform Transformation ---
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
@@ -399,7 +457,7 @@ def create_usim_input_data(
 
     # load last iter UrbanSim output data
     usim_output_store, table_prefix_year = read_datastore(
-        settings, forecast_year, mutable_data_dir=workspace.full_path
+        settings, forecast_year, mutable_data_dir=workspace.get_usim_mutable_data_dir()
     )
 
     logger.info("Merging results back into UrbanSim format and storing as .h5!")
@@ -471,15 +529,11 @@ def create_usim_input_data(
     usim_output_store.close()
     logger.info("Closing all open h5 files")
 
-    # --- Record Output ---
-    all_source_paths = asim_source_paths + [archive_path, usim_output_store_path]
-    output_record = provenance_tracker.record_output_file(
-        model_name,
-        input_store_path,  # The path to the newly created H5 file
+    output_record = FileRecord(
+        file_path=input_store_path,
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
-        model_run_id=model_run_hash,
-        source_file_paths=all_source_paths,
+        short_name=f"usim_input_{forecast_year}",
     )
 
     return input_store_path, output_record
@@ -489,15 +543,11 @@ def update_usim_inputs_after_warm_start(
     settings,
     state: WorkflowState,
     workspace: Workspace,
-    provenance_tracker: "FileProvenanceTracker",
-    runInfo: ModelRunInfo,
+    model_run_hash: Optional[str] = None,
 ):
     """
     TODO: Combine this method with create_usim_input_data() above
     """
-    model_run_id = getattr(runInfo, "model_run_id", None)
-    model_name = "activitysim_warm_start_postprocessor"  # Virtual model name
-
     # load usim data
     usim_data_dir = workspace.get_usim_mutable_data_dir()
     datastore_name = get_usim_datastore_fname(settings, io="input")
@@ -510,26 +560,6 @@ def update_usim_inputs_after_warm_start(
     warm_start_persons_path = os.path.join(warm_start_dir, "warm_start_persons.csv")
     warm_start_households_path = os.path.join(
         warm_start_dir, "warm_start_households.csv"
-    )
-
-    # --- Record Inputs ---
-    provenance_tracker.record_input_file(
-        model_name,
-        input_store_path,
-        description="UrbanSim input H5 before warm start update",
-        model_run_id=model_run_id,
-    )
-    provenance_tracker.record_input_file(
-        model_name,
-        warm_start_persons_path,
-        description="Warm start persons data",
-        model_run_id=model_run_id,
-    )
-    provenance_tracker.record_input_file(
-        model_name,
-        warm_start_households_path,
-        description="Warm start households data",
-        model_run_id=model_run_id,
     )
 
     # --- Perform Transformation ---
@@ -564,21 +594,6 @@ def update_usim_inputs_after_warm_start(
 
     usim_datastore.close()
 
-    # --- Record Output ---
-    source_files = [
-        input_store_path,
-        warm_start_persons_path,
-        warm_start_households_path,
-    ]
-    provenance_tracker.record_output_file(
-        model_name,
-        input_store_path,  # The modified H5 file
-        year=state.year,
-        description="UrbanSim input H5 after warm start update",
-        model_run_id=model_run_id,
-        source_file_paths=source_files,
-    )
-
     return
 
 
@@ -587,10 +602,59 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     ActivitySim-specific postprocessor that consolidates all postprocessing steps.
     """
 
-    def postprocess(
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        """
+        asim_output_dir = workspace.get_asim_output_dir()
+        return {
+            "asim_output_dir": (
+                asim_output_dir if os.path.exists(asim_output_dir) else None
+            ),
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``asim_output_dir``: ActivitySim output directory retained after
+              postprocessing.
+            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
+              for downstream UrbanSim/ATLAS steps.
+        Related docs
+            - See `pilates/activitysim/inputs.py` for the corresponding input
+              descriptions used by ActivitySim and downstream models.
+        """
+        usim_input_fname = get_usim_datastore_fname(settings, io="input")
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        return {
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            "usim_datastore_h5": usim_input_path,
+        }
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, major_stage)
+
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
-        runInfo: ModelRunInfo,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
@@ -602,9 +666,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         Args:
             raw_outputs (RecordStore): The raw outputs from the model run.
-            runInfo (ModelRunInfo): Metadata or information about the model run.
             workspace (Workspace): The workspace object for path management.
-            model_run_hash (str): The unique hash for this postprocessor run.
+            model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
             RecordStore: Postprocessed output data.
@@ -619,15 +682,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             forecast_year,
         )
 
-        # Postprocess
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "activitysim_postprocessor",
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="Post-processing ASIM outputs",
-            inputs=raw_outputs,
-        )
-
         iteration_folder_name = "year-{0}-iteration-{1}".format(
             year, replanning_iteration_number
         )
@@ -638,37 +692,120 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if not os.path.exists(os.path.abspath(iteration_folder_path)):
             os.makedirs(iteration_folder_path, exist_ok=True)
 
+        # Archive ActivitySim inputs for this iteration
+        # This ensures Consist can find input files at stable paths for hybrid views
+        inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
+            year, replanning_iteration_number
+        )
+        inputs_folder_path = os.path.join(
+            workspace.get_asim_output_dir(), inputs_folder_name
+        )
+        if not os.path.exists(os.path.abspath(inputs_folder_path)):
+            os.makedirs(inputs_folder_path, exist_ok=True)
+
         processed_records = []
 
-        # Record raw outputs as inputs to this post-processing run
-        for record in raw_outputs.all_records():
-            if hasattr(record, "file_path"):
-                source = os.path.join(workspace.output_path, record.file_path)
-                target = os.path.join(
-                    iteration_folder_path,
-                    record.short_name.replace("_asim_out", "") + ".parquet",
-                )
-                moved_record = self.provenance_tracker.move_file(
-                    record,
-                    source,
-                    target,
-                    model="activitysim_postprocessor",
-                    state=self.state,
-                )
-                processed_records.append(moved_record)
+        def _build_content_hash_map() -> Dict[str, str]:
+            hash_map: Dict[str, str] = {}
+            for record in raw_outputs.all_records():
+                path = record.get_absolute_path(base_path=workspace.full_path)
+                if not path:
+                    continue
+                record_hash = getattr(record, "content_hash", None)
+                if record_hash:
+                    hash_map[path] = record_hash
+            for store in (workspace.output_data or {}).values():
+                if not isinstance(store, RecordStore):
+                    continue
+                for record in store.all_records():
+                    path = record.get_absolute_path(base_path=workspace.full_path)
+                    if not path:
+                        continue
+                    record_hash = getattr(record, "content_hash", None)
+                    if record_hash:
+                        hash_map[path] = record_hash
+            return hash_map
 
-        # 1. Load raw ActivitySim outputs from files
-        # The raw_outputs RecordStore contains the paths to these files.
-        asim_output_dict = _load_asim_outputs(settings, workspace)
+        content_hash_map = _build_content_hash_map()
 
-        # The raw output files are implicitly the source for all derived products in this post-processing step.
-        source_file_paths = [
-            getattr(r, "file_path")
-            for r in raw_outputs.all_records()
-            if hasattr(r, "file_path")
+        def _resolve_content_hash(source_path: str) -> Optional[str]:
+            if not source_path:
+                return None
+            return content_hash_map.get(os.path.abspath(source_path))
+
+        # Archive input files from activitysim/data/
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
+        input_files_to_archive = [
+            "households.csv",
+            "persons.csv",
+            "land_use.csv",
+            "skims.omx",
         ]
 
+        for input_file in input_files_to_archive:
+            source_path = os.path.join(asim_data_dir, input_file)
+            if os.path.exists(source_path):
+                target_path = os.path.join(inputs_folder_path, input_file)
+                shutil.copy(source_path, target_path)
+                content_hash = _resolve_content_hash(source_path)
+
+                processed_records.append(
+                    FileRecord(
+                        file_path=target_path,
+                        year=self.state.current_year,
+                        description=f"Archived ActivitySim input: {input_file}",
+                        short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
+                        iteration=self.state.current_inner_iter,
+                        content_hash=content_hash,
+                    )
+                )
+                logger.info(f"Archived ActivitySim input: {input_file}")
+            else:
+                logger.debug(f"Input file not found, skipping archive: {source_path}")
+
+        # Archive skims.zarr from activitysim/output/cache/
+        zarr_source_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
+        if os.path.exists(zarr_source_path):
+            zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
+            if os.path.exists(zarr_target_path):
+                shutil.rmtree(zarr_target_path)
+            shutil.copytree(zarr_source_path, zarr_target_path)
+            content_hash = _resolve_content_hash(zarr_source_path)
+
+            processed_records.append(
+                FileRecord(
+                    file_path=zarr_target_path,
+                    year=self.state.current_year,
+                    description="Archived ActivitySim input: skims.zarr (snapshot)",
+                    short_name="asim_input_skims_zarr_archived",
+                    iteration=self.state.current_inner_iter,
+                    content_hash=content_hash,
+                )
+            )
+            logger.info("Archived ActivitySim input: skims.zarr")
+        else:
+            logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
+
         if self.state.is_enabled(WorkflowState.Stage.land_use):
+
+            # 1. Load raw ActivitySim outputs from files
+            # The raw_outputs RecordStore contains the paths to these files.
+            # TODO: update this to only grad tables_updated_by_asim
+            asim_output_dict = _load_asim_outputs(
+                settings,
+                workspace,
+                self.state,
+                fallback_dir=iteration_folder_path,
+            )
+
+            # The raw output files are implicitly the source for all derived products in this post-processing step.
+            source_file_paths = [
+                getattr(r, "file_path")
+                for r in raw_outputs.all_records()
+                if hasattr(r, "file_path")
+            ]
 
             # 2. Prepare tables for integration with UrbanSim
             tables_updated_by_asim = ["households", "persons"]
@@ -687,34 +824,46 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 settings,
                 self.state,
                 workspace,
-                self.provenance_tracker,
-                runInfo,
                 asim_output_dict,
                 tables_updated_by_asim,
                 source_file_paths,
-                model_run_hash,
             )
             if usim_record:
                 processed_records.append(usim_record)
 
-        # 4. Create BEAM input data THIS ISN'T ACTUALLY USED
-        # if settings.get("traffic_assignment_enabled", False):
-        #     beam_input_zip_path, beam_record = create_beam_input_data(
-        #         settings,
-        #         state,
-        #         workspace,
-        #         provenance_tracker,
-        #         runInfo,
-        #         asim_output_dict,
-        #         source_file_paths,
-        #         model_run_hash,
-        #     )
-        #     if beam_record:
-        #         processed_records.append(beam_record)
+        # Record raw outputs as inputs to this post-processing run
+        for record in raw_outputs.all_records():
+            if hasattr(record, "file_path"):
+                source = record.get_absolute_path(base_path=workspace.full_path)
+                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
+                output_key = normalize_asim_output_key(clean_name)
+                target = os.path.join(
+                    iteration_folder_path,
+                    clean_name + ".parquet",
+                )
+                if not source:
+                    continue
+                if os.path.abspath(source) == os.path.abspath(target):
+                    continue
+                if not os.path.exists(source):
+                    logger.debug("ASim output missing, skipping move: %s", source)
+                    continue
+                if os.path.exists(target):
+                    logger.debug("ASim output already archived: %s", target)
+                    continue
+                shutil.move(source, target)
+                content_hash = _resolve_content_hash(source)
+                processed_records.append(
+                    FileRecord(
+                        file_path=target,
+                        year=self.state.forecast_year,
+                        description=f"ActivitySim output file: {clean_name}",
+                        short_name=output_key,
+                        iteration=self.state.current_inner_iter,
+                        content_hash=content_hash,
+                    )
+                )
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)
-        self.provenance_tracker.complete_model_run(
-            model_run_hash, output_records=processed_store.all_records()
-        )
         return processed_store

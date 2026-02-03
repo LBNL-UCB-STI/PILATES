@@ -1,793 +1,263 @@
-import gzip
+from __future__ import annotations
+
 import logging
 import os
 import shutil
-from typing import Optional, List, Tuple
+from datetime import datetime
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
+import re
 
-import numpy as np
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
+
+
 import pandas as pd
 
+from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore, Record, FileRecord
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
-from pilates.utils.provenance import find_project_root, FileProvenanceTracker
+from pilates.utils.path_utils import find_project_root
+from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.artifact_constants import (
+    ASIM_OUTPUT_DIR,
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_INPUT,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+)
+from pilates.activitysim.outputs import has_asim_run_marker
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
+# Mappings for BEAM configuration parameters
 beam_param_map = {
     "beam_sample": "beam.agentsim.agentSampleSizeAsFractionOfPopulation",
     "beam_replanning_portion": "beam.agentsim.agents.plans.merge.fraction",
     "max_plans_memory": "beam.replanning.maxAgentPlanMemorySize",
-    "skim_zone_geoid_col": "beam.agentsim.taz.tazIdFieldName",
+    "beam.agentsim.taz.filePath": "beam.agentsim.taz.filePath",
+    "beam.agentsim.taz.tazIdFieldName": "beam.agentsim.taz.tazIdFieldName",
+}
+
+BEAM_PYDANTIC_PATH_MAP = {
+    "beam_sample": "beam.sample",
+    "beam_replanning_portion": "beam.replanning_portion",
+    "max_plans_memory": "beam.max_plans_memory",
+    "skim_zone_geoid_col": "beam.skim_zone_geoid_col",
 }
 
 
-def copy_data_to_mutable_location(
-    settings, output_dir, provenance_tracker: FileProvenanceTracker
-) -> Tuple[RecordStore, RecordStore]:
+def _prepare_beam_zone_shapefile(
+    workspace: "Workspace", settings: PilatesConfig
+) -> Optional[str]:
     """
-    Copy BEAM input files for the current region from the production directory to the run's mutable input directory.
+    Creates a sorted zone shapefile for BEAM from the canonical zone definitions
+    and updates the BEAM config to use it.
     """
-    input_records = []
-    output_records = []
-    region = settings["region"]
-    # Find the project root by searching upwards for 'pilates' or '.git'
-    pilates_root = find_project_root()
-    if pilates_root is None:
-        pilates_root = os.path.realpath(os.getcwd())
-    beam_production_path = os.path.abspath(
-        os.path.join(
-            pilates_root,
-            "pilates",
-            "beam",
-            "production",
-            region,
-        )
-    )
+    logger.info("--- Preparing BEAM Zone Shapefile ---")
+    try:
+        from pilates.utils.zone_utils import load_canonical_zones
 
-    # If not found, try with "sources/PILATES" in the path (for symlinked or alternate layouts)
-    if not os.path.exists(beam_production_path):
-        alt_root = os.path.join(pilates_root, "sources", "PILATES")
-        alt_beam_production_path = os.path.abspath(
-            os.path.join(
-                alt_root,
-                "pilates",
-                "beam",
-                "production",
-                region,
-            )
+        canonical_zones_gdf = load_canonical_zones(settings, workspace)
+
+        region = settings.run.region
+        beam_mutable_folder = workspace.get_beam_mutable_data_dir()
+        output_shapefile_name = "canonical_zones_sorted.geojson"
+        output_shapefile_path = os.path.join(
+            beam_mutable_folder, region, "shape", output_shapefile_name
         )
-        if os.path.exists(alt_beam_production_path):
-            logger.info(
-                f"Primary BEAM production path not found, using alternate: {alt_beam_production_path}"
-            )
-            beam_production_path = alt_beam_production_path
+        os.makedirs(os.path.dirname(output_shapefile_path), exist_ok=True)
+
+        logger.info(
+            f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
+        )
+
+        # Reset index so the ID becomes a column
+        canonical_zones_gdf = canonical_zones_gdf.reset_index()
+
+        if settings.beam is None:
+            raise ValueError("Beam settings are not configured")
+        sort_col = settings.beam.skim_zone_geoid_col
+        if sort_col in canonical_zones_gdf.columns:
+            # If the specific beam config column exists, verify sort order
+            canonical_zones_gdf = canonical_zones_gdf.sort_values(by=sort_col)
         else:
-            logger.error(
-                f"BEAM production input directory does not exist at either {beam_production_path} or {alt_beam_production_path}"
+            # If column is missing, it was likely renamed during load_canonical_zones.
+            # Since load_canonical_zones guarantees a sorted index, we accept that order.
+            logger.info(
+                f"Beam sort column '{sort_col}' not found (likely renamed to '{canonical_zones_gdf.columns[0]}'). "
+                "Using existing sort order from load_canonical_zones."
             )
-            return
-    dest = os.path.join(os.path.abspath(output_dir), region)
-    logger.info(
-        "Copying BEAM production inputs from {0} to {1}".format(
-            beam_production_path, dest
-        )
-    )
 
-    if not os.path.exists(beam_production_path):
+        canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")
+
+        logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
+        return output_shapefile_path
+    except Exception as e:
         logger.error(
-            f"BEAM production input directory does not exist: {beam_production_path}"
+            f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
         )
-        return
-
-    shutil.copytree(
-        beam_production_path,
-        dest,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(".git", ".git*"),
-    )
-
-    git_hash = provenance_tracker.get_git_hash(beam_production_path)
-    input_records.append(
-        provenance_tracker.record_repo_input(
-            "beam",
-            repo_path=beam_production_path,
-            short_name="beam_prod",
-            description="Beam Production Data Repo",
-            git_hash=git_hash,
-        )
-    )
-    output_records.append(
-        provenance_tracker.record_repo_input(
-            "beam",
-            repo_path=dest,
-            short_name="beam_prod",
-            description="Beam Production Data Repo",
-        )
-    )
-
-    # Optionally copy 'common' configs if present
-    common_config_path = os.path.join(os.path.dirname(beam_production_path), "common")
-    dest = os.path.join(os.path.abspath(output_dir), "common")
-    if os.path.exists(common_config_path):
-        shutil.copytree(
-            common_config_path,
-            dest,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".git", ".git*"),
-        )
-        input_records.append(
-            provenance_tracker.record_repo_input(
-                "beam",
-                repo_path=common_config_path,
-                short_name="beam_common",
-                description="Beam Common Data Repo",
-                git_hash=git_hash,
-            )
-        )
-        output_records.append(
-            provenance_tracker.record_repo_input(
-                "beam",
-                repo_path=dest,
-                short_name="beam_common",
-                description="Beam Common Data Repo",
-            )
-        )
-
-    if "beam_skims_shapefile" in settings:
-        logger.info(
-            f"[BEAM Preprocessor] Updating beam config to use zone id of {settings['skim_zone_geoid_col']}"
-        )
-        update_beam_config(
-            settings,
-            os.path.split(os.path.split(os.path.split(output_dir)[0])[0])[
-                0
-            ],  # Sorry...
-            "skim_zone_geoid_col",
-            settings["skim_zone_geoid_col"],
-        )
-    return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
+        raise
 
 
-def update_beam_config(settings, working_dir, param, valueOverride=None):
+class BeamDataHelper:
     """
-    Update a BEAM config file parameter with a new value.
+    Centralizes logic for reading, cleaning, and standardizing BEAM input data.
     """
-    if param in settings:
-        config_header = beam_param_map[param]
-        if valueOverride is None:
-            config_value = settings[param]
-        else:
-            config_value = valueOverride
-        beam_config_path = os.path.join(
-            working_dir,
-            settings["beam_local_mutable_data_folder"],
-            settings["region"],
-            settings["beam_config"],
-        )
-        if not os.path.exists(beam_config_path):
-            logger.warning(
-                f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
-            )
-            return
-        modified = False
-        with open(beam_config_path, "r") as file:
-            data = file.readlines()
-        with open(beam_config_path, "w") as file:
-            for line in data:
-                if config_header in line:
-                    if not modified:
-                        file.writelines(
-                            config_header + " = " + str(config_value) + "\n"
-                        )
-                    modified = True
-                else:
-                    file.writelines(line)
-            if not modified:
-                file.writelines("\n" + config_header + " = " + str(config_value) + "\n")
-        logger.info(
-            f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"
-        )
-    else:
-        logger.warning(
-            f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
-        )
 
+    # Column Renaming Maps
+    RENAMES = {
+        "plans": {
+            "tripId": "trip_id",
+            "tripid": "trip_id",
+            "personId": "person_id",
+            "personid": "person_id",
+            "vehicleId": "vehicle_id",
+            "vehicleid": "vehicle_id",
+            "legVehicleIds": "leg_vehicle_ids",
+            "legvehicleids": "leg_vehicle_ids",
+        },
+        "households": {"VEHICL": "cars", "auto_ownership": "cars"},
+        "persons": {},  # No common renames, but kept for consistency
+    }
 
-def make_archive(source, destination):
-    """
-    From https://stackoverflow.com/questions/32640053/compressing-directory-using-shutil-make-archive-while-preserving-directory-str
-    """
-    base = os.path.basename(destination)
-    name = base.split(".")[0]
-    fmt = base.split(".")[1]
-    archive_from = os.path.dirname(source)
-    archive_to = os.path.basename(source.strip(os.sep))
-    shutil.make_archive(name, fmt, archive_from, archive_to)
-    shutil.move("%s.%s" % (name, fmt), destination)
+    # Dtypes for CSV reading to prevent Int64 -> Float conversion
+    DTYPES = {
+        "plans": {
+            "trip_id": pd.Int64Dtype(),
+            "person_id": pd.Int64Dtype(),
+            "planindex": pd.Int64Dtype(),
+        },
+        "households": {
+            "household_id": pd.Int64Dtype(),
+            "cars": pd.Int64Dtype(),
+            "auto_ownership": pd.Int64Dtype(),
+            "VEHICL": pd.Int64Dtype(),
+        },
+        "persons": {
+            "household_id": pd.Int64Dtype(),
+            "person_id": pd.Int64Dtype(),
+            "age": pd.Int64Dtype(),
+            "sex": pd.Int64Dtype(),
+        },
+    }
 
+    # Default columns to ensure exist in Plans
+    PLAN_DEFAULTS = {
+        "planindex": 0,
+        "planselected": False,  # Default to False; logic can override to True
+        "planscore": 0.0,
+        "legtraveltime": 0.0,
+        "legroutetype": "",
+        "legroutestartlink": 0,
+        "legrouteendlink": 0,
+        "legroutetraveltime": 0.0,
+        "legroutedistance": 0.0,
+        "legroutelinks": "",
+    }
 
-def copy_vehicles_from_atlas(
-    settings,
-    workspace: "Workspace",
-    state: WorkflowState,
-    provenance_tracker: "FileProvenanceTracker",
-    model_run_hash: str,
-):
-    beam_scenario_folder = os.path.join(
-        workspace.get_beam_mutable_data_dir(),
-        settings["region"],
-        settings["beam_scenario_folder"],
-    )
-    beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
-    atlas_output_data_dir = workspace.get_atlas_output_dir()
-    atlas_vehicle_file_loc = os.path.join(
-        atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year)
-    )
-    if not os.path.exists(atlas_vehicle_file_loc):
-        atlas_vehicle_file_loc = os.path.join(
-            atlas_output_data_dir, "vehicles_{0}.csv.gz".format(state.forecast_year - 1)
-        )
-    logger.info(
-        "Copying atlas vehicles file from {0} to {1}".format(
-            atlas_vehicle_file_loc, beam_vehicles_path
-        )
-    )
-    provenance_tracker.record_input_file(
-        "beam_preprocessor", atlas_vehicle_file_loc, model_run_id=model_run_hash
-    )
-    shutil.copy(atlas_vehicle_file_loc, beam_vehicles_path)
-    provenance_tracker.record_output_file(
-        "beam_preprocessor",
-        beam_vehicles_path,
-        model_run_id=model_run_hash,
-        source_file_paths=[atlas_vehicle_file_loc],
-    )
-
-
-def find_activitysim_output_files(
-    provenance_tracker: "FileProvenanceTracker",
-    workspace: "Workspace",
-    required_files: List[str],
-) -> dict:
-    """
-    Find ActivitySim output files by looking through the provenance tracker's file records.
-    This handles the case where files have been moved by the postprocessor.
-
-    Args:
-        provenance_tracker: The provenance tracker containing file records
-        workspace: The workspace object
-        required_files: List of required file short names (e.g., ['households', 'persons', 'beam_plans'])
-
-    Returns:
-        dict: Mapping of short_name to absolute file path
-    """
-    found_files = {}
-
-    # Look through all file records to find ActivitySim outputs
-    for file_hash, file_record in provenance_tracker.run_info.file_records.items():
-        if (
-            hasattr(file_record, "short_name")
-            and file_record.short_name in required_files
-        ):
-            if (
-                "activitysim" in file_record.models
-                or "activitysim_postprocessor" in file_record.models
-            ):
-                # Convert relative path to absolute path
-                if file_record.file_path.startswith("/"):
-                    abs_path = file_record.file_path
-                else:
-                    abs_path = os.path.join(
-                        workspace.output_path or workspace.full_path,
-                        file_record.file_path,
-                    )
-
-                found_files[file_record.short_name] = abs_path
-                logger.info(
-                    f"Found ActivitySim output file {file_record.short_name}: {abs_path}"
-                )
-
-    # Log missing files
-    missing_files = set(required_files) - set(found_files.keys())
-    if missing_files:
-        logger.warning(f"Could not find ActivitySim output files: {missing_files}")
-
-        # Try to find them in the expected locations as fallback
-        asim_output_dir = workspace.get_asim_output_dir()
-        for missing_file in missing_files:
-            # Map beam_plans back to plans for file system lookup
-            file_name = "plans" if missing_file == "beam_plans" else missing_file
-
-            # Try different possible locations
-            possible_paths = [
-                os.path.join(
-                    asim_output_dir, "final_pipeline", file_name, "final.parquet"
-                ),
-                os.path.join(
-                    asim_output_dir,
-                    f"year-{workspace.state.current_year}-iteration-{workspace.state.current_inner_iter}",
-                    f"{missing_file}.parquet",
-                ),
-                os.path.join(asim_output_dir, f"{missing_file}.parquet"),
-            ]
-
-            for path in possible_paths:
-                if os.path.exists(path):
-                    found_files[missing_file] = path
-                    logger.info(f"Found {missing_file} at fallback location: {path}")
-                    break
-
-    return found_files
-
-
-def copy_plans_from_asim(
-    input_records: RecordStore,
-    settings,
-    workspace: "Workspace",
-    state: WorkflowState,
-    provenance_tracker: "FileProvenanceTracker",
-    replanning_iteration_number=0,
-    model_run_hash: str = None,
-) -> RecordStore:
-    beam_scenario_folder = os.path.join(
-        workspace.get_beam_mutable_data_dir(),
-        settings["region"],
-        settings["beam_scenario_folder"],
-    )
-
-    def copy_with_compression_asim_file_to_beam(
-        asim_file_path,
-        beam_file_name,
-        file_format,
-        input_record: Optional[Record] = None,
-    ) -> Optional[Record]:
+    @classmethod
+    def read_and_clean(
+        cls, file_path: str, table_type: str, file_format: str
+    ) -> pd.DataFrame:
         """
-        Copy and compress a file from ActivitySim output to BEAM input, with provenance logging.
+        Reads a file (CSV/Parquet), applies dtypes, renames columns, and ensures defaults.
+
+        Args:
+            file_path: Path to the file.
+            table_type: One of 'plans', 'households', 'persons'.
+            file_format: 'csv' or 'parquet'.
         """
-        beam_file_path = locate_beam_file(
-            beam_scenario_folder, beam_file_name, file_format
-        )
-        logger.info(
-            "Copying asim file %s to beam input scenario file %s",
-            asim_file_path,
-            beam_file_path,
-        )
+        if not os.path.exists(file_path):
+            # Let the caller handle missing files, or raise specific error
+            raise FileNotFoundError(f"File not found: {file_path}")
 
-        if isinstance(input_record, FileRecord):
-            source_run_id = input_record.producing_run_id
+        # 1. Read File
+        if file_format == "parquet":
+            df = pd.read_parquet(file_path)
+        elif file_format == "csv":
+            # Get specific dtypes for this table type
+            dtype_map = cls.DTYPES.get(table_type, {})
+            df = pd.read_csv(file_path, dtype=dtype_map)
         else:
-            source_run_id = None
+            raise ValueError(f"Unsupported file format: {file_format}")
 
-        # Always record the ActivitySim file as an input to the BEAM preprocessor run
-        provenance_tracker.record_input_file(
-            "beam_preprocessor",
-            asim_file_path,
-            short_name=beam_file_name,
-            description=f"ActivitySim output for BEAM: {beam_file_name}",
-            model_run_id=model_run_hash,
-            source_run_id=source_run_id,
-        )
+        # 2. Rename Columns
+        rename_map = cls.RENAMES.get(table_type, {})
+        df = df.rename(columns=rename_map)
 
-        if os.path.exists(asim_file_path):
-            if file_format == "csv":
-                df = (
-                    pd.read_csv(
-                        asim_file_path,
-                        dtype={
-                            "household_id": pd.Int64Dtype(),
-                            "person_id": pd.Int64Dtype(),
-                            "trip_id": pd.Int64Dtype(),
-                            "cars": pd.Int64Dtype(),
-                            "VEHICL": pd.Int64Dtype(),
-                            "age": pd.Int64Dtype(),
-                            "sex": pd.Int64Dtype(),
-                        },
-                    )
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                )
-                df = df.loc[:, ~df.columns.duplicated()].copy()
-                df.to_csv(beam_file_path, compression="gzip")
-            elif file_format == "parquet":
-                df = (
-                    pd.read_parquet(asim_file_path)
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                    .rename(columns={"tripId": "trip_id"})
-                )
-                if "household_id" in df.columns:
-                    df = df.astype({"household_id": pd.Int64Dtype()})
-                df.loc[:, ~df.columns.duplicated()].to_parquet(
-                    beam_file_path, index=True
-                )
-            else:
-                logger.error(f"Unsupported file format: {file_format}")
-                return None
+        # 3. Deduplicate Columns (Fixes issue seen in households with multiple 'cars' inputs)
+        df = df.loc[:, ~df.columns.duplicated()].copy()
 
-            # Record the copied file as an output of the preprocessor
-            record = provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_file_path,
-                description=f"Copied from ActivitySim output: {beam_file_name}",
-                short_name=beam_file_name + "_beam_in",
-                source_file_paths=[asim_file_path],
-                model_run_id=model_run_hash,
-            )
-            return record
-        else:
-            logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
-            # Still record as missing output for provenance
-            provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_file_path,
-                description=f"Missing BEAM input file: {beam_file_name}",
-                model_run_id=model_run_hash,
-                skip_missing=False,
-            )
-            return None
+        # 4. Apply Defaults (specifically for Plans)
+        if table_type == "plans":
+            for col, default_val in cls.PLAN_DEFAULTS.items():
+                if col not in df.columns:
+                    df[col] = default_val
 
-    def merge_only_updated_households(asim_file_paths: dict) -> List[Record]:
-        file_format = settings.get("file_format", "parquet")
+        # 5. Set standard Index if applicable
+        index_map = {"households": "household_id", "persons": "person_id"}
+        index_col = index_map.get(table_type)
+        if index_col and index_col in df.columns:
+            df.set_index(index_col, inplace=True, drop=True)
 
-        asim_plans_path, asim_plans_record = asim_file_paths.get("beam_plans")
-        asim_households_path, asim_households_record = asim_file_paths.get("households")
-        asim_persons_path, asim_persons_record = asim_file_paths.get("persons")
-        beam_plans_path, beam_plans_record = asim_file_paths.get("beam_plans_out")
-
-        # beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
-        beam_households_path = locate_beam_file(
-            beam_scenario_folder, "households", file_format
-        )
-        beam_persons_path = locate_beam_file(
-            beam_scenario_folder, "persons", file_format
-        )
-
-        # Record ActivitySim files as inputs to BEAM preprocessor
-        for asim_path, name in [
-            (asim_plans_path, "plans"),
-            (asim_households_path, "households"),
-            (asim_persons_path, "persons"),
-        ]:
-            if asim_path:
-                provenance_tracker.record_input_file(
-                    "beam_preprocessor",
-                    asim_path,
-                    description=f"ActivitySim output for BEAM merge: {name}",
-                    model_run_id=model_run_hash,
-                )
-
-        if os.path.exists(beam_plans_path):
-            logger.info("Merging asim outputs with existing beam input scenario files")
-            if file_format == "csv":
-                original_households = pd.read_csv(
-                    beam_households_path,
-                    dtype={
-                        "household_id": pd.Int64Dtype(),
-                        "cars": pd.Int64Dtype(),
-                        "auto_ownership": pd.Int64Dtype(),
-                    },
-                )
-                updated_households = (
-                    pd.read_csv(
-                        asim_households_path,
-                        dtype={
-                            "household_id": pd.Int64Dtype(),
-                            "VEHICL": pd.Int64Dtype(),
-                            "auto_ownership": pd.Int64Dtype(),
-                        },
-                    )
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                )
-                updated_households = updated_households.loc[
-                    :, ~updated_households.columns.duplicated()
-                ].copy()
-                original_persons = pd.read_csv(
-                    beam_persons_path,
-                    dtype={
-                        "household_id": pd.Int64Dtype(),
-                        "person_id": pd.Int64Dtype(),
-                        "age": pd.Int64Dtype(),
-                        "sex": pd.Int64Dtype(),
-                    },
-                )
-                updated_persons = pd.read_csv(
-                    asim_persons_path,
-                    dtype={
-                        "household_id": pd.Int64Dtype(),
-                        "person_id": pd.Int64Dtype(),
-                        "age": pd.Int64Dtype(),
-                        "sex": pd.Int64Dtype(),
-                    },
-                )
-                original_plans = pd.read_csv(beam_plans_path).rename(
-                    columns={"tripId": "trip_id"}
-                )
-                updated_plans = pd.read_csv(asim_plans_path)
-            elif file_format == "parquet":
-                original_households = (
-                    pd.read_parquet(beam_households_path)
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                )
-                updated_households = (
-                    pd.read_parquet(asim_households_path)
-                    .rename(columns={"VEHICL": "cars"})
-                    .rename(columns={"auto_ownership": "cars"})
-                )
-                original_persons = pd.read_parquet(beam_persons_path)
-                updated_persons = pd.read_parquet(asim_persons_path)
-                if beam_plans_path.endswith(".parquet"):
-                    original_plans = pd.read_parquet(beam_plans_path).rename(
-                        columns={"tripId": "trip_id", "personId": "person_id"}
-                    )
-                else:
-                    try:
-                        original_plans = pd.read_csv(beam_plans_path).rename( # WHY IS THIS FAILING!!!!!
-                            columns={"tripId": "trip_id", "personId": "person_id"}
-                        )
-                    except gzip.BadGzipFile:
-                        logger.warning("Bad GZip file... Trying to read it as parquet instead?????")
-                        try:
-                            original_plans = pd.read_parquet(beam_plans_path).rename(
-                                columns={"tripId": "trip_id", "personId": "person_id"}
-                            )
-                            logger.info("That worked!!!")
-                        except Exception as e:
-                            logger.warning(f"That didn't work {e}. Just reading in asim plans")
-                            original_plans = pd.read_parquet(asim_plans_path)
-                updated_plans = pd.read_parquet(asim_plans_path)
-            else:
-                raise NotImplementedError
-            if "person_id" in original_persons.columns:
-                original_persons.set_index("person_id", inplace=True, drop=True)
-                logger.warning("Setting index to person_id in original persons")
-            if "person_id" in updated_persons.columns:
-                updated_persons.set_index("person_id", inplace=True, drop=True)
-                logger.warning("Setting index to person_id in updated persons")
-            if "household_id" in original_households.columns:
-                original_households.set_index("household_id", inplace=True, drop=True)
-                logger.warning("Setting index to household_id in original households")
-            if "household_id" in updated_households.columns:
-                updated_households.set_index("household_id", inplace=True, drop=True)
-                logger.warning("Setting index to household_id in updated households")
-            per_o = original_persons.index.unique()
-            per_u = updated_persons.index.unique()
-            overlap = np.in1d(per_u.astype(float), per_o.astype(float)).sum()
-            logger.info(
-                "There were %s persons replanned out of %s originally, and %s of them existed before",
-                len(per_u),
-                len(per_o),
-                overlap,
-            )
-
-            hh_o = original_households.index.unique()
-            hh_u = updated_households.index.unique()
-            overlap = np.in1d(hh_u.astype(float), hh_o.astype(float)).sum()
-            logger.info(
-                "There were %s households replanned out of %s originally, and %s of them existed before",
-                len(hh_u),
-                len(hh_o),
-                overlap,
-            )
-
-            persons_final = pd.concat(
-                [
-                    updated_persons,
-                    original_persons.loc[~original_persons.index.isin(per_u), :],
-                ]
-            )
-            persons_final = persons_final.astype(
-                {
-                    "household_id": pd.Int64Dtype(),
-                    "age": pd.Int64Dtype(),
-                    "sex": pd.Int64Dtype(),
-                }
-            )
-
-            households_final = pd.concat(
-                [
-                    updated_households,
-                    original_households.loc[~original_households.index.isin(hh_u), :],
-                ]
-            )
-            households_final = households_final.astype({"cars": pd.Int64Dtype()})
-
-            unchanged_plans = original_plans.loc[
-                ~original_plans.person_id.isin(per_u), :
-            ]
-            logger.info(
-                "Adding %s new plan elements after and keeping %s from previous iteration",
-                len(updated_plans),
-                len(unchanged_plans),
-            )
-            plans_final = pd.concat([updated_plans, unchanged_plans])
-            persons_with_plans = np.in1d(
-                persons_final.index.unique().astype(float),
-                plans_final.person_id.unique().astype(float),
-            ).sum()
-            logger.info(
-                "Of %s persons, %s of them have plans",
-                len(persons_final),
-                persons_with_plans,
-            )
-            if file_format == "csv":
-                persons_final.to_csv(beam_persons_path, index=False, compression="gzip")
-                households_final.to_csv(
-                    beam_households_path, index=False, compression="gzip"
-                )
-                plans_final.to_csv(beam_plans_path, compression="gzip", index=False)
-            else:
-                persons_final.to_parquet(beam_persons_path, index=True)
-                households_final.to_parquet(beam_households_path, index=True)
-                plans_final.to_parquet(beam_plans_path, index=True)
-            # Record provenance for all three files
-            persons_record = provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_persons_path,
-                description="Merged persons for BEAM input",
-                model_run_id=model_run_hash,
-                state=state,
-                source_file_paths=[asim_persons_path] if asim_persons_path else [],
-                short_name="persons_beam_in",
-            )
-            households_record = provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_households_path,
-                description="Merged households for BEAM input",
-                model_run_id=model_run_hash,
-                state=state,
-                source_file_paths=(
-                    [asim_households_path] if asim_households_path else []
-                ),
-                short_name="households_beam_in",
-            )
-            plans_record = provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_plans_path,
-                description="Merged plans for BEAM input",
-                model_run_id=model_run_hash,
-                state=state,
-                source_file_paths=[asim_plans_path] if asim_plans_path else [],
-                short_name="plans_beam_in",
-            )
-            record_list = [plans_record, households_record, persons_record]
-        else:
-            logger.info("No plans existed already so copying them directly.")
-            if asim_plans_path and os.path.exists(asim_plans_path):
-                pd.read_parquet(asim_plans_path).to_parquet(
-                    beam_plans_path
-                )  # Why OSError: Cannot save file into a non-existent directory: '/Users/zaneedell/git/PILATES/tmp/pilates-run-20250714-115638/beam/beam_output/sfbay/year-2011-iteration-0/ITERS/it.2'
-
-                # Record provenance for the plans file at least
-                plans_record = provenance_tracker.record_output_file(
-                    "beam_preprocessor",
-                    beam_plans_path,
-                    description="Copied plans for BEAM input (no merge)",
-                    model_run_id=model_run_hash,
-                    state=state,
-                    source_file_paths=[asim_plans_path],
-                    short_name="plans_beam_in",
-                )
-                record_list = [plans_record]
-            else:
-                logger.error("No ActivitySim plans file found to copy")
-                record_list = []
-        return record_list
-
-    # Main logic for copy_plans_from_asim
-    if settings.get("copy_plans_from_asim_outputs", True):
-        logger.info(
-            "You have chosen to use final ASIM plans. Will attempt to read files from provenance tracker."
-        )
-        file_format = settings.get("file_format", "parquet")
-
-        # Find ActivitySim output files using provenance tracker
-        required_files = [
-            "beam_plans",
-            "households",
-            "persons",
-            "beam_plans_out",
-        ]
-        asim_output_records = (
-            provenance_tracker.run_info.get_latest_model_run_output_records(
-                "activitysim_postprocessor"
-            )
-        )
-
-        if len(asim_output_records) == 0:
-            logger.error("No ActivitySim output files found in provenance tracker")
-            return RecordStore()
-
-        asim_file_paths = {}
-        for record in input_records.all_records():
-            if (record.short_name.rsplit("_", 2)[0] in required_files) or (
-                record.short_name in required_files
-            ):
-                splt = record.short_name.rsplit("_", 2)
-                if len(splt) > 1:
-                    if str.isdigit(splt[1]):
-                        shortened_name = splt[0]
-                    else:
-                        shortened_name = record.short_name
-                else:
-                    shortened_name = record.short_name
-                asim_file_paths[shortened_name] = (
-                    os.path.join(workspace.output_path, record.file_path),
-                    record,
-                )
-                logger.info(
-                    f"Found ActivitySim output file {record.short_name}: {record.file_path}"
-                )
-            else:
-                logger.info(
-                    f"Skipping non-required ActivitySim output file: {record.short_name}"
-                )
-
-        if replanning_iteration_number <= 0:
-            record_list = []
-            # Map ActivitySim output names to BEAM input names
-            asim_to_beam_mapping = [
-                (
-                    "beam_plans",
-                    "plans",
-                ),  # ActivitySim outputs beam_plans, BEAM needs plans
-                ("households", "households"),
-                ("persons", "persons"),
-            ]
-
-            for asim_name, beam_name in asim_to_beam_mapping:
-                asim_file_path, asim_file_record = asim_file_paths.get(
-                    asim_name, (None, None)
-                )
-                if asim_file_path:
-                    record = copy_with_compression_asim_file_to_beam(
-                        asim_file_path, beam_name, file_format, asim_file_record
-                    )
-                    if record:
-                        record_list.append(record)
-                else:
-                    logger.warning(f"ActivitySim output file not found: {asim_name}")
-        else:
-            record_list = merge_only_updated_households(asim_file_paths)
-
-        record_store = RecordStore(recordList=[r for r in record_list if r is not None])
-    else:
-        logger.info("Using the plans that were already in the beam scenario folder")
-        # Locate and create records for existing plans, households, persons
-        file_format = settings.get("file_format", "parquet")
-        record_list = []
-        for _, beam_name in [
-            ("beam_plans", "plans"),
-            ("households", "households"),
-            ("persons", "persons"),
-        ]:
-            beam_file_path = locate_beam_file(
-                beam_scenario_folder, beam_name, file_format
-            )
-            record = provenance_tracker.record_output_file(
-                "beam_preprocessor",
-                beam_file_path,
-                description=f"Existing BEAM input file: {beam_name}",
-                short_name=beam_name,
-                model_run_id=model_run_hash,
-            )
-            if record:
-                record_list.append(record)
-        record_store = RecordStore(recordList=[r for r in record_list if r is not None])
-
-    return record_store
+        return df
 
 
 class BeamPreprocessor(GenericPreprocessor):
     """
-    Preprocessor for BEAM model.
+    Preprocessor for the BEAM model. Handles data preparation, configuration updates,
+    and copying of inputs from other model components like ActivitySim and ATLAS.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
-        super().__init__(model_name, state, provenance_tracker)
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        """
+        asim_output_dir = None
+        if getattr(settings, "activity_demand_enabled", False):
+            asim_output_dir = workspace.get_asim_output_dir()
+
+        atlas_output_dir = None
+        if getattr(settings, "vehicle_ownership_model_enabled", False):
+            atlas_output_dir = workspace.get_atlas_output_dir()
+        return {
+            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            ASIM_OUTPUT_DIR: asim_output_dir,
+            ATLAS_OUTPUT_DIR: atlas_output_dir,
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this preprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``beam_mutable_data_dir``: Mutable BEAM data directory populated
+              with inputs for the runner.
+        Related docs
+            - See `pilates/beam/inputs.py` for the corresponding input
+              descriptions used by BEAM and downstream models.
+        """
+        return {"beam_mutable_data_dir": workspace.get_beam_mutable_data_dir()}
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, major_stage)
         self.required_input_data: List[str] = [
             "persons",
             "households",
@@ -795,138 +265,870 @@ class BeamPreprocessor(GenericPreprocessor):
             "linkstats",
             "beam_plans_out",
         ]
+        self.settings = self.state.full_settings
 
-    def copy_data_to_mutable_location(
-        self,
-        settings,
-        output_dir,
-    ) -> Tuple[RecordStore, RecordStore]:
-        # Delegate to the module-level function
-        from pilates.beam import preprocessor as beam_pre
-
-        return beam_pre.copy_data_to_mutable_location(
-            settings, output_dir, self.provenance_tracker
-        )
-
-    def preprocess(
+    def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
     ) -> RecordStore:
         """
-        Prepares all data needed to run BEAM.
+        Prepares all data needed to run BEAM for the current iteration.
         """
-        settings = self.state.full_settings
-        iteration_number = self.state.iteration
-
-        # Start by retrieving what Initialization stored
         input_records = workspace.output_data.get("beam", RecordStore())
         output_records = RecordStore()
 
-        # Only process ActivitySim records if ActivitySim was run
-        if previous_records is not None:
-            asim_post_records = previous_records.all_records()
-            for record in asim_post_records:
-                if record.short_name.rsplit("_", 2)[0] in self.required_input_data:
-                    input_records.add_record(record)
+        # Collect necessary records from the previous (ActivitySim) step
+        asim_post_records = previous_records.all_records()
+        for record in asim_post_records:
+            raw_name = getattr(record, "short_name", "") or ""
+            if not raw_name:
+                continue
+            if raw_name in self.required_input_data:
+                short_name = raw_name
+            elif "_asim_out" in raw_name:
+                short_name = raw_name.split("_asim_out")[0]
+            else:
+                short_name = raw_name
 
-        previous_beam_records = (
-            self.provenance_tracker.run_info.get_latest_model_run_output_records("beam")
-        )
-        for record in previous_beam_records:
-            if (record.short_name.rsplit('_', 2)[0] in self.required_input_data) and ('_sub' not in record.short_name):
+            if short_name in self.required_input_data:
                 input_records.add_record(record)
+                logger.info(f"Added {short_name} to beam inputs")
+            else:
+                logger.info(f"Skipping {raw_name} produced by activitysim")
 
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "beam_preprocessor",
-            year=self.state.current_year,
-            iteration=self.state.current_inner_iter,
-            description="Preprocessing for BEAM",
-            inputs=input_records,
+        # For replanning iterations, inputs from the previous BEAM run should be
+        # passed in explicitly by the caller.
+        previous_beam_records: List[FileRecord] = []
+        for record in previous_records.all_records():
+            short_name = getattr(record, "short_name", "") or ""
+            if short_name.startswith("linkstats"):
+                previous_beam_records.append(record)
+
+        # Update BEAM config based on settings
+        self._update_beam_config(
+            "max_plans_memory",
+            value_override=0 if self.settings.beam.discard_plans_every_year else None,
+            base_path=workspace.full_path,
         )
+        # Prepare the zone shapefile to ensure consistent zone ordering
+        self.prepare_beam_zone_shapefile(workspace)
 
-        # Update BEAM config
-        if settings["discard_plans_every_year"]:
-            update_beam_config(settings, workspace.full_path, "max_plans_memory", 0)
-        else:
-            update_beam_config(settings, workspace.full_path, "max_plans_memory")
+        store = RecordStore()
 
-        # Copy vehicle data from Atlas if enabled
-        if settings.get("vehicle_ownership_model_enabled"):
-            copy_vehicles_from_atlas(
-                settings, workspace, self.state, self.provenance_tracker, model_run_hash
+        # Copy vehicle data from Atlas (only on first iteration)
+        if (
+            self.settings.vehicle_ownership_model_enabled
+            and self.state.current_inner_iter == 0
+        ):
+            atlas_input_record, beam_output_record = self._copy_vehicles_from_atlas(
+                workspace
             )
+            if atlas_input_record is not None:
+                store.add_record(atlas_input_record)
+            if beam_output_record is not None:
+                store.add_record(beam_output_record)
 
-        # Copy plans from ActivitySim
-        store =  copy_plans_from_asim(
-            input_records,
-            settings,
-            workspace,
-            self.state,
-            self.provenance_tracker,
-            iteration_number,
-            model_run_hash,
-        )
+        # Copy and merge plans from ActivitySim
+        store += self._copy_plans_from_asim(input_records, workspace)
 
-        beam_prod_repo_record = next(
-            (
-                repo
-                for repo in self.provenance_tracker.run_info.repo_records.values()
-                if repo.short_name == "beam_prod"
-            ),
-            None,
-        )
-
-        # Add the BEAM scenario folder to the record store
-        if beam_prod_repo_record:
-            store.add_record(beam_prod_repo_record)
+        # Add FileRecord outputs here for any additional BEAM inputs you want
+        # tracked as explicit coupler keys (e.g., network files from the
+        # initialized BEAM input directory).
         store += output_records
 
-        self.provenance_tracker.complete_model_run(
-            run_hash=model_run_hash, output_records=store.all_records()
-        )
-
-
-        linkstats_record = next(
-            (
-                record
-                for record in previous_beam_records
-                if record.short_name.startswith("linkstats") and ("_sub" not in record.short_name)
-            ),
-            None,
-        )
-        if not linkstats_record:
-            linkstats_path = os.path.join(
-                workspace.get_beam_mutable_data_dir(),
-                settings["region"],
-                settings["beam_router_directory"],
-                "init.linkstats.csv.gz",
-            )
-            if os.path.exists(linkstats_path):
-                linkstats_record = self.provenance_tracker.record_output_file(
-                    "beam_preprocessor",
-                    linkstats_path,
-                    self.state.year,
-                    description="Initialized linkstats file",
-                    short_name="linkstats",
-                    state=self.state,
-                )
-                logger.info(
-                    "[BEAM Preprocessor] Found linkstats file at %s",
-                    linkstats_path,
-                )
-            else:
-                logger.info(
-                    "[BEAM Preprocessor] Linkstats file not found at %s, skipping",
-                    linkstats_path,
-                )
-
-        if linkstats_record:
-            logger.info(
-                "[BEAM Preprocessor] Linkstats file at %s added to BEAM input store",
-                linkstats_record.file_path,
-            )
-            store.add_record(linkstats_record)
+        # Ensure linkstats file is present and recorded
+        self._handle_linkstats(workspace, previous_beam_records, store)
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
+
+    def copy_data_to_mutable_location(
+        self, settings: PilatesConfig, output_dir: str
+    ) -> Tuple[RecordStore, RecordStore]:
+        """
+        Copy BEAM input files for the current region from the production directory
+        to the run's mutable input directory.
+        """
+        input_records, output_records = [], []
+        region = settings.run.region
+        beam_production_path = self._find_beam_production_path(settings, region)
+
+        if not beam_production_path:
+            logger.error(
+                f"Could not find BEAM production directory for region {region}."
+            )
+            return RecordStore(), RecordStore()
+
+        dest_region = os.path.join(os.path.abspath(output_dir), region)
+        logger.info(
+            f"Copying BEAM production inputs from {beam_production_path} to {dest_region}"
+        )
+
+        shutil.copytree(
+            beam_production_path,
+            dest_region,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", ".git*"),
+        )
+        input_records.append(
+            FileRecord(
+                file_path=beam_production_path,
+                short_name="beam_prod_source",
+                description="Beam Production Data Repo source",
+            )
+        )
+
+        output_records.append(
+            FileRecord(
+                file_path=dest_region,
+                short_name="beam_prod",
+                description="Beam Production Data Repo",
+            )
+        )
+
+        # Optionally copy 'common' configs if present
+        common_config_path = os.path.join(
+            os.path.dirname(beam_production_path), "common"
+        )
+        if os.path.exists(common_config_path):
+            dest_common = os.path.join(os.path.abspath(output_dir), "common")
+            shutil.copytree(
+                common_config_path,
+                dest_common,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git", ".git*"),
+            )
+            input_records.append(
+                FileRecord(
+                    file_path=common_config_path,
+                    short_name="beam_common_source",
+                    description="Beam Common Data Repo source",
+                )
+            )
+            output_records.append(
+                FileRecord(
+                    file_path=dest_common,
+                    short_name="beam_common",
+                    description="Beam Common Data Repo",
+                )
+            )
+
+        if hasattr(settings.beam, "skims_shapefile"):
+            logger.info(
+                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}"
+            )
+
+            # FIX: Calculate base path from output_dir if state.workspace is not guaranteed
+            # Original code used triple split logic; here we approximate assuming output_dir is in the workspace
+            # or fallback to self.state.workspace if available.
+            # A safe fallback for initialization time:
+            base_path = None
+            if hasattr(self.state, "workspace"):
+                base_path = self.state.workspace.full_path
+            else:
+                # Replicate logic: output_dir is usually "{root}/beam/data"
+                # os.path.dirname(os.path.dirname(output_dir)) approx "{root}"
+                base_path = os.path.dirname(
+                    os.path.dirname(os.path.abspath(output_dir))
+                )
+
+            self._update_beam_config(
+                "skim_zone_geoid_col",
+                value_override=settings.beam.skim_zone_geoid_col,
+                base_path=base_path,
+            )
+
+        return RecordStore(recordList=input_records), RecordStore(
+            recordList=output_records
+        )
+
+    def prepare_beam_zone_shapefile(self, workspace: "Workspace") -> Optional[str]:
+        """
+        Creates a sorted zone shapefile for BEAM from the canonical zone definitions
+        and updates the BEAM config to use it.
+        """
+
+        output_shapefile_path = _prepare_beam_zone_shapefile(workspace, self.settings)
+        output_shapefile_name = os.path.basename(output_shapefile_path)
+
+        logger.info("Updating BEAM configuration to use the new sorted shapefile.")
+        relative_shapefile_path = os.path.join("shape", output_shapefile_name)
+
+        # FIX: Pass workspace.full_path explicitly
+        self._update_beam_config(
+            "beam.agentsim.taz.filePath",
+            value_override="${beam.inputDirectory}" + f"/{relative_shapefile_path}",
+            base_path=workspace.full_path,
+        )
+        self._update_beam_config(
+            "beam.agentsim.taz.tazIdFieldName",
+            value_override=self.settings.shared.geography.zones.activitysim_index_col,
+            base_path=workspace.full_path,
+        )
+        return output_shapefile_path
+
+    def _copy_vehicles_from_atlas(
+        self, workspace: "Workspace"
+    ) -> Tuple[Optional[FileRecord], Optional[FileRecord]]:
+        """
+        Copies the vehicles file from the ATLAS output to the BEAM input scenario.
+
+        Returns
+        -------
+        tuple of FileRecord or None
+            (input_record, output_record) for lineage tracking.
+        """
+        beam_scenario_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
+        )
+        beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
+
+        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+            logger.info(
+                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
+            )
+            previous_run_dir = os.path.dirname(self.state.run_info_path)
+            atlas_output_data_dir = os.path.join(
+                previous_run_dir, "atlas", "atlas_output"
+            )
+        else:
+            atlas_output_data_dir = workspace.get_atlas_output_dir()
+
+        # Look for vehicles2_{year}.csv, falling back to year-1
+        atlas_vehicle_file_loc = os.path.join(
+            atlas_output_data_dir, f"vehicles2_{self.state.forecast_year}.csv"
+        )
+        if not os.path.exists(atlas_vehicle_file_loc):
+            atlas_vehicle_file_loc = os.path.join(
+                atlas_output_data_dir, f"vehicles2_{self.state.forecast_year - 1}.csv"
+            )
+
+        if not os.path.exists(atlas_vehicle_file_loc):
+            logger.warning(
+                "ATLAS vehicles2 file not found for BEAM input: %s",
+                atlas_vehicle_file_loc,
+            )
+            return None, None
+
+        logger.info(
+            f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
+        )
+
+        df = pd.read_csv(atlas_vehicle_file_loc)
+        df.to_csv(beam_vehicles_path, compression="gzip", index=False)
+        input_record = FileRecord(
+            file_path=atlas_vehicle_file_loc,
+            description="ATLAS vehicles2 input for BEAM",
+            short_name=ATLAS_VEHICLES2_INPUT,
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+        )
+        output_record = FileRecord(
+            file_path=beam_vehicles_path,
+            description="BEAM vehicles input derived from ATLAS vehicles2",
+            short_name="vehicles_beam_in",
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+        )
+        return input_record, output_record
+
+    def _copy_plans_from_asim(
+        self,
+        input_records: RecordStore,
+        workspace: "Workspace",
+    ) -> RecordStore:
+        """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
+        logger.info("Attempting to copy final ASIM plans from input records.")
+        file_format = self.settings.activitysim.file_format
+
+        base_path = (
+            os.path.dirname(self.state.run_info_path)
+            if self.state.run_info_path and os.path.exists(self.state.run_info_path)
+            else workspace.full_path
+        )
+
+        asim_file_paths = {}
+        for record in input_records.all_records():
+            splt = record.short_name.rsplit("_", 2)
+            shortened_name = (
+                splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
+            )
+            if shortened_name.endswith("_asim_out"):
+                shortened_name = shortened_name.split("_asim_out")[0]
+            if shortened_name in self.required_input_data:
+                asim_file_paths[shortened_name] = (
+                    os.path.join(base_path, record.file_path),
+                    record,
+                )
+                logger.info(
+                    f"Found ActivitySim output file {record.short_name}: {record.file_path}"
+                )
+
+        # Fallback: If required files are not found in the input records, try to
+        # locate them directly on the filesystem.
+        required_asim_base_names = [
+            "households",
+            "persons",
+            "beam_plans",  # ActivitySim outputs beam_plans
+        ]
+        asim_output_dir = workspace.get_asim_output_dir()
+        if base_path and os.path.isabs(base_path):
+            rel_asim_output_dir = os.path.relpath(asim_output_dir, workspace.full_path)
+            asim_output_dir = os.path.join(base_path, rel_asim_output_dir)
+
+        allow_final_pipeline = has_asim_run_marker(
+            asim_output_dir, self.state.current_year, self.state.current_inner_iter
+        )
+        if not allow_final_pipeline:
+            logger.warning(
+                "ASim success marker not found for year %s iteration %s; "
+                "skipping final_pipeline fallback for BEAM inputs.",
+                self.state.current_year,
+                self.state.current_inner_iter,
+            )
+
+        # Construct the full path to the year-iteration specific output directory
+        asim_output_iter_dir = os.path.join(
+            asim_output_dir,
+            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
+        )
+
+        for base_name in required_asim_base_names:
+            if base_name not in asim_file_paths:
+                expected_file_name = f"{base_name}.{file_format}"
+                candidate_paths = [
+                    os.path.join(asim_output_iter_dir, expected_file_name),
+                    os.path.join(
+                        asim_output_iter_dir,
+                        base_name,
+                        f"final.{file_format}",
+                    ),
+                ]
+                if allow_final_pipeline:
+                    candidate_paths.append(
+                        os.path.join(
+                            asim_output_dir,
+                            "final_pipeline",
+                            base_name,
+                            f"final.{file_format}",
+                        )
+                    )
+                found_path = next(
+                    (path for path in candidate_paths if os.path.exists(path)), None
+                )
+
+                if found_path:
+                    logger.warning(
+                        "ActivitySim output file '%s' (expected: %s) not found in input records. "
+                        "Falling back to filesystem at: %s",
+                        base_name,
+                        expected_file_name,
+                        found_path,
+                    )
+                    dummy_path = (
+                        os.path.relpath(found_path, base_path)
+                        if base_path and os.path.isabs(base_path)
+                        else found_path
+                    )
+                    dummy_record = FileRecord(
+                        file_path=dummy_path,
+                        short_name=base_name,
+                        description=(
+                            "ActivitySim output file found via filesystem fallback "
+                            f"({os.path.basename(found_path)})"
+                        ),
+                        year=self.state.current_year,
+                    )
+                    asim_file_paths[base_name] = (found_path, dummy_record)
+                else:
+                    logger.warning(
+                        "Required ActivitySim output file '%s' (expected: %s) not found in input "
+                        "records AND not found on filesystem at any of: %s",
+                        base_name,
+                        expected_file_name,
+                        ", ".join(candidate_paths),
+                    )
+
+        if self.state.current_inner_iter <= 0:
+            # First iteration: just copy files over
+            record_list = self._copy_initial_asim_files(
+                asim_file_paths, file_format, workspace
+            )
+        else:
+            # Subsequent iterations: merge replanned households/persons/plans
+            record_list = self._merge_replanned_asim_files(
+                asim_file_paths, file_format, workspace
+            )
+
+        return RecordStore(recordList=[r for r in record_list if r is not None])
+
+    def _copy_initial_asim_files(
+        self,
+        asim_file_paths: dict,
+        file_format: str,
+        workspace: "Workspace",
+    ) -> List[FileRecord]:
+        """Directly copies ActivitySim outputs for the first BEAM iteration."""
+        record_list = []
+        asim_to_beam_mapping = [
+            (
+                "beam_plans",
+                "plans",
+            ),  # ActivitySim outputs 'beam_plans', BEAM needs 'plans'
+            ("households", "households"),
+            ("persons", "persons"),
+        ]
+        beam_scenario_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
+        )
+
+        for asim_name, beam_name in asim_to_beam_mapping:
+            asim_file_path, asim_file_record = asim_file_paths.get(
+                asim_name, (None, None)
+            )
+            if asim_file_path:
+                records = self._copy_with_compression_asim_file_to_beam(
+                    asim_file_path,
+                    beam_name,
+                    file_format,
+                    beam_scenario_folder,
+                    input_record=asim_file_record,
+                )
+                if records:
+                    record_list.extend(records)
+            else:
+                logger.warning(f"ActivitySim output file not found: {asim_name}")
+        return record_list
+
+    def _merge_replanned_asim_files(
+        self,
+        asim_file_paths: dict,
+        file_format: str,
+        workspace: "Workspace",
+    ) -> List[FileRecord]:
+        """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
+        logger.info("Merging asim outputs with existing beam input scenario files.")
+        beam_scenario_folder = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+            self.settings.beam.scenario_folder,
+        )
+
+        asim_plans_path, asim_plans_rec = asim_file_paths.get(
+            "beam_plans", (None, None)
+        )
+        asim_persons_path, asim_persons_rec = asim_file_paths.get(
+            "persons", (None, None)
+        )
+        asim_households_path, asim_households_rec = asim_file_paths.get(
+            "households", (None, None)
+        )
+
+        def get_data(
+            path: str, table_type: str, file_format: str, file_source: str
+        ) -> pd.DataFrame:
+            if path is None:
+                raise FileNotFoundError(
+                    f"{file_source} file for table '{table_type}' not found."
+                )
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    f"{file_source} file for table '{table_type}' not found at {path}."
+                )
+            return BeamDataHelper.read_and_clean(path, table_type, file_format)
+
+        beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
+        beam_persons_path = locate_beam_file(
+            beam_scenario_folder, "persons", file_format
+        )
+        beam_households_path = locate_beam_file(
+            beam_scenario_folder, "households", file_format
+        )
+
+        # Existing BEAM files (previous iteration)
+        original_hh = get_data(beam_households_path, "households", file_format, "BEAM")
+        original_per = get_data(beam_persons_path, "persons", file_format, "BEAM")
+        original_plans = get_data(beam_plans_path, "plans", file_format, "BEAM")
+
+        # New ActivitySim files (current iteration)
+        updated_hh = get_data(
+            asim_households_path, "households", file_format, "ActivitySim"
+        )
+        updated_per = get_data(asim_persons_path, "persons", file_format, "ActivitySim")
+        updated_plans = get_data(asim_plans_path, "plans", file_format, "ActivitySim")
+
+        # Ensure new plans are marked as selected (override default False)
+        updated_plans["planselected"] = True
+
+        # Log overlap
+        logger.info(
+            f"Replanned {len(updated_per)} persons and {len(updated_hh)} households."
+        )
+
+        # Merge logic
+        per_idx = updated_per.index
+        hh_idx = updated_hh.index
+
+        persons_final = pd.concat(
+            [updated_per, original_per.loc[~original_per.index.isin(per_idx)]]
+        )
+        households_final = pd.concat(
+            [updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]]
+        )
+        plans_final = pd.concat(
+            [updated_plans, original_plans.loc[~original_plans.person_id.isin(per_idx)]]
+        )
+
+        # Save and Record
+        record_list = []
+
+        # Map dataframes to their output names and input records
+        outputs = [
+            (persons_final, "persons", asim_persons_rec),
+            (households_final, "households", asim_households_rec),
+            (plans_final, "plans", asim_plans_rec),
+        ]
+
+        for df, name, asim_rec in outputs:
+            path = locate_beam_file(beam_scenario_folder, name, file_format)
+
+            if file_format == "parquet":
+                df.to_parquet(path, index=True)
+            else:
+                df.to_csv(path, index=(name != "plans"), compression="gzip")
+
+            # Re-enforce CSV behavior from original
+            if file_format != "parquet":
+                df.to_csv(path, index=False, compression="gzip")
+
+            record_list.extend(
+                self._format_specific_output_records(
+                    name, path, file_format, "Merged BEAM input file"
+                )
+            )
+
+        return record_list
+
+    def _copy_with_compression_asim_file_to_beam(
+        self,
+        asim_file_path: str,
+        beam_file_name: str,
+        file_format: str,
+        beam_scenario_folder: str,
+        input_record: Optional[FileRecord] = None,
+    ) -> Optional[List[FileRecord]]:
+        """Copies and compresses a single file from ActivitySim to BEAM."""
+        beam_file_path = locate_beam_file(
+            beam_scenario_folder, beam_file_name, file_format
+        )
+        logger.info(
+            f"Copying asim file {asim_file_path} to beam input scenario file {beam_file_path}"
+        )
+
+        if not os.path.exists(asim_file_path):
+            logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
+            return [
+                FileRecord(
+                    file_path=beam_file_path,
+                    description=f"Missing BEAM input file: {beam_file_name}",
+                    short_name=f"{beam_file_name}_beam_in_missing",
+                    year=self.state.current_year,
+                    iteration=self.state.current_inner_iter,
+                )
+            ]
+
+        table_type = "plans" if "plans" in beam_file_name else beam_file_name
+
+        df = BeamDataHelper.read_and_clean(asim_file_path, table_type, file_format)
+
+        if file_format == "parquet":
+            df.to_parquet(beam_file_path, index=True)
+        else:
+            df.to_csv(beam_file_path, compression="gzip", index=False)
+
+        records = self._format_specific_output_records(
+            beam_file_name,
+            beam_file_path,
+            file_format,
+            f"Copied from ActivitySim output: {beam_file_name}",
+        )
+        return records
+
+    def _format_specific_output_records(
+        self,
+        file_stem: str,
+        file_path: str,
+        file_format: str,
+        description_prefix: str,
+    ) -> List[FileRecord]:
+        """
+        Emit explicit output records for BEAM input files by format.
+
+        Parameters
+        ----------
+        file_stem : str
+            Base filename (e.g., "persons").
+        file_path : str
+            Full path to the output file.
+        file_format : str
+            File format ("csv" or "parquet").
+        description_prefix : str
+            Description prefix for the record.
+        """
+        short_name_map = {
+            "plans": BEAM_PLANS_IN,
+            "households": BEAM_HOUSEHOLDS_IN,
+            "persons": BEAM_PERSONS_IN,
+        }
+        short_name = short_name_map.get(file_stem, f"{file_stem}_beam_in")
+        return [
+            FileRecord(
+                file_path=file_path,
+                description=description_prefix,
+                short_name=short_name,
+                year=getattr(self.state, "current_year", None),
+                iteration=getattr(self.state, "current_inner_iter", None),
+            )
+        ]
+
+    def _handle_linkstats(
+        self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
+    ):
+        """
+        Ensure a single, explicit warm-start linkstats record is present for this BEAM run.
+
+        Semantics:
+        - For the first BEAM run in the PILATES inner-iteration loop, use the initial
+          warm-start linkstats file copied into the BEAM mutable input tree
+          (typically `.../<router_directory>/init.linkstats.csv.gz`).
+        - For subsequent BEAM runs (inner-iterations > 0), use the linkstats produced by
+          the most recent BEAM run's *last* BEAM internal iteration (the one logged without
+          a `_sub...` suffix).
+
+        Implementation note:
+        - We "tag" the selected file via a stable `FileRecord.short_name` of
+          `linkstats_warmstart`, so each BEAM step has a consistent lineage key.
+        """
+        from pilates.generic.records import FileRecord
+
+        def _abs_from_record(rec: FileRecord) -> Optional[str]:
+            if not getattr(rec, "file_path", None):
+                return None
+            if os.path.isabs(rec.file_path):
+                return rec.file_path
+            return os.path.abspath(
+                os.path.join(str(workspace.full_path), rec.file_path)
+            )
+
+        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`), which is
+        # named like `linkstats_<year>_<inner_iter>` by BeamRunner.gather_outputs().
+        beam_output_linkstats = None
+        pattern = re.compile(r"^linkstats_\d+_\d+$")
+        for rec in previous_beam_records or []:
+            sn = getattr(rec, "short_name", "") or ""
+            if "_sub" in sn:
+                continue
+            if pattern.match(sn):
+                beam_output_linkstats = rec
+                break
+
+        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
+        # record, use it, but make it very obvious that this is not ideal.
+        if beam_output_linkstats is None:
+            for rec in previous_beam_records or []:
+                sn = getattr(rec, "short_name", "") or ""
+                if sn == "linkstats":
+                    beam_output_linkstats = rec
+                    logger.warning(
+                        "[NOT IDEAL] Using an unversioned `linkstats` record as warm-start input. "
+                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` so lineage is unambiguous."
+                    )
+                    break
+
+        # Determine which physical file path to use.
+        warmstart_abs_path = None
+        warmstart_source = None
+        if beam_output_linkstats is not None:
+            warmstart_abs_path = _abs_from_record(beam_output_linkstats)
+            warmstart_source = "previous_beam_output"
+
+        if warmstart_abs_path is None:
+            base_dir = os.path.join(
+                str(workspace.get_beam_mutable_data_dir()),
+                self.settings.run.region,
+                self.settings.beam.router_directory,
+            )
+            parquet_candidate = os.path.join(base_dir, "init.linkstats.parquet")
+            csv_candidate = os.path.join(base_dir, "init.linkstats.csv.gz")
+            if os.path.exists(parquet_candidate):
+                warmstart_abs_path = parquet_candidate
+            else:
+                warmstart_abs_path = csv_candidate
+            warmstart_source = "initial_inputs"
+
+        if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):
+            logger.warning(
+                "[BEAM Preprocessor] Warm-start linkstats file not found (source=%s): %s",
+                warmstart_source,
+                warmstart_abs_path,
+            )
+            return
+
+        warmstart_rel_path = os.path.relpath(
+            warmstart_abs_path, str(workspace.full_path)
+        )
+        warmstart_record = FileRecord(
+            file_path=warmstart_rel_path,
+            short_name="linkstats_warmstart",
+            description=f"BEAM warm-start linkstats (source={warmstart_source})",
+            year=getattr(self.state, "forecast_year", None),
+            iteration=getattr(self.state, "current_inner_iter", None),
+        )
+
+        logger.info(
+            "[BEAM Preprocessor] Using warm-start linkstats (source=%s): %s",
+            warmstart_source,
+            warmstart_rel_path,
+        )
+        store.add_record(warmstart_record)
+
+    @staticmethod
+    def _find_beam_production_path(
+        settings: PilatesConfig, region: str
+    ) -> Optional[str]:
+        """
+        Finds the path to the BEAM production data directory.
+
+        Semantics:
+        - `settings.beam.local_input_folder` is interpreted as an inputs-root-relative
+          path (relative to the directory containing `run.py`) unless absolute.
+        - The returned path should point at the region subdirectory inside that tree.
+        """
+        pilates_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not pilates_root:
+            pilates_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+                "This can break inputs:// URI virtualization and should be fixed by running from the repo root "
+                "or ensuring the repo contains expected markers.",
+                pilates_root,
+            )
+
+        configured_root = (
+            getattr(settings.beam, "local_input_folder", None)
+            if settings.beam
+            else None
+        )
+        if not configured_root:
+            logger.error("BEAM local_input_folder is not configured.")
+            return None
+
+        if os.path.isabs(configured_root):
+            root_candidate = configured_root
+        else:
+            root_candidate = os.path.join(pilates_root, configured_root)
+
+        primary_path = os.path.abspath(os.path.join(root_candidate, region))
+        if os.path.exists(primary_path):
+            return primary_path
+
+        # Legacy fallback observed in some HPC layouts.
+        alt_root = os.path.join(pilates_root, "sources", "PILATES")
+        alt_path = os.path.abspath(os.path.join(alt_root, configured_root, region))
+        if os.path.exists(alt_path):
+            logger.warning(
+                "[NOT IDEAL] Primary BEAM production path not found; using legacy alternate layout: %s. "
+                "Prefer fixing mounts/paths so inputs resolve directly under the configured inputs root.",
+                alt_path,
+            )
+            return alt_path
+
+        logger.error(
+            "BEAM production input directory does not exist at either %s or %s",
+            primary_path,
+            alt_path,
+        )
+        return None
+
+    def _update_beam_config(
+        self, param: str, value_override=None, base_path: str = None
+    ):
+        """
+        Update a BEAM config file parameter with a new value.
+
+        Args:
+            param: The config parameter key.
+            value_override: The value to set.
+            base_path: The root directory of the workspace.
+        """
+        config_header = beam_param_map.get(param)
+        if not config_header:
+            logger.warning(
+                f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
+            )
+            return
+
+        if value_override is not None:
+            config_value = value_override
+        else:
+            pydantic_path = BEAM_PYDANTIC_PATH_MAP.get(param)
+            if not pydantic_path:
+                logger.warning(
+                    f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
+                )
+                return
+            config_value = get_setting(self.settings, pydantic_path)
+
+        if config_value is None:
+            logger.debug(
+                f"Skipping beam config update for '{param}' because value is None."
+            )
+            return
+
+        # FIX: Determine root path robustly
+        root = base_path
+        if not root and hasattr(self.state, "workspace"):
+            root = self.state.workspace.full_path
+
+        if not root:
+            logger.error(
+                f"Cannot update BEAM config for {param}: Workspace root path could not be determined."
+            )
+            return
+
+        beam_config_path = os.path.join(
+            root,
+            self.settings.beam.local_mutable_data_folder,
+            self.settings.run.region,
+            self.settings.beam.config,
+        )
+
+        if not os.path.exists(beam_config_path):
+            logger.warning(
+                f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
+            )
+            return
+
+        with open(beam_config_path, "r") as file:
+            lines = file.readlines()
+
+        modified = False
+        with open(beam_config_path, "w") as file:
+            for line in lines:
+                if line.strip().startswith(config_header):
+                    if not modified:  # Write only the first occurrence
+                        file.write(f"{config_header} = {config_value}\n")
+                        modified = True
+                else:
+                    file.write(line)
+            if not modified:
+                file.write(f"\n{config_header} = {config_value}\n")
+
+        logger.info(
+            f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"
+        )

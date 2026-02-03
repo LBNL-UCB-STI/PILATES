@@ -1,5 +1,6 @@
 import yaml
 import os
+from pilates.utils.settings_helper import get as get_setting
 
 WARM_START_ACTIVITIES = True
 
@@ -13,7 +14,7 @@ if __name__ == "__main__":
         settings = yaml.load(f, Loader=yaml.FullLoader)
 
     settings.update({"docker_stdout": True})
-    year = settings["start_year"]
+    year = get_setting(settings, "run.start_year")
 
     client = initialize_docker_client(settings)
 

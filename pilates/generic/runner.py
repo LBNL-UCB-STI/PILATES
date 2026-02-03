@@ -1,21 +1,24 @@
+from __future__ import annotations
+
 import abc
 import logging
+import os
+import shlex
+import shutil
 import subprocess
+from typing import TYPE_CHECKING, Optional, List, Union, Dict, Any
 
+from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 
-try:
-    import docker
-except ImportError:
-    print("Warning: Unable to import Docker Module")
 from abc import ABC
-from typing import Dict, Optional, List, Tuple
 
-from pilates.generic.records import RecordStore, ModelRunInfo
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.generic.records import RecordStore
+from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
-from pilates.utils.container_utils import to_singularity_volumes, to_singularity_env
+from pilates.utils.settings_helper import get as get_setting
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,33 +28,55 @@ class GenericRunner(ABC, Model):
     A generic runner class that can be extended for specific models.
     """
 
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
-        super().__init__(model_name, state, provenance_tracker)
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        major_stage: Optional["WorkflowState.Stage"] = None,  # new
+    ):
+        super().__init__(model_name, state, major_stage)  # new
         self.required_input_files = []
         self.required_output_files = []
+
+    def setup_container_cache_dirs(self, settings: PilatesConfig):
+        """
+        Deprecated: Consist backends handle cache directory setup internally.
+        Kept for backward compatibility with subclasses.
+        """
+        pass
 
     def check_required_input_files(self, inputStore: RecordStore) -> bool:
         # TODO: Implement a check for required input files. Requires Record.simple_name
         return True
 
     @staticmethod
-    def get_model_and_image(settings: dict, model_type: str):
-        manager = settings.get("container_manager")
+    def get_model_and_image(settings: PilatesConfig, model_type: str):
+        manager = settings.infrastructure.container_manager
         if manager == "docker":
-            image_names = settings.get("docker_images", {})
+            image_names = settings.infrastructure.docker_images
         elif manager == "singularity":
-            image_names = settings.get("singularity_images", {})
+            image_names = settings.infrastructure.singularity_images
         else:
             raise ValueError(
                 "Container Manager not specified (container_manager param in settings.yaml)"
             )
 
-        model_name = settings.get(model_type)
+        # Map legacy model_type keys to their new paths under run.models
+        model_name_map = {
+            "land_use_model": settings.run.models.land_use,
+            "travel_model": settings.run.models.travel,
+            "activity_demand_model": settings.run.models.activity_demand,
+            "vehicle_ownership_model": settings.run.models.vehicle_ownership,
+        }
+
+        model_name = model_name_map.get(model_type)
+
+        # Fallback for custom or non-standard model types passed in tests
+        if model_name is None:
+            model_name = getattr(settings.run.models, model_type, None)
+
         if not model_name:
-            # If model type is optional (e.g., vehicle_ownership_model), return None
-            optional_models = [
-                "vehicle_ownership_model"
-            ]  # Add other optional models here
+            optional_models = ["vehicle_ownership_model"]
             if model_type in optional_models:
                 return None, None
             else:
@@ -60,17 +85,16 @@ class GenericRunner(ABC, Model):
         image_name = image_names.get(model_name)
         if not image_name:
             raise ValueError(
-                f"No {manager} image specified for model '{model_name}' (model type: {model_type}). Check settings['{manager}_images']."
+                f"No {manager} image specified for model '{model_name}' (model type: {model_type}). Check settings for '{manager}_images'."
             )
 
         return model_name, image_name
 
-    @abc.abstractmethod
     def run(
         self,
         store: RecordStore,
         workspace: Workspace,
-    ) -> Tuple[RecordStore, ModelRunInfo]:
+    ) -> RecordStore:
         """
         Do the model run
 
@@ -79,16 +103,35 @@ class GenericRunner(ABC, Model):
             workspace (Workspace): The workspace.
 
         Returns:
-            tuple: A tuple containing:
-                - data (RecordStore): The raw output files that have been prepared to run the model
-                - model_run_info (ModelRunInfo): Information about the model run
+            RecordStore: The raw output files that have been prepared to run the model.
+        """
+        self.state.set_sub_stage_progress("runner")
+        return self._run(store, workspace)
+
+    @abc.abstractmethod
+    def _run(
+        self,
+        store: RecordStore,
+        workspace: Workspace,
+    ) -> RecordStore:
+        """
+        Do the model run.
+
+        Subclasses should return a RecordStore of outputs without provenance side effects.
+
+        Args:
+            store (RecordStore): The input data generated by the preprocessor.
+            workspace (Workspace): The workspace.
+
+        Returns:
+            RecordStore: The raw output files that have been prepared to run the model.
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
     @staticmethod
     def run_container(
         client,
-        settings: dict,
+        settings: PilatesConfig,
         image: str,
         volumes: dict,
         command: str,
@@ -96,192 +139,246 @@ class GenericRunner(ABC, Model):
         working_dir=None,
         environment=None,
         args=None,
+        input_artifacts: List[Union[str, Any]] = None,
+        output_paths: List[str] = None,
+        lineage_mode: str = None,
     ) -> bool:
         """
-        Executes container using docker or singularity
-
-        Args:
-            client: the docker client. If it's provided then docker is used, otherwise singularity is used
-            settings: settings to get docker configuration
-            image: the image to run
-            volumes: a dictionary describing volume binding
-            command: the command to run
-            model_name: name of the model, used for stubs
-            working_dir: the working directory inside the container
-            environment: a dictionary that contains environment variables
-            args: additional arguments to the command
-
-        Returns:
-            bool: True if the container/stub ran successfully (exit code 0), False otherwise.
+        Executes container with Consist if available, otherwise falls back to direct
+        Docker/Singularity execution without provenance.
         """
-        if client:  # Docker client is available
-            docker_stdout = settings.get("docker_stdout", False)
-            logger.info("Running docker container: %s, command: %s", image, command)
-            run_kwargs = {
-                "volumes": volumes,
-                "command": command,
-                "stdout": docker_stdout,
-                "stderr": True,  # Always capture stderr
-                "detach": True,  # Run in detached mode to stream logs
-            }
-            if working_dir:
-                run_kwargs["working_dir"] = working_dir
-            if environment:
-                run_kwargs["environment"] = environment
-            if args:
-                # Append args to command string for docker
-                full_command = command + " " + " ".join(args)
-                run_kwargs["command"] = full_command
-                logger.info("Full docker command: %s", full_command)
+        run_cfg = getattr(settings, "run", None)
+        use_stubs = (
+            getattr(run_cfg, "use_stubs", False) if run_cfg is not None else False
+        )
+        if use_stubs is True:
+            logger.warning(
+                "[%s] use_stubs=True; skipping container execution for image=%s",
+                model_name,
+                image,
+            )
+            return True
 
-            container = None
+        mounts = GenericRunner._extract_mounts(volumes)
+        consist_volumes = {host: container for host, container, _mode in mounts}
+
+        # Handle command + args: Split if string, combine with args
+        full_command_list = GenericRunner._build_full_command(command, args)
+
+        # Determine settings from config
+        backend_type = get_setting(
+            settings, "infrastructure.container_manager", "docker"
+        )
+        pull_latest = get_setting(
+            settings, "infrastructure.docker_config.pull_latest", False
+        )
+        docker_stdout = get_setting(
+            settings, "infrastructure.docker_config.stdout", None
+        )
+        if docker_stdout is None:
+            docker_stdout = get_setting(settings, "docker_stdout", False)
+
+        if cr.consist_available(settings):
+            tracker = cr.current_tracker()
+            if not tracker:
+                raise RuntimeError(
+                    "A Consist tracker must be active for container execution. "
+                    "Ensure the call occurs within a Consist scenario/run context."
+                )
             try:
-                container = client.containers.run(image, **run_kwargs)
-                # Stream logs
-                for line in container.logs(
-                    stream=True, stderr=True, stdout=docker_stdout
-                ):
-                    # Decode bytes and print
-                    try:
-                        print(line.decode("utf-8").strip())
-                    except UnicodeDecodeError:
-                        print(line.strip())  # Print raw bytes if decoding fails
-
-                # Wait for container to finish and get exit code
-                result = container.wait()
-                exit_code = result["StatusCode"]
-                logger.info(
-                    f"Docker container {image} finished with exit code: {exit_code}"
+                from consist.integrations.containers import (
+                    run_container as consist_run_container,
                 )
-                return exit_code == 0
-
-            except Exception as e:
-                logger.error(f"Unexpected error running docker container {image}: {e}")
-                return False
-            finally:
-                if container:
-                    try:
-                        container.remove()
-                        logger.debug(f"Removed container {container.id}")
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not remove container {container.id}: {e}"
-                        )
-
-        else:  # Singularity
-            import os
-
-            for local_folder in volumes:
-                # Ensure local directories exist for singularity binds
-                os.makedirs(local_folder, exist_ok=True)
-
-            singularity_volumes = to_singularity_volumes(volumes)
-            # Construct the singularity command
-            proc = (
-                ["singularity", "run", "--cleanenv", "--writable-tmpfs"]
-                + (["--env", to_singularity_env(environment)] if environment else [])
-                + (["--pwd", working_dir] if working_dir else [])
-                + ["-B", singularity_volumes, image]
-                + (args if args else [])
-                + command.split()
-            )  # Split command string into list
-
-            logger.info("Running singularity command: %s", " ".join(proc))
-
-            # Check if using stubs
-            if settings.get("use_stubs"):
-                # Pass the full command string as config_name to the stub
-                stub_cmd = [
-                    "python",
-                    os.path.join(
-                        os.path.dirname(__file__),
-                        "..",
-                        "..",
-                        "tests",
-                        "stubs",
-                        "run_stub.py",
-                    ),  # Use relative path for stub
-                    "--model_name",
-                    model_name,
-                    "--cwd",
-                    os.getcwd(),  # Pass current working directory of run.py
-                    "--config_name",
-                    " ".join(command),  # Pass the original command string
-                ]
-                logger.info(
-                    f"Using stub for {model_name} ({image}). Running stub command: {' '.join(stub_cmd)}"
+            except ImportError as e:
+                logger.error(
+                    f"Consist container integration unavailable: {e}. Falling back to direct execution."
                 )
+            else:
+                logger.info(f"[{model_name}] Delegating container execution to Consist")
                 try:
-                    result = subprocess.run(
-                        stub_cmd, check=True, capture_output=True, text=True
+                    return consist_run_container(
+                        tracker=tracker,
+                        run_id=f"{model_name}_container",
+                        image=image,
+                        command=full_command_list,
+                        volumes=consist_volumes,
+                        inputs=input_artifacts or [],
+                        outputs=output_paths or [],
+                        environment=environment or {},
+                        working_dir=working_dir,
+                        backend_type=backend_type,
+                        pull_latest=pull_latest,
+                        lineage_mode=lineage_mode,
                     )
-                    print("Stub stdout:\n", result.stdout)
-                    print("Stub stderr:\n", result.stderr)
-                    logger.info(f"Stub for {model_name} finished successfully.")
-                    return True  # Stub success is check=True
-                except subprocess.CalledProcessError as e:
-                    logger.error(
-                        f"Stub for {model_name} failed with exit code {e.returncode}."
-                    )
-                    print("Stub stdout:\n", e.stdout)
-                    print("Stub stderr:\n", e.stderr)
-                    return False
-                except FileNotFoundError:
-                    logger.error(f"Stub script not found at {stub_cmd[2]}.")
-                    return False
-                except Exception as e:
-                    logger.error(f"Unexpected error running stub for {model_name}: {e}")
-                    return False
-
-            else:  # Run actual singularity container
-                try:
-                    # Use subprocess.run to execute singularity command
-                    result = subprocess.run(
-                        proc, check=False
-                    )  # Don't raise exception on non-zero exit code
-                    logger.info(
-                        f"Singularity container {image} finished with exit code: {result.returncode}"
-                    )
-                    return result.returncode == 0
-                except FileNotFoundError:
-                    logger.error(
-                        f"Singularity command not found. Is Singularity installed and in your PATH?"
-                    )
-                    return False
                 except Exception as e:
                     logger.error(
-                        f"Unexpected error running singularity container {image}: {e}"
+                        f"Consist container execution failed: {e}",
+                        exc_info=True,
                     )
-                    return False
+
+        logger.info(
+            f"[{model_name}] Consist disabled/unavailable; using direct container execution."
+        )
+        return GenericRunner._run_container_direct(
+            image=image,
+            command=full_command_list,
+            mounts=mounts,
+            environment=environment or {},
+            backend=backend_type,
+            working_dir=working_dir,
+            pull_latest=pull_latest,
+            docker_stdout=docker_stdout,
+        )
+
+    @staticmethod
+    def _build_full_command(command: Union[str, List[str]], args=None) -> List[str]:
+        if isinstance(command, list):
+            full_command_list = list(command)
+        else:
+            full_command_list = shlex.split(str(command))
+
+        if args:
+            if isinstance(args, list):
+                full_command_list.extend(args)
+            else:
+                full_command_list.extend(shlex.split(str(args)))
+
+        return full_command_list
+
+    @staticmethod
+    def _extract_mounts(volumes: dict) -> List[tuple]:
+        mounts = []
+        for host_path, mount_info in volumes.items():
+            if isinstance(mount_info, dict):
+                container_path = mount_info.get("bind", mount_info)
+                mode = mount_info.get("mode", "rw")
+            else:
+                container_path = mount_info
+                mode = "rw"
+
+            if not isinstance(container_path, str):
+                raise ValueError(
+                    f"Invalid container path for mount {host_path!r}: {container_path!r}"
+                )
+
+            abs_host_path = os.path.abspath(host_path)
+            mounts.append((abs_host_path, container_path, mode))
+        return mounts
+
+    @staticmethod
+    def _run_container_direct(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        backend: str,
+        working_dir: Optional[str],
+        pull_latest: bool,
+        docker_stdout: bool,
+    ) -> bool:
+        if backend == "docker":
+            return GenericRunner._run_docker_container(
+                image=image,
+                command=command,
+                mounts=mounts,
+                environment=environment,
+                working_dir=working_dir,
+                pull_latest=pull_latest,
+                docker_stdout=docker_stdout,
+            )
+        if backend == "singularity":
+            return GenericRunner._run_singularity_container(
+                image=image,
+                command=command,
+                mounts=mounts,
+                environment=environment,
+                working_dir=working_dir,
+            )
+
+        raise ValueError(f"Unknown container backend: {backend}")
+
+    @staticmethod
+    def _run_docker_container(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        working_dir: Optional[str],
+        pull_latest: bool,
+        docker_stdout: bool,
+    ) -> bool:
+        if pull_latest:
+            pull_cmd = ["docker", "pull", image]
+            logger.info(f"Pulling Docker image {image}")
+            subprocess.run(pull_cmd, check=True)
+
+        docker_cmd = ["docker", "run", "--rm"]
+        if working_dir:
+            docker_cmd.extend(["-w", working_dir])
+
+        for host_path, container_path, mode in mounts:
+            docker_cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
+
+        for key, value in (environment or {}).items():
+            docker_cmd.extend(["-e", f"{key}={value}"])
+
+        docker_cmd.append(image)
+        docker_cmd.extend(command)
+
+        logger.info(f"Running Docker container: {' '.join(docker_cmd)}")
+        try:
+            subprocess.run(
+                docker_cmd,
+                check=True,
+                capture_output=not docker_stdout,
+                text=True,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Docker execution failed: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def _run_singularity_container(
+        image: str,
+        command: List[str],
+        mounts: List[tuple],
+        environment: Dict[str, str],
+        working_dir: Optional[str],
+    ) -> bool:
+        runtime = "apptainer" if shutil.which("apptainer") else "singularity"
+
+        bind_args = []
+        for host_path, container_path, mode in mounts:
+            bind_args.extend(["-B", f"{host_path}:{container_path}:{mode}"])
+
+        sing_cmd = [runtime, "run"]
+        if working_dir:
+            sing_cmd.extend(["--pwd", working_dir])
+        sing_cmd.extend(bind_args)
+        sing_cmd.append(image)
+        sing_cmd.extend(command)
+
+        env = dict(os.environ)
+        for key, value in (environment or {}).items():
+            if runtime == "apptainer":
+                env[f"APPTAINERENV_{key}"] = value
+            else:
+                env[f"SINGULARITYENV_{key}"] = value
+
+        logger.info(f"Running Singularity container: {' '.join(sing_cmd)}")
+        try:
+            subprocess.run(
+                sing_cmd,
+                check=True,
+                env=env,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Singularity execution failed: {e}", exc_info=True)
+            return False
 
     @staticmethod
     def initialize_docker_client(settings):
-        land_use_model = settings.get("land_use_model", False)
-        vehicle_ownership_model = settings.get(
-            "vehicle_ownership_model", False
-        )  ## ATLAS
-        activity_demand_model = settings.get("activity_demand_model", False)
-        travel_model = settings.get("travel_model", False)
-        models = [
-            land_use_model,
-            vehicle_ownership_model,
-            activity_demand_model,
-            travel_model,
-        ]
-        image_names = settings["docker_images"]
-        pull_latest = settings.get("pull_latest", False)
-
-        client = docker.from_env()
-        if pull_latest:
-            logger.info("Pulling from docker...")
-            for model in models:
-                if model:
-                    image = image_names.get(model)  # Use .get for safety
-                    if image is not None:
-                        print("Pulling latest image for {0}".format(image))
-                        try:
-                            client.images.pull(image)
-                        except Exception as e:
-                            logger.error(f"Error pulling docker image {image}: {e}")
-
-        return client
+        # Deprecated: Consist handles backend initialization
+        return None

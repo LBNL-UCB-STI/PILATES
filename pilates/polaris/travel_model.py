@@ -1,6 +1,5 @@
 import os
 import sys
-import subprocess
 import yaml
 import shutil
 import pilates.polaris.preprocessor as preprocessor
@@ -11,6 +10,8 @@ import fnmatch
 import polarisruntime as PR
 from pathlib import Path
 from threading import Thread
+
+from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -79,27 +80,38 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
     # read settings from config file
     with open("pilates/polaris/polaris_settings.yaml") as file:
         polaris_settings = yaml.load(file, Loader=yaml.FullLoader)
-    data_dir = Path(polaris_settings.get("data_dir"))
-    backup_dir = Path(polaris_settings.get("backup_dir"))
-    scripts_dir = Path(polaris_settings.get("scripts_dir"))
-    db_name = polaris_settings.get("db_name")
-    out_name = polaris_settings.get("out_name")
-    polaris_exe = polaris_settings.get("polaris_exe")
-    scenario_init_file = polaris_settings.get("scenario_main_init", None)
-    scenario_main_file = polaris_settings.get("scenario_main")
-    vehicle_file_base = polaris_settings.get("vehicle_file_basename", None)
-    vehicle_file_fleet_base = polaris_settings.get("fleet_vehicle_file_basename", None)
-    num_threads = polaris_settings.get("num_threads")
-    num_abm_runs = polaris_settings.get("num_abm_runs")
-    block_loc_file_name = polaris_settings.get("block_loc_file_name")
-    population_scale_factor = polaris_settings.get("population_scale_factor")
-    archive_dir = polaris_settings.get("archive_dir")
+        data_dir = Path(get_setting(polaris_settings, "data_dir"))
+        backup_dir = Path(get_setting(polaris_settings, "backup_dir"))
+        scripts_dir = Path(get_setting(polaris_settings, "scripts_dir"))
+        db_name = get_setting(polaris_settings, "db_name")
+        out_name = get_setting(polaris_settings, "out_name")
+        polaris_exe = get_setting(polaris_settings, "polaris_exe")
+        scenario_init_file = get_setting(polaris_settings, "scenario_main_init", None)
+        scenario_main_file = get_setting(polaris_settings, "scenario_main")
+        vehicle_file_base = get_setting(polaris_settings, "vehicle_file_basename", None)
+        vehicle_file_fleet_base = get_setting(
+            polaris_settings, "fleet_vehicle_file_basename", None
+        )
+        num_threads = get_setting(polaris_settings, "num_threads")
+        num_abm_runs = get_setting(polaris_settings, "num_abm_runs")
+        block_loc_file_name = get_setting(polaris_settings, "block_loc_file_name")
+        population_scale_factor = get_setting(
+            polaris_settings, "population_scale_factor"
+        )
+        archive_dir = get_setting(polaris_settings, "archive_dir")
+
+        # create the output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        vot_level = get_setting(polaris_settings, "vot_level")
     db_supply = "{0}/{1}-Supply.sqlite".format(str(data_dir), db_name)
     db_demand = "{0}/{1}-Demand.sqlite".format(str(data_dir), db_name)
     block_loc_file = "{0}/{1}".format(str(data_dir), block_loc_file_name)
     vot_level = polaris_settings.get("vot_level")
 
-    usim_output_dir = os.path.abspath(usim_settings["usim_local_mutable_data_folder"])
+    usim_output_dir = os.path.abspath(
+        usim_get_setting(settings, "urbansim.local_mutable_data_folder")
+    )
 
     # store the original inputs
     supply_db_name = db_name + "-Supply.sqlite"
@@ -146,10 +158,8 @@ def run_polaris(forecast_year, usim_settings, warm_start=False):
             '"' + vehicle_file_fleet_base + '_{0}.txt"'.format(forecast_year)
         )
         if not forecast_year:
-            veh_file_name = '"' + vehicle_file_base + '.txt"'.format(forecast_year)
-            fleet_veh_file_name = (
-                '"' + vehicle_file_fleet_base + 'txt"'.format(forecast_year)
-            )
+            veh_file_name = '"' + vehicle_file_base + '.txt"'
+            fleet_veh_file_name = '"' + vehicle_file_fleet_base + 'txt"'
 
         if loop == 0:
             if forecast_year:

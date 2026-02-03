@@ -1,12 +1,17 @@
 import logging
 import os
+import re
 import shutil
-from typing import Optional
+import time
+from typing import Optional, List, Dict, Any, Tuple
 
 import numpy as np
 import openmatrix as omx
+import pandas as pd
 
-from pilates.utils.provenance import FileProvenanceTracker
+from pilates.config import PilatesConfig
+import pilates.utils.zone_utils as zone_utils
+from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 try:
     import xarray as xr
@@ -18,8 +23,9 @@ except ImportError as e:
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, ModelRunInfo
+from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
+from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
@@ -31,26 +37,40 @@ TNC_CONSOLIDATION_MAP = {
 
 
 def find_latest_beam_iteration(beam_output_dir):
+    """
+    Return (path_to_latest_iteration_dir, latest_iteration_number).
+
+    BEAM iteration directories are typically named `it.<n>` under an `ITERS` folder.
+    """
     iter_dirs = [
-        os.path.join(root, dir)
+        os.path.join(root, dir_name)
         for root, dirs, files in os.walk(beam_output_dir)
-        if not root.startswith(".")
-        for dir in dirs
-        if dir == "ITERS"
+        if not os.path.basename(root).startswith(".")
+        for dir_name in dirs
+        if dir_name == "ITERS"
     ]
     logger.info("Looking in directories {0}".format(iter_dirs))
     if not iter_dirs:
         return None, None
+
     last_iters_dir = max(iter_dirs, key=os.path.getmtime)
-    all_iteration_dir = [
-        it for it in os.listdir(last_iters_dir) if not it.startswith(".")
-    ]
-    logger.info("Looking in directories {0}".format(all_iteration_dir))
-    if not all_iteration_dir:
-        return None, None
     it_prefix = "it."
-    max_it_num = max(dir_name[len(it_prefix) :] for dir_name in all_iteration_dir)
-    return os.path.join(last_iters_dir, it_prefix + str(max_it_num)), max_it_num
+
+    iteration_nums = []
+    for dir_name in os.listdir(last_iters_dir):
+        if dir_name.startswith(".") or not dir_name.startswith(it_prefix):
+            continue
+        try:
+            iteration_nums.append(int(dir_name[len(it_prefix) :]))
+        except ValueError:
+            logger.warning(f"Skipping non-integer iteration directory: {dir_name}")
+
+    logger.info("Looking in directories {0}".format(iteration_nums))
+    if not iteration_nums:
+        return None, None
+
+    max_it_num = max(iteration_nums)
+    return os.path.join(last_iters_dir, f"{it_prefix}{max_it_num}"), max_it_num
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
@@ -62,6 +82,158 @@ def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):
     )
     logger.info("expecting skims at {0}".format(od_skims_path))
     return od_skims_path
+
+
+def _sanitize_event_type(event_type: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", str(event_type)).strip("_")
+    return safe or "unknown"
+
+
+def split_events_parquet_by_type(
+    events_path: str,
+    event_types: Optional[List[str]] = None,
+    *,
+    output_dir: Optional[str] = None,
+    output_prefix: Optional[str] = None,
+    create_path_traversal_links: bool = False,
+) -> Tuple[Dict[str, str], Optional[str]]:
+    """
+    Split a BEAM events parquet file into per-type parquet files.
+
+    Parameters
+    ----------
+    events_path : str
+        Path to the combined events parquet.
+    event_types : list[str], optional
+        Event types to split. When None, uses all types present.
+    output_dir : str, optional
+        Output directory for split files (defaults to events_path parent).
+    output_prefix : str, optional
+        Prefix for output filenames (defaults to events filename stem).
+    """
+    # NOTE: DuckDB could do this faster with predicate pushdown and Parquet COPY.
+    # Sketch:
+    #   COPY (
+    #     SELECT *, row_number() OVER () - 1 AS PathTraversalEventId
+    #     FROM read_parquet('events.parquet')
+    #     WHERE type = 'PathTraversal'
+    #   ) TO '...PathTraversal.parquet' (FORMAT 'parquet');
+    #   COPY (
+    #     SELECT
+    #       PathTraversalEventId,
+    #       UNNEST(STRING_SPLIT(links, ','))::BIGINT AS linkId,
+    #       UNNEST(STRING_SPLIT(linkTravelTime, ','))::DOUBLE AS travelTimeSeconds,
+    #       ROW_NUMBER() OVER (PARTITION BY PathTraversalEventId) - 1 AS link_index
+    #     FROM read_parquet('events.parquet')
+    #     WHERE type = 'PathTraversal'
+    #   ) TO '...PathTraversal.links.parquet' (FORMAT 'parquet');
+    if not os.path.exists(events_path):
+        logger.warning("Events parquet not found for split: %s", events_path)
+        return {}, None
+    if event_types is None:
+        try:
+            type_col = pd.read_parquet(events_path, columns=["type"])
+        except Exception:
+            logger.warning(
+                "Failed to read 'type' column from events parquet: %s",
+                events_path,
+                exc_info=True,
+            )
+            return {}, None
+        if "type" not in type_col.columns:
+            logger.warning("Events parquet missing 'type' column: %s", events_path)
+            return {}, None
+        event_types = sorted(type_col["type"].dropna().unique().tolist())
+    output_dir = output_dir or os.path.dirname(events_path)
+    prefix = output_prefix or os.path.splitext(os.path.basename(events_path))[0]
+    written_paths: Dict[str, str] = {}
+    path_traversal_links_path: Optional[str] = None
+    for event_type in event_types:
+        try:
+            subset = pd.read_parquet(
+                events_path,
+                filters=[("type", "==", event_type)],
+                engine="pyarrow",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to filter events parquet for type %s: %s",
+                event_type,
+                events_path,
+                exc_info=True,
+            )
+            continue
+        if subset.empty:
+            continue
+        subset = subset.reset_index(drop=True)
+        subset[f"{_sanitize_event_type(event_type)}EventId"] = subset.index
+        if create_path_traversal_links and event_type == "PathTraversal":
+            links = subset.get("links")
+            travel_times = subset.get("linkTravelTime")
+            if links is not None and travel_times is not None:
+                links_split = links.astype(str).str.split(",")
+                travel_times_split = travel_times.astype(str).str.split(",")
+                link_ids = links_split.explode()
+                tt_vals = travel_times_split.explode()
+                if len(link_ids) != len(tt_vals):
+                    logger.warning(
+                        "PathTraversal links and travel time lengths mismatch: %d vs %d",
+                        len(link_ids),
+                        len(tt_vals),
+                    )
+                link_table = pd.DataFrame(
+                    {
+                        "PathTraversalEventId": link_ids.index,
+                        "link_index": link_ids.groupby(level=0).cumcount(),
+                        "linkId": link_ids,
+                        "travelTimeSeconds": tt_vals,
+                    }
+                )
+                link_table["linkId"] = pd.to_numeric(
+                    link_table["linkId"], errors="coerce"
+                ).astype("Int64")
+                link_table["travelTimeSeconds"] = pd.to_numeric(
+                    link_table["travelTimeSeconds"], errors="coerce"
+                )
+                link_table = link_table.replace({"": pd.NA}).dropna(
+                    subset=["linkId", "travelTimeSeconds"]
+                )
+                path_traversal_links_path = os.path.join(
+                    output_dir,
+                    f"{prefix}.PathTraversal.links.parquet",
+                )
+                link_table.to_parquet(path_traversal_links_path, index=False)
+                subset = subset.drop(columns=["links", "linkTravelTime"])
+        subset = subset.dropna(axis=1, how="all")
+        safe_type = _sanitize_event_type(event_type)
+        out_path = os.path.join(output_dir, f"{prefix}.{safe_type}.parquet")
+        subset.to_parquet(out_path, index=False)
+        written_paths[event_type] = out_path
+    return written_paths, path_traversal_links_path
+
+
+def _select_last_events_parquet_record(
+    raw_outputs: RecordStore,
+    year: int,
+    iteration: int,
+) -> Optional[FileRecord]:
+    target_name = f"events_parquet_{year}_{iteration}"
+    best_sub = None
+    best_sub_idx = -1
+    for record in raw_outputs.all_records():
+        short_name = getattr(record, "short_name", "")
+        if short_name == target_name:
+            return record
+        if short_name.startswith(f"{target_name}_sub"):
+            suffix = short_name.split("_sub", 1)[-1]
+            try:
+                sub_idx = int(suffix)
+            except ValueError:
+                continue
+            if sub_idx > best_sub_idx:
+                best_sub_idx = sub_idx
+                best_sub = record
+    return best_sub
 
 
 def find_produced_linkstats(beam_output_dir, suffix="csv.gz"):
@@ -82,6 +254,7 @@ def find_produced_plans(beam_output_dir, suffix="csv.gz"):
     od_skims_path = os.path.join(iteration_dir, "{0}.plans.{1}".format(it_num, suffix))
     logger.info("expecting output plans at {0}".format(od_skims_path))
     return od_skims_path
+
 
 def find_beam_iterations(beam_output_dir):
     iter_dirs = [
@@ -107,7 +280,7 @@ def find_beam_iterations(beam_output_dir):
     for dir_name in os.listdir(last_iters_dir):
         if dir_name.startswith(it_prefix):
             try:
-                it_num = int(dir_name[len(it_prefix):])
+                it_num = int(dir_name[len(it_prefix) :])
                 iteration_dict[it_num] = os.path.join(last_iters_dir, dir_name)
             except ValueError:
                 logger.warning(f"Skipping non-integer iteration directory: {dir_name}")
@@ -118,7 +291,10 @@ def find_beam_iterations(beam_output_dir):
     max_iteration = max(iteration_dict.keys())
     return iteration_dict, max_iteration
 
-def find_iteration_file(iteration_path: str, iteration: int, file: str, file_type: str="") -> Optional[str]:
+
+def find_iteration_file(
+    iteration_path: str, iteration: int, file: str, file_type: str = ""
+) -> Optional[str]:
     path = os.path.join(iteration_path, f"{iteration}.{file}{file_type}")
     if os.path.exists(path):
         logger.debug(f"Found file at {path}")
@@ -126,6 +302,7 @@ def find_iteration_file(iteration_path: str, iteration: int, file: str, file_typ
     else:
         logger.warning(f"Could not find file at {path}")
         return None
+
 
 def find_produced_origin_skims(beam_output_dir):
     iteration_dir, it_num = find_latest_beam_iteration(beam_output_dir)
@@ -150,46 +327,26 @@ def copy_skims_for_unobserved_modes(mapping, skims_ds):
     """
     logger.info("Copying skims for unobserved modes...")
     for fromMode, toModes in mapping.items():
-        # Find all skim variables starting with the source mode
-        # Exclude TRIPS and FAILURES as these represent observed demand, not skim values
-        # Exclude measures that might have mode-specific meanings or are handled separately
-        # e.g., "TOLL" skims should not be copied onto non-toll modes, but the mapping is SOV -> SOVTOLL etc.
-        # The original code copied *all* relevant skim keys. Let's refine this.
-        # A better approach is to specify which measures should be copied.
-        # However, sticking to the original behavior of copying most things except TRIPS/FAILURES
-        # and assuming the measures list in settings covers what's needed.
-        # Let's copy based on the existence of the target key format in the dataset.
+        # Quick fix for config issue where a string is provided instead of a list
+        if isinstance(toModes, str):
+            toModes = [toModes]
 
-        # Get all variable names in the dataset
         all_vars = list(skims_ds.data_vars)
 
         for var_name in all_vars:
-            # Check if the variable name starts with the source mode path
-            # and is not TRIPS, FAILURES, or TNC specific (handled elsewhere)
             if var_name.startswith(fromMode + "_") and not any(
                 m in var_name for m in ["_TRIPS", "_FAILURES"]
             ):
-                # Check if this measure should be copied (avoid copying e.g. SOV_TOLL to HOV)
-                if (
-                    "TOLL" in var_name.split("_")[0]
-                ):  # Check if the mode itself contains TOLL
-                    continue  # Don't use TOLL skims as sources to copy FROM
+                if "TOLL" in var_name.split("_")[0]:
+                    continue
 
-                # Extract the measure name (assuming format SOV_MEASURE or SOVTOLL_MEASURE)
-                measure_parts = var_name.split("_", 1)
-                if len(measure_parts) < 2:
-                    continue  # Skip if not in expected format
+                # Correctly extract measure name for complex mode names
+                measure_name = var_name[len(fromMode) + 1 :]
 
-                measure_name = measure_parts[1]  # e.g., "TOTIVT"
-
-                # For each target mode, construct the expected target variable name
                 for toMode in toModes:
                     target_var_name = f"{toMode}_{measure_name}"
 
-                    # Check if the target variable exists in the dataset
                     if target_var_name in all_vars:
-                        # Perform the copy using .data
-                        # Check shape compatibility - they should be the same (zones, zones, periods)
                         if skims_ds[var_name].shape == skims_ds[target_var_name].shape:
                             skims_ds[target_var_name].data[:] = skims_ds[var_name].data[
                                 :
@@ -629,7 +786,7 @@ def _postprocess_tnc_zarr(
             # Original logic seems to set FAR to 0 except where explicitly calculated, or set to a fixed value.
             # The OMX code did not explicitly modify FAR, but the postprocessor had commented out code.
             # Let's default to 0 where TRIPS are zero, or a fixed value if settings provide one.
-            default_far = settings.get("tnc_default_far", 0.0)  # Add this setting
+            default_far = 0.0  # Replaces legacy tnc_default_far setting
 
             # Set FAR to default_far where TRIPS are zero or NaN
             mask_zero_trips = (completed_3d + failed_3d) == 0
@@ -666,6 +823,76 @@ def clear_skim_cache(asim_local_output_dir):
         shutil.rmtree(skims_path)
     else:
         logger.warning("Did not find skim cache to delete")
+
+
+def _accumulate_all_completed_failed_trips_zarr(partial_skims_ds, timePeriods):
+    """
+    Accumulates completed and failed trip counts from all modes/providers
+    in the partial Zarr dataset.
+
+    Parameters:
+    -----------
+    partial_skims_ds : xarray.Dataset
+        The Zarr dataset containing the partial skims from BEAM.
+    timePeriods : list of str
+        List of time period names.
+
+    Returns:
+    --------
+    dict
+        Dictionary where keys are mode paths and values are tuples:
+        (completed_trips_3d_array, failed_trips_3d_array).
+    """
+
+    if "time_period" in partial_skims_ds.coords:
+        zarr_time_periods = [str(tp) for tp in partial_skims_ds.time_period.values]
+        if zarr_time_periods != timePeriods:
+            logger.warning(
+                f"Time periods mismatch: Zarr has {zarr_time_periods}, "
+                f"expected {timePeriods}. Using Zarr periods."
+            )
+
+    logger.info(
+        "Accumulating completed and failed trip counts from partial Zarr skims..."
+    )
+    completed_failed_dict = {}
+
+    # Get all data variables
+    for var_name in partial_skims_ds.data_vars:
+        # Check if it's a TRIPS or FAILURES variable
+        is_trips = var_name.endswith("_TRIPS")
+        is_failures = var_name.endswith("_FAILURES")
+
+        if is_trips or is_failures:
+            # Extract the mode path
+            if is_trips:
+                mode = var_name[: -len("_TRIPS")]
+            else:  # is_failures
+                mode = var_name[: -len("_FAILURES")]
+
+            if mode not in completed_failed_dict:
+                # Get the shape from the data variable
+                shape = partial_skims_ds[var_name].shape
+                completed_failed_dict[mode] = [
+                    np.zeros(shape, dtype=np.float32),  # Completed trips 3D
+                    np.zeros(shape, dtype=np.float32),  # Failed trips 3D
+                ]
+
+            try:
+                data_3d = np.nan_to_num(partial_skims_ds[var_name].values)
+
+                if is_trips:
+                    completed_failed_dict[mode][0] = data_3d
+                else:  # is_failures
+                    completed_failed_dict[mode][1] = data_3d
+
+            except Exception as e:
+                logger.error(f"Error reading partial Zarr skim {var_name}: {e}")
+
+    logger.info(
+        f"Accumulated trip counts for {len(completed_failed_dict)} modes/providers."
+    )
+    return completed_failed_dict
 
 
 def _accumulate_all_completed_failed_trips(partialSkims, timePeriods):
@@ -885,6 +1112,62 @@ def _transform_measure(
     return np.zeros_like(input_vals, dtype=bool), np.array([]), None
 
 
+def _merge_one_zarr_measure_from_zarr(
+    partial_skims_ds, skims_ds, path, measure, timePeriods, completed_3d, failed_3d
+):
+    """
+    Merges a single measure's data from Zarr partial skims into the master Zarr dataset.
+    """
+    source_var_name = f"{path}_{measure}"
+    target_var_name = source_var_name
+
+    # Check if source variable exists in partial skims
+    if source_var_name not in partial_skims_ds.data_vars:
+        logger.debug(f"Variable {source_var_name} not found in partial Zarr skims.")
+        return None, None
+
+    # Ensure the target variable exists in skims_ds
+    if target_var_name not in skims_ds.data_vars:
+        logger.warning(f"Target Zarr variable '{target_var_name}' not found. Ignoring")
+        return None, None
+
+    target_da = skims_ds[target_var_name]
+    source_da = partial_skims_ds[source_var_name]
+
+    # Get the data
+    input_vals_3d = source_da.values
+
+    # Apply transformations for each time period
+    for tpIdx in range(input_vals_3d.shape[2]):
+        input_vals_tp = input_vals_3d[:, :, tpIdx]
+        completed_tp = completed_3d[:, :, tpIdx]
+        failed_tp = failed_3d[:, :, tpIdx]
+
+        # Apply transformations using the helper function
+        mask_update, vals_update, to_cancel_tp = _transform_measure(
+            input_vals_tp,
+            completed_tp,
+            failed_tp,
+            measure,
+            path,
+        )
+
+        # Apply updates
+        current_slice = target_da.data[:, :, tpIdx]
+        if mask_update.any():
+            current_slice[mask_update] = vals_update
+
+        # Handle cancellations
+        if to_cancel_tp is not None and to_cancel_tp.any():
+            cancellation_count = to_cancel_tp.sum()
+            current_slice[to_cancel_tp] = 0.0
+            logger.debug(f"  Canceled {cancellation_count} ODs for {source_var_name}")
+
+        target_da.data[:, :, tpIdx] = current_slice
+
+    return path, measure
+
+
 def _merge_one_zarr_measure(
     partialSkims, skims_ds, path, measure, timePeriods, completed_3d, failed_3d
 ):
@@ -1019,12 +1302,8 @@ def _merge_zarr_trip_counts(allSkims, path, completed, failed):
         logger.info(
             f"For {path} previously had {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips"
         )
-        prev_completed[any_observed] = (
-            0.5 * prev_completed[any_observed] + completed[any_observed]
-        )
-        prev_failed[any_observed] = (
-            0.5 * prev_completed[any_observed] + failed[any_observed]
-        )
+        prev_completed = np.ceil(0.9 * prev_completed + completed).astype(int)
+        prev_failed = np.ceil(0.9 * prev_failed + failed).astype(int)
         allSkims[key_completed].data[
             :
         ] = prev_completed  # Use [:] to modify data in place
@@ -1068,7 +1347,7 @@ def _handle_transit_mode_availability(skims_ds, timePeriods):
 
     # Create a summary table header using logger
     logger.info(f"{'=' * 80}")
-    logger.info(f"Transit Mode Availability Analysis")
+    logger.info("Transit Mode Availability Analysis")
     logger.info(f"{'=' * 80}")
     logger.info(
         f"{'Period':<6} | {'Mode':<12} | {'ODs w/50+ Transit':<18} | {'ODs w/0 Mode Trips':<18} | {'Changed':<10} | {'% Changed':<10}"
@@ -1714,8 +1993,8 @@ def _transfer_tnc_provider_data_zarr(
     return list(transferred_vars)
 
 
-def write_zarr_skim_as_omx(
-    all_skims_path, settings, new_skim_name, exclude_tables=None
+def write_zarr_skim_as_omx_new(
+    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
 ):
     """
     Write the skims from the Zarr format to an OMX format.
@@ -1724,7 +2003,164 @@ def write_zarr_skim_as_omx(
     ----------
     all_skims_path : str
         Path to the main skims Zarr store.
-    settings : dict
+    settings : PilatesConfig
+        Settings dictionary, needed for 'region' and 'beam_local_mutable_data_folder'.
+    new_skim_name : str
+        Name of the new OMX skim file to be created (e.g., 'skims.omx').
+    exclude_tables : list, optional
+        A list of variable names (strings) from the Zarr dataset
+        to exclude from being written to the OMX file. Defaults to None.
+
+    Returns
+    -------
+    str or None
+        The path to the newly created OMX file if successful, otherwise None.
+    """
+    logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
+
+    region = settings.run.region
+    beam_input_dir = settings.beam.local_mutable_data_folder
+
+    if not region or not beam_input_dir:
+        logger.error(
+            "Settings 'region' or 'beam_local_input_folder' are not defined. Cannot determine output path."
+        )
+        return None
+
+    target_skims_path = os.path.join(beam_input_dir, region, new_skim_name)
+
+    if exclude_tables is None:
+        exclude_tables = []
+
+    skims_ds = None
+    new_omx_file = None
+
+    try:
+        # Open the Zarr dataset
+        skims_ds = xr.open_zarr(all_skims_path)
+        # Ensure arrays are in memory so in-place edits are captured before re-writing.
+        skims_ds = skims_ds.load()
+        logger.info(f"Opened Zarr skims file: {all_skims_path}")
+
+        # Get zone IDs - simplified logic
+        if "taz_ids" in skims_ds.attrs:
+            # BEAM stores actual TAZ IDs in attributes
+            zone_ids = skims_ds.attrs["taz_ids"]
+            logger.info(f"Using TAZ IDs from attributes: {len(zone_ids)} zones")
+        else:
+            # Fall back to coordinate values
+            zone_ids = skims_ds.coords["otaz"].values
+            logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+
+        # Ensure zone_ids are integers if they represent numbers
+        try:
+            zone_ids = [int(z) for z in zone_ids]
+        except ValueError:
+            # Keep as strings if they can't be converted to int
+            zone_ids = [str(z) for z in zone_ids]
+
+        # Get time periods
+        time_periods = []
+        if "time_period" in skims_ds.coords:
+            time_periods = [str(s) for s in skims_ds.time_period.values]
+            logger.info(f"Found {len(time_periods)} time periods: {time_periods}")
+
+        # Prepare output file
+        logger.info(f"Target output OMX path: {target_skims_path}")
+        if os.path.exists(target_skims_path):
+            logger.info(f"Deleting existing file: {target_skims_path}")
+            os.remove(target_skims_path)
+
+        # Create the new OMX file
+        new_omx_file = omx.open_file(target_skims_path, "w")
+        logger.info(f"Created new OMX file: {target_skims_path}")
+
+        # Add zone mapping
+        new_omx_file.create_mapping("zone_id", zone_ids)
+        logger.info(f"Created 'zone_id' mapping with {len(zone_ids)} zones")
+
+        # Write matrices - NO SCALING CHANGES
+        logger.info("Writing matrices to OMX file...")
+        written_count = 0
+
+        for key in skims_ds.data_vars:
+            if key in exclude_tables:
+                logger.info(f"Skipping excluded variable: {key}")
+                continue
+
+            try:
+                data_array = skims_ds[key]
+                data = data_array.values
+
+                if data_array.ndim == 2:
+                    # Write 2D matrix directly
+                    data_to_write = np.nan_to_num(data).astype(np.float32)
+                    new_omx_file[key] = data_to_write
+                    written_count += 1
+                    logger.debug(f"Wrote 2D matrix '{key}'")
+
+                elif data_array.ndim == 3:
+                    # Write slices for each time period
+                    for t_idx, tp in enumerate(time_periods):
+                        new_key = f"{key}__{tp}"
+                        slice_data = data[:, :, t_idx]
+                        data_to_write = np.nan_to_num(slice_data).astype(np.float32)
+                        new_omx_file[new_key] = data_to_write
+
+                        # Add attributes
+                        parts = key.rsplit("_", 1)
+                        if len(parts) == 2:
+                            new_omx_file[new_key].attrs["mode"] = parts[0]
+                            new_omx_file[new_key].attrs["measure"] = parts[1]
+                        else:
+                            new_omx_file[new_key].attrs["measure"] = key
+                        new_omx_file[new_key].attrs["timePeriod"] = tp
+
+                        written_count += 1
+                        logger.debug(f"Wrote 3D slice '{new_key}'")
+
+            except Exception as e:
+                logger.error(f"Error writing variable '{key}' to OMX: {e}")
+
+        logger.info(
+            f"Finished writing {written_count} matrices to OMX file {target_skims_path}"
+        )
+        return target_skims_path
+
+    except Exception as e:
+        logger.critical(
+            f"An unexpected error occurred during Zarr to OMX conversion: {e}"
+        )
+        return None
+
+    finally:
+        # Ensure files are closed
+        if new_omx_file:
+            try:
+                new_omx_file.close()
+                logger.info("Closed OMX file")
+            except Exception as e:
+                logger.error(f"Error closing OMX file: {e}")
+
+        if skims_ds:
+            try:
+                skims_ds.close()
+                logger.info("Closed Zarr dataset")
+            except Exception as e:
+                logger.error(f"Error closing Zarr dataset: {e}")
+
+
+def write_zarr_skim_as_omx(
+    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
+):
+    """
+    Write the skims from the Zarr format to an OMX format.
+
+    Parameters
+    ----------
+    all_skims_path : str
+        Path to the main skims Zarr store.
+    settings : PilatesConfig
         Settings dictionary, needed for 'region' and 'beam_local_input_folder'.
     new_skim_name : str
         Name of the new OMX skim file to be created (e.g., 'skims.omx').
@@ -1739,8 +2175,8 @@ def write_zarr_skim_as_omx(
     """
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
-    region = settings.get("region")
-    beam_input_dir = settings.get("beam_local_input_folder")
+    region = get_setting(settings, "run.region")
+    beam_input_dir = get_setting(settings, "beam.local_input_folder")
 
     if not region or not beam_input_dir:
         logger.error(
@@ -1778,7 +2214,9 @@ def write_zarr_skim_as_omx(
                     "Zarr uses zero-based zones but no original zone mapping found!"
                 )
                 # Try to reconstruct from settings
-                zone_ids = zone_order(settings, settings.get("start_year", 2015))
+                zone_ids = zone_order(
+                    settings, get_setting(settings, "run.start_year", 2015)
+                )
                 logger.warning(
                     f"Reconstructed zone IDs from settings: {len(zone_ids)} zones"
                 )
@@ -1918,122 +2356,282 @@ def write_zarr_skim_as_omx(
                 logger.error(f"Error closing Zarr dataset {all_skims_path}: {e}")
 
 
+def verify_skim_zone_order(
+    settings, skim_file_path: str, workspace: "Workspace"
+) -> List[str]:
+    """
+    Verifies that the zone order in a skim file (Zarr or OMX) matches the
+    canonical order from the canonical_zones file.
+
+    Args:
+        settings: The PilatesConfig object.
+        skim_file_path: Path to the skim file to verify.
+        workspace: The current run's workspace object.
+
+    Raises:
+        ValueError: If the zone orders do not match.
+    """
+    logger.info(f"--- Verifying zone order for skim file: {skim_file_path} ---")
+
+    # 1. Get Canonical Order
+    canonical_zones_df = zone_utils.load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.tolist()
+    logger.info(
+        f"Successfully loaded canonical order for {len(canonical_order)} zones."
+    )
+
+    # 2. Get Skim File Order
+    skim_order = None
+    store = None
+    if skim_file_path.endswith(".zarr") or skim_file_path.endswith(".zarr.zip"):
+        try:
+            store = xr.open_zarr(skim_file_path)
+            if "original_zone_ids" in store.attrs:
+                skim_order = store.attrs["original_zone_ids"]
+                logger.info(
+                    f"Extracted {len(skim_order)} zone IDs from Zarr root attributes."
+                )
+            elif "original_zone_ids" in store["otaz"].attrs:
+                skim_order = store["otaz"].attrs["original_zone_ids"]
+                logger.info(
+                    f"Extracted {len(skim_order)} zone IDs from Zarr 'otaz' attributes (legacy)."
+                )
+            else:
+                raise ValueError(
+                    "Zarr file does not contain 'original_zone_ids' metadata in root or 'otaz' attributes."
+                )
+        except (ValueError, KeyError) as e:
+            logger.warning(
+                f"Could not find 'original_zone_ids' on first attempt ({e}). Trying to consolidate metadata."
+            )
+            if store:
+                store.close()
+            try:
+                import zarr
+
+                zarr.consolidate_metadata(skim_file_path)
+                store = xr.open_zarr(skim_file_path, consolidated=True)
+                if "original_zone_ids" in store.attrs:
+                    skim_order = store.attrs["original_zone_ids"]
+                    logger.info(
+                        f"Extracted {len(skim_order)} zone IDs after consolidating metadata."
+                    )
+                else:
+                    raise ValueError(
+                        "Zarr file does not contain 'original_zone_ids' metadata even after consolidation."
+                    )
+            except Exception as consolidation_error:
+                raise ValueError(
+                    f"Zarr file does not contain 'original_zone_ids' metadata. Consolidation attempt failed: {consolidation_error}"
+                )
+
+    elif skim_file_path.endswith(".omx"):
+        with omx.open_file(skim_file_path, "r") as f:
+            if "TAZ" in f.list_mappings():
+                mapping_items = sorted(
+                    f.mapping("TAZ").items(), key=lambda item: item[1]
+                )
+                skim_order = [item[0] for item in mapping_items]
+                logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
+            else:
+                raise ValueError("OMX file does not contain 'TAZ' mapping.")
+    else:
+        logger.warning(
+            f"Unsupported file type for zone order verification: {skim_file_path}"
+        )
+        return canonical_order
+
+    # 3. Compare Orders
+    try:
+        if skim_order is None:
+            raise ValueError("Could not extract zone order from skim file.")
+
+        if len(skim_order) != len(canonical_order):
+            msg = (
+                f"Zone count mismatch! Canonical order has {len(canonical_order)} zones, "
+                f"but skim file has {len(skim_order)} zones."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        if skim_order != canonical_order:
+            for i, (canonical_id, skim_id) in enumerate(
+                zip(canonical_order, skim_order)
+            ):
+                if canonical_id != skim_id:
+                    msg = (
+                        f"FATAL: Skim zone order (from original_zone_ids attribute) does not match canonical order! "
+                        f"This indicates silent data corruption is occurring in the BEAM run. "
+                        f"First mismatch at index {i}: Canonical='{canonical_id}', Skim='{skim_id}'"
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+
+        if store:
+            expected_otaz_coords = np.arange(len(canonical_order))
+            actual_otaz_coords = store.coords["otaz"].values
+
+            if not np.array_equal(actual_otaz_coords, expected_otaz_coords):
+                msg = (
+                    f"FATAL: Zarr 'otaz' coordinates are not 0-based as expected! "
+                    f"Expected 0-based coordinates up to {len(canonical_order) - 1}, "
+                    f"but found coordinates starting with {actual_otaz_coords[0]} and ending with {actual_otaz_coords[-1]}. "
+                    f"This indicates BEAM produced 1-based coordinates, which will cause ActivitySim to fail."
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+    finally:
+        if store:
+            store.close()
+
+    logger.info("--- Zone order verification successful. ---")
+
+    return canonical_order
+
+
 def _merge_beam_skims_to_zarr(
     all_skims_path,
+    iteration_skims_path,
     beam_output_dir,
     settings,
+    workspace,
     override=None,
-    provenance_tracker=None,
-    model_run_hash=None,
-):
+) -> Optional[str]:
     """
     Merges current BEAM OMX skims into the main Zarr skims file.
     Handles TNC consolidation if enabled.
     Records provenance for all skims lineage.
+    Creates zarr version snapshots for skim evolution tracking.
+
+    Parameters
+    ----------
+    state : WorkflowState, optional
+        Current workflow state (for year/iteration tracking)
+    run_id : str, optional
+        PILATES run ID (for zarr snapshot tracking)
     """
-    logger.info(
-        f"Starting merge of current BEAM OMX skims into Zarr at {all_skims_path}"
-    )
+    logger.info(f"Starting merge of current BEAM skims into Zarr at {all_skims_path}")
+
+    # Load canonical order for coordinate validation and correction
+    canonical_zones_df = zone_utils.load_canonical_zones(settings, workspace)
+    canonical_order = canonical_zones_df.index.tolist()
+    logger.info(f"DEBUG: Loaded canonical order for {len(canonical_order)} zones.")
+
+    # Determine input format and find skims
+    partialSkims = None
+    partial_skims_ds = None
 
     if override is None:
-        current_omx_skims_path = find_produced_od_skims(beam_output_dir, "omx")
+        # First try to find Zarr skims
+
+        if os.path.exists(iteration_skims_path):
+            current_skims_path = iteration_skims_path
+        else:
+            current_skims_path = None
     else:
-        current_omx_skims_path = override
+        current_skims_path = override
+        # Detect format from extension
 
-    if current_omx_skims_path is None or not os.path.exists(current_omx_skims_path):
-        logger.warning(
-            f"No current OMX skims found at {current_omx_skims_path}. Skipping merge."
-        )
-        # Check if the Zarr file exists; if not, ActivitySim won't run, so this is a failure state.
-        # Assume Zarr was created by asim_pre.create_zarr_skims
-        if not os.path.exists(all_skims_path):
-            logger.error(
-                f"Target Zarr skims file not found at {all_skims_path} and no new OMX skims available. Cannot proceed."
-            )
-            return None
-        try:
-            skims_ds = xr.open_zarr(
-                all_skims_path
-            )  # Open existing for possible post-processing if it's a replan iteration
-            skims_ds.close()  # Just check if it's readable
-        except Exception as e:
-            logger.error(
-                f"Failed to open existing Zarr skims file at {all_skims_path}: {e}. Cannot proceed."
-            )
-            return None
+    if current_skims_path is None or not os.path.exists(current_skims_path):
+        logger.warning("No current skims found. Skipping merge.")
+        return None
 
+    canonical_order = verify_skim_zone_order(settings, current_skims_path, workspace)
+
+    if current_skims_path.endswith(".zarr"):
+        input_format = "zarr"
+        partial_skims_ds = xr.open_zarr(current_skims_path)
         logger.info(
-            "Existing Zarr skims file found, but no new OMX skims to merge. Proceeding with post-processing on existing Zarr if needed."
+            f"DEBUG: Partial (BEAM) skims otaz coords: {partial_skims_ds.coords['otaz'].values[:5]}...{partial_skims_ds.coords['otaz'].values[-5:]}"
         )
-        partialSkims = None  # Ensure partialSkims is None if file not found
-
-    else:
-        try:
-            partialSkims = omx.open_file(current_omx_skims_path, mode="r")
-            logger.info(f"Opened partial skims file: {current_omx_skims_path}")
-        except Exception as e:
-            logger.error(
-                f"Failed to open partial skims file {current_omx_skims_path}: {e}. Skipping merge."
+        if "time_period" in partial_skims_ds.coords:
+            logger.debug(
+                "Partial BEAM skims time_period coords for %s: %s",
+                current_skims_path,
+                list(partial_skims_ds.coords["time_period"].values),
             )
-            partialSkims = None  # Ensure partialSkims is None if opening fails
-            if not os.path.exists(all_skims_path):
-                logger.error(
-                    f"Target Zarr skims file not found at {all_skims_path} and failed to open new OMX skims. Cannot proceed."
-                )
-                return None  # Indicate failure
+    else:
+        input_format = "omx"
+        partialSkims = omx.open_file(current_skims_path, mode="r")
+
+    # Ensure the main skims.zarr is 0-based and flagged before opening for merge
+    try:
+        ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
+    except Exception as e:
+        logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
+        return all_skims_path
 
     # Open the Zarr dataset in append mode to modify it in place
     try:
         skims_ds = xr.open_zarr(all_skims_path)
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
-
-        # Store original zone IDs BEFORE any preprocessing
-        if "original_zone_ids" not in skims_ds.attrs:
-            # Get the actual zone order from settings, not from preprocessed coordinates
-            original_zone_ids = zone_order(settings, settings.get("start_year", 2015))
-            skims_ds.attrs["original_zone_ids"] = original_zone_ids.tolist()
-            logger.info(
-                f"Stored original zone IDs from settings: {len(original_zone_ids)} zones"
-            )
-        else:
-            original_zone_ids = skims_ds.attrs["original_zone_ids"]
-            logger.info("Found existing original zone IDs in Zarr attributes")
-    except Exception as e:
-        logger.error(
-            f"Failed to open target Zarr skims file {all_skims_path}: {e}. Cannot proceed."
+        logger.info(
+            f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
         )
-        if partialSkims:
-            partialSkims.close()
-        return None  # Indicate failure
 
-    timePeriods = settings["periods"]
-    consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
+        # Store original zone IDs if needed
+        if "original_zone_ids" not in skims_ds.attrs:
+            if partial_skims_ds and "original_zone_ids" in partial_skims_ds.attrs:
+                # Copy from partial skims if available
+                skims_ds.attrs["original_zone_ids"] = partial_skims_ds.attrs[
+                    "original_zone_ids"
+                ]
+            else:
+                # Get from settings
+                canonical_zones_df = zone_utils.load_canonical_zones(
+                    settings, workspace
+                )
+                original_zone_ids = canonical_zones_df.index.tolist()
+                skims_ds.attrs["original_zone_ids"] = original_zone_ids
+    except Exception as e:
+        logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
+        if partial_skims_ds:
+            partial_skims_ds.close()
+        return None
 
-    # Step 1: Accumulate completed and failed trips from partial skims (all modes/providers)
+    timePeriods = get_setting(settings, "shared.skims.periods")
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
+
+    # Step 1: Accumulate completed and failed trips based on format
     completed_failed_dict_all = {}
-    if partialSkims:
+    if input_format == "zarr" and partial_skims_ds:
+        completed_failed_dict_all = _accumulate_all_completed_failed_trips_zarr(
+            partial_skims_ds, timePeriods
+        )
+    elif input_format == "omx" and partialSkims:
         completed_failed_dict_all = _accumulate_all_completed_failed_trips(
             partialSkims, timePeriods
         )
 
+    # Merge trip counts
     for path, (completed, failed) in completed_failed_dict_all.items():
         _merge_zarr_trip_counts(skims_ds, path, completed, failed)
 
-    # Step 2: Process TNC/RH skims (either consolidate or transfer) and run their specific post-processing
-    # This step handles creating/updating TNC_* or RH_* variables in skims_ds and running their post-processing.
-    # It needs the provider-level completed/failed counts if not consolidating.
-    tnc_modes_processed = set()  # Keep track of modes handled by the TNC/RH logic
-    if partialSkims:
-        # If consolidating, _process_all_tnc_logic will use provider counts internally
-        # and run postprocessing on consolidated RH modes.
-        # If not consolidating, it will transfer provider data and run postprocessing
-        # on TNC_* provider modes.
+    if partial_skims_ds or partialSkims:
         try:
-            tnc_modes_processed = _process_all_tnc_logic(
-                partialSkims, skims_ds, timePeriods, settings, completed_failed_dict_all
+            if input_format == "zarr":
+                # You'll need to create a Zarr version of _process_all_tnc_logic
+                tnc_modes_processed = _process_all_tnc_logic_zarr(
+                    partial_skims_ds,
+                    skims_ds,
+                    timePeriods,
+                    settings,
+                    completed_failed_dict_all,
+                )
+            else:
+                tnc_modes_processed = _process_all_tnc_logic(
+                    partialSkims,
+                    skims_ds,
+                    timePeriods,
+                    settings,
+                    completed_failed_dict_all,
+                )
+            logger.info(f"Processed TNC modes: {tnc_modes_processed}")
+            logger.info(
+                f"DEBUG: skims_ds otaz coords after TNC logic: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
             )
-        except AttributeError as e:
-            logger.error(f"Failed to process TNC logic at {all_skims_path}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to process TNC logic: {e}", exc_info=True)
     else:
         logger.warning(
             "No new OMX skims found. Reconstructing TNC/RH trip counts from existing Zarr data for post-processing."
@@ -2073,8 +2671,43 @@ def _merge_beam_skims_to_zarr(
         else:
             logger.info("No existing TNC/RH modes found in Zarr for post-processing.")
 
-    # Step 3: Process non-TNC/non-RH skims and run standard merging
-    if partialSkims:  # Only merge if we have new partial skims
+    if input_format == "zarr" and partial_skims_ds:
+        # Process Zarr format
+        grouped_partial_sources = {}
+
+        for var_name in partial_skims_ds.data_vars:
+            # Parse path and measure from variable name
+            # Similar logic to OMX parsing but simpler since format is PATH_MEASURE
+            parts = var_name.rsplit("_", 1)
+            if len(parts) == 2:
+                path, measure = parts
+
+                # Skip TNC/RH paths
+                if path.startswith("TNC_") or path.startswith("RH_"):
+                    continue
+
+                # Skip if no trip counts
+                if path not in completed_failed_dict_all:
+                    continue
+
+                grouped_partial_sources[(path, measure)] = [var_name]
+
+        # Process each group
+        for (path, measure), var_names in grouped_partial_sources.items():
+            completed_3d, failed_3d = completed_failed_dict_all[path]
+            _merge_one_zarr_measure_from_zarr(
+                partial_skims_ds,
+                skims_ds,
+                path,
+                measure,
+                timePeriods,
+                completed_3d,
+                failed_3d,
+            )
+
+    elif (
+        input_format == "omx" and partialSkims
+    ):  # Only merge if we have new partial skims
         # Group partial skims by (path, measure)
         grouped_partial_sources = {}  # Key: (path, measure), Value: list of omx_key
 
@@ -2209,8 +2842,9 @@ def _merge_beam_skims_to_zarr(
     # This should run after the base skims (like SOV) are finalized.
     # This should run regardless of whether new OMX skims were merged.
     logger.info("Copying skims for unobserved modes based on mapping.")
-    mapping = settings.get(
-        "unobserved_skim_copy_map",
+    mapping = get_setting(
+        settings,
+        "beam.ridehail_path_map",
         {"SOV": ["SOVTOLL", "HOV2", "HOV2TOLL", "HOV3", "HOV3TOLL"]},
     )  # Add setting
     copy_skims_for_unobserved_modes(mapping, skims_ds)
@@ -2220,30 +2854,277 @@ def _merge_beam_skims_to_zarr(
     # Use mode='w' to overwrite with the updated data, consolidated=True for performance
     # Ensure zarr_version=2 for compatibility
     try:
-        skims_ds.to_zarr(all_skims_path, mode="w", consolidated=True, zarr_version=2)
+        # Defensively ensure coordinates are correct before saving, to counteract any
+        # potential corruption or misalignment that may have occurred during the merge.
+        expected_coords = np.arange(len(canonical_order))
+        if not np.array_equal(skims_ds.coords["otaz"].values, expected_coords):
+            logger.warning(
+                "Correcting 'otaz' coordinates to be 0-based before final save."
+            )
+            skims_ds = skims_ds.assign_coords(otaz=expected_coords)
+        if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
+            logger.warning(
+                "Correcting 'dtaz' coordinates to be 0-based before final save."
+            )
+            skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
+
+        skims_ds.attrs["ZARR_WRITE_TIME"] = time.time()
+
+        if "time_period" in skims_ds.coords:
+            logger.debug(
+                "Pre-write time_period coords for %s: %s",
+                all_skims_path,
+                list(skims_ds.coords["time_period"].values),
+            )
+
+        temp_path = f"{all_skims_path}_temp_merged"
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+        for name in skims_ds.variables:
+            skims_ds[name].encoding = {}
+        try:
+            skims_ds.to_zarr(temp_path, mode="w", consolidated=True, zarr_version=2)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to write skims in Zarr v2 format. ActivitySim requires "
+                "Zarr v2; if that requirement changes, update the skims writer "
+                "to allow newer formats."
+            ) from e
+        if os.path.exists(all_skims_path):
+            shutil.rmtree(all_skims_path)
+        os.rename(temp_path, all_skims_path)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (
             True  # Indicate merge/post-processing was attempted successfully
         )
     except Exception as e:
         logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
-        merge_successful = False  # Indicate failure
+        raise
+
+        # Independent verification of the written Zarr file
+    try:
+        with xr.open_zarr(all_skims_path) as verified_ds:
+            logger.info(
+                f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
+            )
+            if "time_period" in verified_ds.coords:
+                logger.debug(
+                    "Post-write time_period coords for %s: %s",
+                    all_skims_path,
+                    list(verified_ds.coords["time_period"].values),
+                )
+    except Exception as e:
+        logger.error(
+            f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}"
+        )
 
     # Close the datasets
-    skims_ds.close()
     if partialSkims:
         partialSkims.close()
+    if partial_skims_ds:
+        partial_skims_ds.close()
+    if skims_ds:
+        skims_ds.close()
 
-    # Return the path to the new OMX skims *if* a new one was found and processed.
-    # This is used by the caller to check if skims were updated.
-    if partialSkims is not None and merge_successful:
-        return current_omx_skims_path
-    else:  # partialSkims is None or writing failed
-        logger.warning("No new OMX skims found, returning None.")
-        return None  # No new skims to indicate success/failure for
+    # Return the updated Zarr skims path whenever we successfully wrote them.
+    # This ensures downstream logging captures the rewritten master skims even
+    # if no new OMX skims were found.
+    if merge_successful:
+        return all_skims_path
+    logger.warning("No new OMX skims found, returning None.")
+    return None
 
 
-# New function to orchestrate TNC/RH processing
+def _process_all_tnc_logic_zarr(
+    partial_skims_ds, skims_ds, timePeriods, settings, completed_failed_dict_all
+):
+    """
+    Process TNC/RH logic for Zarr format partial skims.
+    Either consolidates TNC providers into RH modes or transfers them directly.
+    """
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
+    tnc_modes_processed = set()
+
+    if consolidate_tnc_fleets:
+        # Consolidate TNC providers into RH modes
+        logger.info("Consolidating TNC fleets into RH modes from Zarr partial skims...")
+
+        # Group providers by their target RH mode
+        rh_consolidation = {}  # target_mode -> list of provider modes
+        for provider_mode, target_mode in TNC_CONSOLIDATION_MAP.items():
+            if provider_mode in completed_failed_dict_all:
+                if target_mode not in rh_consolidation:
+                    rh_consolidation[target_mode] = []
+                rh_consolidation[target_mode].append(provider_mode)
+                tnc_modes_processed.add(provider_mode)
+
+        # Process each RH target mode
+        for target_mode, provider_modes in rh_consolidation.items():
+            logger.info(f"Consolidating {provider_modes} into {target_mode}")
+
+            # Accumulate trip counts across providers
+            shape = completed_failed_dict_all[provider_modes[0]][0].shape
+            consolidated_completed = np.zeros(shape, dtype=np.float32)
+            consolidated_failed = np.zeros(shape, dtype=np.float32)
+
+            for provider_mode in provider_modes:
+                completed, failed = completed_failed_dict_all[provider_mode]
+                consolidated_completed += completed
+                consolidated_failed += failed
+
+            # Update trip counts in target dataset
+            _merge_zarr_trip_counts(
+                skims_ds, target_mode, consolidated_completed, consolidated_failed
+            )
+
+            # Process each measure for this RH mode
+            # Get all measures from the first provider as a template
+            first_provider = provider_modes[0]
+            provider_measures = set()
+
+            for var_name in partial_skims_ds.data_vars:
+                if var_name.startswith(f"{first_provider}_") and not (
+                    var_name.endswith("_TRIPS") or var_name.endswith("_FAILURES")
+                ):
+                    # Extract measure name
+                    measure = var_name[len(first_provider) + 1 :]
+                    provider_measures.add(measure)
+
+            # Consolidate each measure
+            for measure in provider_measures:
+                target_var_name = f"{target_mode}_{measure}"
+
+                # Create target variable if it doesn't exist
+                if target_var_name not in skims_ds.data_vars:
+                    # Use first provider's variable as template
+                    template_var = f"{first_provider}_{measure}"
+                    if template_var in partial_skims_ds.data_vars:
+                        skims_ds[target_var_name] = xr.DataArray(
+                            np.zeros_like(
+                                partial_skims_ds[template_var].values, dtype=np.float32
+                            ),
+                            coords=partial_skims_ds[template_var].coords,
+                            dims=partial_skims_ds[template_var].dims,
+                            name=target_var_name,
+                        )
+
+                # Consolidate data from all providers
+                if target_var_name in skims_ds.data_vars:
+                    consolidated_data = np.zeros_like(skims_ds[target_var_name].values)
+                    total_weights = np.zeros_like(consolidated_completed)
+
+                    for provider_mode in provider_modes:
+                        provider_var = f"{provider_mode}_{measure}"
+                        if provider_var in partial_skims_ds.data_vars:
+                            provider_data = partial_skims_ds[provider_var].values
+                            provider_completed = completed_failed_dict_all[
+                                provider_mode
+                            ][0]
+
+                            # Weight by completed trips
+                            mask = provider_completed > 0
+                            consolidated_data[mask] += (
+                                provider_data[mask] * provider_completed[mask]
+                            )
+                            total_weights[mask] += provider_completed[mask]
+
+                    # Compute weighted average
+                    mask = total_weights > 0
+                    consolidated_data[mask] = (
+                        consolidated_data[mask] / total_weights[mask]
+                    )
+
+                    # Apply transformations
+                    for tpIdx in range(consolidated_data.shape[2]):
+                        mask_update, vals_update, to_cancel = _transform_measure(
+                            consolidated_data[:, :, tpIdx],
+                            consolidated_completed[:, :, tpIdx],
+                            consolidated_failed[:, :, tpIdx],
+                            measure,
+                            target_mode,
+                        )
+
+                        if mask_update.any():
+                            skims_ds[target_var_name].data[:, :, tpIdx][
+                                mask_update
+                            ] = vals_update
+
+                        if to_cancel is not None and to_cancel.any():
+                            skims_ds[target_var_name].data[:, :, tpIdx][to_cancel] = 0.0
+
+            tnc_modes_processed.add(target_mode)
+
+    else:
+        # Transfer TNC provider modes directly without consolidation
+        logger.info(
+            "Transferring TNC provider modes directly from Zarr partial skims..."
+        )
+
+        # Find all TNC provider modes in partial skims
+        tnc_provider_modes = set()
+        for var_name in partial_skims_ds.data_vars:
+            if var_name.startswith("TNC_") and "_TRIPS" in var_name:
+                mode = var_name[: -len("_TRIPS")]
+                tnc_provider_modes.add(mode)
+
+        # Process each TNC provider mode
+        for provider_mode in tnc_provider_modes:
+            if provider_mode not in completed_failed_dict_all:
+                continue
+
+            completed, failed = completed_failed_dict_all[provider_mode]
+
+            # Get all measures for this provider
+            provider_measures = set()
+            for var_name in partial_skims_ds.data_vars:
+                if var_name.startswith(f"{provider_mode}_") and not (
+                    var_name.endswith("_TRIPS") or var_name.endswith("_FAILURES")
+                ):
+                    measure = var_name[len(provider_mode) + 1 :]
+                    provider_measures.add(measure)
+
+            # Transfer each measure
+            for measure in provider_measures:
+                _merge_one_zarr_measure_from_zarr(
+                    partial_skims_ds,
+                    skims_ds,
+                    provider_mode,
+                    measure,
+                    timePeriods,
+                    completed,
+                    failed,
+                )
+
+            tnc_modes_processed.add(provider_mode)
+
+    # Run post-processing on the TNC/RH modes
+    if tnc_modes_processed:
+        completed_failed_for_postprocess = {
+            mode: completed_failed_dict_all.get(mode, (None, None))
+            for mode in tnc_modes_processed
+            if mode in completed_failed_dict_all or mode in skims_ds.data_vars
+        }
+
+        # For consolidated RH modes, use the consolidated counts
+        if consolidate_tnc_fleets:
+            for target_mode in rh_consolidation:
+                if f"{target_mode}_TRIPS" in skims_ds.data_vars:
+                    completed_failed_for_postprocess[target_mode] = (
+                        np.nan_to_num(skims_ds[f"{target_mode}_TRIPS"].values),
+                        np.nan_to_num(skims_ds[f"{target_mode}_FAILURES"].values),
+                    )
+
+        _postprocess_tnc_zarr(
+            skims_ds,
+            timePeriods,
+            settings,
+            completed_failed_for_postprocess,
+            use_rh_modes=consolidate_tnc_fleets,
+        )
+
+    return tnc_modes_processed
+
+
 def _process_all_tnc_logic(
     partialSkims, skims_ds, timePeriods, settings, completed_failed_dict_all
 ):
@@ -2271,7 +3152,7 @@ def _process_all_tnc_logic(
     set
         A set of Zarr variable names that were created/updated by this function (TNC provider or RH consolidated).
     """
-    consolidate_tnc_fleets = settings.get("consolidate_tnc_fleets", True)
+    consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
     processed_vars = set()
     tnc_modes_to_postprocess = set()
     completed_failed_dict_for_postprocess = (
@@ -2381,6 +3262,41 @@ def _process_all_tnc_logic(
     return processed_vars
 
 
+def validate_zone_alignment(zarr_path, land_use_df):
+    """Validate that zarr zones align with land_use zones."""
+    ds = xr.open_zarr(zarr_path)
+
+    # Get zones from zarr
+    zarr_zones = ds.coords["otaz"].values
+
+    # Get zones from land_use
+    if f"_original_{land_use_df.index.name}" in land_use_df:
+        land_use_zones = land_use_df[f"_original_{land_use_df.index.name}"].values
+    else:
+        land_use_zones = land_use_df.index.values
+
+    # Check if they match
+    if not np.array_equal(zarr_zones, land_use_zones):
+        logger.warning(
+            f"Zone mismatch! Zarr has {len(zarr_zones)} zones, land_use has {len(land_use_zones)}"
+        )
+        logger.warning(f"First 10 zarr zones: {zarr_zones[:10]}")
+        logger.warning(f"First 10 land_use zones: {land_use_zones[:10]}")
+
+        # Check if same zones, different order
+        if set(zarr_zones) == set(land_use_zones):
+            logger.info("Same zones but different order - reindexing will be required")
+        else:
+            missing_in_zarr = set(land_use_zones) - set(zarr_zones)
+            missing_in_land_use = set(zarr_zones) - set(land_use_zones)
+            if missing_in_zarr:
+                logger.error(f"Zones in land_use but not zarr: {missing_in_zarr}")
+            if missing_in_land_use:
+                logger.error(f"Zones in zarr but not land_use: {missing_in_land_use}")
+        return False
+    return True
+
+
 def trim_inaccessible_ods_zarr(all_skims_path, settings):
     """
     Zero out inaccessible ODs in Zarr-format skims, similar to trim_inaccessible_ods for OMX.
@@ -2397,11 +3313,11 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
 
     try:
         order = zone_order(
-            settings, settings.get("start_year", 2015)
+            settings, get_setting(settings, "run.start_year", 2015)
         )  # Use .get for start_year safety
-        periods = settings["periods"]
-        transit_paths_settings = settings.get(
-            "transit_paths", {}
+        periods = get_setting(settings, "shared.skims.periods")
+        transit_paths_settings = get_setting(
+            settings, "shared.skims.transit_paths", {}
         )  # Use .get for safety
     except Exception as e:
         logger.error(f"Error reading settings for trimming: {e}. Skipping trim.")
@@ -2627,14 +3543,70 @@ class BeamPostprocessor(GenericPostprocessor):
     """
     Postprocessor for BEAM model.
     """
-    def __init__(self, model_name: str, state: "WorkflowState", provenance_tracker: FileProvenanceTracker):
-        super().__init__(model_name, state, provenance_tracker)
-        self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
 
-    def postprocess(
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        """
+        beam_output_dir = workspace.get_beam_output_dir()
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        return {
+            "beam_output_dir": (
+                beam_output_dir if os.path.exists(beam_output_dir) else None
+            ),
+            "zarr_skims": (zarr_path if os.path.exists(zarr_path) else None),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this postprocessor produces.
+
+        Notes
+        -----
+        Output keys
+            - ``final_skims_omx``: Final OMX skims written to the BEAM
+              mutable data directory when OMX output is enabled.
+            - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing
+              when OMX output is disabled.
+        Related docs
+            - See `pilates/beam/inputs.py` for the corresponding input
+              descriptions used by BEAM and downstream models.
+        """
+        write_omx = get_setting(settings, "write_skims_to_omx", False) or (
+            get_setting(settings, "run.models.land_use") == "urbansim"
+        )
+        if write_omx:
+            region = settings.run.region
+            omx_name = settings.shared.skims.fname
+            final_omx_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(), region, omx_name
+            )
+            return {"final_skims_omx": final_omx_path}
+
+        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        return {"zarr_skims": zarr_path}
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, major_stage)
+        self.required_input_data = ["zarr_skims", "raw_od_skims", "raw_origin_skims"]
+        self.skim_format = get_setting(
+            self.state.full_settings, "shared.skims.fname", "skimsActivitySimOD_current"
+        )
+
+    def _postprocess(
         self,
         raw_outputs: RecordStore,
-        runInfo: ModelRunInfo,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
@@ -2644,90 +3616,201 @@ class BeamPostprocessor(GenericPostprocessor):
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
 
-        zarr_record = self.provenance_tracker.run_info.get_most_recent_record("zarr_skims")
-        if zarr_record:
-            raw_outputs.add_record(zarr_record)
-            logger.info(f"Using existing Zarr skims record: {zarr_record.file_path}")
-
-        model_run_hash = self.provenance_tracker.start_model_run(
-            "beam_postprocessor",
-            self.state.current_year,
-            self.state.current_inner_iter,
-            description="Post-processing BEAM outputs",
-            inputs=raw_outputs,
-        )
-
         raw_output_files = [record.short_name for record in raw_outputs.all_records()]
         processed_records = []
+
+        events_record = _select_last_events_parquet_record(
+            raw_outputs, self.state.forecast_year, self.state.iteration
+        )
+        if events_record is not None and getattr(events_record, "file_path", None):
+            events_path = events_record.file_path
+            try:
+                written_paths, links_path = split_events_parquet_by_type(
+                    events_path,
+                    create_path_traversal_links=True,
+                )
+                if written_paths:
+                    logger.info(
+                        "Wrote %d split events parquet files from %s",
+                        len(written_paths),
+                        events_path,
+                    )
+                    for event_type, out_path in written_paths.items():
+                        safe_type = _sanitize_event_type(event_type)
+                        short_name = (
+                            f"events_parquet_{self.state.forecast_year}_"
+                            f"{self.state.iteration}_type_{safe_type}"
+                        )
+                        processed_records.append(
+                            FileRecord(
+                                file_path=out_path,
+                                year=self.state.forecast_year,
+                                short_name=short_name,
+                                description=(
+                                    "BEAM events parquet (type: %s)" % event_type
+                                ),
+                            )
+                        )
+                if links_path:
+                    short_name = (
+                        f"path_traversal_links_{self.state.forecast_year}_"
+                        f"{self.state.iteration}"
+                    )
+                    processed_records.append(
+                        FileRecord(
+                            file_path=links_path,
+                            year=self.state.forecast_year,
+                            short_name=short_name,
+                            description="BEAM PathTraversal link travel times",
+                        )
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to split events parquet for %s", events_path, exc_info=True
+                )
 
         all_skims_path = os.path.join(
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
 
-        if f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}" not in raw_output_files:
+        zarr_skim_name = (
+            f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
+        )
+        omx_skim_name = (
+            f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}"
+        )
+
+        # List of possible skim names to check
+        possible_skim_names = [
+            zarr_skim_name,
+            f"raw_od_skims_zarr_{self.state.forecast_year}_{self.state.iteration}",
+            omx_skim_name,
+        ]
+
+        skim_name_found = None
+        for name in possible_skim_names:
+            if name in raw_output_files:
+                if name != zarr_skim_name:
+                    logger.warning(
+                        f"Could not find skim file with name {zarr_skim_name}, but found {name}. Proceeding with this file."
+                    )
+                skim_name_found = name
+                break
+
+        if not skim_name_found:
+            for name in raw_output_files:
+                if "skims" in name and name.endswith(".zarr"):
+                    logger.warning(
+                        f"Could not find skim file with expected names, but found {name}. Proceeding with this file."
+                    )
+                    skim_name_found = name
+                    break
+
+        if not skim_name_found:
             logger.warning(
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
+
         elif not os.path.exists(all_skims_path):
             logger.warning(
                 f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
             )
         else:
-            if not zarr_record:
-                logger.warning(
-                    "No existing Zarr skims record found, even though the file exists. Will generate a record as an output after merging"
-                )
+            skim_name = skim_name_found
 
-            raw_od_skims_path = os.path.join(
-                workspace.output_path,
-                next(
-                    record.file_path
-                    for record in raw_outputs.all_records()
-                    if record.short_name == f"raw_od_skims_{self.state.forecast_year}_{self.state.iteration}"
-                ),
-            )
-            # Path to the main Zarr skims store, which is an ActivitySim data artifact.
+            all_skims_found = [
+                record.file_path
+                for record in raw_outputs.all_records()
+                if record.short_name == skim_name
+            ]
+
+            logger.info("Here are all the skim files found")
+            logger.info(all_skims_found)
 
             beam_output_dir = workspace.get_beam_output_dir()
 
-            # Call the main merging and post-processing logic for Zarr skims
-            updated_skims_path = _merge_beam_skims_to_zarr(
-                all_skims_path=all_skims_path,
-                beam_output_dir=beam_output_dir,
-                settings=settings,
-                override=raw_od_skims_path,
-                provenance_tracker=self.provenance_tracker,
-                model_run_hash=model_run_hash,
-            )
+            merged_sources = []
+            merged_any = False
+            for it, it_skim in enumerate(all_skims_found):
 
-            # The main output is the modified Zarr store. Record it.
-            output_rec = self.provenance_tracker.record_output_file(
-                "beam_postprocessor",
-                all_skims_path,
-                model_run_id=model_run_hash,
-                description="Zarr skims store updated with BEAM outputs.",
-                short_name="zarr_skims",
-            )
-            if output_rec:
-                processed_records.append(output_rec)
-
-        # Optionally, if other files are produced (e.g., an OMX version of the skims), record them too.
-        if settings.get("write_final_skims_as_omx"):
-            omx_skim_name = settings.get("final_omx_skim_name", "skims.omx")
-            final_omx_path = write_zarr_skim_as_omx(
-                all_skims_path, settings, omx_skim_name
-            )
-            if final_omx_path:
-                omx_rec = self.provenance_tracker.record_output_file(
-                    "beam_postprocessor",
-                    final_omx_path,
-                    model_run_id=model_run_hash,
-                    description="Final skims converted to OMX format.",
+                raw_od_skims_path = os.path.join(
+                    workspace.full_path,
+                    it_skim,
                 )
-                if omx_rec:
-                    processed_records.append(omx_rec)
+                merged_sources.append(raw_od_skims_path)
+
+                logger.info(f"Processing {raw_od_skims_path} for iteration {it}")
+
+                # Call the main merging and post-processing logic for Zarr skims
+                updated_skims_path = _merge_beam_skims_to_zarr(
+                    all_skims_path=all_skims_path,
+                    iteration_skims_path=raw_od_skims_path,
+                    beam_output_dir=beam_output_dir,
+                    settings=settings,
+                    workspace=workspace,
+                    override=raw_od_skims_path,
+                )
+
+                # The main output is the modified Zarr store.
+                if updated_skims_path:
+                    merged_any = True
+
+            if merged_any:
+                processed_records.append(
+                    FileRecord(
+                        file_path=all_skims_path,
+                        year=self.state.current_year,
+                        description="Zarr skims store updated with BEAM outputs.",
+                        short_name="zarr_skims",
+                    )
+                )
+
+        if (
+            get_setting(settings, "write_skims_to_omx", False)
+            or get_setting(settings, "run.models.land_use") == "urbansim"
+        ):
+            logger.info(
+                "Writing skims to OMX file for UrbanSim or other downstream models..."
+            )
+            if not os.path.exists(
+                all_skims_path
+            ):  # Check if the main Zarr skims file exists
+                logger.error(
+                    "Main Zarr skims file not available. Cannot write skims to OMX."
+                )
+            else:
+                try:
+                    # Exclude intermediate trip/failure tables from the final OMX
+                    vars_to_exclude = []
+                    with xr.open_zarr(all_skims_path) as skims_ds:
+                        for key in skims_ds.data_vars:
+                            if (
+                                key.endswith("_TRIPS")
+                                or key.endswith("_FAILURES")
+                                or key.endswith("_REJECTIONPROB")
+                            ):
+                                vars_to_exclude.append(key)
+
+                    final_omx_path = write_zarr_skim_as_omx_new(
+                        all_skims_path,
+                        settings,
+                        get_setting(settings, "shared.skims.fname"),
+                        exclude_tables=vars_to_exclude,
+                    )
+
+                    if final_omx_path:
+                        processed_records.append(
+                            FileRecord(
+                                file_path=final_omx_path,
+                                short_name="final_skims_omx",
+                                description=(
+                                    "Final skims converted to OMX format for "
+                                    "ActivitySim/UrbanSim."
+                                ),
+                            )
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to write skims to OMX: {e}")
 
         output_store = RecordStore(recordList=processed_records)
-        self.provenance_tracker.complete_model_run(model_run_hash)
-
         return output_store

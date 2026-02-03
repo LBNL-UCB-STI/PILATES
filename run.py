@@ -1,47 +1,69 @@
+"""
+run.py
+
+Main entrypoint and workflow orchestrator for PILATES simulations.
+
+This module:
+- Parses settings and initializes workflow state.
+- Initializes the Consist Tracker and Scenario Context.
+- Executes the multi-stage simulation loop using the Scenario/Step API.
+- Manages provenance for the critical "Data Initialization" step to link
+  immutable inputs to the mutable workspace.
+"""
+
 import warnings
 from datetime import datetime
-import uuid
+import os
+import logging
+import sys
+import shutil
+import socket
+from pathlib import Path
+from typing import Optional, cast, Dict, Any
 
-import pandas as pd
-import tables
-from tables import HDF5ExtError
+# Consist Imports (optional)
+try:
+    import consist
+except ImportError:  # Consist optional dependency
+    consist = None
 
-from pilates.generic.model_factory import ModelFactory
+# Legacy/PILATES Imports
 from pilates.generic.records import RecordStore
-
-# Helper import for model/image lookup and docker client
-from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
-from pilates.utils.provenance import OpenLineageTracker
 from pilates.generic.initialization import Initialization
+from pilates.utils.formatting import formatted_print
+from pilates.utils.io import parse_args_and_settings
+from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_config import (
+    build_scenario_consist_kwargs,
+    build_step_consist_kwargs,
+)
+from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
+from pilates.utils.input_logging import log_inputs
+from pilates.workflows.artifact_constants import (
+    ASIM_MUTABLE_DATA_DIR,
+    ASIM_OUTPUT_DIR,
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_INPUT,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_OUTPUT_DIR,
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    USIM_MUTABLE_DATA_DIR,
+    ZARR_SKIMS,
+)
+from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
+from pilates.workflows.stages import (
+    run_land_use_stage,
+    run_postprocessing_stage,
+    run_supply_demand_stage,
+    run_vehicle_ownership_stage,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-
-try:
-    import docker
-except ImportError:
-    print("Warning: Unable to import Docker Module")
-
-import os
-import logging
-import sys
-import glob
-from pathlib import Path
-
-from pilates.activitysim import preprocessor as asim_pre
-from pilates.activitysim import postprocessor as asim_post
-from pilates.urbansim import preprocessor as usim_pre
-from pilates.urbansim import postprocessor as usim_post
-from pilates.beam import preprocessor as beam_pre
-from pilates.beam import postprocessor as beam_post
-from pilates.atlas import preprocessor as atlas_pre  ##
-from pilates.atlas import postprocessor as atlas_post  ##
-from pilates.utils.io import parse_args_and_settings
-from pilates.postprocessing.postprocessor import process_event_file, copy_outputs_to_mep
-
-# from pilates.polaris.travel_model import run_polaris
+from pilates.workflows.steps import StepOutputsHolder
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -51,595 +73,367 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def is_already_opened_in_write_mode(filename):
-    """Check if a file is already opened in write mode."""
-    if os.path.exists(filename):
+def _get_consist_schemas() -> Optional[list[type]]:
+    try:
+        from pilates.database.schema.registry import get_consist_schemas
+
+        return get_consist_schemas()
+    except Exception:
+        return None
+
+
+def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
+    return (
+        Path(workspace.full_path)
+        / ".workflow"
+        / f"year_{year}_iteration_{iteration}.yaml"
+    )
+
+
+def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
+    """
+    Enumerate static ATLAS inputs from the mutable input directory.
+
+    This fallback is used when Initialization was skipped (e.g., restart) and the
+    in-memory RecordStore of copied inputs is unavailable. It may include files
+    produced by prior ATLAS preprocess runs.
+    """
+    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+    if not os.path.exists(atlas_input_dir):
+        return {}
+    inputs: Dict[str, str] = {}
+    for root, _, files in os.walk(atlas_input_dir):
+        for filename in sorted(files):
+            path = os.path.join(root, filename)
+            relpath = os.path.relpath(path, atlas_input_dir)
+            key = f"atlas_static_{relpath.replace(os.sep, '__')}"
+            inputs.setdefault(key, path)
+    return inputs
+
+
+def _read_mount_table() -> Dict[str, str]:
+    mounts: Dict[str, str] = {}
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 3:
+                    mountpoint = parts[1]
+                    fstype = parts[2]
+                    mounts[mountpoint] = fstype
+    except OSError:
+        return {}
+    return mounts
+
+
+def _mount_for_path(path: str, mounts: Dict[str, str]) -> str:
+    path = os.path.realpath(path)
+    best_match = ""
+    for mountpoint in mounts:
+        if path == mountpoint or path.startswith(mountpoint.rstrip("/") + "/"):
+            if len(mountpoint) > len(best_match):
+                best_match = mountpoint
+    return best_match
+
+
+def _format_bytes(value: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if value < 1024:
+            return f"{value:.1f}{unit}"
+        value /= 1024.0
+    return f"{value:.1f}EiB"
+
+
+def _log_local_storage_info() -> None:
+    mounts = _read_mount_table()
+    hostname = socket.gethostname()
+    job_id = os.environ.get("SLURM_JOB_ID")
+    node_list = os.environ.get("SLURM_NODELIST")
+    logger.info(
+        "Storage probe: host=%s job_id=%s nodelist=%s",
+        hostname,
+        job_id or "n/a",
+        node_list or "n/a",
+    )
+
+    candidates = []
+    for var in ("SLURM_TMPDIR", "TMPDIR", "TMP", "TEMP"):
+        value = os.environ.get(var)
+        if value:
+            candidates.append(value)
+    candidates += [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/scratch",
+        "/local",
+        "/local_scratch",
+        "/lscratch",
+        "/mnt",
+    ]
+
+    seen = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not os.path.exists(path):
+            continue
         try:
-            f = pd.HDFStore(filename, "a")
-            f.close()
-        except HDF5ExtError:
-            return True
-        except RuntimeError as e:
-            logger.warning(str(e))
-            return True
-    return False
-
-
-def record_inputs_and_outputs(
-    provenance_tracker, model, inputs=None, outputs=None, year=None, model_run_id=None
-):
-    """Helper function to record inputs and outputs for provenance tracking."""
-    if inputs:
-        for file_path, description in inputs:
-            if os.path.exists(file_path):
-                provenance_tracker.record_input_file(
-                    model, file_path, description=description, model_run_id=model_run_id
-                )
-            else:
-                logger.warning(f"Input file not found: {file_path}")
-
-    if outputs:
-        for file_path, description in outputs:
-            if os.path.exists(file_path):
-                provenance_tracker.record_output_file(
-                    model,
-                    file_path,
-                    year=year,
-                    description=description,
-                    model_run_id=model_run_id,
-                )
-            else:
-                logger.warning(f"Output file not found: {file_path}")
-
-
-def formatted_print(string, width=50, fill_char="#"):
-    """
-    Print a formatted banner for major workflow steps.
-    """
-    print("\n")
-    if len(string) + 2 > width:
-        width = len(string) + 4
-    string = string.upper()
-    print(fill_char * width)
-    print("{:#^{width}}".format(" " + string + " ", width=width))
-    print(fill_char * width, "\n")
-
-
-def find_latest_beam_iteration(beam_output_dir):
-    """
-    Find the latest BEAM iteration directory (if any).
-    """
-    iter_dirs = []
-    for root, dirs, files in os.walk(beam_output_dir):
-        for dir in dirs:
-            if dir == "ITER":
-                iter_dirs.append(os.path.join(root, dir))
-    if iter_dirs:
-        logger.info(f"Found BEAM iteration directories: {iter_dirs}")
-    else:
-        logger.info("No BEAM iteration directories found.")
-    return iter_dirs
-
-
-def get_usim_docker_vols(settings, output_dir=None):
-    usim_remote_data_folder = settings["usim_client_data_folder"]
-    if output_dir is None:
-        output_dir = settings[
-            "usim_local_data_input_folder"
-        ]  # This seems wrong, should be mutable output dir
-        logger.warning(
-            "get_usim_docker_vols called without output_dir, using usim_local_data_input_folder. Check logic."
-        )
-    usim_local_mutable_data_folder = os.path.abspath(output_dir)
-    usim_docker_vols = {
-        usim_local_mutable_data_folder: {"bind": usim_remote_data_folder, "mode": "rw"}
-    }
-    return usim_docker_vols
-
-
-def get_usim_cmd(settings, year, forecast_year):
-    region = settings["region"]
-    region_id = settings["region_to_region_id"][region]
-    land_use_freq = settings["land_use_freq"]
-    skims_source = settings["travel_model"]
-    formattable_usim_cmd = settings["usim_formattable_command"]
-    usim_cmd = formattable_usim_cmd.format(
-        region_id, year, forecast_year, land_use_freq, skims_source
-    )
-    return usim_cmd
-
-
-def warm_start_activities(
-    settings,
-    state: WorkflowState,
-    client,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-):
-    """
-    Run activity demand models to update UrbanSim inputs with long-term
-    choices it needs: workplace location, school location, and
-    auto ownership.
-    This runs only in the first year as part of the Land Use stage.
-    """
-    # Use ModelFactory for all model/image lookups
-    factory = ModelFactory()
-    activity_demand_model, activity_demand_image = GenericRunner.get_model_and_image(
-        settings, "activity_demand_model"
-    )
-
-    if activity_demand_model == "polaris":
-        # run_polaris(None, settings, warm_start=True)
+            usage = shutil.disk_usage(path)
+        except OSError:
+            continue
+        mountpoint = _mount_for_path(path, mounts)
+        fstype = mounts.get(mountpoint, "unknown")
         logger.info(
-            "POLARIS module is not activated due to missing polarisruntime library"
+            "Storage candidate: path=%s mount=%s fstype=%s free=%s total=%s",
+            os.path.realpath(path),
+            mountpoint or "unknown",
+            fstype,
+            _format_bytes(usage.free),
+            _format_bytes(usage.total),
         )
-
-    elif activity_demand_model == "activitysim":
-        runner = factory.get_runner("activitysim", state, provenance_tracker)
-        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
-
-        # Preprocess
-        inputData = preprocessor.preprocess(workspace)
-
-        # Run
-        rawOutputs, runInfo = runner.run(
-            inputData, workspace
-        )
-
-        logger.info(
-            "Appending warm start activities/choices to UrbanSim base year input data"
-        )
-
-        # The post-processing step for warm start is just updating the UrbanSim H5 file.
-        # We call the specific function for this, not the full postprocessor.
-        post_run_hash = provenance_tracker.start_model_run(
-            "activitysim_postprocessor",
-            state.current_year,
-            state.current_inner_iter,
-            description="Post-processing for ActivitySim warm start",
-        )
-        asim_post.update_usim_inputs_after_warm_start(
-            settings,
-            state,
-            runInfo,
-            usim_data_dir=workspace.get_usim_mutable_data_dir(),
-            warm_start_dir=workspace.get_asim_output_dir(),
-            provenance_tracker=provenance_tracker,
-            model_run_hash=post_run_hash,
-        )
-        provenance_tracker.complete_model_run(post_run_hash)
-
-    logger.info("Done!")
-
-    return
-
-
-def forecast_land_use(
-    settings,
-    year,
-    workflow_state: WorkflowState,
-    client,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-):
-    land_use_model, land_use_image = GenericRunner.get_model_and_image(
-        settings, "land_use_model"
-    )
-
-    # Start UrbanSim run and get model_run_hash
-    usim_run_hash = provenance_tracker.start_model_run(
-        land_use_model,
-        workflow_state.current_year,
-        workflow_state.current_inner_iter,
-        description="UrbanSim run",
-    )
-
-    run_land_use(
-        settings,
-        year,
-        workflow_state,
-        client,
-        workspace,
-        provenance_tracker,
-        usim_run_hash,
-    )
-
-    # Record UrbanSim run completion
-    usim_output_store_name = usim_post.get_usim_datastore_fname(
-        settings, io="output", year=workflow_state.forecast_year
-    )
-    usim_datastore_fpath = os.path.join(
-        workspace.get_usim_mutable_data_dir(), usim_output_store_name
-    )
-
-    if os.path.exists(usim_datastore_fpath):
-        provenance_tracker.complete_model_run(usim_run_hash, status="completed")
-        # Record UrbanSim output file
-        provenance_tracker.record_output_file(
-            land_use_model,
-            usim_datastore_fpath,
-            year=workflow_state.forecast_year,
-            description="UrbanSim forecast output data",
-            model_run_id=usim_run_hash,
-        )
-    else:
-        logger.critical(
-            "No UrbanSim output data found at {0}. It probably did not finish successfully.".format(
-                usim_datastore_fpath
-            )
-        )
-        provenance_tracker.complete_model_run(usim_run_hash, status="failed")
-        sys.exit(1)
-
-
-def run_land_use(
-    settings,
-    year,
-    workflow_state: WorkflowState,
-    client,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-    model_run_hash: str,
-):
-    logger.info("Running land use")
-
-    # 1. PARSE SETTINGS
-    land_use_model, land_use_image = GenericRunner.get_model_and_image(
-        settings, "land_use_model"
-    )
-    usim_docker_vols = get_usim_docker_vols(
-        settings, workspace.get_usim_mutable_data_dir()
-    )
-    forecast_year = workflow_state.forecast_year
-    usim_cmd = get_usim_cmd(settings, year, forecast_year)
-
-    # 2. PREPARE URBANSIM DATA
-    print_str = "Preparing {0} input data for land use development simulation.".format(
-        year
-    )
-    formatted_print(print_str)
-
-    # Record inputs to UrbanSim preprocessing (skims from ASim output)
-    asim_skims_path = os.path.join(
-        workspace.get_asim_mutable_data_dir(), settings["skims_fname"]
-    )
-
-    provenance_tracker.record_input_file(
-        land_use_model,
-        asim_skims_path,
-        description="ActivitySim skims for UrbanSim input",
-        model_run_id=model_run_hash,
-    )
-
-    usim_pre.add_skims_to_model_data(
-        settings,
-        workspace.get_usim_mutable_data_dir(),
-        workspace.get_asim_mutable_data_dir(),
-    )
-
-    usim_input_in_run_dir = os.path.join(
-        workspace.get_usim_mutable_data_dir(),
-        usim_post.get_usim_datastore_fname(settings, io="input"),
-    )
-    provenance_tracker.record_input_file(
-        land_use_model,
-        usim_input_in_run_dir,
-        description="UrbanSim input data for forecast",
-        model_run_id=model_run_hash,
-    )
-
-    if is_already_opened_in_write_mode(usim_input_in_run_dir):
-        logger.warning(
-            "Closing h5 files {0} because they were left open. You should really "
-            "figure out where this happened".format(tables.file._open_files.filenames)
-        )
-        tables.file._open_files.close_all()
-
-    # 3. RUN URBANSIM
-    print_str = "Simulating land use development from {0} " "to {1} with {2}.".format(
-        year, forecast_year, land_use_model
-    )
-    formatted_print(print_str)
-    provenance_tracker.start_model_run(model_run_hash)
-
-    GenericRunner.run_container(
-        client=client,
-        settings=settings,
-        image=land_use_image,
-        volumes=usim_docker_vols,
-        command=usim_cmd,
-        model_name=land_use_model,
-        working_dir=settings["usim_client_base_folder"],
-    )
-    logger.info("Done!")
-    # Completion is recorded in forecast_land_use
-
-    return
-
-
-def run_activity_demand(
-    settings,
-    state: WorkflowState,
-    client,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-) -> RecordStore:
-    """
-    Generate activity plans for the current year.
-    """
-    factory = ModelFactory()
-    activity_demand_model = settings.get("activity_demand_model")
-
-    if activity_demand_model == "polaris":
-        # run_polaris(state, settings)
-        logger.info(
-            "POLARIS module is not activated due to missing polarisruntime library"
-        )
-        return RecordStore()
-    elif activity_demand_model == "activitysim":
-        preprocessor = factory.get_preprocessor("activitysim", state, provenance_tracker)
-        runner = factory.get_runner("activitysim", state, provenance_tracker)
-        postprocessor = factory.get_postprocessor("activitysim", state, provenance_tracker)
-
-        # Preprocess
-        input_data = preprocessor.preprocess(workspace)
-
-        # Run
-        raw_outputs, run_info = runner.run(
-            input_data, workspace
-        )
-
-        # Postprocess
-        processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, workspace
-        )
-
-        return processed_outputs
-
-    else:
-        logger.warning(
-            f"Unknown or disabled activity demand model: {activity_demand_model}"
-        )
-        return RecordStore()
-
-
-def run_traffic_assignment(
-    settings,
-    state: WorkflowState,
-    client,
-    workspace: Workspace,
-    provenance_tracker: OpenLineageTracker,
-    activity_demand_outputs: RecordStore = None,
-):
-    """
-    Run traffic assignment for the current year.
-    """
-    factory = ModelFactory()
-    travel_model = settings.get("travel_model")
-
-    if travel_model == "polaris":
-        # run_polaris(state, settings)
-        logger.info(
-            "POLARIS module is not activated due to missing polarisruntime library"
-        )
-    elif travel_model == "beam":
-        preprocessor = factory.get_preprocessor("beam", state, provenance_tracker)
-        runner = factory.get_runner("beam", state, provenance_tracker)
-        postprocessor = factory.get_postprocessor("beam", state, provenance_tracker)
-
-        # Preprocess
-        input_data = preprocessor.preprocess(workspace, activity_demand_outputs)
-
-        # Run
-        raw_outputs, run_info = runner.run(
-            input_data, workspace
-        )
-
-        processed_outputs = postprocessor.postprocess(
-            raw_outputs, run_info, workspace
-        )
-
-    else:
-        logger.warning(f"Unknown or disabled travel model: {travel_model}")
-
-
 def main():
+    """
+    Main entrypoint for PILATES simulation orchestration using Consist Scenario API.
+
+    This workflow coordinates multiple land use and transportation microsimulation models
+    across a multi-year planning horizon:
+
+    1. **Initialization**: Copy immutable input data to mutable workspace
+    2. **Land Use Forecasting**: UrbanSim predicts demographic/economic changes
+    3. **Vehicle Ownership**: ATLAS models vehicle fleet evolution
+    4. **Supply/Demand Loop**: Iterates between activity demand (ActivitySim) and
+       traffic assignment (BEAM) until convergence
+    5. **Post-Processing**: Validation and output generation
+
+    Architecture:
+    - **Consist Scenario**: Manages caching of expensive computations and provenance logging
+    - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
+    - **StepConfig**: Declarative config for each model step
+    - **Step Builders**: Encapsulate model-specific execution logic
+
+    Caching Strategy:
+    - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
+    - Model outputs: Cached per iteration (convergence check)
+    - Restarting: Skips initialization if run_state.yaml exists
+    """
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
     state = WorkflowState.from_settings(settings)
 
-    # Set up provenance tracking and workspace
-    output_path = os.path.expandvars(settings.get("output_directory"))
-    custom_label = settings.get("output_run_name", "")
-    region = settings.get("region", "")
-    date_time_str = datetime.now().strftime('%Y%m%d-%H%M%S')
-    run_name = f"pilates-run--{region}--{custom_label}--{date_time_str}"
-    run_id = str(uuid.uuid4())
+    _log_local_storage_info()
 
-    provenance_tracker = OpenLineageTracker(run_id, output_path, folder_name=run_name, use_marquez=False)
-    provenance_tracker.initialize_from_settings(settings)
+    # 2. SETUP PATHS
+    output_directory = settings.run.output_directory
+    if not output_directory:
+        raise ValueError("output_directory not found in config")
+    output_path = os.path.realpath(os.path.expandvars(output_directory))
 
+    if state.run_info_path:
+        run_name = os.path.basename(os.path.dirname(state.run_info_path))
+        logger.info(f"Restarting run. Reusing output folder: {run_name}")
+    else:
+        partial_run_name = settings.run.output_run_name
+        run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
+
+    full_run_dir = os.path.join(output_path, run_name)
+    os.makedirs(full_run_dir, exist_ok=True)
+
+    # 3. INITIALIZE CONSIST TRACKER (OPTIONAL)
+    # Consist provides provenance tracking and computation caching. It's optional; PILATES
+    # works without it but gains:
+    #   - Provenance: Full lineage of data transformations (OpenLineage compatible)
+    #   - Caching: Skips expensive computations if inputs unchanged
+    #   - Coupler: Manages artifact passing between steps
+    # Mount Strategy:
+    # - 'inputs': The project root. Source files resolve here.
+    # - 'workspace': The mutable run dir. Destination files resolve here.
+    # NOTE: Do not rely on cwd; production runs may invoke `python run.py` from elsewhere.
+    # Use the directory containing `run.py` as the canonical inputs root.
+    project_root_abs = str(Path(__file__).resolve().parent)
+
+    consist_enabled = cr.consist_available(settings)
+    tracker: Optional[TrackerLike] = None
+    if consist_enabled:
+        logger.info(f"Initializing Consist Tracker in {full_run_dir}")
+    else:
+        logger.info("Consist disabled/unavailable; running without Consist tracker.")
+
+    tracker = cr.create_tracker(
+        settings=settings,
+        enabled=consist_enabled,
+        run_dir=full_run_dir,
+        db_path=(
+            settings.shared.database.path if settings.shared.database.enabled else None
+        ),
+        mounts={
+            "inputs": project_root_abs,  # Immutable Source
+            "workspace": full_run_dir,  # Mutable Destination
+            "scratch": str(Path(output_path).resolve()),  # For temp files
+        },
+        project_root=project_root_abs,
+        schemas=_get_consist_schemas(),
+    )
+    if tracker is None and consist_enabled:
+        raise RuntimeError(
+            "Consist enabled but tracker could not be created. "
+            "Install Consist or set settings.shared.database.use_consist=False."
+        )
+    if consist_enabled:
+        assert tracker is not None
+
+    # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
         settings,
         output_path,
         folder_name=run_name,
-        provenance_tracker=provenance_tracker,
     )
     state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
+    if not state.run_info_path:
+        state.set_run_info_path(state.file_loc)
 
-    initialization = Initialization("initialization",state,provenance_tracker)
-    initialization.run(settings, workspace)
-
-    # Initialize Docker/Singularity client if needed
-    client = None
-    if settings.get("container_manager") == "docker":
-        try:
-            client = GenericRunner.initialize_docker_client(settings)
-        except Exception as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-
-    # 2. MAIN WORKFLOW LOOP
-    for year in state:
-        formatted_print(f"STARTING YEAR {year}")
-
-        # A. LAND USE FORECASTING
-        if state.should_run(WorkflowState.Stage.land_use):
-            formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
-            if state.is_start_year() and settings.get("warm_start_activities"):
-                logger.info("[Main] Running warm start activities for ActivitySim.")
-                warm_start_activities(
-                    settings, state, client, workspace, provenance_tracker
+    # 5. START SCENARIO CONTEXT
+    # The scenario context is where all model execution happens. Each step runs inside
+    # scenario.run(), which handles:
+    #   - Caching checks (skip if inputs identical to previous run)
+    #   - Provenance logging (inputs, outputs, dependencies)
+    #   - Coupler coordination (step outputs → coupler → next step inputs)
+    # The coupler is a shared dict-like object for passing artifacts between steps.
+    if tracker is not None:
+        cr.set_tracker(tracker)
+    scenario_kwargs = build_scenario_consist_kwargs(settings)
+    if consist_enabled:
+        scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
+    with cr.scenario(
+        run_name,
+        tracker=tracker,
+        enabled=consist_enabled,
+        tags=["pilates_simulation"],
+        model="pilates_orchestrator",
+        **scenario_kwargs,
+    ) as scenario:
+        scenario = cast(ScenarioWithCoupler, scenario)
+        coupler = scenario.coupler
+        if consist_enabled:
+            require_outputs = getattr(scenario, "require_outputs", None)
+            if callable(require_outputs):
+                require_outputs(
+                    *PILATES_COUPLER_SCHEMA.keys(),
+                    warn_undocumented=True,
+                    description=PILATES_COUPLER_SCHEMA,
                 )
-            forecast_land_use(
-                settings, year, state, client, workspace, provenance_tracker
-            )
-            state.complete_step(WorkflowState.Stage.land_use)
+        scenario.declare_outputs(
+            USIM_DATASTORE_H5,
+            ASIM_MUTABLE_DATA_DIR,
+            ASIM_OUTPUT_DIR,
+            BEAM_OUTPUT_DIR,
+            ATLAS_OUTPUT_DIR,
+            ZARR_SKIMS,
+            FINAL_SKIMS_OMX,
+        )
 
-        # B. VEHICLE OWNERSHIP MODEL (ATLAS)
-        if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-            formatted_print(
-                f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
-            )
-            logger.info("[Main] Running ATLAS vehicle ownership model.")
+        # 6. DATA INITIALIZATION STEP
+        # Copies immutable input data to the mutable workspace. This is the critical
+        # "data initialization" event in provenance: it links original sources (inputs://)
+        # to the working copies (workspace://). Only runs if state.data_initialized is
+        # False (first run) or if resuming from a checkpoint (uses previous workspace).
+        #
+        # ProvenanceNote: scenario.trace() logs this step, creating a provenance entry
+        # that later steps reference as inputs.
+        if not state.data_initialized:
+            logger.info("Running Initialization Step (Copying mutable data)")
 
-            # Use ModelFactory for all model/image lookups
-            factory = ModelFactory()
-            preprocessor = factory.get_preprocessor("atlas", state, provenance_tracker)
-            runner = factory.get_runner("atlas", state, provenance_tracker)
-            postprocessor = factory.get_postprocessor("atlas", state, provenance_tracker)
+            with scenario.trace(
+                "initialization",
+                model="initialization",
+                year=state.start_year,
+                iteration=0,
+                tags=["init"],
+                **build_step_consist_kwargs(
+                    "initialization", settings, workspace_path=workspace.full_path
+                ),
+            ):
+                init_model = Initialization("initialization", state)
 
-            # Determine if this is a warm start for ATLAS
-            warm_start_atlas = state.is_start_year()
-            forecast = True  # Always forecast for main loop
+                # This performs the copy.
+                # Source files -> recorded as inputs (inputs://...)
+                # Dest files -> recorded as outputs (workspace://...)
+                init_model.run(settings, workspace)
 
-            # Multi-year loop logic (as in run_atlas)
-            if forecast:
-                # For forecast, run for all years between state.year and state.forecast_year, step 2
-                yrs = [y + 2 for y in range(state.year, state.forecast_year, 2)]
-                if not yrs:
-                    yrs = [state.forecast_year]
-            else:
-                yrs = [state.year]
-
-            for atlas_year in yrs:
-                # Update state for this atlas_year
-                # (simulate a sub-state for the pre/postprocessor)
-                class AtlasSubState:
-                    def __init__(self, parent_state, year):
-                        self.__dict__ = parent_state.__dict__.copy()
-                        self.year = year
-                        self.current_year = year
-                        self.forecast_year = year
-                        self.start_year = parent_state.start_year
-                        self.full_settings = parent_state.full_settings
-                        self.is_start_year = lambda: (year == parent_state.start_year)
-
-                atlas_state = AtlasSubState(state, atlas_year)
-
-                logger.info(
-                    f"[run.py] [ATLAS] Preprocessing for year {atlas_year} (is_start_year={atlas_state.is_start_year()})"
-                )
-                # Preprocess
-                preprocessor.update_state(atlas_state)
-                input_data = preprocessor.preprocess(
-                    workspace
-                )
-                logger.info(
-                    f"[run.py] [ATLAS] Preprocessing complete for year {atlas_year}"
-                )
-
-                logger.info(
-                    f"[run.py] [ATLAS] Running AtlasRunner for year {atlas_year}"
-                )
-                # Run
-                runner.update_state(atlas_state)
-                raw_outputs, run_info = runner.run(
-                    input_data, workspace
-                )
-                logger.info(
-                    f"[run.py] [ATLAS] AtlasRunner complete for year {atlas_year}"
-                )
-
-                logger.info(f"[run.py] [ATLAS] Postprocessing for year {atlas_year}")
-                # Postprocess
-                post_run_hash = provenance_tracker.start_model_run(
-                    "atlas_postprocessor",
-                    atlas_state.current_year,
-                    description="ATLAS postprocessing",
-                )
-                postprocessor.update_state(atlas_state)
-                processed_outputs = postprocessor.postprocess(
-                    raw_outputs,
-                    run_info,
-                    workspace,
-                    post_run_hash,
-                )
-                provenance_tracker.complete_model_run(
-                    post_run_hash, output_records=processed_outputs.all_records()
-                )
-                logger.info(
-                    f"[run.py] [ATLAS] Postprocessing complete for year {atlas_year}"
-                )
-
+            state.set_data_initialized(True)
+        else:
             logger.info(
-                "[run.py] [ATLAS] All ATLAS years complete for this major step."
+                "Restarting from a previous state. Skipping data initialization."
             )
-            state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
-        # C. SUPPLY/DEMAND LOOP
-        if state.should_run(WorkflowState.Stage.supply_demand_loop):
-            total_iters = settings.get("supply_demand_iters", 1)
-            for i in range(state.iteration, total_iters):
-                state.iteration = i
-                formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
-                activity_demand_outputs = None
+        # 6. MAIN WORKFLOW LOOP
+        # Iterates through forecast years. For each year, runs sequential stages:
+        # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
+        #
+        # Step Pattern (used for all stages):
+        #   1. build_*_inputs(...)      - Collect inputs from previous outputs + coupler
+        #   2. log_inputs(...)          - Log for provenance
+        #   3. build_*_outputs(...)     - Declare what we expect to produce
+        #   4. make_*_step(...)         - Create step function with coupler refs
+        #   5. build_step_config(...)   - Create config (year, iteration, inputs, outputs, kwargs)
+        #   6. scenario.run(...)        - Execute via Consist (handles caching + provenance)
+        #
+        for year in state:
+            formatted_print(f"STARTING YEAR {year}")
+            usim_inputs: Dict[str, Any] = {}
+            outputs_holder_year = StepOutputsHolder()
 
-                # C1. ACTIVITY DEMAND
-                if state.should_run(
-                    WorkflowState.Stage.supply_demand_loop,
-                    i,
-                    WorkflowState.Stage.activity_demand,
-                ):
-                    formatted_print("ACTIVITY DEMAND MODEL")
-                    logger.info("[Main] Running ActivitySim activity demand model.")
-                    activity_demand_outputs = run_activity_demand(
-                        settings, state, client, workspace, provenance_tracker
-                    )
-                    state.complete_step(
-                        WorkflowState.Stage.supply_demand_loop,
-                        i,
-                        WorkflowState.Stage.activity_demand,
-                    )
+            if state.should_run(WorkflowState.Stage.land_use):
+                usim_inputs = run_land_use_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    year=year,
+                    outputs_holder_year=outputs_holder_year,
+                )
+                state.complete_step(WorkflowState.Stage.land_use)
 
-                # C2. TRAFFIC ASSIGNMENT
-                if state.should_run(
-                    WorkflowState.Stage.supply_demand_loop,
-                    i,
-                    WorkflowState.Stage.traffic_assignment,
-                ):
-                    formatted_print("TRAFFIC ASSIGNMENT MODEL")
-                    logger.info("[Main] Running BEAM traffic assignment model.")
-                    run_traffic_assignment(
-                        settings, state, client, workspace, provenance_tracker, activity_demand_outputs
-                    )
-                    state.complete_step(
-                        WorkflowState.Stage.supply_demand_loop,
-                        i,
-                        WorkflowState.Stage.traffic_assignment,
-                    )
+            if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
+                formatted_print(
+                    f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
+                )
+                run_vehicle_ownership_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    year=year,
+                    build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
+                )
+                state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
 
-            # After all iterations, complete the major stage
-            state.complete_step(WorkflowState.Stage.supply_demand_loop)
+            if state.should_run(WorkflowState.Stage.supply_demand_loop):
+                run_supply_demand_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    coupler=coupler,
+                    year=year,
+                    usim_inputs=usim_inputs,
+                    build_manifest_path=build_manifest_path,
+                )
 
-        # D. POST-PROCESSING
-        if state.should_run(WorkflowState.Stage.postprocessing):
-            formatted_print("POST-PROCESSING")
-            logger.info("[Main] Running post-processing steps.")
-            if settings.get("mep_metrics_to_create"):
-                process_event_file(settings, state, workspace, provenance_tracker)
-            if settings.get("mep_output_dir"):
-                copy_outputs_to_mep(settings, state, workspace, provenance_tracker)
-            state.complete_step(WorkflowState.Stage.postprocessing)
+            if state.should_run(WorkflowState.Stage.postprocessing):
+                formatted_print("POST-PROCESSING")
+                run_postprocessing_stage(
+                    scenario=scenario,
+                    state=state,
+                    settings=settings,
+                    workspace=workspace,
+                    year=year,
+                )
+                state.complete_step(WorkflowState.Stage.postprocessing)
 
     formatted_print("SIMULATION COMPLETE")
     logger.info("[Main] Simulation complete.")

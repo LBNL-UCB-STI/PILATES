@@ -1,10 +1,10 @@
-from datetime import datetime
 from enum import Enum
-from typing import Optional, List
+from typing import Optional
 import os
 import yaml
 import logging
-import uuid
+
+from pilates.config import PilatesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,10 @@ class WorkflowState:
         sub_stage: Stage | None,
         file_loc: str,
         asim_compiled: bool,
-        full_settings: Optional[dict] = None,
+        full_settings: PilatesConfig,
+        sub_stage_progress: Optional[str] = None,
+        run_info_path: Optional[str] = None,  # new
+        data_initialized: bool = False,
     ):
 
         # Store basic simulation parameters
@@ -54,6 +57,9 @@ class WorkflowState:
         self.current_major_stage = major_stage
         self.current_inner_iter = inner_iter
         self.current_sub_stage = sub_stage
+        self.sub_stage_progress = sub_stage_progress
+        self.run_info_path = run_info_path  # new
+        self.data_initialized = data_initialized
 
         self.forecast_year = None
         self.file_loc = file_loc
@@ -162,6 +168,14 @@ class WorkflowState:
     def iteration(self, value):
         self.current_inner_iter = value
 
+    def set_run_info_path(self, run_info_path: Optional[str]):
+        self.run_info_path = run_info_path
+        self.write_state()
+
+    def set_sub_stage_progress(self, sub_stage_progress: Optional[str]):
+        self.sub_stage_progress = sub_stage_progress
+        self.write_state()
+
     def enabled(self, stage):
         return stage in self.enabled_stages
 
@@ -173,12 +187,18 @@ class WorkflowState:
         file_loc,
         iteration,
         asim_compiled,
+        sub_stage_progress: Optional[str] = None,
+        run_info_path: Optional[str] = None,
+        data_initialized: bool = False,
     ):
         to_save = {
             "year": year,
             "stage": current_stage.name if current_stage else None,
             "iteration": iteration,
             "asim_compiled": asim_compiled,
+            "sub_stage_progress": sub_stage_progress,
+            "run_info_path": run_info_path,
+            "data_initialized": data_initialized,
         }
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
@@ -187,7 +207,7 @@ class WorkflowState:
     def read_current_stage(cls, file_loc):
         if not os.path.exists(file_loc):
             logger.info("Creating new stage info at {}".format(file_loc))
-            return [None, None, 0, False]
+            return [None, None, 0, False, None, None, False]
         with open(file_loc, encoding="utf-8") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
             data = data if data is not None else {}
@@ -200,21 +220,47 @@ class WorkflowState:
         )
         iteration = data.get("iteration", 0) or 0
         asim_compiled = data.get("asim_compiled", False)
-        return [year, stage, iteration, asim_compiled]
+        sub_stage_progress = data.get("sub_stage_progress", None)
+        run_info_path = data.get("run_info_path", None)
+        data_initialized = data.get("data_initialized", False)
+        return [
+            year,
+            stage,
+            iteration,
+            asim_compiled,
+            sub_stage_progress,
+            run_info_path,
+            data_initialized,
+        ]
 
     @classmethod
-    def from_settings(cls, settings):
-        start_year = settings["start_year"]
-        end_year = settings["end_year"]
-        travel_model_freq = settings.get("travel_model_freq", 1)
-        land_use_enabled = settings["land_use_enabled"]
-        vehicle_ownership_model_enabled = settings["vehicle_ownership_model_enabled"]
-        activity_demand_enabled = settings["activity_demand_enabled"]
-        traffic_assignment_enabled = settings["traffic_assignment_enabled"]
-        replanning_enabled = settings["replanning_enabled"]
-        file_loc = settings["state_file_loc"]
+    def from_settings(cls, settings: PilatesConfig):
+        # Get settings from nested or legacy locations
+        start_year = settings.run.start_year
+        end_year = settings.run.end_year
+        travel_model_freq = settings.run.travel_model_freq
 
-        [year, stage, iteration, asim_compiled] = cls.read_current_stage(file_loc)
+        # These are always added at top-level by parse_args_and_settings()
+        land_use_enabled = getattr(settings, "land_use_enabled", False)
+        vehicle_ownership_model_enabled = getattr(
+            settings, "vehicle_ownership_model_enabled", False
+        )
+        activity_demand_enabled = getattr(settings, "activity_demand_enabled", False)
+        traffic_assignment_enabled = getattr(
+            settings, "traffic_assignment_enabled", False
+        )
+        replanning_enabled = getattr(settings, "replanning_enabled", False)
+        file_loc = getattr(settings, "state_file_loc", "current_stage.yaml")
+
+        [
+            year,
+            stage,
+            iteration,
+            asim_compiled,
+            sub_stage_progress,
+            run_info_path,
+            data_initialized,
+        ] = cls.read_current_stage(file_loc)
 
         year = year or start_year
 
@@ -234,9 +280,27 @@ class WorkflowState:
             file_loc,
             asim_compiled,
             settings,
+            sub_stage_progress=sub_stage_progress,
+            run_info_path=run_info_path,
+            data_initialized=data_initialized,
         )
 
-        out._settings["supply_demand_iters"] = settings.get("supply_demand_iters", 1)
+        out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
+
+        # If restarting from a saved state whose major stage is now disabled
+        # (common during config/migration changes), reset to the first enabled stage.
+        if (
+            out.current_major_stage is not None
+            and out.current_major_stage not in out.enabled_stages
+        ):
+            logger.info(
+                "Persisted major stage %s is disabled in current settings; "
+                "resetting to first enabled stage.",
+                out.current_major_stage.name,
+            )
+            out.current_major_stage = None
+            out.current_sub_stage = None
+            out.current_inner_iter = 0
 
         if year:
             # Calculate forecast_year based on current_year and frequency
@@ -285,6 +349,9 @@ class WorkflowState:
             self.file_loc,
             self.current_inner_iter,
             self.__asim_compiled,
+            self.sub_stage_progress,
+            self.run_info_path,
+            self.data_initialized,
         )
 
     def is_enabled(self, stage: Stage) -> bool:
@@ -311,12 +378,11 @@ class WorkflowState:
 
         # For major stages (not substages)
         if target_sub_stage is None:
-            # Check if the target major stage is the current one or comes after it
+            # Only run the current major stage.
             try:
                 current_idx = self.major_stage_order.index(self.current_major_stage)
                 target_idx = self.major_stage_order.index(target_major)
-                result = current_idx <= target_idx
-                return result
+                return current_idx == target_idx
             except ValueError:
                 logger.warning(
                     f"Target major stage {target_major.name} not found in order, allowing run"
@@ -492,6 +558,7 @@ class WorkflowState:
                 self.current_major_stage = next_major
                 self.current_inner_iter = 0
                 self.current_sub_stage = None
+                self.sub_stage_progress = None  # new
 
                 # If entering supply-demand loop, set up first substage
                 if next_major == self.Stage.supply_demand_loop and self.loop_substages:
@@ -538,7 +605,12 @@ class WorkflowState:
             self.current_major_stage = None
             self.current_inner_iter = 0
             self.current_sub_stage = None
+            self.sub_stage_progress = None  # new
             # The __next__ method will handle state file removal when it detects completion
+
+    def set_data_initialized(self, value: bool):
+        self.data_initialized = value
+        self.write_state()
 
     def get_sub_stages_from(self, start_sub_stage: Optional[Stage]):
         """Returns the sequence of sub-stages starting from the given stage (inclusive)."""
