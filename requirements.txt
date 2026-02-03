@@ -29,7 +29,7 @@ cramjam>=2.3.0
 fsspec
 openmatrix
 xarray>=2023.12.0
-zarr>=2.16.0,<=3.0.6
+zarr==3.0.6
 asciitree
 numcodecs>=0.10.0
 fasteners
