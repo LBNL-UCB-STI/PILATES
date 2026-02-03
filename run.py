@@ -341,7 +341,7 @@ def main():
                 if callable(require_outputs):
                     require_outputs(
                         *PILATES_COUPLER_SCHEMA.keys(),
-                        warn_undocumented=True,
+                        warn_undefined=True,
                         description=PILATES_COUPLER_SCHEMA,
                     )
             scenario.declare_outputs(

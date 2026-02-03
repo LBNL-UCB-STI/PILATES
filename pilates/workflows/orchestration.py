@@ -49,7 +49,7 @@ class WorkflowStepSpec:
     input_keys: Optional[Sequence[str]] = None
     inputs: Optional[Dict[str, Any]] = None
     output_paths: Optional[Dict[str, Any]] = None
-    cache_hydration: str = "inputs-missing"
+    cache_hydration: str = "outputs-all"
     cache_mode: Optional[str] = None
     load_inputs: bool = False
 
