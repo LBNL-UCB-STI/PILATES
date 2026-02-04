@@ -333,7 +333,8 @@ class BeamPreprocessor(GenericPreprocessor):
                 store.add_record(beam_output_record)
 
         # Copy and merge plans from ActivitySim
-        store += self._copy_plans_from_asim(input_records, workspace)
+        if self.settings.activitysim is not None:
+            store += self._copy_plans_from_asim(input_records, workspace)
 
         # Add FileRecord outputs here for any additional BEAM inputs you want
         # tracked as explicit coupler keys (e.g., network files from the
