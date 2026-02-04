@@ -151,20 +151,21 @@ class Initialization(Model):
                     workspace.output_data["beam"] = rec_out
 
             if settings.run.models.travel == "beam":
-                project_root = find_project_root(start_path=os.path.dirname(__file__))
-                if not project_root:
-                    project_root = os.path.realpath(os.getcwd())
-                    logger.warning(
-                        "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                        "falling back to cwd='%s'.",
-                        project_root,
-                    )
-                zone_source_path = settings.shared.geography.zones.source_file
-                if not os.path.isabs(zone_source_path):
-                    zone_source_path = os.path.join(project_root, zone_source_path)
+                zones_config = settings.shared.geography.zones
+                if zones_config is not None and settings.run.models.activity_demand is not None:
+                    # Zones configured and ActivitySim enabled: copy zones to asim data dir
+                    project_root = find_project_root(start_path=os.path.dirname(__file__))
+                    if not project_root:
+                        project_root = os.path.realpath(os.getcwd())
+                        logger.warning(
+                            "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                            "falling back to cwd='%s'.",
+                            project_root,
+                        )
+                    zone_source_path = zones_config.source_file
+                    if not os.path.isabs(zone_source_path):
+                        zone_source_path = os.path.join(project_root, zone_source_path)
 
-                if settings.run.models.activity_demand is not None:
-                    # ActivitySim enabled: copy zones to asim data dir
                     asim_input_dir = workspace.get_asim_mutable_data_dir()
                     os.makedirs(asim_input_dir, exist_ok=True)
                     if os.path.exists(zone_source_path):
@@ -199,8 +200,11 @@ class Initialization(Model):
                             "Canonical zone source file not found at %s, skipping copy.",
                             zone_source_path,
                         )
+                elif zones_config is None:
+                    logger.info(
+                        "No zones configured in shared.geography.zones; skipping zone setup."
+                    )
                 else:
-                    # BEAM-only: no activitysim directories needed
                     logger.info(
                         "ActivitySim not enabled; skipping activitysim directory setup."
                     )

@@ -312,7 +312,10 @@ class BeamPreprocessor(GenericPreprocessor):
             base_path=workspace.full_path,
         )
         # Prepare the zone shapefile to ensure consistent zone ordering
-        self.prepare_beam_zone_shapefile(workspace)
+        if self.settings.shared.geography.zones is not None:
+            self.prepare_beam_zone_shapefile(workspace)
+        else:
+            logger.info("No zones configured; skipping zone shapefile preparation.")
 
         store = RecordStore()
 
