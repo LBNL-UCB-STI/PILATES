@@ -14,6 +14,16 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+
+def _tag_record_store(record_store: RecordStore, model_name: Optional[str]) -> None:
+    if not model_name:
+        return
+    for record in record_store.all_records():
+        metadata = getattr(record, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata.setdefault("model", model_name)
+
+
 def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
     used_keys = set()
     for record in record_store.all_records():
@@ -50,19 +60,46 @@ def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, objec
             key = sanitized
 
         if key in used_keys:
-            fallback = getattr(record, "unique_id", None)
-            if not fallback or fallback in used_keys:
+            metadata = getattr(record, "metadata", {}) or {}
+            model_name = metadata.get("model")
+            if model_name:
+                namespaced = f"{model_name}/{key}"
+                namespaced = sanitize_artifact_key(namespaced) or namespaced
+                if namespaced not in used_keys:
+                    logger.warning(
+                        "Duplicate initialization key '%s' detected; using namespaced key '%s'.",
+                        key,
+                        namespaced,
+                    )
+                    key = namespaced
+                else:
+                    fallback = getattr(record, "unique_id", None)
+                    if not fallback or fallback in used_keys:
+                        logger.warning(
+                            "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                            key,
+                        )
+                        continue
+                    logger.warning(
+                        "Duplicate initialization key '%s' detected; using unique_id '%s'.",
+                        key,
+                        fallback,
+                    )
+                    key = fallback
+            else:
+                fallback = getattr(record, "unique_id", None)
+                if not fallback or fallback in used_keys:
+                    logger.warning(
+                        "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                        key,
+                    )
+                    continue
                 logger.warning(
-                    "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                    "Duplicate initialization key '%s' detected; using unique_id '%s'.",
                     key,
+                    fallback,
                 )
-                continue
-            logger.warning(
-                "Duplicate initialization key '%s' detected; using unique_id '%s'.",
-                key,
-                fallback,
-            )
-            key = fallback
+                key = fallback
 
         used_keys.add(key)
         yield key, record
@@ -165,6 +202,8 @@ class Initialization(Model):
                 )
                 if result:
                     rec_in, rec_out = result
+                    _tag_record_store(rec_in, "beam")
+                    _tag_record_store(rec_out, "beam")
                     initialization_records_in += rec_in
                     initialization_records_out += rec_out
                     # Make available to later preprocess()
@@ -247,6 +286,8 @@ class Initialization(Model):
                     )
                     if result:
                         rec_in, rec_out = result
+                        _tag_record_store(rec_in, model_name)
+                        _tag_record_store(rec_out, model_name)
                         if model_name in workspace.input_data:
                             workspace.input_data[model_name] += rec_in
                         else:
@@ -273,6 +314,8 @@ class Initialization(Model):
                     )
                     if result:
                         rec_in, rec_out = result
+                        _tag_record_store(rec_in, model_name)
+                        _tag_record_store(rec_out, model_name)
                         if model_name in workspace.input_data:
                             workspace.input_data[model_name] += rec_in
                         else:
@@ -297,6 +340,8 @@ class Initialization(Model):
                             settings, asim_input_dir
                         )
                     )
+                    _tag_record_store(rec_in, model_name)
+                    _tag_record_store(rec_out, model_name)
                     initialization_records_in += rec_in
                     initialization_records_out += rec_out
                     if model_name in workspace.input_data:

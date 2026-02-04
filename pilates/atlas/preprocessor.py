@@ -16,6 +16,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,19 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         input_records = []
         output_records = []
-        source_dir = get_setting(settings, "atlas.host_input_folder", "pilates/atlas/atlas_input")
+        source_dir = get_setting(
+            settings, "atlas.host_input_folder", "pilates/atlas/atlas_input"
+        )
+        if not os.path.isabs(source_dir):
+            project_root = find_project_root(start_path=os.path.dirname(__file__))
+            if not project_root:
+                project_root = os.path.realpath(os.getcwd())
+                logger.warning(
+                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                    "falling back to cwd='%s'.",
+                    project_root,
+                )
+            source_dir = os.path.join(project_root, source_dir)
         scenario = get_setting(settings, "atlas.scenario")
         adscen = get_setting(settings, "atlas.adscen")
         scenario_key = str(scenario).lower() if scenario else None

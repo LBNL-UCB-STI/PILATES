@@ -4,11 +4,7 @@ from __future__ import annotations
 #
 # Step                           Coupler inputs (input_keys)                                 Coupler outputs (keys written)
 # ------------------------------------------------------------------------------------------------ -----------------------------------------------
-# initialization                 (none)                                                      BEAM init outputs:
-#                                                                                              - beam_prod
-#                                                                                              - beam_common (if common/ exists)
-#
-#                                                                                              UrbanSim init outputs:
+# initialization                 (none)                                                      UrbanSim init outputs:
 #                                                                                              - usim_datastore_h5
 #                                                                                              - omx_skims
 #                                                                                              - hh_size
