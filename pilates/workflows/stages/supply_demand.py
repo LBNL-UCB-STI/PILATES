@@ -783,7 +783,7 @@ def run_supply_demand_stage(
             # Satisfy BEAM preprocess dependencies when ActivitySim is disabled.
             outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
                 usim_datastore_h5=None,
-                asim_output_dir=Path(workspace.get_asim_output_dir()),
+                asim_output_dir=None,
             )
 
         # C2. TRAFFIC ASSIGNMENT

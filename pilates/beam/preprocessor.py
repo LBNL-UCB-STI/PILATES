@@ -574,6 +574,8 @@ class BeamPreprocessor(GenericPreprocessor):
             "persons",
             "beam_plans",  # ActivitySim outputs beam_plans
         ]
+        if self.state.full_settings.activitysim is None:
+            return record_store
         asim_output_dir = workspace.get_asim_output_dir()
         if base_path and os.path.isabs(base_path):
             rel_asim_output_dir = os.path.relpath(asim_output_dir, workspace.full_path)
