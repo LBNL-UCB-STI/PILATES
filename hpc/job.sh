@@ -165,16 +165,41 @@ if [ ! -d "$CONSIST_DIR" ]; then
     git clone https://github.com/LBNL-UCB-STI/consist.git "$CONSIST_DIR"
 fi
 
-if ! python3 -c "import consist" 2>/dev/null; then
-    echo "Installing consist library in editable mode..."
+# Consist uses uv_build as its build backend; ensure uv is available
+if ! python3 -c "import uv" 2>/dev/null; then
+    echo "Installing uv (required build backend for consist)..."
+    pip install uv
+fi
+
+# Check that consist is installed AND functional (has create_tracker)
+if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
+    echo "Installing consist library..."
+    # Remove any broken/empty previous install
+    pip uninstall -y consist 2>/dev/null || true
     pip install -e "$CONSIST_DIR"
+
+    # Verify the install actually worked
+    if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
+        echo "ERROR: consist installed but 'create_tracker' not found."
+        echo "Trying non-editable install as fallback..."
+        pip uninstall -y consist 2>/dev/null || true
+        pip install "$CONSIST_DIR"
+    fi
+
+    if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
+        echo "ERROR: Failed to install consist library with functional create_tracker."
+        echo "consist module contents:"
+        python3 -c "import consist; print(dir(consist))" 2>&1 || true
+        exit 1
+    fi
+    echo "consist library installed successfully"
 else
-    echo "consist library already installed"
+    echo "consist library already installed and functional"
 fi
 
 # Verify environment
-echo "Python version: $(python --version)"
-echo "Python path: $(which python)"
+echo "Python version: $(python3 --version)"
+echo "Python path: $(which python3)"
 
 # ==============================================================================
 # EXECUTION
