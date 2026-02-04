@@ -60,6 +60,7 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
             continue
 
         description = getattr(record, "description", None)
+        meta = getattr(record, "metadata", None) or {}
         if tables_used:
             table_filter = _h5_table_filter_from_list(tables_used)
             cr.log_h5_container(
@@ -68,12 +69,13 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
                 direction=direction,
                 table_filter=table_filter,
                 description=description,
+                **meta,
             )
         else:
             if direction == "input":
-                cr.log_input(path, key=key, description=description)
+                cr.log_input(path, key=key, description=description, **meta)
             else:
-                cr.log_output(path, key=key, description=description)
+                cr.log_output(path, key=key, description=description, **meta)
 
 
 def provenance_logging(func):

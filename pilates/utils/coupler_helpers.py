@@ -16,6 +16,7 @@ from pilates.workflows.artifact_constants import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
+    LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 
@@ -24,7 +25,11 @@ logger = logging.getLogger(__name__)
 _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
 _ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
 _ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
-_ARCHIVE_ALLOWED_DIR_PATTERNS = ("zarr_skims", "zarr_skims_*")
+_ARCHIVE_ALLOWED_DIR_PATTERNS = (
+    "zarr_skims",
+    "zarr_skims_*",
+    "asim_input_skims_zarr_archived",
+)
 _archive_queue: Optional["queue.Queue[Optional[tuple[str, str, str, bool]]]"] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
@@ -345,6 +350,7 @@ def update_coupler_from_beam_outputs(
         return
     linkstats_record = None
     beam_plans_record = None
+    linkstats_parquet_records = []
     for record in output_store.all_records():
         if record.short_name == ZARR_SKIMS:
             zarr_path = artifact_to_path(record.file_path, workspace)
@@ -364,7 +370,14 @@ def update_coupler_from_beam_outputs(
                     description="Final skims OMX for downstream models",
                     coupler=coupler,
                 )
-        elif record.short_name and record.short_name.startswith(LINKSTATS):
+        elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
+            if "_sub" not in record.short_name:
+                linkstats_parquet_records.append(record)
+        elif (
+            record.short_name
+            and record.short_name.startswith(LINKSTATS)
+            and not record.short_name.startswith("linkstats_unmodified")
+        ):
             linkstats_record = _select_beam_output_record(
                 linkstats_record, record, LINKSTATS
             )
@@ -381,11 +394,28 @@ def update_coupler_from_beam_outputs(
         workspace=workspace,
     )
     _log_and_set_beam_record(
+        linkstats_record,
+        key=LINKSTATS_WARMSTART,
+        description="BEAM warm-start linkstats for downstream runs",
+        coupler=coupler,
+        workspace=workspace,
+        profile_file_schema=True,
+    )
+    for record in linkstats_parquet_records:
+        _log_and_set_beam_record(
+            record,
+            key=record.short_name,
+            description="BEAM linkstats parquet output for downstream runs",
+            coupler=coupler,
+            workspace=workspace,
+        )
+    _log_and_set_beam_record(
         beam_plans_record,
         key=BEAM_PLANS_OUT,
         description="BEAM plans output for downstream runs",
         coupler=coupler,
         workspace=workspace,
+        profile_file_schema=True,
     )
 
 
@@ -466,6 +496,7 @@ def _log_and_set_beam_record(
     description: str,
     coupler: CouplerProtocol,
     workspace: "Workspace",
+    **meta: Any,
 ) -> None:
     """
     Log a BEAM output record and set it on the coupler.
@@ -493,6 +524,7 @@ def _log_and_set_beam_record(
         path=output_path,
         description=description,
         coupler=coupler,
+        **meta,
     )
 
 

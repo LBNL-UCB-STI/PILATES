@@ -163,11 +163,15 @@ class AtlasPreprocessor(GenericPreprocessor):
                 rel_key = rel_no_ext.replace(os.sep, "/")
                 short_name = sanitize_artifact_key(rel_key) or rel_key
 
+                input_meta = {}
+                if filename.lower().endswith(".csv"):
+                    input_meta["profile_file_schema"] = True
                 input_records.append(
                     FileRecord(
                         file_path=source_path,
                         description=f"ATLAS input file: {filename}",
                         short_name=short_name,
+                        metadata=input_meta,
                     )
                 )
                 output_records.append(
