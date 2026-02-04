@@ -352,7 +352,7 @@ class GenericRunner(ABC, Model):
         for host_path, container_path, mode in mounts:
             bind_args.extend(["-B", f"{host_path}:{container_path}:{mode}"])
 
-        sing_cmd = [runtime, "run"]
+        sing_cmd = [runtime, "run", "--cleanenv"]
         if working_dir:
             sing_cmd.extend(["--pwd", working_dir])
         sing_cmd.extend(bind_args)
