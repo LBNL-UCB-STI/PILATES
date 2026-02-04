@@ -107,6 +107,32 @@ class ConfigMigrator:
             "local_crs": self.legacy.get("local_crs", {}).get(region, "EPSG:4326"),
         }
 
+        # Zones — region-specific defaults for source file and canonical ID
+        zone_type = self.legacy.get("skims_zone_type", "taz")
+        region_zone_defaults = {
+            "seattle": {
+                "source_file": "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson",
+                "canonical_id_col": "OBJECTID",
+            },
+            "sfbay": {
+                "source_file": "pilates/activitysim/data/sfbay/taz_sfbay.geojson",
+                "canonical_id_col": "taz1454",
+            },
+        }
+        zone_defaults = region_zone_defaults.get(region, {})
+        if zone_defaults:
+            geography["zones"] = {
+                "zone_type": zone_type,
+                "source_file": zone_defaults["source_file"],
+                "canonical_id_col": zone_defaults["canonical_id_col"],
+                "activitysim_index_col": "TAZ",
+            }
+        else:
+            logger.warning(
+                f"No zone defaults for region '{region}'. "
+                "Add a 'zones' section to shared.geography manually."
+            )
+
         # Skims
         skims = {
             "zone_type": self.legacy.get("skims_zone_type", "taz"),
