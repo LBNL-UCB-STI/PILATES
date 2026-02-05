@@ -1,12 +1,16 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Tuple
 from unittest.mock import MagicMock
 
 import pytest
+from consist.core.step_context import StepContext
 
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.workflows.steps import StepOutputsHolder, make_beam_preprocess_step
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_beam_preprocess_step,
+    make_beam_run_step,
+)
 
 
 class DummyCoupler:
@@ -42,6 +46,7 @@ class DummyPreprocessor:
 class DummyWorkspace:
     def __init__(self, beam_dir: Path) -> None:
         self._beam_dir = Path(beam_dir)
+        self.full_path = str(beam_dir.parent)
 
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._beam_dir)
@@ -57,9 +62,8 @@ def _make_state() -> SimpleNamespace:
     return SimpleNamespace(year=2020, iteration=0)
 
 
-def _wire_step(monkeypatch, tracker, run_id, preprocessor: DummyPreprocessor) -> None:
+def _wire_common(monkeypatch, tracker, run_id) -> None:
     from pilates.utils import consist_runtime as cr
-    from pilates.workflows import steps as steps_module
 
     monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(
@@ -68,55 +72,44 @@ def _wire_step(monkeypatch, tracker, run_id, preprocessor: DummyPreprocessor) ->
         lambda: SimpleNamespace(id=run_id) if run_id is not None else None,
     )
     monkeypatch.setattr(
-        cr,
-        "log_output",
-        lambda path, **kwargs: SimpleNamespace(path=path),
-    )
-    monkeypatch.setattr(
-        cr,
-        "log_input",
-        lambda path, **kwargs: SimpleNamespace(path=path),
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {"config": {"model": model}},
     )
 
-    def _get_preprocessor(self, *args, **kwargs):
-        return preprocessor
 
-    monkeypatch.setattr(steps_module.ModelFactory, "get_preprocessor", _get_preprocessor)
-
-
-def _setup_config(tmp_path: Path) -> Tuple[DummyWorkspace, SimpleNamespace]:
+def _setup_config(tmp_path: Path):
     beam_root = tmp_path / "beam"
     region = "test_region"
     config_root = beam_root / region
     config_root.mkdir(parents=True, exist_ok=True)
     primary_conf = "beam.conf"
     (config_root / primary_conf).write_text("beam.test = 1\n")
-
     workspace = DummyWorkspace(beam_root)
     settings = _make_settings(region=region, primary_conf=primary_conf)
     return workspace, settings
 
 
-def test_beam_canonicalize_config_with_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_canonicalize_config_with_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from consist.integrations.beam import BeamConfigAdapter
 
     workspace, settings = _setup_config(tmp_path)
-    state = _make_state()
-    outputs_holder = StepOutputsHolder()
-    coupler = DummyCoupler()
-
     tracker = MagicMock()
-    preprocessor = DummyPreprocessor(tmp_path / "beam_inputs")
+    _wire_common(monkeypatch, tracker, run_id="run-456")
 
-    _wire_step(monkeypatch, tracker, run_id="run-456", preprocessor=preprocessor)
-
-    step_fn = make_beam_preprocess_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
     )
-    step_fn(settings=settings, state=state, workspace=workspace)
+    meta = step_fn.__consist_step__
+    ctx = StepContext(
+        func_name=step_fn.__name__,
+        model=meta.model,
+        settings=settings,
+        runtime_kwargs={"workspace": workspace},
+    )
 
+    resolved = meta.config(ctx)
     assert tracker.canonicalize_config.call_count == 1
     args, kwargs = tracker.canonicalize_config.call_args
     assert isinstance(args[0], BeamConfigAdapter)
@@ -125,29 +118,59 @@ def test_beam_canonicalize_config_with_run_id(monkeypatch, tmp_path):
     assert Path(config_dirs[0]) == (
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     )
+    assert "canonical_config_identity_hash" in resolved
 
 
-def test_beam_canonicalize_config_without_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_canonicalize_config_without_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
-    from consist.integrations.beam import BeamConfigAdapter
+
+    workspace, settings = _setup_config(tmp_path)
+    tracker = MagicMock()
+    _wire_common(monkeypatch, tracker, run_id=None)
+
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = StepContext(
+        func_name=step_fn.__name__,
+        model=meta.model,
+        settings=settings,
+        runtime_kwargs={"workspace": workspace},
+    )
+
+    meta.config(ctx)
+    assert tracker.canonicalize_config.call_count == 1
+    _, kwargs = tracker.canonicalize_config.call_args
+    assert kwargs.get("run_id") is None
+
+
+def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):
+    pytest.importorskip("consist")
+    from pilates.utils import consist_runtime as cr
+    from pilates.workflows import steps as steps_module
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
-    outputs_holder = StepOutputsHolder()
-    coupler = DummyCoupler()
-
     tracker = MagicMock()
     preprocessor = DummyPreprocessor(tmp_path / "beam_inputs")
 
-    _wire_step(monkeypatch, tracker, run_id=None, preprocessor=preprocessor)
+    monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(cr, "current_run", lambda: None)
+    monkeypatch.setattr(cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path))
+    monkeypatch.setattr(cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path))
+    monkeypatch.setattr(
+        steps_module.ModelFactory,
+        "get_preprocessor",
+        lambda self, *args, **kwargs: preprocessor,
+    )
 
     step_fn = make_beam_preprocess_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
     )
     step_fn(settings=settings, state=state, workspace=workspace)
 
-    assert tracker.canonicalize_config.call_count == 1
-    args, kwargs = tracker.canonicalize_config.call_args
-    assert isinstance(args[0], BeamConfigAdapter)
-    assert "run_id" not in kwargs
+    assert tracker.canonicalize_config.call_count == 0
+

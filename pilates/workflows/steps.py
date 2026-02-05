@@ -1651,57 +1651,6 @@ def make_activitysim_preprocess_step(
         dict
             Extra runtime kwargs for the step executor (empty for this helper).
         """
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            try:
-                from pathlib import Path
-
-                from consist.core.config_canonicalization import ConfigAdapterOptions
-                from consist.integrations.activitysim import ActivitySimConfigAdapter
-            except Exception:
-                logger.debug(
-                    "ActivitySim config adapter unavailable; skipping canonicalization."
-                )
-            else:
-                config_root = (
-                    Path(workspace.get_asim_mutable_configs_dir())
-                    / settings.activitysim.main_configs_dir
-                )
-                if config_root.exists():
-                    options = ConfigAdapterOptions(
-                        strict=False,
-                        bundle=True,
-                        ingest=True,
-                        allow_heuristic_refs=True,
-                    )
-                    current_run = cr.current_run()
-                    run_id = getattr(current_run, "id", None) if current_run else None
-                    try:
-                        if run_id:
-                            tracker.canonicalize_config(
-                                ActivitySimConfigAdapter(),
-                                [config_root],
-                                run_id=run_id,
-                                options=options,
-                            )
-                        else:
-                            tracker.canonicalize_config(
-                                ActivitySimConfigAdapter(),
-                                [config_root],
-                                options=options,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "ActivitySim config canonicalization failed; "
-                            "continuing without config ingestion.",
-                            exc_info=True,
-                        )
-                else:
-                    logger.warning(
-                        "ActivitySim config root not found for canonicalization: %s",
-                        config_root,
-                    )
-
         usim_input = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -2037,86 +1986,6 @@ def make_beam_preprocess_step(
     This step focuses on generating BEAM inputs and canonicalizing BEAM config.
     """
 
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            from pathlib import Path
-
-            config_root = (
-                Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-            )
-            try:
-                from consist.core.config_canonicalization import ConfigAdapterOptions
-                from consist.integrations.beam import BeamConfigAdapter
-            except Exception:
-                logger.debug(
-                    "BEAM config adapter unavailable; skipping canonicalization."
-                )
-            else:
-                primary_config = config_root / settings.beam.config
-                if primary_config.exists():
-                    options = ConfigAdapterOptions(
-                        strict=False,
-                        bundle=False,
-                        ingest=True,
-                        allow_heuristic_refs=True,
-                    )
-                    current_run = cr.current_run()
-                    run_id = getattr(current_run, "id", None) if current_run else None
-                    beam_input_root = Path(workspace.get_beam_mutable_data_dir()).resolve()
-                    beam_input_root = beam_input_root / settings.run.region
-                    pwd_candidates = [
-                        beam_input_root.parent,
-                        beam_input_root,
-                        beam_input_root.parent.parent,
-                    ]
-                    expected_suffix = Path("input") / settings.run.region
-                    pwd_root = next(
-                        (
-                            root
-                            for root in pwd_candidates
-                            if (root / expected_suffix).exists()
-                        ),
-                        beam_input_root.parent,
-                    )
-                    env_overrides = {"PWD": str(pwd_root)}
-
-                    try:
-                        adapter = BeamConfigAdapter(
-                            primary_config=primary_config,
-                            env_overrides=env_overrides,
-                        )
-                        if run_id:
-                            tracker.canonicalize_config(
-                                adapter,
-                                [config_root],
-                                run_id=run_id,
-                                options=options,
-                            )
-                        else:
-                            tracker.canonicalize_config(
-                                adapter,
-                                [config_root],
-                                options=options,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "BEAM config canonicalization failed; "
-                            "continuing without config ingestion.",
-                            exc_info=True,
-                        )
-                else:
-                    logger.warning(
-                        "BEAM primary config not found for canonicalization: %s",
-                        primary_config,
-                    )
-        return {}
-
     def _log_outputs(
         outputs: BeamPreprocessOutputs,
         settings: PilatesConfig,
@@ -2176,7 +2045,6 @@ def make_beam_preprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
-        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 

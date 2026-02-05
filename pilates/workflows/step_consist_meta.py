@@ -57,7 +57,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         except Exception:
             return {}
 
-        if model == "activitysim_preprocess":
+        if model in {"activitysim_compile", "activitysim_run"}:
             try:
                 from consist.integrations.activitysim import ActivitySimConfigAdapter
             except Exception:
@@ -97,7 +97,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 "canonical_config_adapter_version": contribution.adapter_version,
             }
 
-        if model == "beam_preprocess":
+        if model == "beam_run":
             try:
                 from consist.integrations.beam import BeamConfigAdapter
             except Exception:
