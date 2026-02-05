@@ -10,7 +10,7 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.atlas.inputs import build_atlas_inputs, atlas_static_input_keys
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
+from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -127,7 +127,7 @@ def run_vehicle_ownership_stage(
                     atlas_run_input_keys.append(key)
 
         preprocess_steps = [
-            WorkflowStepSpec(
+            StepRef(
                 name="atlas_preprocess",
                 step_func=make_atlas_preprocess_step(
                     coupler=coupler,
@@ -135,7 +135,7 @@ def run_vehicle_ownership_stage(
                 ),
                 inputs=atlas_preprocess_inputs,
             ),
-            WorkflowStepSpec(
+            StepRef(
                 name="atlas_run",
                 step_func=make_atlas_run_step(
                     coupler=coupler,
@@ -147,11 +147,9 @@ def run_vehicle_ownership_stage(
         ]
 
         try:
-            WorkflowStage(
-                name="atlas",
-                stage_type=state.Stage.vehicle_ownership_model,
+            run_workflow(
+                stage_name="atlas",
                 steps=preprocess_steps,
-            ).run(
                 scenario=scenario,
                 state=atlas_state,
                 settings=settings,
@@ -171,7 +169,7 @@ def run_vehicle_ownership_stage(
                 postprocess_input_keys = None
 
             postprocess_steps = [
-                WorkflowStepSpec(
+                StepRef(
                     name="atlas_postprocess",
                     step_func=make_atlas_postprocess_step(
                         coupler=coupler,
@@ -180,11 +178,9 @@ def run_vehicle_ownership_stage(
                     input_keys=postprocess_input_keys,
                 )
             ]
-            WorkflowStage(
-                name="atlas",
-                stage_type=state.Stage.vehicle_ownership_model,
+            run_workflow(
+                stage_name="atlas",
                 steps=postprocess_steps,
-            ).run(
                 scenario=scenario,
                 state=atlas_state,
                 settings=settings,

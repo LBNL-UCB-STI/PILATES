@@ -17,7 +17,7 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
-from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
+from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
 from pilates.urbansim.inputs import build_urbansim_inputs
 
@@ -74,7 +74,7 @@ def run_land_use_stage(
     )
 
     preprocess_steps = [
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_preprocess",
             step_func=make_urbansim_preprocess_step(
                 coupler=coupler,
@@ -84,11 +84,9 @@ def run_land_use_stage(
         ),
     ]
 
-    WorkflowStage(
-        name="land_use",
-        stage_type=state.Stage.land_use,
+    run_workflow(
+        stage_name="land_use",
         steps=preprocess_steps,
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,
@@ -111,7 +109,7 @@ def run_land_use_stage(
         run_input_keys = None
 
     run_steps = [
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_run",
             step_func=make_urbansim_run_step(
                 coupler=coupler,
@@ -119,7 +117,7 @@ def run_land_use_stage(
             ),
             input_keys=run_input_keys,
         ),
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_postprocess",
             step_func=make_urbansim_postprocess_step(
                 coupler=coupler,
@@ -129,11 +127,9 @@ def run_land_use_stage(
         ),
     ]
 
-    WorkflowStage(
-        name="land_use",
-        stage_type=state.Stage.land_use,
+    run_workflow(
+        stage_name="land_use",
         steps=run_steps,
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,

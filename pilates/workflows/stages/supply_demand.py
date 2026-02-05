@@ -12,7 +12,6 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.io import locate_beam_file
 from pilates.utils.formatting import formatted_print
-from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     clean_expected_outputs,
@@ -20,12 +19,11 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.workflows.orchestration import (
     ManifestConfig,
-    WorkflowStage,
-    WorkflowStepSpec,
+    StepRef,
+    run_workflow,
     run_manifested_steps,
 )
 from pilates.workflows.step_io import build_outputs
-from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -222,7 +220,7 @@ def _run_activity_demand_phase(
                 preprocess_input_keys = None
 
     preprocess_specs = [
-        WorkflowStepSpec(
+        StepRef(
             name="activitysim_preprocess",
             step_func=make_activitysim_preprocess_step(
                 coupler=coupler,
@@ -274,30 +272,35 @@ def _run_activity_demand_phase(
             coupler=coupler,
             outputs_holder=outputs_holder,
         )
-        compile_config = build_step_config(
-            fn=activitysim_compile_step,
-            name=f"activitysim_compile_{inputs.year}",
-            model="activitysim_compile",
+        run_workflow(
+            stage_name="activity_demand_compile",
+            steps=[
+                StepRef(
+                    name="activitysim_compile",
+                    step_func=activitysim_compile_step,
+                    inputs=compile_inputs or None,
+                    input_keys=compile_input_keys,
+                    output_paths=expected_compile_outputs or None,
+                    cache_mode="overwrite",
+                    load_inputs=False,
+                    phase="compile",
+                    model="activitysim_compile",
+                    year=inputs.year,
+                    iteration=-1,
+                )
+            ],
+            scenario=scenario,
             state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix=str(inputs.year),
             iteration=-1,
-            inputs=compile_inputs or None,
-            input_keys=compile_input_keys,
-            output_paths=expected_compile_outputs or None,
-            cache_mode="overwrite",
-            load_inputs=False,
-            runtime_kwargs=common_runtime_kwargs(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                expected_outputs=expected_compile_outputs,
-            ),
-            consist_kwargs=build_step_consist_kwargs(
-                "activitysim_compile",
-                settings,
-                workspace_path=workspace.full_path,
-            ),
+            runtime_kwargs_extra={
+                "expected_outputs": expected_compile_outputs,
+            },
         )
-        scenario.run(**compile_config.to_kwargs())
     else:
         zarr_value = None
         get_value = getattr(coupler, "get", None)
@@ -339,7 +342,7 @@ def _run_activity_demand_phase(
         activitysim_postprocess_inputs[USIM_DATASTORE_H5] = usim_input_path
 
     activitysim_run_specs = [
-        WorkflowStepSpec(
+        StepRef(
             name="activitysim_run",
             step_func=make_activitysim_run_step(
                 coupler=coupler,
@@ -372,7 +375,7 @@ def _run_activity_demand_phase(
         postprocess_input_keys = None
 
     activitysim_postprocess_specs = [
-        WorkflowStepSpec(
+        StepRef(
             name="activitysim_postprocess",
             step_func=make_activitysim_postprocess_step(
                 coupler=coupler,
@@ -579,7 +582,7 @@ def _run_traffic_assignment_phase(
         beam_run_input_keys = None
 
     beam_pre_run_steps = [
-        WorkflowStepSpec(
+        StepRef(
             name="beam_preprocess",
             step_func=make_beam_preprocess_step(
                 coupler=coupler,
@@ -588,7 +591,7 @@ def _run_traffic_assignment_phase(
             input_keys=None,
             inputs=beam_preprocess_inputs or None,
         ),
-        WorkflowStepSpec(
+        StepRef(
             name="beam_run",
             step_func=make_beam_run_step(
                 coupler=coupler,
@@ -598,11 +601,9 @@ def _run_traffic_assignment_phase(
         ),
     ]
 
-    WorkflowStage(
-        name="beam",
-        stage_type=state.Stage.traffic_assignment,
+    run_workflow(
+        stage_name="beam",
         steps=beam_pre_run_steps,
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,
@@ -628,11 +629,10 @@ def _run_traffic_assignment_phase(
     if not beam_postprocess_input_keys:
         beam_postprocess_input_keys = None
 
-    WorkflowStage(
-        name="beam",
-        stage_type=state.Stage.traffic_assignment,
+    run_workflow(
+        stage_name="beam",
         steps=[
-            WorkflowStepSpec(
+            StepRef(
                 name="beam_postprocess",
                 step_func=make_beam_postprocess_step(
                     coupler=coupler,
@@ -641,7 +641,6 @@ def _run_traffic_assignment_phase(
                 input_keys=beam_postprocess_input_keys,
             )
         ],
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,
