@@ -21,12 +21,6 @@ import socket
 from pathlib import Path
 from typing import Optional, cast, Dict, Any
 
-# Consist Imports (optional)
-try:
-    import consist
-except ImportError:  # Consist optional dependency
-    consist = None
-
 # Legacy/PILATES Imports
 from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
@@ -38,7 +32,7 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.utils.consist_types import ScenarioWithCoupler, TrackerLike
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.artifact_constants import (
@@ -260,9 +254,9 @@ def main():
         "1" if settings.run.enable_archive_copy else "0"
     )
 
-    # 3. INITIALIZE CONSIST TRACKER (OPTIONAL)
-    # Consist provides provenance tracking and computation caching. It's optional; PILATES
-    # works without it but gains:
+    # 3. INITIALIZE CONSIST TRACKER
+    # Consist provides provenance tracking and computation caching.
+    # It is required for PILATES execution.
     #   - Provenance: Full lineage of data transformations (OpenLineage compatible)
     #   - Caching: Skips expensive computations if inputs unchanged
     #   - Coupler: Manages artifact passing between steps
@@ -273,16 +267,10 @@ def main():
     # Use the directory containing `run.py` as the canonical inputs root.
     project_root_abs = str(Path(__file__).resolve().parent)
 
-    consist_enabled = cr.consist_available(settings)
-    tracker: Optional[TrackerLike] = None
-    if consist_enabled:
-        logger.info(f"Initializing Consist Tracker in {archive_run_dir}")
-    else:
-        logger.info("Consist disabled/unavailable; running without Consist tracker.")
+    logger.info("Initializing Consist Tracker in %s", archive_run_dir)
 
     tracker = cr.create_tracker(
         settings=settings,
-        enabled=consist_enabled,
         run_dir=archive_run_dir,
         db_path=(
             settings.shared.database.path if settings.shared.database.enabled else None
@@ -295,13 +283,8 @@ def main():
         project_root=project_root_abs,
         schemas=_get_consist_schemas(),
     )
-    if tracker is None and consist_enabled:
-        raise RuntimeError(
-            "Consist enabled but tracker could not be created. "
-            "Install Consist or set settings.shared.database.use_consist=False."
-        )
-    if consist_enabled:
-        assert tracker is not None
+    if tracker is None:
+        raise RuntimeError("Consist tracker could not be created.")
 
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
@@ -320,30 +303,26 @@ def main():
     #   - Provenance logging (inputs, outputs, dependencies)
     #   - Coupler coordination (step outputs → coupler → next step inputs)
     # The coupler is a shared dict-like object for passing artifacts between steps.
-    if tracker is not None:
-        cr.set_tracker(tracker)
+    cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
-    if consist_enabled:
-        scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
+    scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
     try:
         with cr.scenario(
             run_name,
             tracker=tracker,
-            enabled=consist_enabled,
             tags=["pilates_simulation"],
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
             scenario = cast(ScenarioWithCoupler, scenario)
             coupler = scenario.coupler
-            if consist_enabled:
-                require_outputs = getattr(scenario, "require_outputs", None)
-                if callable(require_outputs):
-                    require_outputs(
-                        *PILATES_COUPLER_SCHEMA.keys(),
-                        warn_undefined=True,
-                        description=PILATES_COUPLER_SCHEMA,
-                    )
+            require_outputs = getattr(scenario, "require_outputs", None)
+            if callable(require_outputs):
+                require_outputs(
+                    *PILATES_COUPLER_SCHEMA.keys(),
+                    warn_undefined=True,
+                    description=PILATES_COUPLER_SCHEMA,
+                )
             scenario.declare_outputs(
                 USIM_DATASTORE_H5,
                 ASIM_MUTABLE_DATA_DIR,

@@ -168,8 +168,11 @@ class DatabaseConfig(BaseModel):
         description="Alias for shapshot_path (preferred spelling).",
     )
     use_consist: bool = Field(
-        False,
-        description="Use Consist library for provenance tracking",
+        True,
+        description=(
+            "Deprecated toggle retained for config compatibility. "
+            "Consist is mandatory and this value is ignored."
+        ),
     )
 
     @model_validator(mode="after")

@@ -1601,6 +1601,57 @@ def make_activitysim_preprocess_step(
         dict
             Extra runtime kwargs for the step executor (empty for this helper).
         """
+        tracker = cr.current_tracker()
+        if tracker is not None:
+            try:
+                from pathlib import Path
+
+                from consist.core.config_canonicalization import ConfigAdapterOptions
+                from consist.integrations.activitysim import ActivitySimConfigAdapter
+            except Exception:
+                logger.debug(
+                    "ActivitySim config adapter unavailable; skipping canonicalization."
+                )
+            else:
+                config_root = (
+                    Path(workspace.get_asim_mutable_configs_dir())
+                    / settings.activitysim.main_configs_dir
+                )
+                if config_root.exists():
+                    options = ConfigAdapterOptions(
+                        strict=False,
+                        bundle=True,
+                        ingest=True,
+                        allow_heuristic_refs=True,
+                    )
+                    current_run = cr.current_run()
+                    run_id = getattr(current_run, "id", None) if current_run else None
+                    try:
+                        if run_id:
+                            tracker.canonicalize_config(
+                                ActivitySimConfigAdapter(),
+                                [config_root],
+                                run_id=run_id,
+                                options=options,
+                            )
+                        else:
+                            tracker.canonicalize_config(
+                                ActivitySimConfigAdapter(),
+                                [config_root],
+                                options=options,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "ActivitySim config canonicalization failed; "
+                            "continuing without config ingestion.",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "ActivitySim config root not found for canonicalization: %s",
+                        config_root,
+                    )
+
         usim_input = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -1744,57 +1795,6 @@ def make_activitysim_run_step(
         upstream = holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim preprocess must complete first")
-
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            try:
-                from pathlib import Path
-
-                from consist.core.config_canonicalization import ConfigAdapterOptions
-                from consist.integrations.activitysim import ActivitySimConfigAdapter
-            except Exception:
-                logger.debug(
-                    "ActivitySim config adapter unavailable; skipping canonicalization."
-                )
-            else:
-                config_root = (
-                    Path(workspace.get_asim_mutable_configs_dir())
-                    / settings.activitysim.main_configs_dir
-                )
-                if config_root.exists():
-                    options = ConfigAdapterOptions(
-                        strict=False,
-                        bundle=True,
-                        ingest=True,
-                        allow_heuristic_refs=True,
-                    )
-                    current_run = cr.current_run()
-                    run_id = getattr(current_run, "id", None) if current_run else None
-                    try:
-                        if run_id:
-                            tracker.canonicalize_config(
-                                ActivitySimConfigAdapter(),
-                                [config_root],
-                                run_id=run_id,
-                                options=options,
-                            )
-                        else:
-                            tracker.canonicalize_config(
-                                ActivitySimConfigAdapter(),
-                                [config_root],
-                                options=options,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "ActivitySim config canonicalization failed; "
-                            "continuing without config ingestion.",
-                            exc_info=True,
-                        )
-                else:
-                    logger.warning(
-                        "ActivitySim config root not found for canonicalization: %s",
-                        config_root,
-                    )
 
         profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in upstream._iter_record_items():
@@ -1984,10 +1984,88 @@ def make_beam_preprocess_step(
 
     Notes
     -----
-    This step focuses on generating BEAM inputs. Config canonicalization is
-    performed in the BEAM run step so configs are attached to the execution
-    phase that consumes them.
+    This step focuses on generating BEAM inputs and canonicalizing BEAM config.
     """
+
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        tracker = cr.current_tracker()
+        if tracker is not None:
+            from pathlib import Path
+
+            config_root = (
+                Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+            )
+            try:
+                from consist.core.config_canonicalization import ConfigAdapterOptions
+                from consist.integrations.beam import BeamConfigAdapter
+            except Exception:
+                logger.debug(
+                    "BEAM config adapter unavailable; skipping canonicalization."
+                )
+            else:
+                primary_config = config_root / settings.beam.config
+                if primary_config.exists():
+                    options = ConfigAdapterOptions(
+                        strict=False,
+                        bundle=False,
+                        ingest=True,
+                        allow_heuristic_refs=True,
+                    )
+                    current_run = cr.current_run()
+                    run_id = getattr(current_run, "id", None) if current_run else None
+                    beam_input_root = Path(workspace.get_beam_mutable_data_dir()).resolve()
+                    beam_input_root = beam_input_root / settings.run.region
+                    pwd_candidates = [
+                        beam_input_root.parent,
+                        beam_input_root,
+                        beam_input_root.parent.parent,
+                    ]
+                    expected_suffix = Path("input") / settings.run.region
+                    pwd_root = next(
+                        (
+                            root
+                            for root in pwd_candidates
+                            if (root / expected_suffix).exists()
+                        ),
+                        beam_input_root.parent,
+                    )
+                    env_overrides = {"PWD": str(pwd_root)}
+
+                    try:
+                        adapter = BeamConfigAdapter(
+                            primary_config=primary_config,
+                            env_overrides=env_overrides,
+                        )
+                        if run_id:
+                            tracker.canonicalize_config(
+                                adapter,
+                                [config_root],
+                                run_id=run_id,
+                                options=options,
+                            )
+                        else:
+                            tracker.canonicalize_config(
+                                adapter,
+                                [config_root],
+                                options=options,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "BEAM config canonicalization failed; "
+                            "continuing without config ingestion.",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "BEAM primary config not found for canonicalization: %s",
+                        primary_config,
+                    )
+        return {}
 
     def _log_outputs(
         outputs: BeamPreprocessOutputs,
@@ -2048,6 +2126,7 @@ def make_beam_preprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
+        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 
@@ -2090,111 +2169,9 @@ def make_beam_run_step(
         if tracker is not None:
             from pathlib import Path
 
-            config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-            try:
-                from consist.core.config_canonicalization import ConfigAdapterOptions
-                from consist.integrations.beam import BeamConfigAdapter
-            except Exception:
-                logger.debug(
-                    "BEAM config adapter unavailable; skipping canonicalization."
-                )
-            else:
-                primary_config = config_root / settings.beam.config
-                if primary_config.exists():
-                    options = ConfigAdapterOptions(
-                        strict=False,
-                        bundle=False,
-                        ingest=True,
-                        allow_heuristic_refs=True,
-                    )
-                    current_run = cr.current_run()
-                    run_id = getattr(current_run, "id", None) if current_run else None
-                    beam_input_root = Path(workspace.get_beam_mutable_data_dir()).resolve()
-                    beam_input_root = beam_input_root / settings.run.region
-                    pwd_candidates = [
-                        beam_input_root.parent,
-                        beam_input_root,
-                        beam_input_root.parent.parent,
-                    ]
-                    expected_suffix = Path("input") / settings.run.region
-                    pwd_root = next(
-                        (root for root in pwd_candidates if (root / expected_suffix).exists()),
-                        beam_input_root.parent,
-                    )
-                    env_overrides = {"PWD": str(pwd_root)}
-                    logger.debug(
-                        "BEAM config canonicalization context: run_id=%s db=%s config_root=%s primary_config=%s env_overrides=%s",
-                        run_id,
-                        getattr(tracker.db.engine, "url", None),
-                        config_root,
-                        primary_config,
-                        env_overrides,
-                    )
-                    try:
-                        from pyhocon import ConfigFactory
-                    except Exception:
-                        logger.debug(
-                            "pyhocon unavailable; skipping resolved config debug logs."
-                        )
-                    else:
-                        original_env = {}
-                        for key, value in env_overrides.items():
-                            original_env[key] = os.environ.get(key)
-                            os.environ[key] = value
-                        try:
-                            resolved_config = ConfigFactory.parse_file(
-                                str(primary_config), resolve=True
-                            )
-                            resolved_input_dir = resolved_config.get(
-                                "beam.inputDirectory", None
-                            )
-                            resolved_osm = resolved_config.get(
-                                "beam.routing.r5.osmFile", None
-                            )
-                            resolved_mapdb = resolved_config.get(
-                                "beam.routing.r5.osmMapdbFile", None
-                            )
-                            logger.debug(
-                                "BEAM resolved config values: inputDirectory=%s osmFile=%s osmMapdbFile=%s",
-                                resolved_input_dir,
-                                resolved_osm,
-                                resolved_mapdb,
-                            )
-                        finally:
-                            for key, original in original_env.items():
-                                if original is None:
-                                    os.environ.pop(key, None)
-                                else:
-                                    os.environ[key] = original
-                    try:
-                        adapter = BeamConfigAdapter(
-                            primary_config=primary_config,
-                            env_overrides=env_overrides,
-                        )
-                        if run_id:
-                            tracker.canonicalize_config(
-                                adapter,
-                                [config_root],
-                                run_id=run_id,
-                                options=options,
-                            )
-                        else:
-                            tracker.canonicalize_config(
-                                adapter,
-                                [config_root],
-                                options=options,
-                            )
-                    except Exception:
-                        logger.warning(
-                            "BEAM config canonicalization failed; "
-                            "continuing without config ingestion.",
-                            exc_info=True,
-                        )
-                else:
-                    logger.warning(
-                        "BEAM primary config not found for canonicalization: %s",
-                        primary_config,
-                    )
+            config_root = (
+                Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+            )
 
             # Log the BEAM R5 OSM file referenced in the resolved config if available.
             try:

@@ -40,6 +40,7 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
     if not isinstance(record_store, _RecordStore):
         return
 
+    bulk_mapping = {}
     for record in record_store.all_records():
         key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
         if not key:
@@ -72,10 +73,10 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
                 **meta,
             )
         else:
-            if direction == "input":
-                cr.log_input(path, key=key, description=description, **meta)
-            else:
-                cr.log_output(path, key=key, description=description, **meta)
+            bulk_mapping[key] = path
+
+    if bulk_mapping:
+        cr.log_artifacts(bulk_mapping, direction=direction)
 
 
 def provenance_logging(func):
