@@ -201,6 +201,8 @@ from typing import (
     TypeVar,
 )
 
+from consist import define_step
+
 from pilates.generic.model_factory import ModelFactory
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
@@ -266,6 +268,7 @@ from pilates.atlas.outputs import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
 )
+from pilates.workflows.step_consist_meta import consist_step_meta
 from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
@@ -509,6 +512,42 @@ def require_common_runtime(
     return cr.require_runtime_kwargs("settings", "state", "workspace", *names)
 
 
+def _schema_outputs_from_class(outputs_class: Type[StepOutputsT]) -> Optional[list[str]]:
+    record_keys = getattr(outputs_class, "record_keys", None) or {}
+    values = [value for value in record_keys.values() if isinstance(value, str)]
+    unique = sorted(set(values))
+    return unique or None
+
+
+def _decorate_step_with_consist(
+    *,
+    step_func: Callable[..., Any],
+    step_model: str,
+    description: str,
+    schema_outputs: Optional[list[str]] = None,
+    outputs: Optional[list[str]] = None,
+    tags: Optional[list[str]] = None,
+) -> Callable[..., Any]:
+    """
+    Attach native Consist step metadata to a workflow step function.
+    """
+    if hasattr(step_func, "__consist_step__"):
+        return step_func
+
+    kwargs: Dict[str, Any] = {
+        "model": step_model,
+        "description": description,
+        "name_template": "{func_name}__y{year}__i{iteration}__phase_{phase}",
+        "tags": tags or [step_model],
+        **consist_step_meta(step_model),
+    }
+    if schema_outputs:
+        kwargs["schema_outputs"] = schema_outputs
+    if outputs:
+        kwargs["outputs"] = outputs
+    return define_step(**kwargs)(step_func)
+
+
 def _make_generic_step_function(
     *,
     coupler: CouplerProtocol,
@@ -616,7 +655,14 @@ def _make_generic_step_function(
 
         logger.info("%s %s completed successfully", model_name, phase)
 
-    return _step_func
+    step_model = f"{model_name}_{phase}"
+    return _decorate_step_with_consist(
+        step_func=_step_func,
+        step_model=step_model,
+        description=f"{model_name} {phase} workflow step",
+        schema_outputs=_schema_outputs_from_class(outputs_class),
+        tags=[model_name, phase],
+    )
 
 
 def _execute_preprocess(
@@ -1539,7 +1585,14 @@ def make_activitysim_compile_step(
                 coupler=coupler,
             )
 
-    return _run_activitysim_compile_step
+    return _decorate_step_with_consist(
+        step_func=_run_activitysim_compile_step,
+        step_model="activitysim_compile",
+        description="activitysim compile workflow step",
+        outputs=[ZARR_SKIMS],
+        schema_outputs=[ZARR_SKIMS],
+        tags=["activitysim", "compile"],
+    )
 
 
 def make_activitysim_preprocess_step(
@@ -1567,11 +1620,8 @@ def make_activitysim_preprocess_step(
 
     Notes
     -----
-    Notes
-    -----
     This step focuses on preparing ActivitySim inputs. Config canonicalization
-    is performed in the ActivitySim run step so configs are attached to the
-    execution phase that consumes them.
+    is also performed here so config ingestion is tied to the preprocess phase.
     """
 
     def _log_inputs(

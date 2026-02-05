@@ -38,6 +38,26 @@ from pilates.workflows.steps import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_step_consist_kwargs(
+    *,
+    step_func: Callable[..., Any],
+    step_name: str,
+    settings: Any,
+    workspace: Any,
+) -> Dict[str, Any]:
+    """
+    Resolve per-step Consist kwargs.
+
+    Prefer native `@define_step(...)` metadata when present and fall back to
+    `build_step_consist_kwargs(...)` for undecorated legacy step callables.
+    """
+    if hasattr(step_func, "__consist_step__"):
+        return {}
+    return build_step_consist_kwargs(
+        step_name, settings, workspace_path=workspace.full_path
+    )
+
+
 @dataclass(frozen=True)
 class WorkflowStepSpec:
     """
@@ -102,8 +122,11 @@ class WorkflowStage:
                 cache_mode=spec.cache_mode,
                 load_inputs=spec.load_inputs,
                 runtime_kwargs=runtime_kwargs,
-                consist_kwargs=build_step_consist_kwargs(
-                    spec.name, settings, workspace_path=workspace.full_path
+                consist_kwargs=_resolve_step_consist_kwargs(
+                    step_func=spec.step_func,
+                    step_name=spec.name,
+                    settings=settings,
+                    workspace=workspace,
                 ),
             )
 
@@ -224,8 +247,11 @@ def run_manifested_steps(
             cache_mode=spec.cache_mode,
             load_inputs=spec.load_inputs,
             runtime_kwargs=runtime_kwargs,
-            consist_kwargs=build_step_consist_kwargs(
-                spec.name, settings, workspace_path=workspace.full_path
+            consist_kwargs=_resolve_step_consist_kwargs(
+                step_func=spec.step_func,
+                step_name=spec.name,
+                settings=settings,
+                workspace=workspace,
             ),
         )
 
