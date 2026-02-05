@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from pilates.activitysim.inputs import build_activitysim_inputs
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,

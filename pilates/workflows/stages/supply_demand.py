@@ -34,7 +34,7 @@ from pilates.workflows.steps import (
     make_beam_preprocess_step,
     make_beam_run_step,
 )
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ATLAS_VEHICLES2_INPUT,
     BEAM_HOUSEHOLDS_IN,

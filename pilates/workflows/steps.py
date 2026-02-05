@@ -222,7 +222,7 @@ from pilates.workflows.outputs_base import (
     deserialize_step_outputs,
     serialize_step_outputs,
 )
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_PLANS_OUT,

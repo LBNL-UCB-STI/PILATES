@@ -12,7 +12,7 @@ from pilates.activitysim.outputs import (
     write_asim_run_marker,
     clear_asim_run_marker,
 )
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,

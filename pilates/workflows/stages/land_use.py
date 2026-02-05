@@ -18,7 +18,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.urbansim.inputs import build_urbansim_inputs
 
 

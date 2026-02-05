@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from consist import define_step
 
-from pilates.workflows.artifact_constants import ASIM_HOUSEHOLDS_IN
+from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
 from pilates.workflows.steps import (

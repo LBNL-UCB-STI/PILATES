@@ -3,7 +3,7 @@ from typing import Any, Dict, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.urbansim import postprocessor as usim_post
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace

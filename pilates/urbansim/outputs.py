@@ -6,7 +6,7 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
 )

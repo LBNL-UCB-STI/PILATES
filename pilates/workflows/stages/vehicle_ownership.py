@@ -18,7 +18,7 @@ from pilates.workflows.steps import (
     make_atlas_preprocess_step,
     make_atlas_run_step,
 )
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 

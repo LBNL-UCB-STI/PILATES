@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar, Dict
 from types import SimpleNamespace
 
 from pilates.generic.records import FileRecord, RecordStore
@@ -40,12 +43,43 @@ def test_set_coupler_from_artifact_falls_back_to_set() -> None:
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
+def test_set_coupler_from_artifact_resolves_alias_key() -> None:
+    coupler = CouplerWithSetOnly()
+    coupler_helpers.set_coupler_from_artifact(
+        coupler, "asim_households_in", None, fallback="/tmp/households.csv"
+    )
+    assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
+
+
+@dataclass
+class _AliasOutput:
+    record_keys: ClassVar[Dict[str, str]] = {"households": "households_asim_in"}
+    households: Path
+
+
+def test_record_store_to_outputs_resolves_alias_mapping(tmp_path) -> None:
+    households_path = tmp_path / "households.csv"
+    households_path.write_text("x")
+    workspace = SimpleNamespace(full_path=str(tmp_path))
+    store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(households_path),
+                short_name="asim_households_in",
+            )
+        ]
+    )
+
+    outputs = coupler_helpers.record_store_to_outputs(store, _AliasOutput, workspace)
+    assert outputs.households == households_path
+
+
 def test_update_coupler_from_beam_outputs_sets_latest_records(
     monkeypatch, tmp_path
 ) -> None:
     log_calls = []
 
-    def fake_log_output(path, key, description):
+    def fake_log_output(path, key, description, **_meta):
         log_calls.append((key, path, description))
         return f"artifact:{key}:{path}"
 

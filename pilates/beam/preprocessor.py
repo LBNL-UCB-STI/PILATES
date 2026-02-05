@@ -19,7 +19,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,

@@ -9,7 +9,7 @@ from pilates.utils.coupler_helpers import (
     resolve_artifact_from_value,
     log_coupler_value,
 )
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,

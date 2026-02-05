@@ -9,8 +9,9 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set, Union
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -723,7 +724,7 @@ def _update_coupler_from_record_store(
         path = artifact_to_path(value, workspace)
         if path is None:
             continue
-        set_value(key, path)
+        set_value(resolve_artifact_key(key), path)
 
 
 def _restore_outputs_from_manifest(

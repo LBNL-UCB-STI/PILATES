@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.records import sanitize_artifact_key
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_COMMON,
     ATLAS_STATIC_INPUTS_BY_SCENARIO,

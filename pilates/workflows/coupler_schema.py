@@ -16,7 +16,7 @@ from pilates.atlas.static_inputs import (
 from pilates.generic.records import sanitize_artifact_key
 from pilates.utils.path_utils import find_project_root
 
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,

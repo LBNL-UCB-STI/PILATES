@@ -12,7 +12,11 @@ from typing import Any, Dict, Optional, TYPE_CHECKING, Type
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_key_migrations import (
+    canonicalize_artifact_mapping,
+    resolve_artifact_key,
+)
+from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
@@ -567,14 +571,15 @@ def set_coupler_from_artifact(
     """
     if artifact is None and fallback is None:
         return
+    canonical_key = resolve_artifact_key(key)
     set_from_artifact = getattr(coupler, "set_from_artifact", None)
     if callable(set_from_artifact):
         if artifact is None:
-            set_from_artifact(key, fallback)
+            set_from_artifact(canonical_key, fallback)
         else:
-            set_from_artifact(key, artifact)
+            set_from_artifact(canonical_key, artifact)
         return
-    coupler.set(key, artifact or fallback)
+    coupler.set(canonical_key, artifact or fallback)
 
 
 def _log_with_optional_h5_container(
@@ -769,6 +774,7 @@ def record_store_to_outputs(
         )
 
     mapping = record_store.to_mapping() if record_store is not None else {}
+    mapping = canonicalize_artifact_mapping(mapping)
     record_keys = getattr(output_class, "record_keys", {}) or {}
     values: Dict[str, Any] = {}
 
