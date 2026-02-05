@@ -1911,7 +1911,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, major_stage)
-        self.required_input_data = ["usim_datastore_h5", "beam_geoms", "asim_configs"]
+        self.required_input_data = ["usim_datastore_h5", "beam_geoms"]
 
     def copy_data_to_mutable_location(
         self,
@@ -2550,20 +2550,7 @@ def _copy_data_to_mutable_location(
         shutil.rmtree(configs_dest_dir)
     shutil.copytree(configs_source_dir, configs_dest_dir)
 
-    input_records.add_record(
-        FileRecord(
-            file_path=configs_source_dir,
-            short_name="asim_configs_source",
-            description="ActivitySim configs repo source",
-        )
-    )
-    output_records.add_record(
-        FileRecord(
-            file_path=configs_dest_dir,
-            short_name="asim_configs",
-            description="ActivitySim configs repo",
-        )
-    )
+    # ActivitySim configs are captured via the config adapter; no artifact logging here.
     return input_records, output_records
 
 

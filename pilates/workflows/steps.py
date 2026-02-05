@@ -16,7 +16,7 @@ from __future__ import annotations
 #                                                                                              ActivitySim init outputs:
 #                                                                                              - canonical_zones
 #                                                                                              - clipped_geoms (if exists)
-#                                                                                              - asim_configs
+#                                                                                              - (configs tracked via ActivitySim config adapter)
 #
 #                                                                                              ATLAS init outputs:
 #                                                                                              - one key per non-readme file copied from

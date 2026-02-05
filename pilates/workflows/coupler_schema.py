@@ -68,6 +68,8 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "relmap": "UrbanSim relationship map input CSV.",
     "schools": "UrbanSim schools input CSV.",
     "school_districts": "UrbanSim school districts input CSV.",
+    "canonical_zones": "Canonical zones file copied into ActivitySim workspace.",
+    "clipped_geoms": "Clipped geometry inputs for ActivitySim if available.",
 }
 
 _NAMESPACED_INIT_KEYS = {
