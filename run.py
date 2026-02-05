@@ -19,10 +19,8 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, cast, Dict, Any
+from typing import Optional, cast, Dict, Any, Callable, List
 
-# Legacy/PILATES Imports
-from pilates.generic.records import RecordStore
 from pilates.workspace import Workspace
 from pilates.generic.initialization import Initialization
 from pilates.utils.formatting import formatted_print
@@ -34,20 +32,7 @@ from pilates.utils.consist_config import (
 )
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
-from pilates.utils.input_logging import log_inputs
-from pilates.workflows.artifact_constants import (
-    ASIM_MUTABLE_DATA_DIR,
-    ASIM_OUTPUT_DIR,
-    ATLAS_OUTPUT_DIR,
-    ATLAS_VEHICLES2_INPUT,
-    BEAM_MUTABLE_DATA_DIR,
-    BEAM_OUTPUT_DIR,
-    FINAL_SKIMS_OMX,
-    USIM_DATASTORE_H5,
-    USIM_MUTABLE_DATA_DIR,
-    ZARR_SKIMS,
-)
-from pilates.workflows.coupler_schema import PILATES_COUPLER_SCHEMA
+from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -58,7 +43,22 @@ from pilates.workflows.stages import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_activitysim_compile_step,
+    make_activitysim_postprocess_step,
+    make_activitysim_preprocess_step,
+    make_activitysim_run_step,
+    make_atlas_postprocess_step,
+    make_atlas_preprocess_step,
+    make_atlas_run_step,
+    make_beam_postprocess_step,
+    make_beam_preprocess_step,
+    make_beam_run_step,
+    make_urbansim_postprocess_step,
+    make_urbansim_preprocess_step,
+    make_urbansim_run_step,
+)
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -66,6 +66,57 @@ logging.basicConfig(
     format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+_SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
+
+
+class _SchemaCoupler:
+    """No-op coupler used to construct decorated step callables for schema introspection."""
+
+    def get(self, _key: str, default: Optional[Any] = None) -> Any:
+        return default
+
+    def set(self, _key: str, _value: Any) -> None:
+        return None
+
+    def update(self, _mapping: Dict[str, Any]) -> None:
+        return None
+
+    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _resolve_cache_epoch(settings: Any) -> int:
+    value = getattr(getattr(settings, "run", None), "cache_epoch", 1)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _build_schema_steps() -> List[Callable[..., Any]]:
+    coupler = _SchemaCoupler()
+    outputs_holder = StepOutputsHolder()
+    return [
+        make_urbansim_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_urbansim_run_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_urbansim_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_atlas_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_atlas_run_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_atlas_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_activitysim_preprocess_step(
+            coupler=coupler, outputs_holder=outputs_holder
+        ),
+        make_activitysim_compile_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_activitysim_run_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_activitysim_postprocess_step(
+            coupler=coupler, outputs_holder=outputs_holder
+        ),
+        make_beam_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_beam_run_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_beam_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+    ]
 
 
 def _get_consist_schemas() -> Optional[list[type]]:
@@ -269,12 +320,15 @@ def main():
 
     logger.info("Initializing Consist Tracker in %s", archive_run_dir)
 
+    cache_epoch = _resolve_cache_epoch(settings)
+
     tracker = cr.create_tracker(
         settings=settings,
         run_dir=archive_run_dir,
         db_path=(
             settings.shared.database.path if settings.shared.database.enabled else None
         ),
+        cache_epoch=cache_epoch,
         mounts={
             "inputs": project_root_abs,  # Immutable Source
             "workspace": local_run_dir,  # Mutable Destination
@@ -305,7 +359,10 @@ def main():
     # The coupler is a shared dict-like object for passing artifacts between steps.
     cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
-    scenario_kwargs["require_outputs"] = list(PILATES_COUPLER_SCHEMA.keys())
+    scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
+    scenario_kwargs.setdefault("cache_epoch", cache_epoch)
+    coupler_schema = build_coupler_schema(_build_schema_steps(), settings=settings)
+    scenario_kwargs["require_outputs"] = list(coupler_schema.keys())
     try:
         with cr.scenario(
             run_name,
@@ -316,21 +373,10 @@ def main():
         ) as scenario:
             scenario = cast(ScenarioWithCoupler, scenario)
             coupler = scenario.coupler
-            require_outputs = getattr(scenario, "require_outputs", None)
-            if callable(require_outputs):
-                require_outputs(
-                    *PILATES_COUPLER_SCHEMA.keys(),
-                    warn_undefined=True,
-                    description=PILATES_COUPLER_SCHEMA,
-                )
-            scenario.declare_outputs(
-                USIM_DATASTORE_H5,
-                ASIM_MUTABLE_DATA_DIR,
-                ASIM_OUTPUT_DIR,
-                BEAM_OUTPUT_DIR,
-                ATLAS_OUTPUT_DIR,
-                ZARR_SKIMS,
-                FINAL_SKIMS_OMX,
+            coupler.declare_outputs(
+                *coupler_schema.keys(),
+                warn_undefined=True,
+                description=coupler_schema,
             )
 
             # 6. DATA INITIALIZATION STEP

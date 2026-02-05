@@ -5,7 +5,9 @@ This schema documents coupler keys that are explicitly set during the workflow.
 """
 
 import os
-from typing import Dict
+from typing import Any, Callable, Dict, Iterable, Optional
+
+from consist.utils import collect_step_schema
 
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
@@ -125,3 +127,29 @@ def _atlas_static_key_map() -> Dict[str, str]:
 
 
 PILATES_COUPLER_SCHEMA.update(_atlas_static_key_map())
+
+
+def build_coupler_schema(
+    steps: Iterable[Callable[..., Any]],
+    settings: Optional[Any] = None,
+) -> Dict[str, str]:
+    """
+    Build the workflow coupler schema from step metadata plus static extras.
+
+    Parameters
+    ----------
+    steps : iterable of callables
+        Canonical workflow step functions decorated with ``@define_step``.
+    settings : Any, optional
+        Settings object used to resolve callable schema metadata.
+
+    Returns
+    -------
+    dict
+        Coupler key -> description mapping.
+    """
+    extras = dict(PILATES_COUPLER_SCHEMA)
+    try:
+        return collect_step_schema(steps, settings=settings, extra_keys=extras)
+    except Exception:
+        return extras

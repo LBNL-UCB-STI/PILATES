@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from consist import define_step
 
+from pilates.workflows.artifact_constants import ASIM_HOUSEHOLDS_IN
+from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -137,3 +139,17 @@ def test_workflow_stage_falls_back_to_legacy_consist_kwargs_for_undecorated_step
     assert "config" in call
     assert call["config"]["step"] == "legacy_step"
 
+
+def test_build_coupler_schema_collects_step_metadata_and_extras():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    preprocess_step = make_activitysim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    schema = build_coupler_schema([preprocess_step], settings=SimpleNamespace())
+
+    assert ASIM_HOUSEHOLDS_IN in schema
+    assert "urbansim/usim_datastore_h5" in schema
