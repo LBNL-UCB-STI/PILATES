@@ -65,6 +65,15 @@ class RunConfig(BaseModel):
     # Output configuration (METADATA scope)
     output_directory: str = Field(..., description="Where to write outputs")
     output_run_name: str = Field(..., description="Human-readable run name")
+    local_workspace_root: Optional[str] = Field(
+        None,
+        description=(
+            "Optional node-local workspace root (defaults to output_directory)"
+        ),
+    )
+    enable_archive_copy: bool = Field(
+        False, description="Copy logged outputs to archive root as they are produced"
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
@@ -73,6 +82,14 @@ class RunConfig(BaseModel):
     @classmethod
     def expand_env_vars(cls, v):
         """Expand environment variables in output_directory."""
+        return os.path.expandvars(v)
+
+    @field_validator("local_workspace_root")
+    @classmethod
+    def expand_local_workspace_root(cls, v):
+        """Expand environment variables in local_workspace_root."""
+        if v is None:
+            return v
         return os.path.expandvars(v)
 
     @field_validator("end_year")
@@ -370,6 +387,15 @@ class BeamConfig(BaseModel):
     )
     ridehail_path_map: Dict[str, str] = Field(
         default_factory=dict, description="Ridehail path mappings"
+    )
+    skim_previous_weight: float = Field(
+        0.9,
+        description=(
+            "Weight on previous skims when blending trip counts. "
+            "New counts are always fully applied."
+        ),
+        ge=0.0,
+        le=1.0,
     )
 
 

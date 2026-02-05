@@ -4,11 +4,7 @@ from __future__ import annotations
 #
 # Step                           Coupler inputs (input_keys)                                 Coupler outputs (keys written)
 # ------------------------------------------------------------------------------------------------ -----------------------------------------------
-# initialization                 (none)                                                      BEAM init outputs:
-#                                                                                              - beam_prod
-#                                                                                              - beam_common (if common/ exists)
-#
-#                                                                                              UrbanSim init outputs:
+# initialization                 (none)                                                      UrbanSim init outputs:
 #                                                                                              - usim_datastore_h5
 #                                                                                              - omx_skims
 #                                                                                              - hh_size
@@ -234,6 +230,7 @@ from pilates.workflows.artifact_constants import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
+    USIM_INPUT_ARCHIVE_PREFIX,
     ZARR_SKIMS,
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
@@ -277,6 +274,33 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_missing_coupler_inputs(
+    coupler: Optional[CouplerProtocol],
+    input_store: Optional[RecordStore],
+    context: str,
+) -> None:
+    if coupler is None or input_store is None:
+        return
+    keys_attr = getattr(coupler, "keys", None)
+    if not callable(keys_attr):
+        return
+    try:
+        coupler_keys = set(keys_attr())
+    except Exception:
+        return
+    missing = []
+    for record in input_store.all_records():
+        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
+        if key and key not in coupler_keys:
+            missing.append(key)
+    if missing:
+        logger.warning(
+            "[%s] Input RecordStore keys missing from coupler: %s",
+            context,
+            sorted(set(missing)),
+        )
 
 StepOutputsT = TypeVar("StepOutputsT")
 InputLogger = Callable[
@@ -562,6 +586,8 @@ def _make_generic_step_function(
             component,
             workspace,
             outputs_holder,
+            coupler=coupler,
+            context=f"{model_name}_{phase}",
             **extra_kwargs,
             **kwargs,
         )
@@ -627,6 +653,8 @@ def _execute_run(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "runner",
     extra_inputs: Optional[RecordStore] = None,
     **kwargs: Any,
 ) -> RecordStore:
@@ -658,6 +686,7 @@ def _execute_run(
     input_store = upstream.to_record_store()
     if extra_inputs is not None:
         input_store += extra_inputs
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -699,6 +728,8 @@ def _execute_beam_preprocess(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_preprocess",
     activity_demand_outputs: Optional[RecordStore] = None,
     previous_beam_outputs: Optional[RecordStore] = None,
     **kwargs: Any,
@@ -733,6 +764,7 @@ def _execute_beam_preprocess(
         combined += activity_demand_outputs
     if previous_beam_outputs is not None:
         combined += previous_beam_outputs
+    _warn_missing_coupler_inputs(coupler, combined, context)
     return preprocessor.preprocess(workspace, combined)
 
 
@@ -741,6 +773,8 @@ def _execute_beam_run(
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_run",
     extra_inputs: Optional[RecordStore] = None,
     **kwargs: Any,
 ) -> RecordStore:
@@ -772,6 +806,7 @@ def _execute_beam_run(
     input_store = upstream.to_record_store()
     if extra_inputs is not None:
         input_store += extra_inputs
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -812,6 +847,9 @@ def _execute_urbansim_run(
     runner: Runner,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "urbansim_run",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -838,6 +876,7 @@ def _execute_urbansim_run(
     if upstream is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
     input_store = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -845,6 +884,9 @@ def _execute_urbansim_postprocess(
     postprocessor: Postprocessor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "urbansim_postprocess",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -871,6 +913,7 @@ def _execute_urbansim_postprocess(
     if upstream is None:
         raise RuntimeError("UrbanSim run must complete first")
     raw_outputs = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -878,6 +921,9 @@ def _execute_atlas_run(
     runner: Runner,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "atlas_run",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -904,6 +950,7 @@ def _execute_atlas_run(
     if upstream is None:
         raise RuntimeError("ATLAS preprocess must complete first")
     input_store = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, input_store, context)
     return run_runner(runner, input_store, workspace)
 
 
@@ -911,6 +958,9 @@ def _execute_atlas_postprocess(
     postprocessor: Postprocessor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "atlas_postprocess",
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -937,6 +987,7 @@ def _execute_atlas_postprocess(
     if upstream is None:
         raise RuntimeError("ATLAS run must complete first")
     raw_outputs = upstream.to_record_store()
+    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -1118,6 +1169,16 @@ def make_urbansim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
+                log_output_only(
+                    key=short_name,
+                    path=str(path),
+                    description=description,
+                    profile_file_schema=True,
+                    h5_container=True,
+                    hash_tables="if_unchanged",
+                )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -1569,12 +1630,30 @@ def make_activitysim_preprocess_step(
                 if input_key == USIM_H5_UPDATED
                 else f"UrbanSim datastore for ActivitySim year {state.year}"
             )
+            h5_tables_used = [
+                "households",
+                "persons",
+                "jobs",
+                "blocks",
+            ]
+            start_year = state.start_year
+            if start_year is not None:
+                h5_tables_used.extend(
+                    [
+                        f"/{start_year}/households",
+                        f"/{start_year}/persons",
+                        f"/{start_year}/jobs",
+                        f"/{start_year}/blocks",
+                    ]
+                )
             log_and_set_input(
                 key=input_key,
                 path=usim_path,
                 description=input_desc,
                 coupler=coupler,
                 profile_file_schema=True,
+                h5_container=True,
+                h5_tables_used=h5_tables_used,
             )
         return {}
 

@@ -1,5 +1,11 @@
 import os
 import logging
+import atexit
+import fnmatch
+import queue
+import shutil
+import threading
+import time
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING, Type
@@ -10,10 +16,169 @@ from pilates.workflows.artifact_constants import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
+    LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
+
+_ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
+_ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
+_ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
+_ARCHIVE_ALLOWED_DIR_PATTERNS = (
+    "zarr_skims",
+    "zarr_skims_*",
+    "asim_input_skims_zarr_archived",
+)
+_archive_queue: Optional["queue.Queue[Optional[tuple[str, str, str, bool]]]"] = None
+_archive_thread: Optional[threading.Thread] = None
+_archive_lock = threading.Lock()
+
+
+def _archive_enabled() -> bool:
+    value = os.environ.get(_ARCHIVE_ENABLE_ENV, "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _archive_roots() -> Optional[tuple[str, str]]:
+    local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
+    archive_root = os.environ.get(_ARCHIVE_ROOT_ENV)
+    if not local_root or not archive_root:
+        return None
+    return os.path.abspath(local_root), os.path.abspath(archive_root)
+
+
+def _path_under_root(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def _resolve_archive_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
+    abs_path = os.path.abspath(path)
+    if _path_under_root(abs_path, archive_root):
+        return None
+    if not _path_under_root(abs_path, local_root):
+        return None
+    rel_path = os.path.relpath(abs_path, local_root)
+    return os.path.join(archive_root, rel_path)
+
+
+def _archive_dir_allowed(key: str) -> bool:
+    return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
+
+
+def _archive_worker() -> None:
+    while True:
+        task = _archive_queue.get() if _archive_queue is not None else None
+        if task is None:
+            if _archive_queue is not None:
+                _archive_queue.task_done()
+            break
+        key, src, dest, is_dir = task
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if is_dir:
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dest)
+            logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+        except Exception as exc:
+            logger.warning(
+                "[Archive] Failed to copy %s -> %s (key=%s): %s",
+                src,
+                dest,
+                key,
+                exc,
+            )
+        finally:
+            if _archive_queue is not None:
+                _archive_queue.task_done()
+
+
+def _ensure_archive_worker() -> None:
+    if not _archive_enabled():
+        return
+    with _archive_lock:
+        global _archive_queue, _archive_thread
+        if _archive_queue is None:
+            _archive_queue = queue.Queue()
+        if _archive_thread is None or not _archive_thread.is_alive():
+            _archive_thread = threading.Thread(
+                target=_archive_worker, name="pilates-archiver", daemon=True
+            )
+            _archive_thread.start()
+
+
+def _enqueue_archive_copy(key: str, path: str) -> None:
+    if not _archive_enabled():
+        return
+    roots = _archive_roots()
+    if roots is None:
+        return
+    if not path or (isinstance(path, str) and "://" in path):
+        return
+    if not os.path.exists(path):
+        logger.warning("[Archive] Output path does not exist: %s (key=%s)", path, key)
+        return
+    is_dir = os.path.isdir(path)
+    if is_dir and not _archive_dir_allowed(key):
+        logger.warning(
+            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
+            path,
+            key,
+        )
+        return
+    local_root, archive_root = roots
+    dest = _resolve_archive_path(path, local_root, archive_root)
+    if dest is None or dest == path:
+        return
+    _ensure_archive_worker()
+    logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
+    if _archive_queue is not None:
+        _archive_queue.put((key, path, dest, is_dir))
+
+
+def flush_archive_queue(timeout: Optional[float] = None) -> None:
+    if _archive_queue is None:
+        return
+    pending = _archive_queue.unfinished_tasks
+    logger.info("[Archive] Flushing queue (pending=%s)", pending)
+    if timeout is None:
+        _archive_queue.join()
+        logger.info("[Archive] Flush complete")
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _archive_queue.unfinished_tasks == 0:
+            logger.info("[Archive] Flush complete")
+            return
+        time.sleep(0.1)
+    logger.warning(
+        "[Archive] Flush timed out (pending=%s)", _archive_queue.unfinished_tasks
+    )
+
+
+def stop_archive_worker(timeout: Optional[float] = None) -> None:
+    if _archive_queue is None:
+        return
+    if _archive_thread is None:
+        return
+    logger.info("[Archive] Stopping worker")
+    _archive_queue.put(None)
+    if timeout is None:
+        _archive_thread.join()
+        logger.info("[Archive] Worker stopped")
+        return
+    _archive_thread.join(timeout=timeout)
+    if _archive_thread.is_alive():
+        logger.warning("[Archive] Worker stop timed out")
+    else:
+        logger.info("[Archive] Worker stopped")
+
+
+atexit.register(stop_archive_worker)
 
 if TYPE_CHECKING:
     from pilates.generic.records import RecordStore
@@ -185,6 +350,7 @@ def update_coupler_from_beam_outputs(
         return
     linkstats_record = None
     beam_plans_record = None
+    linkstats_parquet_records = []
     for record in output_store.all_records():
         if record.short_name == ZARR_SKIMS:
             zarr_path = artifact_to_path(record.file_path, workspace)
@@ -204,7 +370,14 @@ def update_coupler_from_beam_outputs(
                     description="Final skims OMX for downstream models",
                     coupler=coupler,
                 )
-        elif record.short_name and record.short_name.startswith(LINKSTATS):
+        elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
+            if "_sub" not in record.short_name:
+                linkstats_parquet_records.append(record)
+        elif (
+            record.short_name
+            and record.short_name.startswith(LINKSTATS)
+            and not record.short_name.startswith("linkstats_unmodified")
+        ):
             linkstats_record = _select_beam_output_record(
                 linkstats_record, record, LINKSTATS
             )
@@ -221,11 +394,28 @@ def update_coupler_from_beam_outputs(
         workspace=workspace,
     )
     _log_and_set_beam_record(
+        linkstats_record,
+        key=LINKSTATS_WARMSTART,
+        description="BEAM warm-start linkstats for downstream runs",
+        coupler=coupler,
+        workspace=workspace,
+        profile_file_schema=True,
+    )
+    for record in linkstats_parquet_records:
+        _log_and_set_beam_record(
+            record,
+            key=record.short_name,
+            description="BEAM linkstats parquet output for downstream runs",
+            coupler=coupler,
+            workspace=workspace,
+        )
+    _log_and_set_beam_record(
         beam_plans_record,
         key=BEAM_PLANS_OUT,
         description="BEAM plans output for downstream runs",
         coupler=coupler,
         workspace=workspace,
+        profile_file_schema=True,
     )
 
 
@@ -306,6 +496,7 @@ def _log_and_set_beam_record(
     description: str,
     coupler: CouplerProtocol,
     workspace: "Workspace",
+    **meta: Any,
 ) -> None:
     """
     Log a BEAM output record and set it on the coupler.
@@ -333,6 +524,7 @@ def _log_and_set_beam_record(
         path=output_path,
         description=description,
         coupler=coupler,
+        **meta,
     )
 
 
@@ -396,13 +588,31 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
-    h5_container = bool(meta.pop("h5_container", False))
+    def _h5_table_filter_from_list(tables_used):
+        normalized = {
+            name if name.startswith("/") else f"/{name}"
+            for name in tables_used
+            if name
+        }
+
+        def _filter(table_name: str) -> bool:
+            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+                return False
+            return table_name in normalized
+
+        return _filter
+
+    tables_used = meta.pop("h5_tables_used", None)
+    h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
         return cr.log_h5_container(
             path,
             key=key,
             direction=direction,
             description=description,
+            table_filter=_h5_table_filter_from_list(tables_used)
+            if tables_used
+            else None,
             **meta,
         )
     if direction == "output":
@@ -439,6 +649,7 @@ def log_and_set_output(
         description=description,
         meta=meta,
     )
+    _enqueue_archive_copy(key, path)
     if cr.current_run() is None:
         set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
@@ -469,6 +680,7 @@ def log_output_only(
         description=description,
         meta=meta,
     )
+    _enqueue_archive_copy(key, path)
 
 
 def log_and_set_input(

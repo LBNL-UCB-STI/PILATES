@@ -49,7 +49,7 @@ class WorkflowStepSpec:
     input_keys: Optional[Sequence[str]] = None
     inputs: Optional[Dict[str, Any]] = None
     output_paths: Optional[Dict[str, Any]] = None
-    cache_hydration: str = "inputs-missing"
+    cache_hydration: str = "outputs-all"
     cache_mode: Optional[str] = None
     load_inputs: bool = False
 
@@ -437,6 +437,7 @@ def _recover_cached_outputs(
             return None
     elif step_name == "beam_preprocess":
         record_store = RecordStore()
+        has_warmstart = False
         if step_inputs:
             allowed_keys = {
                 BEAM_PLANS_IN,
@@ -449,6 +450,8 @@ def _recover_cached_outputs(
                     continue
                 path = artifact_to_path(value, workspace)
                 if path and os.path.exists(path):
+                    if key == LINKSTATS_WARMSTART:
+                        has_warmstart = True
                     record_store.add_record(
                         FileRecord(
                             file_path=str(path),
@@ -456,6 +459,39 @@ def _recover_cached_outputs(
                             description=f"Recovered BEAM preprocess input: {key}",
                         )
                     )
+        if step_inputs and not has_warmstart:
+            # If we have any linkstats-like input, recover a warmstart alias.
+            candidate_keys = []
+            if "linkstats" in step_inputs:
+                candidate_keys.append("linkstats")
+            candidate_keys.extend(
+                key
+                for key in sorted(step_inputs)
+                if key.startswith("linkstats_parquet") and "_sub" not in key
+            )
+            candidate_keys.extend(
+                key
+                for key in sorted(step_inputs)
+                if key.startswith("linkstats") and "_sub" not in key
+            )
+            candidate_keys.extend(
+                key for key in sorted(step_inputs) if key.startswith("linkstats")
+            )
+            for key in candidate_keys:
+                path = artifact_to_path(step_inputs.get(key), workspace)
+                if path and os.path.exists(path):
+                    record_store.add_record(
+                        FileRecord(
+                            file_path=str(path),
+                            short_name=LINKSTATS_WARMSTART,
+                            description=(
+                                "Recovered BEAM preprocess warmstart from cached "
+                                f"input {key}"
+                            ),
+                        )
+                    )
+                    has_warmstart = True
+                    break
         if not record_store.all_records():
             return None
     else:

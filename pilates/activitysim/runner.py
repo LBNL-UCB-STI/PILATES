@@ -104,9 +104,8 @@ class ActivitysimCompileRunner(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
-        output_directory = os.path.expandvars(settings.run.output_directory)
-        shared_cache_dir = os.path.join(output_directory, "shared_cache")
-        shared_tmp_dir = os.path.join(output_directory, "tmp")
+        shared_cache_dir = os.path.join(workspace.full_path, "shared_cache")
+        shared_tmp_dir = os.path.join(workspace.full_path, "tmp")
 
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
         os.makedirs(shared_tmp_dir, exist_ok=True)
@@ -382,16 +381,9 @@ class ActivitysimRunner(GenericRunner):
         # self.setup_container_cache_dirs(settings) # Handled by Consist
 
         # Get from your config
-        output_directory = (
-            settings.run.output_directory
-        )  # "/global/scratch/users/$USER/pilates-output"
-
-        # Expand $USER if needed
-        output_directory = os.path.expandvars(output_directory)
-
-        # Create shared cache and tmp at the base pilates-output level
-        shared_cache_dir = os.path.join(output_directory, "shared_cache")
-        shared_tmp_dir = os.path.join(output_directory, "tmp")
+        # Create shared cache and tmp inside the run workspace
+        shared_cache_dir = os.path.join(workspace.full_path, "shared_cache")
+        shared_tmp_dir = os.path.join(workspace.full_path, "tmp")
 
         # Create them
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)

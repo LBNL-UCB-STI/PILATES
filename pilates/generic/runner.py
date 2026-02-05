@@ -185,6 +185,25 @@ class GenericRunner(ABC, Model):
                     "A Consist tracker must be active for container execution. "
                     "Ensure the call occurs within a Consist scenario/run context."
                 )
+            strict_mounts = True
+            local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
+            archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
+            if output_paths and local_root and archive_root:
+                local_root = os.path.abspath(local_root)
+                archive_root = os.path.abspath(archive_root)
+                if local_root != archive_root:
+                    for path in output_paths:
+                        if not isinstance(path, str) or "://" in path:
+                            continue
+                        abs_path = os.path.abspath(path)
+                        try:
+                            in_local = os.path.commonpath([abs_path, local_root]) == local_root
+                            in_archive = os.path.commonpath([abs_path, archive_root]) == archive_root
+                        except ValueError:
+                            continue
+                        if in_local and not in_archive:
+                            strict_mounts = False
+                            break
             try:
                 from consist.integrations.containers import (
                     run_container as consist_run_container,
@@ -209,6 +228,7 @@ class GenericRunner(ABC, Model):
                         backend_type=backend_type,
                         pull_latest=pull_latest,
                         lineage_mode=lineage_mode,
+                        strict_mounts=strict_mounts,
                     )
                 except Exception as e:
                     logger.error(

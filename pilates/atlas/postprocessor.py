@@ -211,6 +211,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                     year=output_year,
                     description="UrbanSim HDF5 updated with ATLAS vehicle ownership",
                     short_name=USIM_H5_UPDATED,
+                    h5_tables_used=[table_name],
                 )
             )
 

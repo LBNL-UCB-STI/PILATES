@@ -58,6 +58,7 @@ class FileRecord:
         unique_id: Stable identifier (auto-generated if not provided)
         container_uri: Optional Consist container URI when available
         uri: Optional legacy Consist URI when available
+        h5_tables_used: Optional list of HDF5 table paths to log (exact matches)
     """
 
     file_path: str
@@ -71,6 +72,7 @@ class FileRecord:
     unique_id: Optional[str] = None
     container_uri: Optional[str] = None
     uri: Optional[str] = None
+    h5_tables_used: Optional[List[str]] = None
 
     def __post_init__(self):
         # Auto-generate unique_id if not provided

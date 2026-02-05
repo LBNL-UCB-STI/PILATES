@@ -371,21 +371,8 @@ class BeamPreprocessor(GenericPreprocessor):
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns(".git", ".git*"),
         )
-        input_records.append(
-            FileRecord(
-                file_path=beam_production_path,
-                short_name="beam_prod_source",
-                description="Beam Production Data Repo source",
-            )
-        )
-
-        output_records.append(
-            FileRecord(
-                file_path=dest_region,
-                short_name="beam_prod",
-                description="Beam Production Data Repo",
-            )
-        )
+        # Note: BEAM input directories are captured via the BEAM config adapter;
+        # we intentionally avoid tracking them as separate artifacts.
 
         # Optionally copy 'common' configs if present
         common_config_path = os.path.join(
@@ -399,20 +386,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns(".git", ".git*"),
             )
-            input_records.append(
-                FileRecord(
-                    file_path=common_config_path,
-                    short_name="beam_common_source",
-                    description="Beam Common Data Repo source",
-                )
-            )
-            output_records.append(
-                FileRecord(
-                    file_path=dest_common,
-                    short_name="beam_common",
-                    description="Beam Common Data Repo",
-                )
-            )
+            # Note: BEAM common directory is not tracked as a separate artifact.
 
         if hasattr(settings.beam, "skims_shapefile"):
             logger.info(

@@ -16,6 +16,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,19 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         input_records = []
         output_records = []
-        source_dir = get_setting(settings, "atlas.host_input_folder", "pilates/atlas/atlas_input")
+        source_dir = get_setting(
+            settings, "atlas.host_input_folder", "pilates/atlas/atlas_input"
+        )
+        if not os.path.isabs(source_dir):
+            project_root = find_project_root(start_path=os.path.dirname(__file__))
+            if not project_root:
+                project_root = os.path.realpath(os.getcwd())
+                logger.warning(
+                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                    "falling back to cwd='%s'.",
+                    project_root,
+                )
+            source_dir = os.path.join(project_root, source_dir)
         scenario = get_setting(settings, "atlas.scenario")
         adscen = get_setting(settings, "atlas.adscen")
         scenario_key = str(scenario).lower() if scenario else None
@@ -163,11 +176,15 @@ class AtlasPreprocessor(GenericPreprocessor):
                 rel_key = rel_no_ext.replace(os.sep, "/")
                 short_name = sanitize_artifact_key(rel_key) or rel_key
 
+                input_meta = {}
+                if filename.lower().endswith(".csv"):
+                    input_meta["profile_file_schema"] = True
                 input_records.append(
                     FileRecord(
                         file_path=source_path,
                         description=f"ATLAS input file: {filename}",
                         short_name=short_name,
+                        metadata=input_meta,
                     )
                 )
                 output_records.append(
@@ -296,10 +313,27 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.info(
                 f"[AtlasPreprocessor] Recording UrbanSim HDF5 container as input: {urbansim_output}"
             )
+            tables_used = []
+            for year in (self.state.year, self.state.year - 1):
+                if year < self.state.start_year:
+                    continue
+                year_prefix = "" if year == self.state.start_year else f"/{year}"
+                tables_used.extend(
+                    [
+                        f"{year_prefix}/households",
+                        f"{year_prefix}/blocks",
+                        f"{year_prefix}/persons",
+                        f"{year_prefix}/residential_units",
+                        f"{year_prefix}/jobs",
+                    ]
+                )
+                if year != self.state.start_year:
+                    tables_used.append(f"{year_prefix}/graveyard")
             h5_file_record = FileRecord(
                 file_path=urbansim_output,
                 description="UrbanSim output HDF5 container for Atlas input preparation",
                 short_name="usim_h5_container",
+                h5_tables_used=tables_used or None,
             )
             input_records.append(h5_file_record)
         else:

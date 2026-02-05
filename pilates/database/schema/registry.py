@@ -11,6 +11,15 @@ from pilates.database.schema.activitysim_schema import (
     PersonsAsimIn,
     PersonsAsimOut,
 )
+from pilates.database.schema.atlas_schema import (
+    AtlasBlocks,
+    AtlasGrave,
+    AtlasHousehold,
+    AtlasJobs,
+    AtlasPersons,
+    AtlasResidential,
+    VehiclesAtlasOut,
+)
 from pilates.database.schema.beam_schema import BeamNetworkFinal, PlansBeamIn
 
 # Central mapping of artifact keys to curated schema classes.
@@ -23,6 +32,14 @@ _SCHEMA_BY_KEY: Dict[str, Type[SQLModel]] = {
     "persons_beam_in": PersonsAsimOut,
     "plans_beam_in": PlansBeamIn,
     "beam_network_final": BeamNetworkFinal,
+    "atlas_blocks_csv": AtlasBlocks,
+    "atlas_grave_csv": AtlasGrave,
+    "atlas_households_csv": AtlasHousehold,
+    "atlas_jobs_csv": AtlasJobs,
+    "atlas_persons_csv": AtlasPersons,
+    "atlas_residential_csv": AtlasResidential,
+    "atlas_vehicles2_input": VehiclesAtlasOut,
+    "atlas_vehicles2_output": VehiclesAtlasOut,
 }
 
 
