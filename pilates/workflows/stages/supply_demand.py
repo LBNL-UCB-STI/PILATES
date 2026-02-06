@@ -130,6 +130,66 @@ class TrafficAssignmentPhaseOutputs:
     previous_beam_outputs: Optional[RecordStore]
 
 
+def _run_supply_demand_manifested_steps(
+    *,
+    stage_name: str,
+    steps: list[StepRef],
+    outputs_holder: StepOutputsHolder,
+    manifest_config: ManifestConfig,
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    year: int,
+    iteration: int,
+) -> None:
+    """Run manifest-backed steps with shared supply-demand stage context."""
+    run_manifested_steps(
+        stage_name=stage_name,
+        steps=steps,
+        outputs_holder=outputs_holder,
+        manifest_config=manifest_config,
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=f"{year}_iter{iteration}",
+        iteration=iteration,
+    )
+
+
+def _run_supply_demand_workflow(
+    *,
+    stage_name: str,
+    steps: list[StepRef],
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+    runtime_kwargs_extra: Optional[dict[str, Any]] = None,
+) -> None:
+    """Run workflow steps with shared supply-demand stage context."""
+    run_workflow(
+        stage_name=stage_name,
+        steps=steps,
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix=f"{year}_iter{iteration}",
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
+
+
 def _find_initial_linkstats_warmstart(
     settings: PilatesConfig, workspace: Workspace
 ) -> Optional[str]:
@@ -293,7 +353,7 @@ def _run_activity_demand_phase(
             inputs=preprocess_inputs,
         )
     ]
-    run_manifested_steps(
+    _run_supply_demand_manifested_steps(
         stage_name="activity_demand_preprocess",
         steps=preprocess_specs,
         outputs_holder=outputs_holder,
@@ -303,7 +363,7 @@ def _run_activity_demand_phase(
         settings=settings,
         workspace=workspace,
         coupler=coupler,
-        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        year=inputs.year,
         iteration=inputs.iteration,
     )
 
@@ -426,7 +486,7 @@ def _run_activity_demand_phase(
             input_keys=asim_run_input_keys or None,
         ),
     ]
-    run_manifested_steps(
+    _run_supply_demand_manifested_steps(
         stage_name="activity_demand_run",
         steps=activitysim_run_specs,
         outputs_holder=outputs_holder,
@@ -436,7 +496,7 @@ def _run_activity_demand_phase(
         settings=settings,
         workspace=workspace,
         coupler=coupler,
-        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        year=inputs.year,
         iteration=inputs.iteration,
     )
 
@@ -460,7 +520,7 @@ def _run_activity_demand_phase(
             inputs=activitysim_postprocess_inputs or None,
         )
     ]
-    run_manifested_steps(
+    _run_supply_demand_manifested_steps(
         stage_name="activity_demand_postprocess",
         steps=activitysim_postprocess_specs,
         outputs_holder=outputs_holder,
@@ -470,7 +530,7 @@ def _run_activity_demand_phase(
         settings=settings,
         workspace=workspace,
         coupler=coupler,
-        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        year=inputs.year,
         iteration=inputs.iteration,
     )
 
@@ -502,6 +562,262 @@ def _find_input_scenario_dir(
         settings.beam.scenario_folder,
     )
     return locate_beam_file(scenario_dir, filename, filetype)
+
+
+def _collect_previous_beam_outputs(
+    *,
+    coupler: CouplerProtocol,
+    workspace: Workspace,
+    state: WorkflowState,
+    iteration: int,
+    previous_beam_outputs: Optional[RecordStore],
+) -> Optional[RecordStore]:
+    """
+    Resolve previous BEAM outputs for warm-starting.
+
+    When explicit previous outputs are unavailable, this attempts to hydrate
+    a minimal promoted store from coupler keys written by BEAM postprocess.
+    """
+    if previous_beam_outputs is not None:
+        return previous_beam_outputs
+
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None
+
+    promoted_store = RecordStore()
+    for key in (LINKSTATS, BEAM_PLANS_OUT):
+        value = get_value(key)
+        if value is None:
+            continue
+        path = artifact_to_path(value, workspace)
+        if path and os.path.exists(path):
+            promoted_store.add_record(
+                FileRecord(
+                    file_path=path,
+                    short_name=key,
+                    description=f"Promoted BEAM output: {key}",
+                    year=state.forecast_year,
+                    iteration=iteration,
+                )
+            )
+    return promoted_store if promoted_store.all_records() else None
+
+
+def _collect_beam_preprocess_inputs(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    state: WorkflowState,
+    iteration: int,
+    activity_demand_outputs: Optional[RecordStore],
+    previous_beam_outputs: Optional[RecordStore],
+) -> Dict[str, Any]:
+    """
+    Build preprocess inputs for BEAM from available upstream sources.
+
+    Source precedence:
+    1) ActivitySim outputs (when enabled and available)
+    2) Default BEAM scenario files (when ActivitySim is disabled)
+    3) Prior BEAM outputs and warm-start linkstats
+    4) ATLAS vehicles2 (iteration 0 only, when vehicle ownership is enabled)
+    """
+    beam_preprocess_inputs: Dict[str, Any] = {}
+
+    if activity_demand_outputs is not None:
+        asim_input_keys = {
+            "beam_plans_asim_out",
+            "beam_plans_out",
+            "households_asim_out",
+            "linkstats",
+            "persons_asim_out",
+        }
+        for key, value in activity_demand_outputs.to_mapping().items():
+            if key in asim_input_keys:
+                beam_preprocess_inputs[key] = value
+    elif settings.run.models.activity_demand is None:
+        logger.info("Falling back on default inputs to BEAM")
+        default_inputs = {
+            BEAM_PLANS_IN: "plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+        }
+        for key, filename in default_inputs.items():
+            beam_preprocess_inputs[key] = _find_input_scenario_dir(
+                settings,
+                workspace,
+                filename,
+            )
+    elif previous_beam_outputs is None:
+        raise RuntimeError(
+            "TrafficAssignment iteration 0 requires activity_demand_outputs "
+            "or previous_beam_outputs. Ensure ActivityDemand completed or "
+            "provide warm-start outputs before running BEAM."
+        )
+
+    if previous_beam_outputs is not None:
+        for key, value in previous_beam_outputs.to_mapping().items():
+            if key.startswith("linkstats"):
+                beam_preprocess_inputs[key] = value
+
+    if previous_beam_outputs is None or not any(
+        key.startswith("linkstats")
+        for key in previous_beam_outputs.to_mapping().keys()
+    ):
+        warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
+        if warmstart_path:
+            beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
+
+    if (
+        getattr(settings, "vehicle_ownership_model_enabled", False)
+        and iteration == 0
+    ):
+        if state.run_info_path and os.path.exists(state.run_info_path):
+            previous_run_dir = os.path.dirname(state.run_info_path)
+            atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
+        else:
+            atlas_output_dir = workspace.get_atlas_output_dir()
+        atlas_vehicle_path = os.path.join(
+            atlas_output_dir,
+            f"vehicles2_{state.forecast_year}.csv",
+        )
+        if not os.path.exists(atlas_vehicle_path):
+            atlas_vehicle_path = os.path.join(
+                atlas_output_dir,
+                f"vehicles2_{state.forecast_year - 1}.csv",
+            )
+        if os.path.exists(atlas_vehicle_path):
+            beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_INPUT, atlas_vehicle_path)
+
+    return beam_preprocess_inputs
+
+
+def _derive_beam_run_input_keys(
+    *,
+    beam_preprocess_inputs: Mapping[str, Any],
+    activity_demand_outputs: Optional[RecordStore],
+) -> Optional[list[str]]:
+    """
+    Derive BEAM run input keys from preprocess outputs and warm-start signals.
+    """
+    if activity_demand_outputs is None:
+        return None
+
+    run_input_keys = [
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+    ]
+
+    # Only require LINKSTATS_WARMSTART at BEAM run time when that explicit key
+    # is provided to preprocess. Other linkstats* artifacts may exist for
+    # bookkeeping/history but do not guarantee a warm-start input artifact.
+    if LINKSTATS_WARMSTART in beam_preprocess_inputs:
+        run_input_keys.append(LINKSTATS_WARMSTART)
+    else:
+        logger.debug(
+            "[BEAM] linkstats warmstart not available; omitting %s from inputs",
+            LINKSTATS_WARMSTART,
+        )
+    return run_input_keys
+
+
+def _run_beam_steps(
+    *,
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+    beam_preprocess_inputs: Mapping[str, Any],
+    beam_run_input_keys: Optional[list[str]],
+    include_zarr_skims: bool,
+    runtime_kwargs_extra: Mapping[str, Any],
+) -> Optional[RecordStore]:
+    """
+    Execute BEAM preprocess/run/postprocess and return combined outputs.
+    """
+    beam_pre_run_steps = [
+        StepRef(
+            name="beam_preprocess",
+            step_func=make_beam_preprocess_step(
+                coupler=coupler,
+                outputs_holder=outputs_holder,
+            ),
+            input_keys=None,
+            inputs=dict(beam_preprocess_inputs) or None,
+        ),
+        StepRef(
+            name="beam_run",
+            step_func=make_beam_run_step(
+                coupler=coupler,
+                outputs_holder=outputs_holder,
+            ),
+            input_keys=beam_run_input_keys,
+        ),
+    ]
+
+    _run_supply_demand_workflow(
+        stage_name="beam",
+        steps=beam_pre_run_steps,
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+        runtime_kwargs_extra=dict(runtime_kwargs_extra),
+    )
+
+    upstream_run = outputs_holder.beam_run
+    if upstream_run is None:
+        raise RuntimeError("BEAM run must complete first")
+    beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
+        upstream_keys=[
+            short_name for short_name, _, _ in upstream_run._iter_record_items()
+        ],
+        year=state.forecast_year,
+        iteration=iteration,
+        include_zarr_skims=include_zarr_skims,
+    )
+
+    _run_supply_demand_workflow(
+        stage_name="beam",
+        steps=[
+            StepRef(
+                name="beam_postprocess",
+                step_func=make_beam_postprocess_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                input_keys=beam_postprocess_input_keys,
+            )
+        ],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+        runtime_kwargs_extra=dict(runtime_kwargs_extra),
+    )
+
+    if outputs_holder.beam_run is None and outputs_holder.beam_postprocess is None:
+        return None
+
+    combined_beam_outputs = RecordStore()
+    if outputs_holder.beam_run is not None:
+        combined_beam_outputs += outputs_holder.beam_run.to_record_store()
+    if outputs_holder.beam_postprocess is not None:
+        combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
+    return combined_beam_outputs
 
 
 def _run_traffic_assignment_phase(
@@ -545,198 +861,44 @@ def _run_traffic_assignment_phase(
     """
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
 
-    beam_preprocess_inputs: Dict[str, Any] = {}
-    if inputs.activity_demand_outputs is not None:
-        asim_input_keys = {
-            "beam_plans_asim_out",
-            "beam_plans_out",
-            "households_asim_out",
-            "linkstats",
-            "persons_asim_out",
-        }
-        for key, value in inputs.activity_demand_outputs.to_mapping().items():
-            if key in asim_input_keys:
-                beam_preprocess_inputs[key] = value
-    elif settings.run.models.activity_demand is None:
-        logger.info("Falling back on default inputs to BEAM")
-        default_inputs = {
-            BEAM_PLANS_IN: "plans",
-            BEAM_HOUSEHOLDS_IN: "households",
-            BEAM_PERSONS_IN: "persons",
-        }
-        for key, filename in default_inputs.items():
-            beam_preprocess_inputs[key] = _find_input_scenario_dir(
-                settings,
-                workspace,
-                filename,
-            )
-    elif inputs.previous_beam_outputs is None:
-        raise RuntimeError(
-            "TrafficAssignment iteration 0 requires activity_demand_outputs "
-            "or previous_beam_outputs. Ensure ActivityDemand completed or "
-            "provide warm-start outputs before running BEAM."
-        )
-    previous_beam_outputs = inputs.previous_beam_outputs
-    if previous_beam_outputs is None:
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            promoted_store = RecordStore()
-            for key in (LINKSTATS, BEAM_PLANS_OUT):
-                value = get_value(key)
-                if value is None:
-                    continue
-                path = artifact_to_path(value, workspace)
-                if path and os.path.exists(path):
-                    promoted_store.add_record(
-                        FileRecord(
-                            file_path=path,
-                            short_name=key,
-                            description=f"Promoted BEAM output: {key}",
-                            year=state.forecast_year,
-                            iteration=inputs.iteration,
-                        )
-                    )
-            if promoted_store.all_records():
-                previous_beam_outputs = promoted_store
+    previous_beam_outputs = _collect_previous_beam_outputs(
+        coupler=coupler,
+        workspace=workspace,
+        state=state,
+        iteration=inputs.iteration,
+        previous_beam_outputs=inputs.previous_beam_outputs,
+    )
+    beam_preprocess_inputs = _collect_beam_preprocess_inputs(
+        settings=settings,
+        workspace=workspace,
+        state=state,
+        iteration=inputs.iteration,
+        activity_demand_outputs=inputs.activity_demand_outputs,
+        previous_beam_outputs=previous_beam_outputs,
+    )
+    beam_run_input_keys = _derive_beam_run_input_keys(
+        beam_preprocess_inputs=beam_preprocess_inputs,
+        activity_demand_outputs=inputs.activity_demand_outputs,
+    )
 
-    if previous_beam_outputs is not None:
-        for key, value in previous_beam_outputs.to_mapping().items():
-            if key.startswith("linkstats"):
-                beam_preprocess_inputs[key] = value
-    if previous_beam_outputs is None or not any(
-        key.startswith("linkstats") for key in previous_beam_outputs.to_mapping().keys()
-    ):
-        warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
-        if warmstart_path:
-            beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
-    if (
-        getattr(settings, "vehicle_ownership_model_enabled", False)
-        and inputs.iteration == 0
-    ):
-        if state.run_info_path and os.path.exists(state.run_info_path):
-            previous_run_dir = os.path.dirname(state.run_info_path)
-            atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
-        else:
-            atlas_output_dir = workspace.get_atlas_output_dir()
-        atlas_vehicle_path = os.path.join(
-            atlas_output_dir,
-            f"vehicles2_{state.forecast_year}.csv",
-        )
-        if not os.path.exists(atlas_vehicle_path):
-            atlas_vehicle_path = os.path.join(
-                atlas_output_dir,
-                f"vehicles2_{state.forecast_year - 1}.csv",
-            )
-        if os.path.exists(atlas_vehicle_path):
-            beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_INPUT, atlas_vehicle_path)
-
-    zarr_input_keys = None
-    beam_prepared_input_keys = None
-    # Only require LINKSTATS_WARMSTART at BEAM run time when that explicit key
-    # is provided to preprocess. Other linkstats* artifacts may exist for
-    # bookkeeping/history but do not guarantee a warm-start input artifact.
-    has_linkstats_warmstart = LINKSTATS_WARMSTART in (beam_preprocess_inputs or {})
-    if inputs.activity_demand_outputs is not None:
-        zarr_input_keys = [ZARR_SKIMS]
-        beam_prepared_input_keys = [
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        ]
-        if has_linkstats_warmstart:
-            beam_prepared_input_keys.append(LINKSTATS_WARMSTART)
-        else:
-            logger.debug(
-                "[BEAM] linkstats warmstart not available; omitting %s from inputs",
-                LINKSTATS_WARMSTART,
-            )
-
-    beam_run_input_keys = []
-    if beam_prepared_input_keys:
-        beam_run_input_keys.extend(beam_prepared_input_keys)
-    if not beam_run_input_keys:
-        beam_run_input_keys = None
-
-    beam_pre_run_steps = [
-        StepRef(
-            name="beam_preprocess",
-            step_func=make_beam_preprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            input_keys=None,
-            inputs=beam_preprocess_inputs or None,
-        ),
-        StepRef(
-            name="beam_run",
-            step_func=make_beam_run_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            input_keys=beam_run_input_keys,
-        ),
-    ]
-
-    run_workflow(
-        stage_name="beam",
-        steps=beam_pre_run_steps,
+    traffic_runtime_kwargs = {
+        "activity_demand_outputs": inputs.activity_demand_outputs,
+        "previous_beam_outputs": previous_beam_outputs,
+    }
+    combined_beam_outputs = _run_beam_steps(
         scenario=scenario,
         state=state,
         settings=settings,
         workspace=workspace,
         coupler=coupler,
         outputs_holder=outputs_holder,
-        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        year=inputs.year,
         iteration=inputs.iteration,
-        runtime_kwargs_extra={
-            "activity_demand_outputs": inputs.activity_demand_outputs,
-            "previous_beam_outputs": previous_beam_outputs,
-        },
+        beam_preprocess_inputs=beam_preprocess_inputs,
+        beam_run_input_keys=beam_run_input_keys,
+        include_zarr_skims=bool(inputs.activity_demand_outputs),
+        runtime_kwargs_extra=traffic_runtime_kwargs,
     )
-
-    upstream_run = outputs_holder.beam_run
-    if upstream_run is None:
-        raise RuntimeError("BEAM run must complete first")
-    beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
-        upstream_keys=[short_name for short_name, _, _ in upstream_run._iter_record_items()],
-        year=state.forecast_year,
-        iteration=inputs.iteration,
-        include_zarr_skims=bool(zarr_input_keys),
-    )
-
-    run_workflow(
-        stage_name="beam",
-        steps=[
-            StepRef(
-                name="beam_postprocess",
-                step_func=make_beam_postprocess_step(
-                    coupler=coupler,
-                    outputs_holder=outputs_holder,
-                ),
-                input_keys=beam_postprocess_input_keys,
-            )
-        ],
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
-        iteration=inputs.iteration,
-        runtime_kwargs_extra={
-            "activity_demand_outputs": inputs.activity_demand_outputs,
-            "previous_beam_outputs": previous_beam_outputs,
-        },
-    )
-
-    combined_beam_outputs = None
-    if outputs_holder.beam_run is not None or outputs_holder.beam_postprocess is not None:
-        combined_beam_outputs = RecordStore()
-        if outputs_holder.beam_run is not None:
-            combined_beam_outputs += outputs_holder.beam_run.to_record_store()
-        if outputs_holder.beam_postprocess is not None:
-            combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
 
     state.complete_step(
         state.Stage.supply_demand_loop,

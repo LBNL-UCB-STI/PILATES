@@ -302,6 +302,186 @@ def _warn_missing_coupler_inputs(
             sorted(set(missing)),
         )
 
+
+def _log_step_records(
+    *,
+    record_items: Any,
+    log_fn: Callable[..., Any],
+    profile_schema_keys: Optional[set[str]] = None,
+    profile_schema_suffixes: tuple[str, ...] = (),
+    profile_schema_value: Any = True,
+    extra_meta_fn: Optional[Callable[[str, str, str], Dict[str, Any]]] = None,
+) -> None:
+    """
+    Log `(key, path, description)` record triples with optional schema profiling.
+
+    Parameters
+    ----------
+    record_items : iterable
+        Iterable yielding `(short_name, path, description)`.
+    log_fn : callable
+        Logging function accepting `key`, `path`, `description`, and `**meta`.
+    profile_schema_keys : set[str], optional
+        Keys for which `profile_file_schema` should be included.
+    profile_schema_suffixes : tuple[str, ...], optional
+        Path suffixes that should trigger `profile_file_schema`.
+    profile_schema_value : Any, optional
+        Value assigned to `profile_file_schema` when triggered.
+    extra_meta_fn : callable, optional
+        Callback returning additional metadata per record.
+    """
+    profile_schema_keys = profile_schema_keys or set()
+    for short_name, path, description in record_items:
+        path_str = str(path)
+        meta: Dict[str, Any] = {}
+        if (
+            short_name in profile_schema_keys
+            or (
+                profile_schema_suffixes
+                and path_str.endswith(profile_schema_suffixes)
+            )
+        ):
+            meta["profile_file_schema"] = profile_schema_value
+        if extra_meta_fn is not None:
+            extra_meta = extra_meta_fn(short_name, path_str, description)
+            if extra_meta:
+                meta.update(extra_meta)
+        log_fn(
+            key=short_name,
+            path=path_str,
+            description=description,
+            **meta,
+        )
+
+
+def _log_beam_r5_osm_input(
+    *,
+    tracker: Any,
+    settings: "PilatesConfig",
+    workspace: "Workspace",
+) -> None:
+    """Log the BEAM R5 OSM/mapdb file referenced by ingested BEAM config."""
+    from pathlib import Path
+
+    config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+
+    try:
+        from sqlmodel import Session, select
+        from consist.models.beam import BeamConfigCache, BeamConfigIngestRunLink
+    except Exception:
+        logger.debug("SQLModel/Consist beam models unavailable; skipping OSM logging.")
+        return
+
+    current_run = cr.current_run()
+    run_id = getattr(current_run, "id", None) if current_run else None
+    if not run_id or tracker.db is None:
+        return
+
+    try:
+        with Session(tracker.db.engine) as session:
+            base_stmt = (
+                select(
+                    BeamConfigCache.value_str,
+                    BeamConfigCache.content_hash,
+                )
+                .join(
+                    BeamConfigIngestRunLink,
+                    BeamConfigCache.content_hash
+                    == BeamConfigIngestRunLink.content_hash,
+                )
+                .where(BeamConfigIngestRunLink.run_id == run_id)
+            )
+            config_name = settings.beam.config
+            if config_name:
+                base_stmt = base_stmt.where(
+                    BeamConfigIngestRunLink.config_name == config_name
+                )
+            osm_rows = session.exec(
+                base_stmt.where(
+                    BeamConfigCache.key == "beam.routing.r5.osmFile"
+                )
+            ).all()
+            if len(osm_rows) > 1:
+                logger.warning(
+                    "Multiple BEAM osmFile rows found for run_id=%s config=%s",
+                    run_id,
+                    config_name,
+                )
+            osm_value = osm_rows[0][0] if osm_rows else None
+            osm_hash = osm_rows[0][1] if osm_rows else None
+            logger.debug(
+                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s, hash=%s)",
+                osm_value,
+                run_id,
+                tracker.db.engine.url,
+                config_name,
+                osm_hash,
+            )
+            if osm_value == "/":
+                all_osm_rows = session.exec(
+                    select(
+                        BeamConfigIngestRunLink.config_name,
+                        BeamConfigCache.value_str,
+                        BeamConfigCache.content_hash,
+                    )
+                    .join(
+                        BeamConfigCache,
+                        BeamConfigCache.content_hash
+                        == BeamConfigIngestRunLink.content_hash,
+                    )
+                    .where(BeamConfigIngestRunLink.run_id == run_id)
+                    .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
+                ).all()
+                logger.warning(
+                    "BEAM osmFile resolved to '/' for run_id=%s; rows=%s",
+                    run_id,
+                    all_osm_rows,
+                )
+            resolved_osm_path = None
+            if osm_value and "${" not in osm_value:
+                resolved_osm_path = osm_value
+                if not os.path.isabs(resolved_osm_path):
+                    resolved_osm_path = str(
+                        (config_root / resolved_osm_path).resolve()
+                    )
+                if not os.path.exists(resolved_osm_path):
+                    resolved_osm_path = None
+
+            if resolved_osm_path is None:
+                mapdb_row = session.exec(
+                    base_stmt.where(
+                        BeamConfigCache.key
+                        == "beam.routing.r5.osmMapdbFile"
+                    )
+                ).first()
+                mapdb_value = mapdb_row[0] if mapdb_row else None
+                logger.debug(
+                    "BEAM config osmMapdbFile resolved value: %s",
+                    mapdb_value,
+                )
+                if mapdb_value and "${" not in mapdb_value:
+                    resolved_osm_path = mapdb_value
+                    if not os.path.isabs(resolved_osm_path):
+                        resolved_osm_path = str(
+                            (config_root / resolved_osm_path).resolve()
+                        )
+                    if not os.path.exists(resolved_osm_path):
+                        resolved_osm_path = None
+
+            if resolved_osm_path:
+                cr.log_input(
+                    resolved_osm_path,
+                    key=BEAM_R5_OSM_FILE,
+                    description=(
+                        "BEAM R5 OSM input referenced by config"
+                    ),
+                )
+    except Exception:
+        logger.debug(
+            "Failed to resolve/log BEAM R5 OSM file from config.",
+            exc_info=True,
+        )
+
 StepOutputsT = TypeVar("StepOutputsT")
 InputLogger = Callable[
     ["PilatesConfig", WorkflowState, "Workspace", "StepOutputsHolder"],
@@ -1283,16 +1463,11 @@ def make_atlas_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if str(path).endswith((".csv", ".parquet")):
-                meta["profile_file_schema"] = True
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=log_output_only,
+            profile_schema_suffixes=(".csv", ".parquet"),
+        )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1343,16 +1518,11 @@ def make_atlas_run_step(
         upstream = holder.atlas_preprocess
         if upstream is None:
             raise RuntimeError("ATLAS preprocess must complete first")
-        for short_name, path, description in upstream._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if str(path).endswith((".csv", ".parquet")):
-                meta["profile_file_schema"] = True
-            log_input_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+        _log_step_records(
+            record_items=upstream._iter_record_items(),
+            log_fn=log_input_only,
+            profile_schema_suffixes=(".csv", ".parquet"),
+        )
         return {}
 
     def _log_outputs(
@@ -1362,16 +1532,11 @@ def make_atlas_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if str(path).endswith((".csv", ".parquet")):
-                meta["profile_file_schema"] = True
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=log_output_only,
+            profile_schema_suffixes=(".csv", ".parquet"),
+        )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1422,16 +1587,11 @@ def make_atlas_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if str(path).endswith((".csv", ".parquet")):
-                meta["profile_file_schema"] = True
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=log_output_only,
+            profile_schema_suffixes=(".csv", ".parquet"),
+        )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -1702,18 +1862,17 @@ def make_activitysim_preprocess_step(
         holder : StepOutputsHolder
             Outputs holder (unused for this helper).
         """
-        profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
-        for short_name, path, description in outputs._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if short_name in profile_keys:
-                meta["profile_file_schema"] = True
-            log_and_set_output(
-                key=short_name,
-                path=str(path),
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=lambda key, path, description, **meta: log_and_set_output(
+                key=key,
+                path=path,
                 description=description,
                 coupler=coupler,
                 **meta,
-            )
+            ),
+            profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
+        )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -1881,26 +2040,25 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        profile_keys = {
-            "persons_asim_out",
-            "trips_asim_out",
-            "tours_asim_out",
-            "beam_plans_asim_out",
-            "households_asim_out",
-        }
-        for short_name, path, description in outputs._iter_record_items():
+        def _extra_meta(short_name: str, _path: str, _description: str) -> Dict[str, Any]:
             meta: Dict[str, Any] = {}
             content_hash = outputs.processed_output_hashes.get(short_name)
             if content_hash:
                 meta["content_hash"] = content_hash
-            if short_name in profile_keys:
-                meta["profile_file_schema"] = True
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+            return meta
+
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=log_output_only,
+            profile_schema_keys={
+                "persons_asim_out",
+                "trips_asim_out",
+                "tours_asim_out",
+                "beam_plans_asim_out",
+                "households_asim_out",
+            },
+            extra_meta_fn=_extra_meta,
+        )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -1986,25 +2144,28 @@ def make_beam_preprocess_step(
         holder : StepOutputsHolder
             Outputs holder (unused for this helper).
         """
-        profile_schema_keys = {
-            "households_beam_in",
-            "persons_beam_in",
-            "plans_beam_in",
-        }
-
-        for key, path in outputs.prepared_inputs.items():
-            meta: Dict[str, Any] = {}
-            if key in profile_schema_keys:
-                meta["profile_file_schema"] = True
-            log_and_set_output(
+        _log_step_records(
+            record_items=(
+                (
+                    key,
+                    path,
+                    f"BEAM prepared input {key} for year {state.year}, iter {state.iteration}",
+                )
+                for key, path in outputs.prepared_inputs.items()
+            ),
+            log_fn=lambda key, path, description, **meta: log_and_set_output(
                 key=key,
-                path=str(path),
-                description=(
-                    f"BEAM prepared input {key} for year {state.year}, iter {state.iteration}"
-                ),
+                path=path,
+                description=description,
                 coupler=coupler,
                 **meta,
-            )
+            ),
+            profile_schema_keys={
+                "households_beam_in",
+                "persons_beam_in",
+                "plans_beam_in",
+            },
+        )
 
     return _make_generic_step_function(
         coupler=coupler,
@@ -2059,126 +2220,11 @@ def make_beam_run_step(
 
         tracker = cr.current_tracker()
         if tracker is not None:
-            from pathlib import Path
-
-            config_root = (
-                Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+            _log_beam_r5_osm_input(
+                tracker=tracker,
+                settings=settings,
+                workspace=workspace,
             )
-
-            # Log the BEAM R5 OSM file referenced in the resolved config if available.
-            try:
-                from sqlmodel import Session, select
-                from consist.models.beam import BeamConfigCache, BeamConfigIngestRunLink
-            except Exception:
-                logger.debug("SQLModel/Consist beam models unavailable; skipping OSM logging.")
-            else:
-                current_run = cr.current_run()
-                run_id = getattr(current_run, "id", None) if current_run else None
-                if run_id and tracker.db is not None:
-                    try:
-                        with Session(tracker.db.engine) as session:
-                            base_stmt = (
-                                select(
-                                    BeamConfigCache.value_str,
-                                    BeamConfigCache.content_hash,
-                                )
-                                .join(
-                                    BeamConfigIngestRunLink,
-                                    BeamConfigCache.content_hash
-                                    == BeamConfigIngestRunLink.content_hash,
-                                )
-                                .where(BeamConfigIngestRunLink.run_id == run_id)
-                            )
-                            config_name = settings.beam.config
-                            if config_name:
-                                base_stmt = base_stmt.where(
-                                    BeamConfigIngestRunLink.config_name == config_name
-                                )
-                            osm_rows = session.exec(
-                                base_stmt.where(
-                                    BeamConfigCache.key == "beam.routing.r5.osmFile"
-                                )
-                            ).all()
-                            if len(osm_rows) > 1:
-                                logger.warning(
-                                    "Multiple BEAM osmFile rows found for run_id=%s config=%s",
-                                    run_id,
-                                    config_name,
-                                )
-                            osm_value = osm_rows[0][0] if osm_rows else None
-                            osm_hash = osm_rows[0][1] if osm_rows else None
-                            logger.debug(
-                                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s, hash=%s)",
-                                osm_value,
-                                run_id,
-                                tracker.db.engine.url,
-                                config_name,
-                                osm_hash,
-                            )
-                            if osm_value == "/":
-                                all_osm_rows = session.exec(
-                                    select(
-                                        BeamConfigIngestRunLink.config_name,
-                                        BeamConfigCache.value_str,
-                                        BeamConfigCache.content_hash,
-                                    )
-                                    .join(
-                                        BeamConfigCache,
-                                        BeamConfigCache.content_hash
-                                        == BeamConfigIngestRunLink.content_hash,
-                                    )
-                                    .where(BeamConfigIngestRunLink.run_id == run_id)
-                                    .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
-                                ).all()
-                                logger.warning(
-                                    "BEAM osmFile resolved to '/' for run_id=%s; rows=%s",
-                                    run_id,
-                                    all_osm_rows,
-                                )
-                            resolved_osm_path = None
-                            if osm_value and "${" not in osm_value:
-                                resolved_osm_path = osm_value
-                                if not os.path.isabs(resolved_osm_path):
-                                    resolved_osm_path = str(
-                                        (config_root / resolved_osm_path).resolve()
-                                    )
-                                if not os.path.exists(resolved_osm_path):
-                                    resolved_osm_path = None
-
-                            if resolved_osm_path is None:
-                                mapdb_row = session.exec(
-                                    base_stmt.where(
-                                        BeamConfigCache.key
-                                        == "beam.routing.r5.osmMapdbFile"
-                                    )
-                                ).first()
-                                mapdb_value = mapdb_row[0] if mapdb_row else None
-                                logger.debug(
-                                    "BEAM config osmMapdbFile resolved value: %s",
-                                    mapdb_value,
-                                )
-                                if mapdb_value and "${" not in mapdb_value:
-                                    resolved_osm_path = mapdb_value
-                                    if not os.path.isabs(resolved_osm_path):
-                                        resolved_osm_path = str(
-                                            (config_root / resolved_osm_path).resolve()
-                                        )
-                                    if not os.path.exists(resolved_osm_path):
-                                        resolved_osm_path = None
-
-                            if resolved_osm_path:
-                                cr.log_input(
-                                    resolved_osm_path,
-                                    key=BEAM_R5_OSM_FILE,
-                                    description=(
-                                        "BEAM R5 OSM input referenced by config"
-                                    ),
-                                )
-                    except Exception:
-                        logger.debug(
-                            "Failed to resolve/log BEAM R5 OSM file from config.",
-                            exc_info=True,
-                        )
         for short_name, path, description in upstream._iter_record_items():
             log_and_set_input(
                 key=short_name,
@@ -2228,24 +2274,31 @@ def make_beam_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            meta: Dict[str, Any] = {}
-            if short_name.startswith("beam_network_final"):
-                meta["profile_file_schema"] = "if_changed"
-                meta["reuse_if_unchanged"] = True
-                meta["reuse_scope"] = "any_uri"
-                try:
-                    from pilates.database.schema.beam_schema import BeamNetworkFinal
-                except Exception:
-                    BeamNetworkFinal = None
-                if BeamNetworkFinal is not None:
-                    meta["schema"] = BeamNetworkFinal
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=description,
-                **meta,
-            )
+        def _beam_run_extra_meta(
+            short_name: str,
+            _path: str,
+            _description: str,
+        ) -> Dict[str, Any]:
+            if not short_name.startswith("beam_network_final"):
+                return {}
+            meta: Dict[str, Any] = {
+                "profile_file_schema": "if_changed",
+                "reuse_if_unchanged": True,
+                "reuse_scope": "any_uri",
+            }
+            try:
+                from pilates.database.schema.beam_schema import BeamNetworkFinal
+            except Exception:
+                BeamNetworkFinal = None
+            if BeamNetworkFinal is not None:
+                meta["schema"] = BeamNetworkFinal
+            return meta
+
+        _log_step_records(
+            record_items=outputs._iter_record_items(),
+            log_fn=log_output_only,
+            extra_meta_fn=_beam_run_extra_meta,
+        )
 
     return _make_generic_step_function(
         coupler=coupler,
