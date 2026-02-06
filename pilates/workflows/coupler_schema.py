@@ -32,7 +32,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,

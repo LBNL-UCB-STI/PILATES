@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
 import re
 
@@ -774,10 +773,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if file_format == "parquet":
                 df.to_parquet(path, index=True)
             else:
-                df.to_csv(path, index=(name != "plans"), compression="gzip")
-
-            # Re-enforce CSV behavior from original
-            if file_format != "parquet":
                 df.to_csv(path, index=False, compression="gzip")
 
             record_list.extend(

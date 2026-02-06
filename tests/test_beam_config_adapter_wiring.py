@@ -76,6 +76,10 @@ def _wire_common(monkeypatch, tracker, run_id) -> None:
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
         lambda model, settings, workspace_path=None: {"config": {"model": model}},
     )
+    tracker.prepare_config.return_value = SimpleNamespace(
+        identity_hash="beam-plan-hash",
+        adapter_version="beam-adapter-v1",
+    )
 
 
 def _make_step_context(*, step_fn, model, settings, workspace):
@@ -110,7 +114,7 @@ def _setup_config(tmp_path: Path):
     return workspace, settings
 
 
-def test_beam_run_metadata_canonicalize_config_with_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_prepare_config_with_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from consist.integrations.beam import BeamConfigAdapter
 
@@ -131,18 +135,19 @@ def test_beam_run_metadata_canonicalize_config_with_run_id(monkeypatch, tmp_path
     )
 
     resolved = meta.config(ctx)
-    assert tracker.canonicalize_config.call_count == 1
-    args, kwargs = tracker.canonicalize_config.call_args
+    assert tracker.prepare_config.call_count == 1
+    args, kwargs = tracker.prepare_config.call_args
     assert isinstance(args[0], BeamConfigAdapter)
-    assert kwargs.get("run_id") == "run-456"
     config_dirs = args[1]
     assert Path(config_dirs[0]) == (
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     )
-    assert "canonical_config_identity_hash" in resolved
+    assert resolved["canonical_config_identity_hash"] == "beam-plan-hash"
+    assert resolved["canonical_config_adapter_version"] == "beam-adapter-v1"
+    assert tracker.canonicalize_config.call_count == 0
 
 
-def test_beam_run_metadata_canonicalize_config_without_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_prepare_config_without_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
 
     workspace, settings = _setup_config(tmp_path)
@@ -161,10 +166,10 @@ def test_beam_run_metadata_canonicalize_config_without_run_id(monkeypatch, tmp_p
         workspace=workspace,
     )
 
-    meta.config(ctx)
-    assert tracker.canonicalize_config.call_count == 1
-    _, kwargs = tracker.canonicalize_config.call_args
-    assert kwargs.get("run_id") is None
+    resolved = meta.config(ctx)
+    assert tracker.prepare_config.call_count == 1
+    assert resolved["canonical_config_identity_hash"] == "beam-plan-hash"
+    assert tracker.canonicalize_config.call_count == 0
 
 
 def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):
@@ -194,3 +199,4 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
     step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 0
+    assert tracker.prepare_config.call_count == 0

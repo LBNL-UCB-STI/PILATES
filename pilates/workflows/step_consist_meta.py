@@ -82,6 +82,57 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         except Exception:
             return {}
 
+        def _identity_payload(identity_hash: Any, adapter_version: Any) -> Dict[str, Any]:
+            if not identity_hash:
+                return {}
+            payload: Dict[str, Any] = {
+                "canonical_config_identity_hash": identity_hash,
+                "canonical_config_adapter_version": adapter_version,
+            }
+            return payload
+
+        def _resolve_identity_from_adapter(
+            adapter: Any,
+            config_root: Path,
+            *,
+            options: Any,
+        ) -> Dict[str, Any]:
+            """
+            Resolve canonical config identity at metadata-resolution time.
+
+            Prefer `prepare_config` (no active-run requirement) so this can run
+            before ScenarioContext starts the step run. Fall back to legacy
+            `canonicalize_config` only when available and safe.
+            """
+            prepare_config = getattr(tracker, "prepare_config", None)
+            if callable(prepare_config):
+                try:
+                    plan = prepare_config(adapter, [config_root], options=options)
+                except TypeError:
+                    plan = prepare_config(adapter, [config_root], strict=False)
+                except Exception:
+                    plan = None
+                if plan is not None:
+                    return _identity_payload(
+                        getattr(plan, "identity_hash", None),
+                        getattr(plan, "adapter_version", None),
+                    )
+
+            canonicalize_config = getattr(tracker, "canonicalize_config", None)
+            if not callable(canonicalize_config):
+                return {}
+            try:
+                kwargs: Dict[str, Any] = {"options": options}
+                if run_id is not None:
+                    kwargs["run_id"] = run_id
+                contribution = canonicalize_config(adapter, [config_root], **kwargs)
+            except Exception:
+                return {}
+            return _identity_payload(
+                getattr(contribution, "identity_hash", None),
+                getattr(contribution, "adapter_version", None),
+            )
+
         if model in {"activitysim_compile", "activitysim_run"}:
             try:
                 from consist.integrations.activitysim import ActivitySimConfigAdapter
@@ -111,16 +162,11 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 ingest=True,
                 allow_heuristic_refs=True,
             )
-            contribution = tracker.canonicalize_config(
+            return _resolve_identity_from_adapter(
                 ActivitySimConfigAdapter(),
-                [config_root],
-                run_id=run_id,
+                config_root,
                 options=options,
             )
-            return {
-                "canonical_config_identity_hash": contribution.identity_hash,
-                "canonical_config_adapter_version": contribution.adapter_version,
-            }
 
         if model == "beam_run":
             try:
@@ -171,13 +217,12 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 original_env[key] = os.environ.get(key)
                 os.environ[key] = value
             try:
-                contribution = tracker.canonicalize_config(
+                identity = _resolve_identity_from_adapter(
                     BeamConfigAdapter(
                         primary_config=primary_config,
                         env_overrides=env_overrides,
                     ),
-                    [config_root],
-                    run_id=run_id,
+                    config_root,
                     options=options,
                 )
             finally:
@@ -186,10 +231,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
-            return {
-                "canonical_config_identity_hash": contribution.identity_hash,
-                "canonical_config_adapter_version": contribution.adapter_version,
-            }
+            return identity
 
         return {}
 
