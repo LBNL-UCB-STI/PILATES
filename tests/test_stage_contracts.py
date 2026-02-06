@@ -14,6 +14,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
@@ -54,12 +56,22 @@ class CouplerStub:
 class FakeScenario:
     def __init__(self, coupler: CouplerStub) -> None:
         self.coupler = coupler
+        self.calls = []
 
     def run(self, **kwargs):
         import inspect
 
         inputs = kwargs.get("inputs") or {}
         input_keys = kwargs.get("input_keys") or []
+        fn = kwargs["fn"]
+        self.calls.append(
+            {
+                "fn_name": getattr(fn, "__name__", "<unknown>"),
+                "model": kwargs.get("model"),
+                "inputs": dict(inputs),
+                "input_keys": list(input_keys),
+            }
+        )
         for key, value in inputs.items():
             self.coupler.set(key, value)
         for key in input_keys:
@@ -67,7 +79,6 @@ class FakeScenario:
 
         runtime_kwargs = kwargs.get("runtime_kwargs") or {}
         fn_kwargs = dict(runtime_kwargs)
-        fn = kwargs["fn"]
         sig = inspect.signature(fn)
         accepts_kwargs = any(
             param.kind == inspect.Parameter.VAR_KEYWORD
@@ -367,12 +378,16 @@ def test_land_use_stage_contract(stage_env):
         year=stage_env["state"].forecast_year,
         outputs_holder_year=outputs_holder,
     )
-    assert USIM_DATASTORE_H5 in usim_inputs
+    assert USIM_DATASTORE_BASE_H5 in usim_inputs
+    assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+    assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
 def test_vehicle_ownership_stage_contract(stage_env):
-    stage_env["coupler"].set(USIM_DATASTORE_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     run_vehicle_ownership_stage(
         scenario=stage_env["scenario"],
         state=stage_env["state"],
@@ -386,8 +401,12 @@ def test_vehicle_ownership_stage_contract(stage_env):
 
 
 def test_supply_demand_stage_contract(stage_env, tmp_path):
-    stage_env["coupler"].set(USIM_DATASTORE_H5, stage_env["usim_input_path"])
-    usim_inputs = {USIM_DATASTORE_H5: stage_env["usim_input_path"]}
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
     state = stage_env["state"]
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
@@ -407,3 +426,66 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
         build_manifest_path=_build_manifest_path,
     )
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
+
+
+def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    state._settings["activity_demand_enabled"] = False
+    state.enabled_stages.discard(state.Stage.activity_demand)
+    state.loop_substages = [state.Stage.traffic_assignment]
+
+    scenario_dir = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.scenario_folder
+    )
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    default_plans = scenario_dir / "plans.parquet"
+    default_households = scenario_dir / "households.parquet"
+    default_persons = scenario_dir / "persons.parquet"
+    _write_file(default_plans)
+    _write_file(default_households)
+    _write_file(default_persons)
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_beam_only_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    beam_preprocess_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in call["inputs"]
+        and BEAM_HOUSEHOLDS_IN in call["inputs"]
+        and BEAM_PERSONS_IN in call["inputs"]
+    ]
+    assert beam_preprocess_calls, "Expected a BEAM preprocess step call with default inputs."
+    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
+    assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
+    assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
+    assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)

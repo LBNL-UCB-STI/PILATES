@@ -2,13 +2,14 @@ import os
 import logging
 import atexit
 import fnmatch
+import re
 import queue
 import shutil
 import threading
 import time
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, TYPE_CHECKING, Type
+from typing import Any, Callable, Dict, Optional, Sequence, TYPE_CHECKING, Type, Union
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
@@ -593,6 +594,32 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
+    def _is_internal_h5_table(table_name: str) -> bool:
+        leaf = table_name.rsplit("/", 1)[-1]
+        if re.match(r"^axis\d+$", leaf):
+            return True
+        if re.match(r"^block\d+_(items|values)$", leaf):
+            return True
+        if re.match(r"^level\d+$", leaf):
+            return True
+        if re.match(r".*label\d*$", leaf):
+            return True
+        return False
+
+    def _table_filter_to_callable(
+        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]
+    ) -> Optional[Callable[[str], bool]]:
+        if table_filter is None:
+            return None
+        if callable(table_filter):
+            return table_filter
+        normalized = {
+            name if str(name).startswith("/") else f"/{name}"
+            for name in table_filter
+            if name
+        }
+        return lambda table_name: table_name in normalized
+
     def _h5_table_filter_from_list(tables_used):
         normalized = {
             name if name.startswith("/") else f"/{name}"
@@ -601,23 +628,34 @@ def _log_with_optional_h5_container(
         }
 
         def _filter(table_name: str) -> bool:
-            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+            if _is_internal_h5_table(table_name):
                 return False
             return table_name in normalized
 
         return _filter
 
     tables_used = meta.pop("h5_tables_used", None)
+    requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        base_filter = (
+            _h5_table_filter_from_list(tables_used)
+            if tables_used
+            else (lambda table_name: not _is_internal_h5_table(table_name))
+        )
+        if requested_filter is None:
+            table_filter = base_filter
+        else:
+            table_filter = (
+                lambda table_name: base_filter(table_name)
+                and requested_filter(table_name)
+            )
         return cr.log_h5_container(
             path,
             key=key,
             direction=direction,
             description=description,
-            table_filter=_h5_table_filter_from_list(tables_used)
-            if tables_used
-            else None,
+            table_filter=table_filter,
             **meta,
         )
     if direction == "output":

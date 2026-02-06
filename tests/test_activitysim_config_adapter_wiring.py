@@ -1,4 +1,5 @@
 from pathlib import Path
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -107,6 +108,40 @@ def _wire_common(monkeypatch, tracker, run_id) -> None:
     )
 
 
+def _make_step_context(
+    *,
+    step_fn,
+    model,
+    context_settings,
+    runtime_workspace,
+    runtime_settings_override=None,
+):
+    sig = inspect.signature(StepContext)
+    kwargs = {
+        "func_name": step_fn.__name__,
+        "model": model,
+        "runtime_kwargs": {"workspace": runtime_workspace},
+    }
+    if runtime_settings_override is not None:
+        kwargs["runtime_kwargs"]["settings"] = runtime_settings_override
+
+    if "settings" in sig.parameters:
+        kwargs["settings"] = context_settings
+    if "runtime_settings" in sig.parameters:
+        kwargs["runtime_settings"] = (
+            runtime_settings_override
+            if runtime_settings_override is not None
+            else context_settings
+        )
+    if "runtime_workspace" in sig.parameters:
+        kwargs["runtime_workspace"] = runtime_workspace
+    if "consist_settings" in sig.parameters:
+        kwargs["consist_settings"] = SimpleNamespace()
+    if "consist_workspace" in sig.parameters:
+        kwargs["consist_workspace"] = Path(runtime_workspace.full_path)
+    return StepContext(**kwargs)
+
+
 def test_activitysim_run_metadata_canonicalize_config_with_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from consist.integrations.activitysim import ActivitySimConfigAdapter
@@ -123,11 +158,11 @@ def test_activitysim_run_metadata_canonicalize_config_with_run_id(monkeypatch, t
         outputs_holder=StepOutputsHolder(),
     )
     meta = step_fn.__consist_step__
-    ctx = StepContext(
-        func_name=step_fn.__name__,
+    ctx = _make_step_context(
+        step_fn=step_fn,
         model=meta.model,
-        settings=settings,
-        runtime_kwargs={"workspace": workspace},
+        context_settings=settings,
+        runtime_workspace=workspace,
     )
 
     resolved = meta.config(ctx)
@@ -157,11 +192,11 @@ def test_activitysim_run_metadata_canonicalize_config_without_run_id(
         outputs_holder=StepOutputsHolder(),
     )
     meta = step_fn.__consist_step__
-    ctx = StepContext(
-        func_name=step_fn.__name__,
+    ctx = _make_step_context(
+        step_fn=step_fn,
         model=meta.model,
-        settings=settings,
-        runtime_kwargs={"workspace": workspace},
+        context_settings=settings,
+        runtime_workspace=workspace,
     )
 
     meta.config(ctx)
@@ -201,3 +236,31 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(monkeypatch, 
     step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 0
+
+
+def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    tracker = MagicMock()
+    _wire_common(monkeypatch, tracker, run_id="run-789")
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=SimpleNamespace(),
+        runtime_workspace=workspace,
+        runtime_settings_override=_make_settings(),
+    )
+
+    resolved = meta.config(ctx)
+    assert tracker.canonicalize_config.call_count == 1
+    assert "canonical_config_identity_hash" in resolved

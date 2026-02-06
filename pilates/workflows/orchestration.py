@@ -20,7 +20,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_H5,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.consist_types import CouplerProtocol
@@ -597,8 +598,14 @@ def _recover_cached_outputs(
                 )
 
         usim_path = None
-        if step_inputs and USIM_DATASTORE_H5 in step_inputs:
-            usim_path = artifact_to_path(step_inputs[USIM_DATASTORE_H5], workspace)
+        if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
+            usim_path = artifact_to_path(
+                step_inputs[USIM_DATASTORE_BASE_H5], workspace
+            )
+        if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
+            usim_path = artifact_to_path(
+                step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
+            )
         if not usim_path:
             region_id = settings.urbansim.region_id
             if not region_id:

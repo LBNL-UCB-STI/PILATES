@@ -19,6 +19,9 @@ ARTIFACT_KEY_ALIASES: Dict[str, str] = {
     "asim_households_in": K.ASIM_HOUSEHOLDS_IN,
     "asim_persons_in": K.ASIM_PERSONS_IN,
     "asim_omx_skims": K.ASIM_OMX_SKIMS,
+    # UrbanSim key migration aliases.
+    "usim_datastore_current_h5": K.USIM_DATASTORE_CURRENT_H5,
+    "usim_datastore_h5": K.USIM_DATASTORE_CURRENT_H5,
 }
 
 
@@ -42,4 +45,3 @@ def canonicalize_artifact_mapping(mapping: Mapping[str, Any]) -> Dict[str, Any]:
             continue
         canonical[resolved] = value
     return canonical
-

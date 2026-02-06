@@ -196,9 +196,10 @@ def log_h5_table(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    return tracker.log_h5_table(
+    artifact = tracker.log_h5_table(
         path, key=key, table_path=table_path, direction=direction, **meta
     )
+    return _ensure_legacy_table_path_meta(artifact, table_path=table_path)
 
 
 def log_artifacts(
@@ -331,6 +332,37 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
     if hasattr(value, "uri"):
         return str(getattr(value, "uri"))
     return None
+
+
+def _ensure_legacy_table_path_meta(
+    artifact: Optional[ArtifactLike], *, table_path: str
+) -> Optional[ArtifactLike]:
+    """
+    Backward-compatibility shim for callers/tests that read table_path from meta.
+
+    Newer Consist builds may keep table_path as a first-class field without
+    duplicating it in artifact.meta.
+    """
+    if artifact is None:
+        return None
+    artifact_meta = getattr(artifact, "meta", None)
+    if isinstance(artifact_meta, dict):
+        artifact_meta.setdefault("table_path", table_path)
+        return artifact
+    if hasattr(artifact, "model_copy"):
+        try:
+            normalized_meta = {}
+            if isinstance(artifact_meta, Mapping):
+                normalized_meta = dict(artifact_meta)
+            normalized_meta.setdefault("table_path", table_path)
+            return artifact.model_copy(update={"meta": normalized_meta})
+        except Exception:
+            return artifact
+    try:
+        setattr(artifact, "meta", {"table_path": table_path})
+    except Exception:
+        pass
+    return artifact
 
 
 class _NoopArtifact:

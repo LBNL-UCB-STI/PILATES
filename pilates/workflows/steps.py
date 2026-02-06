@@ -230,6 +230,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_PLANS_XML,
     BEAM_R5_OSM_FILE,
     FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
@@ -1096,9 +1098,9 @@ def make_urbansim_preprocess_step(
         usim_input_path = usim_data_dir / usim_input_fname
         if usim_input_path.exists():
             log_and_set_output(
-                key=USIM_DATASTORE_H5,
+                key=USIM_DATASTORE_BASE_H5,
                 path=str(usim_input_path),
-                description="UrbanSim input datastore for preprocessing",
+                description="UrbanSim base datastore for preprocessing",
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
@@ -1279,42 +1281,6 @@ def make_atlas_preprocess_step(
     callable
         Step function for ATLAS preprocess.
     """
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        usim_dir = workspace.get_usim_mutable_data_dir()
-        usim_path = None
-        if state.is_start_year():
-            region_id = settings.urbansim.region_id
-            if not region_id:
-                region_map = settings.urbansim.region_mappings.get(
-                    "region_to_region_id", {}
-                )
-                region_id = region_map.get(settings.run.region)
-            if region_id:
-                fname = settings.urbansim.input_file_template.format(region_id=region_id)
-                usim_path = os.path.join(usim_dir, fname)
-        else:
-            fname = settings.urbansim.output_file_template.format(
-                year=state.forecast_year
-            )
-            usim_path = os.path.join(usim_dir, fname)
-        if usim_path and os.path.exists(usim_path):
-            log_input_only(
-                key=USIM_DATASTORE_H5,
-                path=usim_path,
-                description=(
-                    f"UrbanSim datastore for ATLAS year {state.forecast_year}"
-                ),
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-        return {}
-
     def _log_outputs(
         outputs: AtlasPreprocessOutputs,
         settings: PilatesConfig,
@@ -1346,7 +1312,6 @@ def make_atlas_preprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_preprocess", outputs
         ),
-        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 
@@ -1655,14 +1620,17 @@ def make_activitysim_preprocess_step(
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             updated_value = get_value(USIM_H5_UPDATED)
-            selected_key = (
-                USIM_H5_UPDATED if updated_value is not None else USIM_DATASTORE_H5
-            )
-            selected_value = (
-                updated_value
-                if updated_value is not None
-                else get_value(USIM_DATASTORE_H5)
-            )
+            if updated_value is not None:
+                selected_key = USIM_H5_UPDATED
+                selected_value = updated_value
+            else:
+                current_value = get_value(USIM_DATASTORE_CURRENT_H5)
+                if current_value is not None:
+                    selected_key = USIM_DATASTORE_CURRENT_H5
+                    selected_value = current_value
+                else:
+                    selected_key = USIM_DATASTORE_BASE_H5
+                    selected_value = get_value(USIM_DATASTORE_BASE_H5)
             usim_input = resolve_artifact_from_value(
                 selected_value,
                 key=selected_key,
@@ -1673,12 +1641,21 @@ def make_activitysim_preprocess_step(
             input_key = (
                 USIM_H5_UPDATED
                 if callable(get_value) and get_value(USIM_H5_UPDATED) is not None
-                else USIM_DATASTORE_H5
+                else (
+                    USIM_DATASTORE_CURRENT_H5
+                    if callable(get_value)
+                    and get_value(USIM_DATASTORE_CURRENT_H5) is not None
+                    else USIM_DATASTORE_BASE_H5
+                )
             )
             input_desc = (
                 f"UrbanSim datastore updated by ATLAS for ActivitySim year {state.year}"
                 if input_key == USIM_H5_UPDATED
-                else f"UrbanSim datastore for ActivitySim year {state.year}"
+                else (
+                    f"UrbanSim current datastore for ActivitySim year {state.year}"
+                    if input_key == USIM_DATASTORE_CURRENT_H5
+                    else f"UrbanSim base datastore for ActivitySim year {state.year}"
+                )
             )
             h5_tables_used = [
                 "households",

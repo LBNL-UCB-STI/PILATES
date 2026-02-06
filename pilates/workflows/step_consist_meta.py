@@ -20,8 +20,42 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
 
     cache: Dict[int, Dict[str, Any]] = {}
 
+    def _settings(ctx: StepContext) -> Any:
+        runtime_settings = getattr(ctx, "runtime_settings", None)
+        if runtime_settings is not None:
+            return runtime_settings
+
+        runtime_kwargs = ctx.runtime_kwargs or {}
+        runtime_settings_kwarg = runtime_kwargs.get("settings")
+        if runtime_settings_kwarg is not None:
+            return runtime_settings_kwarg
+
+        legacy_settings = getattr(ctx, "settings", None)
+        if legacy_settings is not None:
+            return legacy_settings
+        return getattr(ctx, "consist_settings", None)
+
     def _workspace_path(ctx: StepContext) -> Optional[str]:
-        ws = ctx.workspace
+        runtime_workspace = getattr(ctx, "runtime_workspace", None)
+        if runtime_workspace is not None:
+            full_path = getattr(runtime_workspace, "full_path", None)
+            if isinstance(full_path, str):
+                return full_path
+            if isinstance(runtime_workspace, (Path, str)):
+                return str(runtime_workspace)
+
+        runtime_kwargs = ctx.runtime_kwargs or {}
+        ws_runtime = runtime_kwargs.get("workspace")
+        if ws_runtime is not None:
+            full_path = getattr(ws_runtime, "full_path", None)
+            if isinstance(full_path, str):
+                return full_path
+            if isinstance(ws_runtime, (Path, str)):
+                return str(ws_runtime)
+
+        ws = getattr(ctx, "workspace", None)
+        if ws is None:
+            ws = getattr(ctx, "consist_workspace", None)
         if ws is not None:
             if isinstance(ws, Path):
                 return str(ws)
@@ -30,20 +64,11 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             full_path = getattr(ws, "full_path", None)
             if isinstance(full_path, str):
                 return full_path
-        runtime_kwargs = ctx.runtime_kwargs or {}
-        ws_runtime = runtime_kwargs.get("workspace")
-        if ws_runtime is None:
-            return None
-        full_path = getattr(ws_runtime, "full_path", None)
-        if isinstance(full_path, str):
-            return full_path
-        if isinstance(ws_runtime, (Path, str)):
-            return str(ws_runtime)
         return None
 
     def _canonicalization_identity(ctx: StepContext) -> Dict[str, Any]:
         tracker = cr.current_tracker()
-        settings = ctx.settings
+        settings = _settings(ctx)
         if tracker is None or settings is None:
             return {}
 
@@ -172,7 +197,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         cache_key = id(ctx)
         if cache_key in cache:
             return cache[cache_key]
-        settings = ctx.settings
+        settings = _settings(ctx)
         if settings is None:
             cache[cache_key] = {}
             return {}

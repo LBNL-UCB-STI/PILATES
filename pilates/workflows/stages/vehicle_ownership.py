@@ -7,6 +7,7 @@ from typing import Callable, Dict, Mapping, Union, Any
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.atlas.inputs import build_atlas_inputs, atlas_static_input_keys
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.atlas_state import AtlasSubState
@@ -18,11 +19,38 @@ from pilates.workflows.steps import (
     make_atlas_preprocess_step,
     make_atlas_run_step,
 )
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
+from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _atlas_sub_years(state: WorkflowState) -> list[int]:
+    """
+    Return ATLAS sub-years within the current workflow interval.
+
+    ATLAS advances in biannual increments. Keep years bounded to the parent
+    interval and never overshoot ``state.forecast_year``.
+    """
+    years = [state.year]
+    if state.forecast_year <= state.year:
+        return years
+    years.extend(range(state.year + 2, state.forecast_year + 1, 2))
+    return years
+
+
+def _resolve_input_path(value: Any, workspace: Workspace) -> Union[str, None]:
+    resolved = artifact_to_path(value, workspace)
+    if resolved:
+        return resolved
+    if isinstance(value, (str, os.PathLike)):
+        return os.fspath(value)
+    return None
 
 
 def run_vehicle_ownership_stage(
@@ -83,15 +111,12 @@ def run_vehicle_ownership_stage(
         )
 
     usim_datastore_h5_path = os.path.join(urbansim_datastore_dir, usim_datastore_fname)
-
-    forecast = True
-    yrs = (
-        [state.year] + [y + 2 for y in range(state.year, state.forecast_year, 2)]
-        if forecast
-        else [state.year]
+    fallback_usim_inputs, _ = build_urbansim_inputs(settings, state, workspace, year)
+    usim_datastore_h5_path = str(
+        fallback_usim_inputs.get(USIM_DATASTORE_CURRENT_H5, usim_datastore_h5_path)
     )
-    if not yrs and forecast:
-        yrs = [state.forecast_year]
+
+    yrs = _atlas_sub_years(state)
 
     for atlas_year in yrs:
         atlas_state = AtlasSubState(state, atlas_year)
@@ -109,6 +134,15 @@ def run_vehicle_ownership_stage(
         step_inputs = merge_model_expected_inputs(
             "atlas", step_inputs, settings, atlas_state, workspace
         )
+        # Keep ATLAS preprocessor H5 selection artifact-driven.
+        atlas_state.atlas_usim_datastore_h5 = _resolve_input_path(
+            step_inputs.get(USIM_DATASTORE_CURRENT_H5),
+            workspace,
+        )
+        atlas_state.atlas_usim_datastore_base_h5 = _resolve_input_path(
+            step_inputs.get(USIM_DATASTORE_BASE_H5),
+            workspace,
+        )
         atlas_preprocess_inputs = dict(step_inputs)
         atlas_run_inputs: Dict[str, Any] = {}
         atlas_static_inputs = workspace.input_data.get("atlas")
@@ -119,9 +153,11 @@ def run_vehicle_ownership_stage(
             atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
 
         atlas_static_keys = atlas_static_input_keys(settings)
-        atlas_run_input_keys = [USIM_DATASTORE_H5]
+        atlas_run_input_keys = [USIM_DATASTORE_CURRENT_H5]
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
+            if get_value(USIM_DATASTORE_BASE_H5) is not None:
+                atlas_run_input_keys.append(USIM_DATASTORE_BASE_H5)
             for key in atlas_static_keys:
                 if get_value(key) is not None:
                     atlas_run_input_keys.append(key)

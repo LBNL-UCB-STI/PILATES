@@ -43,7 +43,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_H5,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
     ZARR_SKIMS,
 )
@@ -197,9 +198,11 @@ def _run_activity_demand_phase(
     # 2) Compile (per-year) outside manifest checkpointing.
     # 3) Run/Postprocess (per-iteration) for demand outputs.
     preprocess_inputs = None
-    preprocess_input_keys = [USIM_DATASTORE_H5]
-    if USIM_DATASTORE_H5 in inputs.usim_inputs:
-        preprocess_inputs = {USIM_DATASTORE_H5: inputs.usim_inputs[USIM_DATASTORE_H5]}
+    preprocess_input_keys = [USIM_DATASTORE_CURRENT_H5]
+    if USIM_DATASTORE_CURRENT_H5 in inputs.usim_inputs:
+        preprocess_inputs = {
+            USIM_DATASTORE_CURRENT_H5: inputs.usim_inputs[USIM_DATASTORE_CURRENT_H5]
+        }
         preprocess_input_keys = None
     else:
         get_value = getattr(coupler, "get", None)
@@ -207,15 +210,19 @@ def _run_activity_demand_phase(
             updated_value = get_value(USIM_H5_UPDATED)
             if updated_value is not None:
                 preprocess_input_keys = [USIM_H5_UPDATED]
-            elif get_value(USIM_DATASTORE_H5) is not None:
-                preprocess_input_keys = [USIM_DATASTORE_H5]
+            elif get_value(USIM_DATASTORE_CURRENT_H5) is not None:
+                preprocess_input_keys = [USIM_DATASTORE_CURRENT_H5]
+            elif get_value(USIM_DATASTORE_BASE_H5) is not None:
+                preprocess_input_keys = [USIM_DATASTORE_BASE_H5]
         else:
             fallback_inputs, _ = build_urbansim_inputs(
                 settings, state, workspace, inputs.year
             )
-            if USIM_DATASTORE_H5 in fallback_inputs:
+            if USIM_DATASTORE_CURRENT_H5 in fallback_inputs:
                 preprocess_inputs = {
-                    USIM_DATASTORE_H5: fallback_inputs[USIM_DATASTORE_H5]
+                    USIM_DATASTORE_CURRENT_H5: fallback_inputs[
+                        USIM_DATASTORE_CURRENT_H5
+                    ]
                 }
                 preprocess_input_keys = None
 
@@ -334,12 +341,21 @@ def _run_activity_demand_phase(
     asim_run_input_keys.append(ZARR_SKIMS)
 
     activitysim_postprocess_inputs: Dict[str, str] = {}
-    usim_input_fname = get_usim_datastore_fname(settings, io="input")
-    usim_input_path = os.path.join(
-        workspace.get_usim_mutable_data_dir(), usim_input_fname
-    )
-    if os.path.exists(usim_input_path):
-        activitysim_postprocess_inputs[USIM_DATASTORE_H5] = usim_input_path
+    usim_base_input = inputs.usim_inputs.get(USIM_DATASTORE_BASE_H5)
+    if usim_base_input is None:
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            usim_base_input = get_value(USIM_DATASTORE_BASE_H5)
+    if usim_base_input is None:
+        usim_input_fname = get_usim_datastore_fname(settings, io="input")
+        usim_input_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(), usim_input_fname
+        )
+        if os.path.exists(usim_input_path):
+            usim_base_input = usim_input_path
+    usim_base_path = artifact_to_path(usim_base_input, workspace)
+    if usim_base_path and os.path.exists(usim_base_path):
+        activitysim_postprocess_inputs[USIM_DATASTORE_BASE_H5] = usim_base_path
 
     activitysim_run_specs = [
         StepRef(

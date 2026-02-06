@@ -1,4 +1,5 @@
 from pathlib import Path
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -77,6 +78,26 @@ def _wire_common(monkeypatch, tracker, run_id) -> None:
     )
 
 
+def _make_step_context(*, step_fn, model, settings, workspace):
+    sig = inspect.signature(StepContext)
+    kwargs = {
+        "func_name": step_fn.__name__,
+        "model": model,
+        "runtime_kwargs": {"workspace": workspace},
+    }
+    if "settings" in sig.parameters:
+        kwargs["settings"] = settings
+    if "runtime_settings" in sig.parameters:
+        kwargs["runtime_settings"] = settings
+    if "runtime_workspace" in sig.parameters:
+        kwargs["runtime_workspace"] = workspace
+    if "consist_settings" in sig.parameters:
+        kwargs["consist_settings"] = SimpleNamespace()
+    if "consist_workspace" in sig.parameters:
+        kwargs["consist_workspace"] = Path(workspace.full_path)
+    return StepContext(**kwargs)
+
+
 def _setup_config(tmp_path: Path):
     beam_root = tmp_path / "beam"
     region = "test_region"
@@ -102,11 +123,11 @@ def test_beam_run_metadata_canonicalize_config_with_run_id(monkeypatch, tmp_path
         outputs_holder=StepOutputsHolder(),
     )
     meta = step_fn.__consist_step__
-    ctx = StepContext(
-        func_name=step_fn.__name__,
+    ctx = _make_step_context(
+        step_fn=step_fn,
         model=meta.model,
         settings=settings,
-        runtime_kwargs={"workspace": workspace},
+        workspace=workspace,
     )
 
     resolved = meta.config(ctx)
@@ -133,11 +154,11 @@ def test_beam_run_metadata_canonicalize_config_without_run_id(monkeypatch, tmp_p
         outputs_holder=StepOutputsHolder(),
     )
     meta = step_fn.__consist_step__
-    ctx = StepContext(
-        func_name=step_fn.__name__,
+    ctx = _make_step_context(
+        step_fn=step_fn,
         model=meta.model,
         settings=settings,
-        runtime_kwargs={"workspace": workspace},
+        workspace=workspace,
     )
 
     meta.config(ctx)
@@ -173,4 +194,3 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
     step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 0
-

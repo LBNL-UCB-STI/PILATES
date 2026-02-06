@@ -18,7 +18,10 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
 from pilates.urbansim.inputs import build_urbansim_inputs
 
 
@@ -72,6 +75,12 @@ def run_land_use_stage(
     usim_inputs = merge_model_expected_inputs(
         "urbansim", usim_inputs, settings, state, workspace
     )
+    preprocess_inputs = dict(usim_inputs)
+    if (
+        preprocess_inputs.get(USIM_DATASTORE_BASE_H5)
+        == preprocess_inputs.get(USIM_DATASTORE_CURRENT_H5)
+    ):
+        preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
 
     preprocess_steps = [
         StepRef(
@@ -80,7 +89,7 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=usim_inputs,
+            inputs=preprocess_inputs,
         ),
     ]
 
@@ -100,13 +109,12 @@ def run_land_use_stage(
     if upstream_preprocess is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
 
-    run_input_keys = [
-        short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
-    ]
-    if USIM_DATASTORE_H5 in usim_inputs:
-        run_input_keys.append(USIM_DATASTORE_H5)
-    if not run_input_keys:
-        run_input_keys = None
+    run_inputs = upstream_preprocess.to_record_store().to_mapping()
+    if not run_inputs:
+        # Some preprocessors materialize key artifacts via explicit logging rather
+        # than RecordStore outputs; fall back to declared UrbanSim inputs so run
+        # identity/provenance still reflects true dependencies.
+        run_inputs = {key: value for key, value in usim_inputs.items() if value is not None}
 
     run_steps = [
         StepRef(
@@ -115,7 +123,7 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=run_input_keys,
+            inputs=run_inputs,
         ),
         StepRef(
             name="urbansim_postprocess",
@@ -123,7 +131,7 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=[USIM_DATASTORE_H5],
+            input_keys=[USIM_DATASTORE_CURRENT_H5],
         ),
     ]
 
@@ -142,8 +150,17 @@ def run_land_use_stage(
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
     run_outputs = outputs_holder_year.urbansim_run
     if postprocess_outputs is not None and postprocess_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_H5] = str(postprocess_outputs.usim_datastore_h5)
+        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(
+            postprocess_outputs.usim_datastore_h5
+        )
     elif run_outputs is not None and run_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_H5] = str(run_outputs.usim_datastore_h5)
+        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(run_outputs.usim_datastore_h5)
+
+    # Preserve base semantics as the static/exogenous input.
+    if (
+        USIM_DATASTORE_BASE_H5 not in usim_inputs
+        and USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    ):
+        usim_inputs[USIM_DATASTORE_BASE_H5] = usim_inputs[USIM_DATASTORE_CURRENT_H5]
 
     return usim_inputs
