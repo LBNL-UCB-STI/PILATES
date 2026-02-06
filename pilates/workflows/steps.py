@@ -182,10 +182,11 @@ from __future__ import annotations
 #                                                                                              - beam_output_network_xml
 #                                                                                              - beam_output_counts_xml
 #
-# beam_postprocess                beam_run raw outputs (all keys above)                        Outputs:
-#                               + zarr_skims (if present)                                     - final_skims_omx OR zarr_skims
-#                                                                                              - linkstats (promoted latest)
-#                                                                                              - beam_plans_out (promoted latest)
+# beam_postprocess                selected beam_run outputs used by postprocessor:             Outputs:
+#                               - events_parquet_<year>_<iter>[ _sub* ]                       - final_skims_omx OR zarr_skims
+#                               - raw_od_skims_<year>_<iter>[ _sub* ]                         - linkstats (promoted latest)
+#                               - raw_od_skims_zarr_<year>_<iter>[ _sub* ]                    - beam_plans_out (promoted latest)
+#                               + zarr_skims (if present)
 #
 import logging
 import os
@@ -1768,6 +1769,8 @@ def make_activitysim_run_step(
 
         profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in upstream._iter_record_items():
+            if short_name == ASIM_OMX_SKIMS:
+                continue
             meta: Dict[str, Any] = {}
             if short_name in profile_keys:
                 meta["profile_file_schema"] = True

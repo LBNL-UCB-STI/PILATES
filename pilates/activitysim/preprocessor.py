@@ -144,6 +144,29 @@ def read_skims(
     return skims
 
 
+def _should_refresh_skims_copy(source_path: str, dest_path: str) -> bool:
+    """
+    Decide whether ``source_path`` should be copied over ``dest_path``.
+
+    Refresh when destination is missing, or when source appears newer/different.
+    """
+    if not os.path.exists(source_path):
+        return False
+    if not os.path.exists(dest_path):
+        return True
+    try:
+        source_stat = os.stat(source_path)
+        dest_stat = os.stat(dest_path)
+    except OSError:
+        return True
+
+    if source_stat.st_size != dest_stat.st_size:
+        return True
+    if source_stat.st_mtime_ns > dest_stat.st_mtime_ns:
+        return True
+    return False
+
+
 # Mapping of PILATES setting parameter names to ActivitySim config parameter names.
 # This allows dynamic updates to ActivitySim's settings.yaml.
 asim_param_map = {"random_seed": "rng_base_seed"}
@@ -1994,7 +2017,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
             os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
-            shutil.copyfile(path_to_beam_skims_in_current_run_workspace, skims_loc)
+            if _should_refresh_skims_copy(
+                path_to_beam_skims_in_current_run_workspace, skims_loc
+            ):
+                shutil.copyfile(path_to_beam_skims_in_current_run_workspace, skims_loc)
+                logger.info(
+                    "Refreshed ActivitySim skims OMX from BEAM source: %s -> %s",
+                    path_to_beam_skims_in_current_run_workspace,
+                    skims_loc,
+                )
+            else:
+                logger.debug(
+                    "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
+                    skims_loc,
+                )
             input_records.add_record(input_skims_record)
         else:
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
@@ -3393,11 +3429,15 @@ def create_asim_data_from_h5(
         settings,
         state.start_year,
         mutable_data_dir=workspace.get_usim_mutable_data_dir(),
+        mode="r",
     )
-    households = store[prefix + "/households"]
-    persons = store[prefix + "/persons"]
-    jobs = store[prefix + "/jobs"]
-    blocks = store[prefix + "/blocks"]
+    try:
+        households = store[prefix + "/households"]
+        persons = store[prefix + "/persons"]
+        jobs = store[prefix + "/jobs"]
+        blocks = store[prefix + "/blocks"]
+    finally:
+        store.close()
 
     # Add zone id to blocks table
     blocks[asim_zone_id_col] = blocks.index.map(block_to_zone_map)

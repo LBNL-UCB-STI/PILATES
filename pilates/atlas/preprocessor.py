@@ -102,6 +102,35 @@ def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
     return None
 
 
+def _resolve_atlas_h5_table_key(
+    store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
+) -> str:
+    """
+    Resolve the HDF5 key for an ATLAS-required table.
+
+    For non-start years, prefer ``/{year}/{table}`` when present. Fall back to
+    root-level ``{table}`` to support merged/current datastores that do not keep
+    per-year table prefixes.
+    """
+    if is_start_year:
+        return table
+
+    year_key = f"/{year}/{table}"
+    if year_key in store:
+        return year_key
+
+    if table in store:
+        logger.warning(
+            "[AtlasPreprocessor] Year-specific table %s not found; falling back "
+            "to root table %s.",
+            year_key,
+            table,
+        )
+        return table
+
+    return year_key
+
+
 class AtlasPreprocessor(GenericPreprocessor):
     """
     ATLAS-specific preprocessor that consolidates all preprocessing steps for the ATLAS vehicle ownership model.
@@ -470,15 +499,22 @@ class AtlasPreprocessor(GenericPreprocessor):
                 output_short_name,
                 output_description,
                 expected_index_name,
+                table_name_root,
                 required=True,
             ):
+                resolved_table_name = _resolve_atlas_h5_table_key(
+                    data,
+                    year=self.state.year,
+                    table=table_name_root,
+                    is_start_year=self.state.is_start_year(),
+                )
                 try:
-                    table_data = data[table_name_in_h5]
+                    table_data = data[resolved_table_name]
                     output_csv_path = f"{atlas_input_path}/{output_csv_name}.csv"
                     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
                     _export_atlas_table_to_csv(
                         table_data,
-                        table_name_in_h5=table_name_in_h5,
+                        table_name_in_h5=resolved_table_name,
                         expected_index_name=expected_index_name,
                         output_csv_path=output_csv_path,
                     )
@@ -519,6 +555,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "atlas_households_csv",
                 "ATLAS households input CSV",
                 "household_id",
+                "households",
                 required=True,
             )
             process_table(
@@ -527,6 +564,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "atlas_blocks_csv",
                 "ATLAS blocks input CSV",
                 "block_id",
+                "blocks",
                 required=True,
             )
             process_table(
@@ -535,6 +573,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "atlas_persons_csv",
                 "ATLAS persons input CSV",
                 "person_id",
+                "persons",
                 required=True,
             )
             if not self.state.is_start_year():
@@ -544,6 +583,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                     "atlas_grave_csv",
                     "ATLAS graveyard input CSV",
                     "person_id",
+                    "graveyard",
                     required=True,
                 )
             process_table(
@@ -552,6 +592,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "atlas_residential_csv",
                 "ATLAS residential units input CSV",
                 "unit_id",
+                "residential_units",
                 required=True,
             )
             process_table(
@@ -560,6 +601,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "atlas_jobs_csv",
                 "ATLAS jobs input CSV",
                 "job_id",
+                "jobs",
                 required=True,
             )
 

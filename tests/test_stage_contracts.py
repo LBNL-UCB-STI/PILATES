@@ -24,6 +24,11 @@ from pilates.workflows.artifact_keys import (
 from pilates.workspace import Workspace
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages.supply_demand import (
+    _build_beam_postprocess_input_keys,
+    _run_traffic_assignment_phase,
+    TrafficAssignmentPhaseInputs,
+)
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from workflow_state import WorkflowState
 
@@ -426,6 +431,16 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
         build_manifest_path=_build_manifest_path,
     )
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
+    asim_run_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if ZARR_SKIMS in (call.get("input_keys") or [])
+        and ASIM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and ASIM_PERSONS_IN in (call.get("input_keys") or [])
+        and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
+    ]
+    assert asim_run_calls, "Expected an ActivitySim run step call."
+    assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
 
 
 def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):
@@ -489,3 +504,142 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
     assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
     assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
+
+
+def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
+    stage_env, monkeypatch, tmp_path
+):
+    """
+    Regression: do not require LINKSTATS_WARMSTART unless that exact key is
+    present in beam_preprocess_inputs.
+    """
+    from pilates.generic.model_factory import ModelFactory
+    from pilates.workflows.steps import StepOutputsHolder
+    from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    asim_outputs = RecordStore(
+        recordList=[
+            FileRecord(file_path=str(tmp_path / "beam_plans_out.parquet"), short_name="beam_plans_out"),
+            FileRecord(file_path=str(tmp_path / "households_asim_out.parquet"), short_name="households_asim_out"),
+            FileRecord(file_path=str(tmp_path / "persons_asim_out.parquet"), short_name="persons_asim_out"),
+        ]
+    )
+    zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    coupler.set(ZARR_SKIMS, str(zarr_path))
+    linkstats_history_path = tmp_path / "linkstats_parquet_2018_0.parquet"
+    _write_file(linkstats_history_path)
+    previous_beam_outputs = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(linkstats_history_path),
+                short_name="linkstats_parquet_2018_0",
+            )
+        ]
+    )
+
+    class _BeamPreprocessorNoWarmstart:
+        def preprocess(self, workspace, previous_records=RecordStore()):
+            beam_dir = Path(workspace.get_beam_mutable_data_dir())
+            plans = beam_dir / "plans.csv"
+            households = beam_dir / "households.csv"
+            persons = beam_dir / "persons.csv"
+            for path in (plans, households, persons):
+                _write_file(path)
+            return RecordStore(
+                recordList=[
+                    FileRecord(file_path=str(plans), short_name=BEAM_PLANS_IN),
+                    FileRecord(file_path=str(households), short_name=BEAM_HOUSEHOLDS_IN),
+                    FileRecord(file_path=str(persons), short_name=BEAM_PERSONS_IN),
+                ]
+            )
+
+    original_get_preprocessor = ModelFactory.get_preprocessor
+
+    def _patched_get_preprocessor(self, model_name, state=None, major_stage=None):
+        if model_name == "beam":
+            return _BeamPreprocessorNoWarmstart()
+        return original_get_preprocessor(self, model_name, state, major_stage)
+
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
+
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path(workspace.get_asim_output_dir()),
+    )
+
+    _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            activity_demand_outputs=asim_outputs,
+            previous_beam_outputs=previous_beam_outputs,
+        ),
+        outputs_holder=outputs_holder,
+    )
+
+    beam_run_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
+    ]
+    assert beam_run_calls, "Expected BEAM run step to execute."
+    assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
+
+
+def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
+    keys = [
+        "beam_output_counts_xml_2018_0",
+        "linkstats_parquet_2018_0",
+        "raw_od_skims_2018_0",
+        "raw_od_skims_2018_0_sub0",
+        "raw_od_skims_zarr_2018_0",
+        "events_parquet_2018_0",
+        "events_parquet_2018_0_sub0",
+    ]
+    selected = _build_beam_postprocess_input_keys(
+        upstream_keys=keys,
+        year=2018,
+        iteration=0,
+        include_zarr_skims=True,
+    )
+    assert selected is not None
+    assert "raw_od_skims_2018_0" in selected
+    assert "raw_od_skims_zarr_2018_0" in selected
+    assert "events_parquet_2018_0" in selected
+    assert ZARR_SKIMS in selected
+    assert "beam_output_counts_xml_2018_0" not in selected
+    assert "linkstats_parquet_2018_0" not in selected
+
+
+def test_build_beam_postprocess_input_keys_falls_back_for_legacy_names():
+    keys = [
+        "raw_od_skims_legacy",
+        "events_parquet_legacy",
+        "beam_output_network_xml_2018_0",
+    ]
+    selected = _build_beam_postprocess_input_keys(
+        upstream_keys=keys,
+        year=2018,
+        iteration=0,
+        include_zarr_skims=False,
+    )
+    assert selected == ["raw_od_skims_legacy", "events_parquet_legacy"]

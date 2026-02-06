@@ -63,15 +63,18 @@ def build_urbansim_inputs(
     base_path: Optional[Path] = usim_input_path if usim_input_path.exists() else None
 
     current_path: Optional[Path] = None
-    if base_path is not None:
+    if state.is_start_year():
         current_path = base_path
-    elif not state.is_start_year():
+    else:
         usim_output_fname = usim_post.get_usim_datastore_fname(
             settings, io="output", year=year
         )
         usim_output_path = usim_data_dir / usim_output_fname
         if usim_output_path.exists():
             current_path = usim_output_path
+        elif base_path is not None:
+            # Fallback for workflows that intentionally operate from base only.
+            current_path = base_path
 
     if base_path is not None:
         inputs[USIM_DATASTORE_BASE_H5] = str(base_path)

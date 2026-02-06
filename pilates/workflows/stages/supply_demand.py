@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.generic.records import RecordStore
@@ -146,6 +146,62 @@ def _find_initial_linkstats_warmstart(
         if os.path.exists(candidate):
             return candidate
     return None
+
+
+def _is_iteration_scoped_artifact_key(
+    key: str, *, prefix: str, year: int, iteration: int
+) -> bool:
+    base = f"{prefix}_{year}_{iteration}"
+    return key == base or key.startswith(f"{base}_sub")
+
+
+def _build_beam_postprocess_input_keys(
+    *,
+    upstream_keys: Iterable[str],
+    year: int,
+    iteration: int,
+    include_zarr_skims: bool,
+) -> Optional[list[str]]:
+    """
+    Select BEAM postprocess coupler inputs from BEAM run outputs.
+
+    BEAM postprocess only consumes BEAM events parquet and OD skims artifacts
+    from the run output store, plus upstream ActivitySim ``zarr_skims`` when
+    available. Trimming input keys to this set keeps run identity aligned with
+    actual behavior while avoiding unnecessary cache invalidation from unrelated
+    BEAM outputs.
+    """
+    selected: list[str] = []
+    keys = list(upstream_keys)
+
+    for key in keys:
+        if _is_iteration_scoped_artifact_key(
+            key, prefix="events_parquet", year=year, iteration=iteration
+        ):
+            selected.append(key)
+            continue
+        if _is_iteration_scoped_artifact_key(
+            key, prefix="raw_od_skims", year=year, iteration=iteration
+        ):
+            selected.append(key)
+            continue
+        if _is_iteration_scoped_artifact_key(
+            key, prefix="raw_od_skims_zarr", year=year, iteration=iteration
+        ):
+            selected.append(key)
+
+    # Conservative fallback for naming drift: keep skim/event dependencies if
+    # exact iteration-scoped keys are absent.
+    if not any(key.startswith("raw_od_skims") for key in selected):
+        selected.extend(key for key in keys if key.startswith("raw_od_skims"))
+    if not any(key.startswith("events_parquet_") for key in selected):
+        selected.extend(key for key in keys if key.startswith("events_parquet_"))
+
+    if include_zarr_skims:
+        selected.append(ZARR_SKIMS)
+
+    deduped = list(dict.fromkeys(selected))
+    return deduped or None
 
 
 def _run_activity_demand_phase(
@@ -337,6 +393,9 @@ def _run_activity_demand_phase(
         raise RuntimeError("ActivitySim preprocess must complete first")
     asim_run_input_keys = [
         short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
+    ]
+    asim_run_input_keys = [
+        key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS
     ]
     asim_run_input_keys.append(ZARR_SKIMS)
 
@@ -573,9 +632,10 @@ def _run_traffic_assignment_phase(
 
     zarr_input_keys = None
     beam_prepared_input_keys = None
-    has_linkstats_warmstart = any(
-        key.startswith("linkstats") for key in (beam_preprocess_inputs or {}).keys()
-    )
+    # Only require LINKSTATS_WARMSTART at BEAM run time when that explicit key
+    # is provided to preprocess. Other linkstats* artifacts may exist for
+    # bookkeeping/history but do not guarantee a warm-start input artifact.
+    has_linkstats_warmstart = LINKSTATS_WARMSTART in (beam_preprocess_inputs or {})
     if inputs.activity_demand_outputs is not None:
         zarr_input_keys = [ZARR_SKIMS]
         beam_prepared_input_keys = [
@@ -637,13 +697,12 @@ def _run_traffic_assignment_phase(
     upstream_run = outputs_holder.beam_run
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
-    beam_postprocess_input_keys = [
-        short_name for short_name, _, _ in upstream_run._iter_record_items()
-    ]
-    if zarr_input_keys:
-        beam_postprocess_input_keys.extend(zarr_input_keys)
-    if not beam_postprocess_input_keys:
-        beam_postprocess_input_keys = None
+    beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
+        upstream_keys=[short_name for short_name, _, _ in upstream_run._iter_record_items()],
+        year=state.forecast_year,
+        iteration=inputs.iteration,
+        include_zarr_skims=bool(zarr_input_keys),
+    )
 
     run_workflow(
         stage_name="beam",
