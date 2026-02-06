@@ -505,6 +505,19 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
     assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
 
+    beam_run_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
+    ]
+    assert beam_run_calls, "Expected BEAM run step call."
+    run_input_keys = beam_run_calls[0].get("input_keys") or []
+    assert BEAM_PLANS_IN in run_input_keys
+    assert BEAM_HOUSEHOLDS_IN in run_input_keys
+    assert BEAM_PERSONS_IN in run_input_keys
+
 
 def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     stage_env, monkeypatch, tmp_path

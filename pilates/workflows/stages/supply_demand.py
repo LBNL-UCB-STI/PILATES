@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
-from pilates.generic.records import RecordStore
+from pilates.generic.records import FileRecord, RecordStore
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.io import locate_beam_file
@@ -696,13 +696,15 @@ def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
     activity_demand_outputs: Optional[RecordStore],
-) -> Optional[list[str]]:
+) -> list[str]:
     """
     Derive BEAM run input keys from preprocess outputs and warm-start signals.
-    """
-    if activity_demand_outputs is None:
-        return None
 
+    The BEAM runner always consumes plans/households/persons from the mutable
+    scenario directory, regardless of whether ActivitySim produced them in this
+    workflow. Keep these as explicit dependencies so run identity/provenance
+    captures both ActivitySim-driven and default-scenario BEAM runs.
+    """
     run_input_keys = [
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
@@ -718,6 +720,15 @@ def _derive_beam_run_input_keys(
         logger.debug(
             "[BEAM] linkstats warmstart not available; omitting %s from inputs",
             LINKSTATS_WARMSTART,
+        )
+
+    if activity_demand_outputs is None:
+        logger.debug(
+            "[BEAM] ActivitySim disabled/unavailable; using default scenario inputs "
+            "for %s, %s, %s",
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
         )
     return run_input_keys
 
