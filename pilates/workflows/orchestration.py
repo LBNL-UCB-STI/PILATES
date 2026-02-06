@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
@@ -23,7 +23,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
-from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
@@ -38,26 +37,6 @@ from pilates.workflows.steps import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_step_consist_kwargs(
-    *,
-    step_func: Callable[..., Any],
-    step_name: str,
-    settings: Any,
-    workspace: Any,
-) -> Dict[str, Any]:
-    """
-    Resolve per-step Consist kwargs.
-
-    Prefer native `@define_step(...)` metadata when present and fall back to
-    `build_step_consist_kwargs(...)` for undecorated legacy step callables.
-    """
-    if hasattr(step_func, "__consist_step__"):
-        return {}
-    return build_step_consist_kwargs(
-        step_name, settings, workspace_path=workspace.full_path
-    )
 
 
 @dataclass(frozen=True)
@@ -81,55 +60,6 @@ class StepRef:
     stage: Optional[str] = None
 
 
-@dataclass(frozen=True)
-class WorkflowStepSpec:
-    """
-    Backward-compatible step spec.
-
-    Prefer StepRef for new code.
-    """
-
-    name: str
-    step_func: Callable[..., None]
-    input_keys: Optional[Sequence[str]] = None
-    inputs: Optional[Dict[str, Any]] = None
-    output_paths: Optional[Dict[str, Any]] = None
-    cache_hydration: str = "outputs-all"
-    cache_mode: Optional[str] = None
-    load_inputs: bool = False
-    model: Optional[str] = None
-    year: Optional[int] = None
-    iteration: Optional[int] = None
-    phase: Optional[str] = None
-    stage: Optional[str] = None
-
-    def to_step_ref(self) -> StepRef:
-        return StepRef(
-            name=self.name,
-            step_func=self.step_func,
-            input_keys=self.input_keys,
-            inputs=self.inputs,
-            output_paths=self.output_paths,
-            cache_hydration=self.cache_hydration,
-            cache_mode=self.cache_mode,
-            load_inputs=self.load_inputs,
-            model=self.model,
-            year=self.year,
-            iteration=self.iteration,
-            phase=self.phase,
-            stage=self.stage,
-        )
-
-
-StepLike = Union[StepRef, WorkflowStepSpec]
-
-
-def _normalize_step_ref(step: StepLike) -> StepRef:
-    if isinstance(step, StepRef):
-        return step
-    return step.to_step_ref()
-
-
 def _infer_phase(step_name: str) -> Optional[str]:
     if "_" not in step_name:
         return None
@@ -140,13 +70,15 @@ def _build_step_run_kwargs(
     *,
     step: StepRef,
     state: Any,
-    settings: Any,
-    workspace: Any,
     runtime_kwargs: Mapping[str, Any],
     stage_name: str,
-    name_suffix: str,
     default_iteration: int,
 ) -> Dict[str, Any]:
+    if not hasattr(step.step_func, "__consist_step__"):
+        raise TypeError(
+            f"Step '{step.name}' must be decorated with @define_step metadata."
+        )
+
     run_kwargs: Dict[str, Any] = {
         "fn": step.step_func,
         "runtime_kwargs": runtime_kwargs,
@@ -183,25 +115,8 @@ def _build_step_run_kwargs(
     if step.load_inputs is not None:
         run_kwargs["load_inputs"] = step.load_inputs
 
-    if hasattr(step.step_func, "__consist_step__"):
-        if step.model is not None:
-            run_kwargs["model"] = step.model
-        return run_kwargs
-
-    run_kwargs["name"] = f"{step.name}_{name_suffix}" if name_suffix else step.name
-    run_kwargs["model"] = step.model or step.name
-    run_kwargs.update(
-        _resolve_step_consist_kwargs(
-            step_func=step.step_func,
-            step_name=step.name,
-            settings=settings,
-            workspace=workspace,
-        )
-    )
-    if "cache_hydration" not in run_kwargs:
-        run_kwargs["cache_hydration"] = "outputs-all"
-    if "load_inputs" not in run_kwargs:
-        run_kwargs["load_inputs"] = False
+    if step.model is not None:
+        run_kwargs["model"] = step.model
     return run_kwargs
 
 
@@ -213,7 +128,7 @@ class WorkflowStage:
 
     name: str
     stage_type: Any
-    steps: Sequence[StepLike]
+    steps: Sequence[StepRef]
 
     def run(
         self,
@@ -258,7 +173,7 @@ class ManifestConfig:
 def run_manifested_steps(
     *,
     stage_name: str,
-    steps: Sequence[StepLike],
+    steps: Sequence[StepRef],
     outputs_holder: StepOutputsHolder,
     manifest_config: ManifestConfig,
     scenario: Any,
@@ -288,7 +203,7 @@ def run_manifested_steps(
     )
 
     for raw_step in steps:
-        spec = _normalize_step_ref(raw_step)
+        spec = raw_step
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
             if outputs_holder.get_attribute(spec.name) is None:
@@ -302,11 +217,8 @@ def run_manifested_steps(
         run_kwargs = _build_step_run_kwargs(
             step=spec,
             state=state,
-            settings=settings,
-            workspace=workspace,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
-            name_suffix=name_suffix,
             default_iteration=iteration,
         )
         result = scenario.run(**run_kwargs)
@@ -334,7 +246,7 @@ def run_manifested_steps(
 def run_workflow(
     *,
     stage_name: str,
-    steps: Sequence[StepLike],
+    steps: Sequence[StepRef],
     scenario: Any,
     state: Any,
     settings: Any,
@@ -373,16 +285,13 @@ def run_workflow(
         **(runtime_kwargs_extra or {}),
     )
     for raw_step in steps:
-        spec = _normalize_step_ref(raw_step)
+        spec = raw_step
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
             state=state,
-            settings=settings,
-            workspace=workspace,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
-            name_suffix=name_suffix,
             default_iteration=iteration,
         )
         coupler_keys = None

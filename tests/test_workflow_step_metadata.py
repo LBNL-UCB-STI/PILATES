@@ -6,7 +6,7 @@ from consist import define_step
 
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
+from pilates.workflows.orchestration import StepRef, WorkflowStage
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -62,9 +62,7 @@ def test_make_step_factories_attach_consist_metadata():
     assert callable(preprocess_meta.facet)
 
 
-def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs(
-    monkeypatch,
-):
+def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs():
     scenario = _FakeScenario()
     workspace = SimpleNamespace(full_path="/tmp/workspace")
     settings = SimpleNamespace()
@@ -76,15 +74,7 @@ def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs(
     def _decorated_step(settings, state, workspace):
         return None
 
-    spec = WorkflowStepSpec(name="dummy_step", step_func=_decorated_step)
-
-    def _unexpected(*args, **kwargs):
-        raise AssertionError("build_step_consist_kwargs should not be called")
-
-    monkeypatch.setattr(
-        "pilates.workflows.orchestration.build_step_consist_kwargs",
-        _unexpected,
-    )
+    spec = StepRef(name="dummy_step", step_func=_decorated_step)
 
     stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
     stage.run(
@@ -103,9 +93,7 @@ def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs(
     assert "hash_inputs" not in call
 
 
-def test_workflow_stage_falls_back_to_legacy_consist_kwargs_for_undecorated_steps(
-    monkeypatch,
-):
+def test_workflow_stage_requires_decorated_steps():
     scenario = _FakeScenario()
     workspace = SimpleNamespace(full_path="/tmp/workspace")
     settings = SimpleNamespace()
@@ -116,29 +104,23 @@ def test_workflow_stage_falls_back_to_legacy_consist_kwargs_for_undecorated_step
     def _legacy_step(settings, state, workspace):
         return None
 
-    spec = WorkflowStepSpec(name="legacy_step", step_func=_legacy_step)
-
-    monkeypatch.setattr(
-        "pilates.workflows.orchestration.build_step_consist_kwargs",
-        lambda step_name, settings, workspace_path: {
-            "config": {"step": step_name, "workspace": workspace_path}
-        },
-    )
+    spec = StepRef(name="legacy_step", step_func=_legacy_step)
 
     stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
-    stage.run(
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix="unit",
-    )
-
-    call = scenario.calls[0]
-    assert "config" in call
-    assert call["config"]["step"] == "legacy_step"
+    try:
+        stage.run(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix="unit",
+        )
+    except TypeError as exc:
+        assert "must be decorated" in str(exc)
+    else:
+        raise AssertionError("Expected undecorated steps to raise TypeError")
 
 
 def test_build_coupler_schema_collects_step_metadata_and_extras():

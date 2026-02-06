@@ -476,6 +476,7 @@ def main():
                         state=state,
                         settings=settings,
                         workspace=workspace,
+                        coupler=coupler,
                         year=year,
                     )
                     state.complete_step(WorkflowState.Stage.postprocessing)

@@ -14,7 +14,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
 from pilates.workflows.orchestration import run_manifested_steps
-from pilates.workflows.orchestration import WorkflowStepSpec
+from pilates.workflows.orchestration import StepRef
 from pilates.workflows.steps import StepOutputsHolder
 
 
@@ -128,20 +128,16 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     holder.beam_preprocess.validate()
 
 
-def test_run_manifested_steps_recovers_cache_hit(monkeypatch, tmp_path):
+def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     _write_file(asim_dir / "households.csv")
     _write_file(asim_dir / "persons.csv")
     _write_file(asim_dir / "land_use.csv")
 
-    monkeypatch.setattr(
-        "pilates.workflows.orchestration.build_step_consist_kwargs",
-        lambda *_args, **_kwargs: {},
-    )
-
     def _noop_step(**_kwargs):
         raise AssertionError("step function should not execute on cache hit")
+    _noop_step.__consist_step__ = object()
 
     holder = StepOutputsHolder()
     scenario = DummyScenario(cache_hit=True)
@@ -153,7 +149,7 @@ def test_run_manifested_steps_recovers_cache_hit(monkeypatch, tmp_path):
     run_manifested_steps(
         stage_name="activity_demand_preprocess",
         steps=[
-            WorkflowStepSpec(
+            StepRef(
                 name="activitysim_preprocess",
                 step_func=_noop_step,
                 input_keys=None,

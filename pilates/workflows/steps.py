@@ -2429,4 +2429,9 @@ def make_postprocessing_step() -> Callable[..., None]:
                 workspace,
             )
 
-    return _run_postprocessing_step
+    return _decorate_step_with_consist(
+        step_func=_run_postprocessing_step,
+        step_model="postprocessing",
+        description="postprocessing workflow step",
+        tags=["postprocessing"],
+    )
