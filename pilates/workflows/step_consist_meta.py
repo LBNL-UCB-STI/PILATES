@@ -66,78 +66,65 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 return full_path
         return None
 
-    def _canonicalization_identity(ctx: StepContext) -> Dict[str, Any]:
+    def _config_plan(ctx: StepContext) -> Any:
         tracker = cr.current_tracker()
         settings = _settings(ctx)
         if tracker is None or settings is None:
-            return {}
+            return None
 
         runtime_kwargs = ctx.runtime_kwargs or {}
         workspace_obj = runtime_kwargs.get("workspace")
-        current_run = cr.current_run()
-        run_id = getattr(current_run, "id", None) if current_run else None
+        prepare_config_resolver = getattr(tracker, "prepare_config_resolver", None)
+        if not callable(prepare_config_resolver):
+            return None
 
-        try:
-            from consist.core.config_canonicalization import ConfigAdapterOptions
-        except Exception:
-            return {}
-
-        def _identity_payload(identity_hash: Any, adapter_version: Any) -> Dict[str, Any]:
-            if not identity_hash:
-                return {}
-            payload: Dict[str, Any] = {
-                "canonical_config_identity_hash": identity_hash,
-                "canonical_config_adapter_version": adapter_version,
-            }
-            return payload
-
-        def _resolve_identity_from_adapter(
+        def _resolve_plan_from_adapter(
             adapter: Any,
             config_root: Path,
-            *,
-            options: Any,
-        ) -> Dict[str, Any]:
-            """
-            Resolve canonical config identity at metadata-resolution time.
-
-            Prefer `prepare_config` (no active-run requirement) so this can run
-            before ScenarioContext starts the step run. Fall back to legacy
-            `canonicalize_config` only when available and safe.
-            """
-            prepare_config = getattr(tracker, "prepare_config", None)
-            if callable(prepare_config):
-                try:
-                    plan = prepare_config(adapter, [config_root], options=options)
-                except TypeError:
-                    plan = prepare_config(adapter, [config_root], strict=False)
-                except Exception:
-                    plan = None
-                if plan is not None:
-                    return _identity_payload(
-                        getattr(plan, "identity_hash", None),
-                        getattr(plan, "adapter_version", None),
-                    )
-
-            canonicalize_config = getattr(tracker, "canonicalize_config", None)
-            if not callable(canonicalize_config):
-                return {}
+            env_overrides: Optional[Dict[str, str]] = None,
+        ) -> Any:
             try:
-                kwargs: Dict[str, Any] = {"options": options}
-                if run_id is not None:
-                    kwargs["run_id"] = run_id
-                contribution = canonicalize_config(adapter, [config_root], **kwargs)
+                resolver = prepare_config_resolver(
+                    adapter=adapter,
+                    config_dirs=[config_root],
+                )
+            except TypeError:
+                try:
+                    resolver = prepare_config_resolver(adapter, [config_root])
+                except TypeError:
+                    return None
             except Exception:
-                return {}
-            return _identity_payload(
-                getattr(contribution, "identity_hash", None),
-                getattr(contribution, "adapter_version", None),
-            )
+                return None
+
+            if not callable(resolver):
+                return None
+
+            if not env_overrides:
+                try:
+                    return resolver(ctx)
+                except Exception:
+                    return None
+
+            original_env: Dict[str, Optional[str]] = {}
+            for key, value in env_overrides.items():
+                original_env[key] = os.environ.get(key)
+                os.environ[key] = value
+            try:
+                return resolver(ctx)
+            except Exception:
+                return None
+            finally:
+                for key, value in original_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
         if model in {"activitysim_compile", "activitysim_run"}:
             try:
                 from consist.integrations.activitysim import ActivitySimConfigAdapter
             except Exception:
-                return {}
+                return None
 
             config_root: Optional[Path] = None
             if workspace_obj is not None and hasattr(workspace_obj, "get_asim_mutable_configs_dir"):
@@ -154,25 +141,18 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                         / settings.activitysim.main_configs_dir
                     )
             if config_root is None or not config_root.exists():
-                return {}
+                return None
 
-            options = ConfigAdapterOptions(
-                strict=False,
-                bundle=True,
-                ingest=True,
-                allow_heuristic_refs=True,
-            )
-            return _resolve_identity_from_adapter(
+            return _resolve_plan_from_adapter(
                 ActivitySimConfigAdapter(),
                 config_root,
-                options=options,
             )
 
         if model == "beam_run":
             try:
                 from consist.integrations.beam import BeamConfigAdapter
             except Exception:
-                return {}
+                return None
 
             config_root: Optional[Path] = None
             if workspace_obj is not None and hasattr(workspace_obj, "get_beam_mutable_data_dir"):
@@ -188,11 +168,11 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                         / settings.run.region
                     )
             if config_root is None:
-                return {}
+                return None
 
             primary_config = config_root / settings.beam.config
             if not primary_config.exists():
-                return {}
+                return None
 
             beam_input_root = config_root.resolve()
             pwd_candidates = [
@@ -206,34 +186,16 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 beam_input_root.parent,
             )
             env_overrides = {"PWD": str(pwd_root)}
-            options = ConfigAdapterOptions(
-                strict=False,
-                bundle=False,
-                ingest=True,
-                allow_heuristic_refs=True,
+            return _resolve_plan_from_adapter(
+                BeamConfigAdapter(
+                    primary_config=primary_config,
+                    env_overrides=env_overrides,
+                ),
+                config_root,
+                env_overrides=env_overrides,
             )
-            original_env: Dict[str, Optional[str]] = {}
-            for key, value in env_overrides.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
-            try:
-                identity = _resolve_identity_from_adapter(
-                    BeamConfigAdapter(
-                        primary_config=primary_config,
-                        env_overrides=env_overrides,
-                    ),
-                    config_root,
-                    options=options,
-                )
-            finally:
-                for key, value in original_env.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
-            return identity
 
-        return {}
+        return None
 
     def _resolve(ctx: StepContext) -> Dict[str, Any]:
         cache_key = id(ctx)
@@ -249,20 +211,19 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             settings=settings,
             workspace_path=workspace_path,
         )
-        extra_identity = _canonicalization_identity(ctx)
-        if extra_identity:
-            config = resolved.get("config")
-            if isinstance(config, dict):
-                config = dict(config)
-                config.update(extra_identity)
-            else:
-                config = dict(extra_identity)
-            resolved["config"] = config
+        plan = _config_plan(ctx)
+        if plan is not None:
+            resolved["config_plan"] = plan
+            # Avoid duplicate/overlapping invalidation when Consist canonical
+            # config plans are available. The plan's identity hash is now the
+            # authoritative file-based config signature for these steps.
+            resolved.pop("hash_inputs", None)
         cache[cache_key] = resolved
         return resolved
 
     return {
         "config": lambda ctx: _resolve(ctx).get("config"),
+        "config_plan": lambda ctx: _resolve(ctx).get("config_plan"),
         "facet": lambda ctx: _resolve(ctx).get("facet"),
         "facet_index": lambda ctx: _resolve(ctx).get("facet_index"),
         "facet_schema_version": lambda ctx: _resolve(ctx).get("facet_schema_version"),

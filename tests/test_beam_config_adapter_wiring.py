@@ -76,9 +76,11 @@ def _wire_common(monkeypatch, tracker, run_id) -> None:
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
         lambda model, settings, workspace_path=None: {"config": {"model": model}},
     )
-    tracker.prepare_config.return_value = SimpleNamespace(
-        identity_hash="beam-plan-hash",
-        adapter_version="beam-adapter-v1",
+    tracker.prepare_config_resolver.return_value = (
+        lambda ctx: SimpleNamespace(
+            identity_hash="beam-plan-hash",
+            adapter_version="beam-adapter-v1",
+        )
     )
 
 
@@ -114,7 +116,7 @@ def _setup_config(tmp_path: Path):
     return workspace, settings
 
 
-def test_beam_run_metadata_prepare_config_with_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_prepares_config_plan_with_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from consist.integrations.beam import BeamConfigAdapter
 
@@ -134,20 +136,26 @@ def test_beam_run_metadata_prepare_config_with_run_id(monkeypatch, tmp_path):
         workspace=workspace,
     )
 
-    resolved = meta.config(ctx)
-    assert tracker.prepare_config.call_count == 1
-    args, kwargs = tracker.prepare_config.call_args
-    assert isinstance(args[0], BeamConfigAdapter)
-    config_dirs = args[1]
+    resolved_config = meta.config(ctx)
+    resolved_plan = meta.config_plan(ctx)
+    resolved_hash_inputs = meta.hash_inputs(ctx)
+    assert tracker.prepare_config_resolver.call_count == 1
+    _, kwargs = tracker.prepare_config_resolver.call_args
+    adapter = kwargs["adapter"]
+    config_dirs = kwargs["config_dirs"]
+    assert isinstance(adapter, BeamConfigAdapter)
     assert Path(config_dirs[0]) == (
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     )
-    assert resolved["canonical_config_identity_hash"] == "beam-plan-hash"
-    assert resolved["canonical_config_adapter_version"] == "beam-adapter-v1"
+    assert resolved_config["model"] == "beam_run"
+    assert resolved_plan.identity_hash == "beam-plan-hash"
+    assert resolved_plan.adapter_version == "beam-adapter-v1"
+    assert resolved_hash_inputs is None
+    assert tracker.prepare_config.call_count == 0
     assert tracker.canonicalize_config.call_count == 0
 
 
-def test_beam_run_metadata_prepare_config_without_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_prepares_config_plan_without_run_id(monkeypatch, tmp_path):
     pytest.importorskip("consist")
 
     workspace, settings = _setup_config(tmp_path)
@@ -166,9 +174,12 @@ def test_beam_run_metadata_prepare_config_without_run_id(monkeypatch, tmp_path):
         workspace=workspace,
     )
 
-    resolved = meta.config(ctx)
-    assert tracker.prepare_config.call_count == 1
-    assert resolved["canonical_config_identity_hash"] == "beam-plan-hash"
+    resolved_plan = meta.config_plan(ctx)
+    resolved_hash_inputs = meta.hash_inputs(ctx)
+    assert tracker.prepare_config_resolver.call_count == 1
+    assert resolved_plan.identity_hash == "beam-plan-hash"
+    assert resolved_hash_inputs is None
+    assert tracker.prepare_config.call_count == 0
     assert tracker.canonicalize_config.call_count == 0
 
 
@@ -200,3 +211,4 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
 
     assert tracker.canonicalize_config.call_count == 0
     assert tracker.prepare_config.call_count == 0
+    assert tracker.prepare_config_resolver.call_count == 0

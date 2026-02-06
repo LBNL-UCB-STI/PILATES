@@ -58,6 +58,7 @@ def test_make_step_factories_attach_consist_metadata():
     assert compile_meta.outputs == ["zarr_skims"]
     assert preprocess_meta.name_template == "{func_name}__y{year}__i{iteration}__phase_{phase}"
     assert callable(preprocess_meta.config)
+    assert callable(preprocess_meta.config_plan)
     assert callable(preprocess_meta.facet)
 
 

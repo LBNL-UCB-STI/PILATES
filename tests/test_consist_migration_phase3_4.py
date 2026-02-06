@@ -202,3 +202,77 @@ def test_run_container_uses_current_tracker(monkeypatch, tmp_path):
 
     assert ok is True
     assert called.get("tracker") is tracker
+
+
+def test_scenario_run_hash_includes_coupler_input_keys(tmp_path):
+    pytest.importorskip("consist")
+    from consist import Tracker
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "consist_test.duckdb"),
+        mounts={"workspace": str(tmp_path)},
+    )
+
+    plans_path = tmp_path / "plans.parquet"
+    consumer_out = tmp_path / "consumer.out"
+    plans_path.write_text("plans-v1")
+    consume_calls = {"count": 0}
+
+    def _consume():
+        consume_calls["count"] += 1
+        consumer_out.write_text(f"consume-{consume_calls['count']}")
+
+    with cr.scenario("hash-inputs-test", tracker=tracker) as scenario:
+        scenario.run(
+            fn=lambda: None,
+            name="seed_plans",
+            model="seed_plans",
+            output_paths={"plans_beam_in": str(plans_path)},
+            cache_mode="off",
+        )
+
+        first = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+        second = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+
+        plans_path.write_text("plans-v2")
+        scenario.run(
+            fn=lambda: None,
+            name="seed_plans_refresh",
+            model="seed_plans",
+            output_paths={"plans_beam_in": str(plans_path)},
+            cache_mode="off",
+        )
+        third = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert third.cache_hit is False
+    assert consume_calls["count"] == 2

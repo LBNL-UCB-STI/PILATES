@@ -106,9 +106,11 @@ def _wire_common(monkeypatch, tracker, run_id) -> None:
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
         lambda model, settings, workspace_path=None: {"config": {"model": model}},
     )
-    tracker.prepare_config.return_value = SimpleNamespace(
-        identity_hash="asim-plan-hash",
-        adapter_version="asim-adapter-v1",
+    tracker.prepare_config_resolver.return_value = (
+        lambda ctx: SimpleNamespace(
+            identity_hash="asim-plan-hash",
+            adapter_version="asim-adapter-v1",
+        )
     )
 
 
@@ -146,7 +148,9 @@ def _make_step_context(
     return StepContext(**kwargs)
 
 
-def test_activitysim_run_metadata_prepare_config_with_run_id(monkeypatch, tmp_path):
+def test_activitysim_run_metadata_prepares_config_plan_with_run_id(
+    monkeypatch, tmp_path
+):
     pytest.importorskip("consist")
     from consist.integrations.activitysim import ActivitySimConfigAdapter
 
@@ -169,18 +173,24 @@ def test_activitysim_run_metadata_prepare_config_with_run_id(monkeypatch, tmp_pa
         runtime_workspace=workspace,
     )
 
-    resolved = meta.config(ctx)
-    assert tracker.prepare_config.call_count == 1
-    args, kwargs = tracker.prepare_config.call_args
-    assert isinstance(args[0], ActivitySimConfigAdapter)
-    config_dirs = args[1]
+    resolved_config = meta.config(ctx)
+    resolved_plan = meta.config_plan(ctx)
+    resolved_hash_inputs = meta.hash_inputs(ctx)
+    assert tracker.prepare_config_resolver.call_count == 1
+    _, kwargs = tracker.prepare_config_resolver.call_args
+    adapter = kwargs["adapter"]
+    config_dirs = kwargs["config_dirs"]
+    assert isinstance(adapter, ActivitySimConfigAdapter)
     assert Path(config_dirs[0]) == fixture_root / "base"
-    assert resolved["canonical_config_identity_hash"] == "asim-plan-hash"
-    assert resolved["canonical_config_adapter_version"] == "asim-adapter-v1"
+    assert resolved_config["model"] == "activitysim_run"
+    assert resolved_plan.identity_hash == "asim-plan-hash"
+    assert resolved_plan.adapter_version == "asim-adapter-v1"
+    assert resolved_hash_inputs is None
+    assert tracker.prepare_config.call_count == 0
     assert tracker.canonicalize_config.call_count == 0
 
 
-def test_activitysim_run_metadata_prepare_config_without_run_id(
+def test_activitysim_run_metadata_prepares_config_plan_without_run_id(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("consist")
@@ -204,13 +214,18 @@ def test_activitysim_run_metadata_prepare_config_without_run_id(
         runtime_workspace=workspace,
     )
 
-    resolved = meta.config(ctx)
-    assert tracker.prepare_config.call_count == 1
-    assert resolved["canonical_config_identity_hash"] == "asim-plan-hash"
+    resolved_plan = meta.config_plan(ctx)
+    resolved_hash_inputs = meta.hash_inputs(ctx)
+    assert tracker.prepare_config_resolver.call_count == 1
+    assert resolved_plan.identity_hash == "asim-plan-hash"
+    assert resolved_hash_inputs is None
+    assert tracker.prepare_config.call_count == 0
     assert tracker.canonicalize_config.call_count == 0
 
 
-def test_activitysim_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):
+def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
+    monkeypatch, tmp_path
+):
     pytest.importorskip("consist")
     from pilates.utils import consist_runtime as cr
     from pilates.workflows import steps as steps_module
@@ -223,8 +238,12 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(monkeypatch, 
 
     monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(cr, "current_run", lambda: None)
-    monkeypatch.setattr(cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path))
-    monkeypatch.setattr(cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path))
+    monkeypatch.setattr(
+        cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path)
+    )
+    monkeypatch.setattr(
+        cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path)
+    )
 
     dummy_preprocessor = DummyPreprocessor(tmp_path / "asim_preprocess")
     Path(workspace.get_asim_mutable_data_dir()).mkdir(parents=True, exist_ok=True)
@@ -242,6 +261,7 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(monkeypatch, 
 
     assert tracker.canonicalize_config.call_count == 0
     assert tracker.prepare_config.call_count == 0
+    assert tracker.prepare_config_resolver.call_count == 0
 
 
 def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
@@ -267,7 +287,13 @@ def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
         runtime_settings_override=_make_settings(),
     )
 
-    resolved = meta.config(ctx)
-    assert tracker.prepare_config.call_count == 1
-    assert resolved["canonical_config_identity_hash"] == "asim-plan-hash"
+    resolved_plan = meta.config_plan(ctx)
+    resolved_hash_inputs = meta.hash_inputs(ctx)
+    assert tracker.prepare_config_resolver.call_count == 1
+    _, kwargs = tracker.prepare_config_resolver.call_args
+    config_dirs = kwargs["config_dirs"]
+    assert Path(config_dirs[0]) == fixture_root / "base"
+    assert resolved_plan.identity_hash == "asim-plan-hash"
+    assert resolved_hash_inputs is None
+    assert tracker.prepare_config.call_count == 0
     assert tracker.canonicalize_config.call_count == 0
