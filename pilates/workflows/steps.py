@@ -221,11 +221,15 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_PLANS_OUT,
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
     BEAM_OUTPUT_PLANS_XML,
     BEAM_R5_OSM_FILE,
+    LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
@@ -955,6 +959,7 @@ def _execute_beam_preprocess(
     context: str = "beam_preprocess",
     activity_demand_outputs: Optional[RecordStore] = None,
     previous_beam_outputs: Optional[RecordStore] = None,
+    beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -987,6 +992,28 @@ def _execute_beam_preprocess(
         combined += activity_demand_outputs
     if previous_beam_outputs is not None:
         combined += previous_beam_outputs
+    if beam_preprocess_inputs:
+        # Bridge orchestration-level fallback inputs into the legacy BEAM
+        # preprocessor contract, which expects ActivitySim-style short names.
+        key_aliases = {
+            BEAM_PLANS_IN: "beam_plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+            LINKSTATS_WARMSTART: "linkstats",
+        }
+        for key, value in beam_preprocess_inputs.items():
+            path = artifact_to_path(value, workspace)
+            if path is None and isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+            if not path:
+                continue
+            combined.add_record(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=key_aliases.get(key, key),
+                    description=f"BEAM preprocess provided input: {key}",
+                )
+            )
     _warn_missing_coupler_inputs(coupler, combined, context)
     return preprocessor.preprocess(workspace, combined)
 

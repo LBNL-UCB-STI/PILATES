@@ -7,6 +7,11 @@ import pytest
 from consist.core.step_context import StepContext
 
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+)
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_beam_preprocess_step,
@@ -212,3 +217,49 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
     assert tracker.canonicalize_config.call_count == 0
     assert tracker.prepare_config.call_count == 0
     assert tracker.prepare_config_resolver.call_count == 0
+
+
+def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):
+    captured = {}
+
+    class CapturingPreprocessor:
+        def preprocess(self, workspace, inputs) -> RecordStore:
+            captured["keys"] = {
+                record.short_name for record in inputs.all_records()
+            }
+            return RecordStore()
+
+    workspace, settings = _setup_config(tmp_path)
+    state = _make_state()
+    plans = tmp_path / "plans.parquet"
+    households = tmp_path / "households.parquet"
+    persons = tmp_path / "persons.parquet"
+    for path in (plans, households, persons):
+        path.write_text("x")
+
+    from pilates.workflows import steps as steps_module
+
+    monkeypatch.setattr(
+        steps_module.ModelFactory,
+        "get_preprocessor",
+        lambda self, *args, **kwargs: CapturingPreprocessor(),
+    )
+
+    step_fn = make_beam_preprocess_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    step_fn(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_preprocess_inputs={
+            BEAM_PLANS_IN: str(plans),
+            BEAM_HOUSEHOLDS_IN: str(households),
+            BEAM_PERSONS_IN: str(persons),
+        },
+    )
+
+    assert "beam_plans" in captured["keys"]
+    assert "households" in captured["keys"]
+    assert "persons" in captured["keys"]

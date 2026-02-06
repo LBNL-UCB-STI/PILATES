@@ -895,6 +895,7 @@ def _run_traffic_assignment_phase(
     traffic_runtime_kwargs = {
         "activity_demand_outputs": inputs.activity_demand_outputs,
         "previous_beam_outputs": previous_beam_outputs,
+        "beam_preprocess_inputs": beam_preprocess_inputs,
     }
     combined_beam_outputs = _run_beam_steps(
         scenario=scenario,
