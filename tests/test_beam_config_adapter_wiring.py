@@ -46,6 +46,9 @@ class DummyWorkspace:
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._beam_dir)
 
+    def get_beam_output_dir(self) -> str:
+        return str(self._beam_dir / "output")
+
 
 def _make_settings(region: str, primary_conf: str) -> SimpleNamespace:
     run = SimpleNamespace(region=region)
@@ -92,14 +95,19 @@ def _setup_config(tmp_path: Path) -> Tuple[DummyWorkspace, SimpleNamespace]:
     primary_conf = "beam.conf"
     (config_root / primary_conf).write_text("beam.test = 1\n")
 
+    # Create output directory
+    output_dir = beam_root / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     workspace = DummyWorkspace(beam_root)
     settings = _make_settings(region=region, primary_conf=primary_conf)
     return workspace, settings
 
 
 def test_beam_canonicalize_config_with_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist")
+    pytest.importorskip("consist.integrations.beam")
     from consist.integrations.beam import BeamConfigAdapter
+    from pilates.workflows.steps import make_beam_run_step
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
@@ -111,11 +119,23 @@ def test_beam_canonicalize_config_with_run_id(monkeypatch, tmp_path):
 
     _wire_step(monkeypatch, tracker, run_id="run-456", preprocessor=preprocessor)
 
-    step_fn = make_beam_preprocess_step(
+    # Set beam_preprocess output so the run step doesn't fail the prerequisite check
+    from pilates.beam.outputs import BeamPreprocessOutputs
+    outputs_holder.beam_preprocess = BeamPreprocessOutputs(
+        beam_mutable_data_dir=workspace.get_beam_mutable_data_dir(),
+        prepared_inputs={}
+    )
+
+    step_fn = make_beam_run_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
     )
-    step_fn(settings=settings, state=state, workspace=workspace)
+
+    # Mock the runner to avoid actual BEAM execution
+    from pilates.beam.runner import BeamRunner
+    with monkeypatch.context() as m:
+        m.setattr(BeamRunner, "run", lambda self, *args, **kwargs: None)
+        step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 1
     args, kwargs = tracker.canonicalize_config.call_args
@@ -128,8 +148,9 @@ def test_beam_canonicalize_config_with_run_id(monkeypatch, tmp_path):
 
 
 def test_beam_canonicalize_config_without_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist")
+    pytest.importorskip("consist.integrations.beam")
     from consist.integrations.beam import BeamConfigAdapter
+    from pilates.workflows.steps import make_beam_run_step
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
@@ -141,11 +162,23 @@ def test_beam_canonicalize_config_without_run_id(monkeypatch, tmp_path):
 
     _wire_step(monkeypatch, tracker, run_id=None, preprocessor=preprocessor)
 
-    step_fn = make_beam_preprocess_step(
+    # Set beam_preprocess output so the run step doesn't fail the prerequisite check
+    from pilates.beam.outputs import BeamPreprocessOutputs
+    outputs_holder.beam_preprocess = BeamPreprocessOutputs(
+        beam_mutable_data_dir=workspace.get_beam_mutable_data_dir(),
+        prepared_inputs={}
+    )
+
+    step_fn = make_beam_run_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
     )
-    step_fn(settings=settings, state=state, workspace=workspace)
+
+    # Mock the runner to avoid actual BEAM execution
+    from pilates.beam.runner import BeamRunner
+    with monkeypatch.context() as m:
+        m.setattr(BeamRunner, "run", lambda self, *args, **kwargs: None)
+        step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 1
     args, kwargs = tracker.canonicalize_config.call_args

@@ -12,8 +12,8 @@ scipy>=1.11.0
 numexpr==2.10.2
 bottleneck==1.4.2
 py-cpuinfo
-blosc2~=2.0.0
-tables==3.8.0
+blosc2>=2.3.0
+tables>=3.9.0,<4.0
 h5py
 matplotlib==3.7.1
 

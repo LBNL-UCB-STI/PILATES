@@ -10,7 +10,7 @@ from pilates.workflows.artifact_constants import (
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
 )
-from pilates.workflows.steps import StepOutputsHolder, make_activitysim_preprocess_step
+from pilates.workflows.steps import StepOutputsHolder, make_activitysim_preprocess_step, make_activitysim_run_step
 
 
 class DummyCoupler:
@@ -67,19 +67,25 @@ class DummyWorkspace:
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._data_dir)
 
-
-def _fixture_root() -> Path:
-    return (
-        Path(__file__).resolve().parent
-        / "fixtures"
-        / "consist"
-        / "activitysim_small"
-    )
+    def get_asim_output_dir(self) -> str:
+        return str(self._data_dir / "output")
 
 
 def _make_settings() -> SimpleNamespace:
     activitysim = SimpleNamespace(main_configs_dir="base")
     return SimpleNamespace(activitysim=activitysim)
+
+
+def _setup_config(tmp_path: Path) -> tuple:
+    """Create ActivitySim config directory structure for testing."""
+    asim_root = tmp_path / "asim_configs"
+    config_root = asim_root / "base"
+    config_root.mkdir(parents=True, exist_ok=True)
+
+    # Create a dummy config file
+    (config_root / "settings.yaml").write_text("models: []\\n")
+
+    return asim_root
 
 
 def _make_state() -> SimpleNamespace:
@@ -116,10 +122,10 @@ def _wire_step(monkeypatch, tracker, run_id) -> None:
 
 
 def test_activitysim_canonicalize_config_with_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist")
+    pytest.importorskip("consist.integrations.activitysim")
 
-    fixture_root = _fixture_root()
-    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    asim_configs_root = _setup_config(tmp_path)
+    workspace = DummyWorkspace(asim_configs_root, tmp_path / "asim_data")
     settings = _make_settings()
     state = _make_state()
     outputs_holder = StepOutputsHolder()
@@ -130,24 +136,43 @@ def test_activitysim_canonicalize_config_with_run_id(monkeypatch, tmp_path):
 
     _wire_step(monkeypatch, tracker, run_id="run-123")
 
-    step_fn = make_activitysim_preprocess_step(
+    # Set up activitysim_preprocess prerequisite output
+    from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+    from pathlib import Path
+    data_dir = Path(workspace.get_asim_mutable_data_dir())
+    data_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(workspace.get_asim_output_dir())
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=data_dir,
+        land_use_table=data_dir / "land_use.csv",
+        households_table=data_dir / "households.csv",
+        persons_table=data_dir / "persons.csv"
+    )
+
+    step_fn = make_activitysim_run_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
     )
-    step_fn(settings=settings, state=state, workspace=workspace)
+
+    # Mock the runner to avoid actual ActivitySim execution
+    from pilates.activitysim.runner import ActivitysimRunner
+    with monkeypatch.context() as m:
+        m.setattr(ActivitysimRunner, "run", lambda self, *args, **kwargs: None)
+        step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 1
     args, kwargs = tracker.canonicalize_config.call_args
     assert kwargs.get("run_id") == "run-123"
     config_dirs = args[1]
-    assert Path(config_dirs[0]) == fixture_root / "base"
+    assert Path(config_dirs[0]) == asim_configs_root / "base"
 
 
 def test_activitysim_canonicalize_config_without_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist")
+    pytest.importorskip("consist.integrations.activitysim")
 
-    fixture_root = _fixture_root()
-    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    asim_configs_root = _setup_config(tmp_path)
+    workspace = DummyWorkspace(asim_configs_root, tmp_path / "asim_data")
     settings = _make_settings()
     state = _make_state()
     outputs_holder = StepOutputsHolder()
@@ -158,11 +183,30 @@ def test_activitysim_canonicalize_config_without_run_id(monkeypatch, tmp_path):
 
     _wire_step(monkeypatch, tracker, run_id=None)
 
-    step_fn = make_activitysim_preprocess_step(
+    # Set up activitysim_preprocess prerequisite output
+    from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+    from pathlib import Path
+    data_dir = Path(workspace.get_asim_mutable_data_dir())
+    data_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(workspace.get_asim_output_dir())
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=data_dir,
+        land_use_table=data_dir / "land_use.csv",
+        households_table=data_dir / "households.csv",
+        persons_table=data_dir / "persons.csv"
+    )
+
+    step_fn = make_activitysim_run_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
     )
-    step_fn(settings=settings, state=state, workspace=workspace)
+
+    # Mock the runner to avoid actual ActivitySim execution
+    from pilates.activitysim.runner import ActivitysimRunner
+    with monkeypatch.context() as m:
+        m.setattr(ActivitysimRunner, "run", lambda self, *args, **kwargs: None)
+        step_fn(settings=settings, state=state, workspace=workspace)
 
     assert tracker.canonicalize_config.call_count == 1
     _, kwargs = tracker.canonicalize_config.call_args

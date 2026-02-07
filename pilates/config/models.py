@@ -335,6 +335,29 @@ class ActivitySimConfig(BaseModel):
         }
 
 
+class BackgroundSkimsCreatorConfig(BaseModel):
+    """Configuration for BEAM BackgroundSkimsCreatorApp (skim-only mode)."""
+
+    enabled: bool = Field(False, description="Enable skim-only mode")
+    router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
+    skims_geo_type: str = Field("taz", description="Geography: taz or h3")
+    skims_kind: str = Field("od", description="Skim type: od")
+    peak_hours: List[float] = Field(
+        default_factory=lambda: [8.5], description="Peak hours (8.5 = 8:30 AM)"
+    )
+    modes_to_build: Dict[str, bool] = Field(
+        default_factory=lambda: {"drive": True, "walk": False, "transit": False},
+        description="Modes to generate skims for",
+    )
+    parallelism: int = Field(12, description="Parallel threads for routing")
+    output_filename: str = Field(
+        "background_skims.csv", description="Output CSV filename"
+    )
+    linkstats_file: Optional[str] = Field(
+        None, description="Optional linkstats for congested times"
+    )
+
+
 class BeamConfig(BaseModel):
     """BEAM transportation network simulation configuration."""
 
@@ -370,6 +393,9 @@ class BeamConfig(BaseModel):
     )
     ridehail_path_map: Dict[str, str] = Field(
         default_factory=dict, description="Ridehail path mappings"
+    )
+    skim_only: Optional[BackgroundSkimsCreatorConfig] = Field(
+        None, description="Skim-only mode configuration (runs BackgroundSkimsCreatorApp)"
     )
 
 

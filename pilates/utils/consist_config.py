@@ -354,7 +354,7 @@ def build_beam_hash_inputs(
         raise FileNotFoundError(f"BEAM mutable data dir not found: {root}")
 
     config_name = getattr(cfg, "config", None)
-    if config_name:
+    if isinstance(config_name, str) and config_name:
         matches = sorted(root.rglob(config_name))
         if matches:
             return [(f"beam_conf/{config_name}", matches[0])]

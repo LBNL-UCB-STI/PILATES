@@ -66,7 +66,7 @@ class BeamRunner(GenericRunner):
         Declare the input paths/artifacts this runner expects from the workflow.
         """
         zarr_path = None
-        if settings.activitysim is not None:
+        if getattr(settings, "activitysim", None) is not None:
             candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
             if os.path.exists(candidate):
                 zarr_path = candidate
@@ -302,6 +302,39 @@ class BeamRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
+        # Determine if skim-only mode is enabled via configuration
+        environment = {"JAVA_OPTS": java_opts}
+        command = f"--config={path_to_beam_config}"
+        beam_cfg = getattr(settings, "beam", None)
+        if beam_cfg and beam_cfg.skim_only and beam_cfg.skim_only.enabled:
+            # Override main class for skim-only mode
+            environment["BEAM_MAIN_CLASS"] = "scripts.BackgroundSkimsCreatorApp"
+            skim_cfg = beam_cfg.skim_only
+            # Build command arguments for the BackgroundSkimsCreatorApp
+            output_path = os.path.join(abs_beam_output, skim_cfg.output_filename)
+            cmd_parts = [
+                f"--configPath={path_to_beam_config}",
+                f"--output={output_path}",
+                f"--parallelism={skim_cfg.parallelism}",
+                f"--routerType={skim_cfg.router_type}",
+                f"--skimsGeoType={skim_cfg.skims_geo_type}",
+                f"--skimsKind={skim_cfg.skims_kind}",
+            ]
+
+            # Format peak hours as comma-separated list
+            peak_hours_str = ",".join(str(h) for h in skim_cfg.peak_hours)
+            cmd_parts.append(f"--peakHours={peak_hours_str}")
+
+            # Format modes to build as comma-separated list of enabled modes
+            enabled_modes = [mode for mode, enabled in skim_cfg.modes_to_build.items() if enabled]
+            if enabled_modes:
+                modes_str = ",".join(enabled_modes)
+                cmd_parts.append(f"--modesToBuild={modes_str}")
+
+            if skim_cfg.linkstats_file:
+                cmd_parts.append(f"--linkstats={skim_cfg.linkstats_file}")
+            command = " ".join(cmd_parts)
+
         # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
         # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
         from pilates.generic.records import FileRecord
@@ -318,10 +351,10 @@ class BeamRunner(GenericRunner):
                 abs_beam_input: {"bind": "/app/input", "mode": "rw"},
                 abs_beam_output: {"bind": "/app/output", "mode": "rw"},
             },
-            command=f"--config={path_to_beam_config}",
+            command=command,
             model_name=self.model_name,
             working_dir="/app",
-            environment={"JAVA_OPTS": java_opts},
+            environment=environment,
             input_artifacts=input_paths,
             output_paths=[abs_beam_output],
             lineage_mode="none",

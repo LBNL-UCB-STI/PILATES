@@ -3553,7 +3553,7 @@ class BeamPostprocessor(GenericPostprocessor):
         """
         beam_output_dir = workspace.get_beam_output_dir()
         zarr_path = None
-        if settings.activitysim is not None:
+        if getattr(settings, "activitysim", None) is not None:
             candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
             if os.path.exists(candidate):
                 zarr_path = candidate
@@ -3593,7 +3593,7 @@ class BeamPostprocessor(GenericPostprocessor):
             )
             return {"final_skims_omx": final_omx_path}
 
-        if settings.activitysim is not None:
+        if getattr(settings, "activitysim", None) is not None:
             zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
             return {"zarr_skims": zarr_path}
         return {}
@@ -3676,7 +3676,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 )
 
         all_skims_path = None
-        if settings.activitysim is not None:
+        if getattr(settings, "activitysim", None) is not None:
             all_skims_path = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )

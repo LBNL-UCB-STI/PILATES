@@ -1,5 +1,8 @@
-import yaml
+__test__ = False
+
 import os
+import yaml
+
 from pilates.utils.settings_helper import get as get_setting
 
 WARM_START_ACTIVITIES = True

@@ -171,12 +171,18 @@ class Initialization(Model):
                     if os.path.exists(zone_source_path):
                         zone_fname = os.path.basename(zone_source_path)
                         dest_path = os.path.join(asim_input_dir, zone_fname)
-                        logger.info(
-                            "Copying canonical zones from %s to %s",
-                            zone_source_path,
-                            dest_path,
-                        )
-                        shutil.copy(zone_source_path, dest_path)
+                        # Only copy if source and destination are different
+                        if os.path.abspath(zone_source_path) != os.path.abspath(dest_path):
+                            logger.info(
+                                "Copying canonical zones from %s to %s",
+                                zone_source_path,
+                                dest_path,
+                            )
+                            shutil.copy(zone_source_path, dest_path)
+                        else:
+                            logger.info(
+                                "Canonical zones already at destination: %s", dest_path
+                            )
                         rec_in = RecordStore(
                             recordList=[
                                 FileRecord(

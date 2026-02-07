@@ -84,6 +84,10 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     Verify that Initialization.run aggregates input/output records for
     beam and urbansim models using the dummy preprocessor.
     """
+    # Disable consist for this test to avoid needing a run context
+    from pilates.utils import consist_runtime as cr
+    monkeypatch.setattr(cr, "consist", None)
+
     # Patch ModelFactory used inside Initialization
     monkeypatch.setattr(
         "pilates.generic.initialization.ModelFactory", DummyModelFactory
@@ -102,6 +106,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
             start_year=2020,
         ),
         shared=SimpleNamespace(
+            database=SimpleNamespace(use_consist=False),
             skims=SimpleNamespace(zone_type="block_group"),
             geography=SimpleNamespace(
                 zones=SimpleNamespace(
