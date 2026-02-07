@@ -379,7 +379,7 @@ class BeamRunner(GenericRunner):
                 cmd_parts.append(f"--modesToBuild={modes_str}")
 
             if skim_cfg.linkstats_file:
-                cmd_parts.append(f"--linkstats={skim_cfg.linkstats_file}")
+                cmd_parts.append(f"--linkstatsPath={skim_cfg.linkstats_file}")
             command = " ".join(cmd_parts)
 
         # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
