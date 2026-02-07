@@ -25,7 +25,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.1-beta-v260121
+  beam: docker://haitamlaarabi/beam:1.1-beta-v260207
   activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.1-beta-v260121
+  beam: haitamlaarabi/beam:1.1-beta-v260207
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -60,7 +60,7 @@ geoms_index_col: GEOID
 ###############################
 
 output_directory: /global/scratch/users/$USER/pilates-output
-output_run_name: jdeq-calibration-FC07-0
+output_run_name: 20250721--2018-Baseline--fullskim
 
 # URBANSIM
 region_to_region_id:
@@ -100,7 +100,7 @@ atlas_formattable_command: "--freq {0} --outyear {1} --npe {2} --nsample {3} --b
 
 
 # BEAM 
-beam_config: scenarios/network-calibration/beam-pilates-run--seattle--jdeq-calibration-FC07-0.conf # OR austin-pilates-base.conf
+beam_config: scenarios/freight/seattle-pilates--20250721--2018-Baseline.conf # OR austin-pilates-base.conf
 beam_sample: 1.0
 beam_replanning_portion: 0.4
 beam_local_input_folder: pilates/beam/production/
@@ -120,6 +120,19 @@ beam_simulated_hwy_paths:
   - HOV2
   - HOV3
 file_format: "parquet"
+
+beam_skim_only_enabled: true
+beam_skim_only_router_type: "r5+gh"        # Options: "r5", "r5+gh", "gh"
+beam_skim_only_skims_geo_type: "taz"       # Options: "taz", "h3"
+beam_skim_only_skims_kind: "od"
+beam_skim_only_peak_hours: [8.5, 17.5]    # List of peak hours
+beam_skim_only_modes_drive: true           # Enable drive skims
+beam_skim_only_modes_walk: false            # Enable walk skims
+beam_skim_only_modes_transit: false        # Disable transit skims
+# beam_skim_only_parallelism: not specified - will auto-calculate
+beam_skim_only_output_filename: skimsODFull.csv.gz
+beam_skim_only_linkstats_file: r5/seattle-area-cbg120-ferry-weakConn-network/linkstats_v2/6.linkstats.fc07_0.csv.gz
+
 
 # POLARIS
 polaris_local_data_folder: pilates/polaris/data

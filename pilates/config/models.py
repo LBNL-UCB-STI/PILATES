@@ -349,7 +349,9 @@ class BackgroundSkimsCreatorConfig(BaseModel):
         default_factory=lambda: {"drive": True, "walk": False, "transit": False},
         description="Modes to generate skims for",
     )
-    parallelism: int = Field(12, description="Parallel threads for routing")
+    parallelism: Optional[int] = Field(
+        None, description="Parallel threads for routing (auto-calculated if not set)"
+    )
     output_filename: str = Field(
         "background_skims.csv", description="Output CSV filename"
     )

@@ -365,18 +365,23 @@ class ConfigMigrator:
             if not modes_to_build:
                 modes_to_build = {"drive": True, "walk": False, "transit": False}
 
-            beam_config["skim_only"] = {
+            skim_only_config = {
                 "enabled": self.legacy.get("beam_skim_only_enabled", False),
                 "router_type": self.legacy.get("beam_skim_only_router_type", "r5+gh"),
                 "skims_geo_type": self.legacy.get("beam_skim_only_skims_geo_type", "taz"),
                 "skims_kind": self.legacy.get("beam_skim_only_skims_kind", "od"),
                 "peak_hours": self.legacy.get("beam_skim_only_peak_hours", [8.5]),
                 "modes_to_build": modes_to_build,
-                "parallelism": self.legacy.get("beam_skim_only_parallelism", 12),
                 "output_filename": self.legacy.get(
                     "beam_skim_only_output_filename", "background_skims.csv"
                 ),
             }
+
+            # Add parallelism only if explicitly set (otherwise auto-calculate)
+            if "beam_skim_only_parallelism" in self.legacy:
+                skim_only_config["parallelism"] = self.legacy.get("beam_skim_only_parallelism")
+
+            beam_config["skim_only"] = skim_only_config
 
             # Add linkstats_file only if it's not None/null
             linkstats_file = self.legacy.get("beam_skim_only_linkstats_file")

@@ -20,6 +20,47 @@ from pilates.utils.settings_helper import get as get_setting
 logger = logging.getLogger(__name__)
 
 
+def _calculate_optimal_parallelism() -> int:
+    """
+    Calculate optimal parallelism for skim generation based on available resources.
+
+    Returns
+    -------
+    int
+        Recommended number of parallel threads
+    """
+    import multiprocessing
+    import psutil
+
+    # Get available CPU cores
+    cpu_count = multiprocessing.cpu_count()
+
+    # Get available memory in GB
+    memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+
+    # Calculate based on CPU (use 75% of cores, reserve some for system)
+    cpu_based = max(1, int(cpu_count * 0.75))
+
+    # Calculate based on memory (assume ~2 GB per thread)
+    memory_based = max(1, int(memory_gb / 2))
+
+    # Take the minimum to avoid oversubscription
+    optimal = min(cpu_based, memory_based)
+
+    # Cap at reasonable maximum (diminishing returns beyond this)
+    optimal = min(optimal, 64)
+
+    # Ensure minimum of 4 threads (unless severely resource constrained)
+    optimal = max(optimal, min(4, cpu_count))
+
+    logger.info(
+        f"Auto-calculated parallelism: {optimal} "
+        f"(CPU: {cpu_count} cores, Memory: {memory_gb:.1f} GB available)"
+    )
+
+    return optimal
+
+
 def find_not_taken_dir_name(dir_name):
     for x in range(1, 99999):
         testing_name = f"{dir_name}_{x}"
@@ -310,12 +351,18 @@ class BeamRunner(GenericRunner):
             # Override main class for skim-only mode
             environment["BEAM_MAIN_CLASS"] = "scripts.BackgroundSkimsCreatorApp"
             skim_cfg = beam_cfg.skim_only
+
+            # Auto-calculate parallelism if not specified
+            parallelism = skim_cfg.parallelism
+            if parallelism is None:
+                parallelism = _calculate_optimal_parallelism()
+
             # Build command arguments for the BackgroundSkimsCreatorApp
             output_path = os.path.join(abs_beam_output, skim_cfg.output_filename)
             cmd_parts = [
                 f"--configPath={path_to_beam_config}",
                 f"--output={output_path}",
-                f"--parallelism={skim_cfg.parallelism}",
+                f"--parallelism={parallelism}",
                 f"--routerType={skim_cfg.router_type}",
                 f"--skimsGeoType={skim_cfg.skims_geo_type}",
                 f"--skimsKind={skim_cfg.skims_kind}",
