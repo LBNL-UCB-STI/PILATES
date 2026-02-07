@@ -379,7 +379,10 @@ class BeamRunner(GenericRunner):
                 cmd_parts.append(f"--modesToBuild={modes_str}")
 
             if skim_cfg.linkstats_file:
-                cmd_parts.append(f"--linkstatsPath={skim_cfg.linkstats_file}")
+                # Prepend the region directory so the path resolves inside the container
+                region = get_setting(settings, "run.region")
+                linkstats_path = os.path.join(region, skim_cfg.linkstats_file)
+                cmd_parts.append(f"--linkstatsPath={linkstats_path}")
             command = " ".join(cmd_parts)
 
         # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
