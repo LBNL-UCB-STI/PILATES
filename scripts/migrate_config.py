@@ -310,7 +310,7 @@ class ConfigMigrator:
         """Migrate BEAM configuration."""
         logger.info("Migrating BEAM configuration...")
 
-        return {
+        beam_config = {
             "config": self.legacy.get("beam_config", "beam.conf"),
             "sample": self.legacy.get("beam_sample", 1.0),
             "replanning_portion": self.legacy.get("beam_replanning_portion", 0.4),
@@ -347,6 +347,43 @@ class ConfigMigrator:
             ),
             "ridehail_path_map": self.legacy.get("ridehail_path_map", {}),
         }
+
+        # Migrate skim_only configuration if present
+        if self.legacy.get("beam_skim_only_enabled") is not None:
+            logger.info("Migrating BEAM skim_only configuration...")
+
+            # Build modes_to_build dict from individual mode flags
+            modes_to_build = {}
+            if self.legacy.get("beam_skim_only_modes_drive") is not None:
+                modes_to_build["drive"] = self.legacy.get("beam_skim_only_modes_drive")
+            if self.legacy.get("beam_skim_only_modes_walk") is not None:
+                modes_to_build["walk"] = self.legacy.get("beam_skim_only_modes_walk")
+            if self.legacy.get("beam_skim_only_modes_transit") is not None:
+                modes_to_build["transit"] = self.legacy.get("beam_skim_only_modes_transit")
+
+            # Default to drive-only if no modes specified
+            if not modes_to_build:
+                modes_to_build = {"drive": True, "walk": False, "transit": False}
+
+            beam_config["skim_only"] = {
+                "enabled": self.legacy.get("beam_skim_only_enabled", False),
+                "router_type": self.legacy.get("beam_skim_only_router_type", "r5+gh"),
+                "skims_geo_type": self.legacy.get("beam_skim_only_skims_geo_type", "taz"),
+                "skims_kind": self.legacy.get("beam_skim_only_skims_kind", "od"),
+                "peak_hours": self.legacy.get("beam_skim_only_peak_hours", [8.5]),
+                "modes_to_build": modes_to_build,
+                "parallelism": self.legacy.get("beam_skim_only_parallelism", 12),
+                "output_filename": self.legacy.get(
+                    "beam_skim_only_output_filename", "background_skims.csv"
+                ),
+            }
+
+            # Add linkstats_file only if it's not None/null
+            linkstats_file = self.legacy.get("beam_skim_only_linkstats_file")
+            if linkstats_file is not None:
+                beam_config["skim_only"]["linkstats_file"] = linkstats_file
+
+        return beam_config
 
     def _migrate_postprocessing_config(self) -> Dict[str, Any]:
         """Migrate postprocessing configuration."""
