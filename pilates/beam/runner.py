@@ -20,9 +20,14 @@ from pilates.utils.settings_helper import get as get_setting
 logger = logging.getLogger(__name__)
 
 
-def _calculate_optimal_parallelism() -> int:
+def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     """
     Calculate optimal parallelism for skim generation based on available resources.
+
+    Parameters
+    ----------
+    cpu_ratio : float
+        Ratio of CPU cores to use (0.0-1.0). Default is 0.8 (80%).
 
     Returns
     -------
@@ -38,8 +43,8 @@ def _calculate_optimal_parallelism() -> int:
     # Get available memory in GB
     memory_gb = psutil.virtual_memory().available / (1024 ** 3)
 
-    # Calculate based on CPU (use 75% of cores, reserve some for system)
-    cpu_based = max(1, int(cpu_count * 0.75))
+    # Calculate based on CPU using the specified ratio
+    cpu_based = max(1, int(cpu_count * cpu_ratio))
 
     # Calculate based on memory (assume ~2 GB per thread)
     memory_based = max(1, int(memory_gb / 2))
@@ -48,14 +53,14 @@ def _calculate_optimal_parallelism() -> int:
     optimal = min(cpu_based, memory_based)
 
     # Cap at reasonable maximum (diminishing returns beyond this)
-    optimal = min(optimal, 64)
+    optimal = min(optimal, 128)
 
     # Ensure minimum of 4 threads (unless severely resource constrained)
     optimal = max(optimal, min(4, cpu_count))
 
     logger.info(
-        f"Auto-calculated parallelism: {optimal} "
-        f"(CPU: {cpu_count} cores, Memory: {memory_gb:.1f} GB available)"
+        f"Auto-calculated parallelism: {optimal} ({cpu_ratio:.1%} of {cpu_count} cores, "
+        f"Memory: {memory_gb:.1f} GB available)"
     )
 
     return optimal
@@ -352,10 +357,13 @@ class BeamRunner(GenericRunner):
             environment["BEAM_MAIN_CLASS"] = "scripts.BackgroundSkimsCreatorApp"
             skim_cfg = beam_cfg.skim_only
 
-            # Auto-calculate parallelism if not specified
-            parallelism = skim_cfg.parallelism
-            if parallelism is None:
-                parallelism = _calculate_optimal_parallelism()
+            # Calculate parallelism based on CPU ratio (default 0.8 = 80% if not specified)
+            cpu_ratio = (
+                skim_cfg.parallelism_thread_ratio
+                if skim_cfg.parallelism_thread_ratio is not None
+                else 0.8
+            )
+            parallelism = _calculate_optimal_parallelism(cpu_ratio)
 
             # Build command arguments for the BackgroundSkimsCreatorApp
             output_path = os.path.join(abs_beam_output, skim_cfg.output_filename)

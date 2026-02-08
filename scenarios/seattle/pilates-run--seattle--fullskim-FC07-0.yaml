@@ -8,10 +8,11 @@
 region: seattle
 scenario: base
 start_year: 2017
-end_year: 2018
+end_year: 2017
 land_use_freq: 0
 travel_model_freq: 1
 vehicle_ownership_freq: 0
+supply_demand_iters: 1 # For full PILATES simulations (UrbanSim + BEAM + ActivitySim), you need around supply-demand iterations for the feedback loop to converge
 
 # simulation platforms (leave blank to turn off)
 land_use_model:
@@ -25,7 +26,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.1-beta-v260208Bis2
+  beam: docker://haitamlaarabi/beam:1.1-beta-v260208Bis3
   activitysim: docker://zaneedell/activitysim:0.2.5
   polaris:
 
@@ -33,7 +34,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.1-beta-v260208Bis2
+  beam: haitamlaarabi/beam:1.1-beta-v260208Bis3
   activitysim: zaneedell/activitysim:0.2.5
   polaris: tbd
 docker_stdout: False
@@ -129,7 +130,7 @@ beam_skim_only_peak_hours: [8.5, 17.5]    # List of peak hours
 beam_skim_only_modes_drive: true           # Enable drive skims
 beam_skim_only_modes_walk: false            # Enable walk skims
 beam_skim_only_modes_transit: false        # Disable transit skims
-# beam_skim_only_parallelism: not specified - will auto-calculate
+parallelism_thread_ratio: 0.8
 beam_skim_only_output_filename: skimsODFull.csv.gz
 beam_skim_only_linkstats_file: r5/seattle-area-cbg120-ferry-weakConn-network/linkstats_v2/6.linkstats.fc07_0.csv.gz
 

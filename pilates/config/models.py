@@ -59,7 +59,7 @@ class RunConfig(BaseModel):
         1, description="How often vehicle model runs", ge=0
     )
     supply_demand_iters: int = Field(
-        6, description="Supply-demand loop iterations", ge=1
+        1, description="Supply-demand loop iterations", ge=1
     )
 
     # Output configuration (METADATA scope)
@@ -349,8 +349,11 @@ class BackgroundSkimsCreatorConfig(BaseModel):
         default_factory=lambda: {"drive": True, "walk": False, "transit": False},
         description="Modes to generate skims for",
     )
-    parallelism: Optional[int] = Field(
-        None, description="Parallel threads for routing (auto-calculated if not set)"
+    parallelism_thread_ratio: Optional[float] = Field(
+        None,
+        description="Ratio of CPU cores to use (0.0-1.0). Default: 0.8 (80%) if not specified",
+        ge=0.0,
+        le=1.0
     )
     output_filename: str = Field(
         "background_skims.csv", description="Output CSV filename"
@@ -358,6 +361,7 @@ class BackgroundSkimsCreatorConfig(BaseModel):
     linkstats_file: Optional[str] = Field(
         None, description="Optional linkstats for congested times"
     )
+
 
 
 class BeamConfig(BaseModel):

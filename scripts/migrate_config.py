@@ -377,9 +377,20 @@ class ConfigMigrator:
                 ),
             }
 
-            # Add parallelism only if explicitly set (otherwise auto-calculate)
-            if "beam_skim_only_parallelism" in self.legacy:
-                skim_only_config["parallelism"] = self.legacy.get("beam_skim_only_parallelism")
+            # Add parallelism_thread_ratio only if explicitly set (otherwise auto-calculate at 0.8)
+            parallelism_value = None
+            if "beam_skim_only_parallelism_thread_pct" in self.legacy:
+                parallelism_value = self.legacy.get("beam_skim_only_parallelism_thread_pct")
+            # Support old name for backwards compatibility
+            elif "beam_skim_only_parallelism" in self.legacy:
+                parallelism_value = self.legacy.get("beam_skim_only_parallelism")
+
+            if parallelism_value is not None:
+                # Interpret <=1.0 as ratio, otherwise treat as percent
+                if parallelism_value <= 1.0:
+                    skim_only_config["parallelism_thread_ratio"] = parallelism_value
+                else:
+                    skim_only_config["parallelism_thread_ratio"] = parallelism_value / 100.0
 
             beam_config["skim_only"] = skim_only_config
 
