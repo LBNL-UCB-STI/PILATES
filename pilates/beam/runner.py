@@ -52,6 +52,39 @@ def rename_beam_output_directory(
     return beam_run_output_dir, new_iteration_output_directory
 
 
+def find_iteration_phys_sim_linkstats_parquet(
+    iteration_path: str, iteration: int
+) -> List[tuple[int, str]]:
+    """
+    Discover BEAM sub-iteration unmodified linkstats parquet files.
+
+    Matches files like:
+      {iteration}.linkstats_unmodified_physSimIter1.parquet
+      {iteration}.linkstats_unmodified_physSimIter2.parquet
+    """
+    prefix = f"{iteration}.linkstats_unmodified_physSimIter"
+    suffix = ".parquet"
+    found: List[tuple[int, str]] = []
+
+    try:
+        filenames = os.listdir(iteration_path)
+    except OSError:
+        return found
+
+    for filename in filenames:
+        if not filename.startswith(prefix) or not filename.endswith(suffix):
+            continue
+        iter_token = filename[len(prefix) : -len(suffix)]
+        try:
+            phys_sim_iter = int(iter_token)
+        except ValueError:
+            continue
+        found.append((phys_sim_iter, os.path.join(iteration_path, filename)))
+
+    found.sort(key=lambda item: item[0])
+    return found
+
+
 class BeamRunner(GenericRunner):
     """
     Runner for the BEAM model.
@@ -192,6 +225,42 @@ class BeamRunner(GenericRunner):
                             description=f"BEAM output artifact: {dataset_name}",
                         )
                     )
+
+            for phys_sim_iter, full_path in find_iteration_phys_sim_linkstats_parquet(
+                path, it
+            ):
+                facet = {
+                    "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+                    "year": self.state.forecast_year,
+                    "iteration": self.state.iteration,
+                    "phys_sim_iteration": phys_sim_iter,
+                }
+                if it != last_iter:
+                    facet["beam_sub_iteration"] = it
+                if it == last_iter:
+                    dataset_name = (
+                        "linkstats_unmodified_phys_sim_iter_parquet_"
+                        f"{phys_sim_iter}_{self.state.forecast_year}_{self.state.iteration}"
+                    )
+                else:
+                    dataset_name = (
+                        "linkstats_unmodified_phys_sim_iter_parquet_"
+                        f"{phys_sim_iter}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
+                    )
+                output_records.append(
+                    FileRecord(
+                        file_path=full_path,
+                        year=self.state.forecast_year,
+                        sub_iteration=None if it == last_iter else it,
+                        short_name=dataset_name,
+                        description=f"BEAM output artifact: {dataset_name}",
+                        metadata={
+                            "facet": facet,
+                            "facet_schema_version": "beam_linkstats_unmodified_phys_sim_iter_v1",
+                            "facet_index": True,
+                        },
+                    )
+                )
 
         for short_name, (file_name, extension) in top_level_files.items():
             full_path = os.path.join(
