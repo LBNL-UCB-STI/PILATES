@@ -53,10 +53,10 @@ class RunConfig(BaseModel):
     )
 
     # Model execution frequencies (GLOBAL scope)
-    land_use_freq: int = Field(1, description="How often land use model runs", ge=1)
-    travel_model_freq: int = Field(1, description="How often travel model runs", ge=1)
+    land_use_freq: int = Field(1, description="How often land use model runs", ge=0)
+    travel_model_freq: int = Field(1, description="How often travel model runs", ge=0)
     vehicle_ownership_freq: int = Field(
-        1, description="How often vehicle model runs", ge=1
+        1, description="How often vehicle model runs", ge=0
     )
     supply_demand_iters: int = Field(
         6, description="Supply-demand loop iterations", ge=1
