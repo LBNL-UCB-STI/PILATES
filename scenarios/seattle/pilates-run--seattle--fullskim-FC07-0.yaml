@@ -9,9 +9,9 @@ region: seattle
 scenario: base
 start_year: 2017
 end_year: 2018
-land_use_freq: 1
+land_use_freq: 0
 travel_model_freq: 1
-vehicle_ownership_freq: 6
+vehicle_ownership_freq: 0
 
 # simulation platforms (leave blank to turn off)
 land_use_model:
