@@ -375,9 +375,6 @@ class ConfigMigrator:
                 "skims_kind": self.legacy.get(f"{skim_key_prefix}_skims_kind", "od"),
                 "peak_hours": self.legacy.get(f"{skim_key_prefix}_peak_hours", [8.5]),
                 "modes_to_build": modes_to_build,
-                "output_filename": self.legacy.get(
-                    f"{skim_key_prefix}_output_filename", "background_skims.csv"
-                ),
             }
 
             # Add parallelism_thread_ratio only if explicitly set (otherwise auto-calculate at 0.8)
@@ -397,11 +394,6 @@ class ConfigMigrator:
                     full_skim_config["parallelism_thread_ratio"] = parallelism_value / 100.0
 
             beam_config["full_skim"] = full_skim_config
-
-            # Add linkstats_file only if it's not None/null
-            linkstats_file = self.legacy.get("beam_full_skim_linkstats_file")
-            if linkstats_file is not None:
-                beam_config["full_skim"]["linkstats_file"] = linkstats_file
 
         return beam_config
 

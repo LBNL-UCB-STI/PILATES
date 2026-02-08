@@ -136,8 +136,6 @@ beam_memory: "${BEAM_MEMORY}"
 # beam_full_skim_modes_walk: false
 # beam_full_skim_modes_transit: false
 # beam_full_skim_parallelism_thread_ratio: 0.8
-# beam_full_skim_output_filename: skimsODFull.csv.gz
-# beam_full_skim_linkstats_file: r5/.../linkstats.csv.gz
 skim_zone_source_id_col: objectid
 replan_iters: 2
 supply_demand_iters: 5 # Added setting for supply-demand iterations

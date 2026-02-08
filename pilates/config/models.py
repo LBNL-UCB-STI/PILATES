@@ -369,12 +369,6 @@ class FullSkimsCreatorConfig(BaseModel):
         ge=0.0,
         le=1.0
     )
-    output_filename: str = Field(
-        "background_skims.csv", description="Output CSV filename"
-    )
-    linkstats_file: Optional[str] = Field(
-        None, description="Optional linkstats for congested times"
-    )
 
 
 

@@ -28,3 +28,5 @@ file lists, see `docs/lineage_map.md`.
   A future improvement is to centralize these keys into a shared constants module.
 - For restart scenarios, initialization inputs may be re-derived from mutable
   directories (see ATLAS static input fallback in `run.py`).
+- Full-skim runs fall back to warm-start linkstats at:
+  `beam/input/<region>/<beam_router_directory>/init.linkstats.(parquet|csv.gz)`

@@ -131,8 +131,6 @@ beam_full_skim_modes_drive: true           # Enable drive skims
 beam_full_skim_modes_walk: false            # Enable walk skims
 beam_full_skim_modes_transit: false        # Disable transit skims
 beam_full_skim_parallelism_thread_ratio: 0.8
-beam_full_skim_output_filename: skimsODFull.csv.gz
-beam_full_skim_linkstats_file: r5/seattle-area-cbg120-ferry-weakConn-network/linkstats_v2/6.linkstats.fc07_0.csv.gz
 
 
 # POLARIS
