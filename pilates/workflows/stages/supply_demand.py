@@ -35,6 +35,7 @@ from pilates.workflows.steps import (
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
+    make_beam_full_skim_step,
 )
 from pilates.workflows.artifact_constants import (
     ASIM_OMX_SKIMS,
@@ -147,6 +148,20 @@ def _find_initial_linkstats_warmstart(
         if os.path.exists(candidate):
             return candidate
     return None
+
+
+def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+    beam_cfg = getattr(settings, "beam", None)
+    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+    if not skim_cfg:
+        return False
+    mode = getattr(skim_cfg, "run_schedule", "standalone")
+    if mode == "after_each_iteration":
+        return True
+    if mode == "after_final_iteration":
+        total_iters = settings.run.supply_demand_iters
+        return iteration == total_iters - 1
+    return False
 
 
 def _run_activity_demand_phase(
@@ -663,6 +678,39 @@ def _run_traffic_assignment_phase(
             combined_beam_outputs += outputs_holder.beam_run.to_record_store()
         if outputs_holder.beam_postprocess is not None:
             combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
+
+    if _should_run_full_skim(settings, inputs.iteration):
+        WorkflowStage(
+            name="beam",
+            stage_type=state.Stage.traffic_assignment,
+            steps=[
+                WorkflowStepSpec(
+                    name="beam_full_skim",
+                    step_func=make_beam_full_skim_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder,
+                    ),
+                    input_keys=None,
+                )
+            ],
+        ).run(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+            iteration=inputs.iteration,
+            runtime_kwargs_extra={
+                "previous_beam_outputs": combined_beam_outputs,
+            },
+        )
+
+        if combined_beam_outputs is None:
+            combined_beam_outputs = RecordStore()
+        if outputs_holder.beam_full_skim is not None:
+            combined_beam_outputs += outputs_holder.beam_full_skim.to_record_store()
 
     state.complete_step(
         state.Stage.supply_demand_loop,

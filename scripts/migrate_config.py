@@ -348,56 +348,60 @@ class ConfigMigrator:
             "ridehail_path_map": self.legacy.get("ridehail_path_map", {}),
         }
 
-        # Migrate skim_only configuration if present
-        if self.legacy.get("beam_skim_only_enabled") is not None:
-            logger.info("Migrating BEAM skim_only configuration...")
+        # Migrate full_skim configuration if present
+        if self.legacy.get("beam_full_skim_run_schedule") is not None:
+            logger.info("Migrating BEAM full_skim configuration...")
 
             # Build modes_to_build dict from individual mode flags
             modes_to_build = {}
-            if self.legacy.get("beam_skim_only_modes_drive") is not None:
-                modes_to_build["drive"] = self.legacy.get("beam_skim_only_modes_drive")
-            if self.legacy.get("beam_skim_only_modes_walk") is not None:
-                modes_to_build["walk"] = self.legacy.get("beam_skim_only_modes_walk")
-            if self.legacy.get("beam_skim_only_modes_transit") is not None:
-                modes_to_build["transit"] = self.legacy.get("beam_skim_only_modes_transit")
+            if self.legacy.get("beam_full_skim_modes_drive") is not None:
+                modes_to_build["drive"] = self.legacy.get("beam_full_skim_modes_drive")
+            if self.legacy.get("beam_full_skim_modes_walk") is not None:
+                modes_to_build["walk"] = self.legacy.get("beam_full_skim_modes_walk")
+            if self.legacy.get("beam_full_skim_modes_transit") is not None:
+                modes_to_build["transit"] = self.legacy.get("beam_full_skim_modes_transit")
 
             # Default to drive-only if no modes specified
             if not modes_to_build:
                 modes_to_build = {"drive": True, "walk": False, "transit": False}
 
-            skim_only_config = {
-                "enabled": self.legacy.get("beam_skim_only_enabled", False),
-                "router_type": self.legacy.get("beam_skim_only_router_type", "r5+gh"),
-                "skims_geo_type": self.legacy.get("beam_skim_only_skims_geo_type", "taz"),
-                "skims_kind": self.legacy.get("beam_skim_only_skims_kind", "od"),
-                "peak_hours": self.legacy.get("beam_skim_only_peak_hours", [8.5]),
+            skim_key_prefix = "beam_full_skim"
+            full_skim_config = {
+                "run_schedule": self.legacy.get(
+                    f"{skim_key_prefix}_run_schedule", "standalone"
+                ),
+                "router_type": self.legacy.get(f"{skim_key_prefix}_router_type", "r5+gh"),
+                "skims_geo_type": self.legacy.get(f"{skim_key_prefix}_skims_geo_type", "taz"),
+                "skims_kind": self.legacy.get(f"{skim_key_prefix}_skims_kind", "od"),
+                "peak_hours": self.legacy.get(f"{skim_key_prefix}_peak_hours", [8.5]),
                 "modes_to_build": modes_to_build,
                 "output_filename": self.legacy.get(
-                    "beam_skim_only_output_filename", "background_skims.csv"
+                    f"{skim_key_prefix}_output_filename", "background_skims.csv"
                 ),
             }
 
             # Add parallelism_thread_ratio only if explicitly set (otherwise auto-calculate at 0.8)
             parallelism_value = None
-            if "beam_skim_only_parallelism_thread_pct" in self.legacy:
-                parallelism_value = self.legacy.get("beam_skim_only_parallelism_thread_pct")
-            # Support old name for backwards compatibility
-            elif "beam_skim_only_parallelism" in self.legacy:
-                parallelism_value = self.legacy.get("beam_skim_only_parallelism")
+            if "beam_full_skim_parallelism_thread_ratio" in self.legacy:
+                parallelism_value = self.legacy.get("beam_full_skim_parallelism_thread_ratio")
+            elif "beam_full_skim_parallelism_thread_pct" in self.legacy:
+                parallelism_value = self.legacy.get("beam_full_skim_parallelism_thread_pct")
+            elif "beam_full_skim_parallelism" in self.legacy:
+                parallelism_value = self.legacy.get("beam_full_skim_parallelism")
 
             if parallelism_value is not None:
                 # Interpret <=1.0 as ratio, otherwise treat as percent
                 if parallelism_value <= 1.0:
-                    skim_only_config["parallelism_thread_ratio"] = parallelism_value
+                    full_skim_config["parallelism_thread_ratio"] = parallelism_value
                 else:
-                    skim_only_config["parallelism_thread_ratio"] = parallelism_value / 100.0
+                    full_skim_config["parallelism_thread_ratio"] = parallelism_value / 100.0
 
-            beam_config["skim_only"] = skim_only_config
+            beam_config["full_skim"] = full_skim_config
 
             # Add linkstats_file only if it's not None/null
-            linkstats_file = self.legacy.get("beam_skim_only_linkstats_file")
+            linkstats_file = self.legacy.get("beam_full_skim_linkstats_file")
             if linkstats_file is not None:
-                beam_config["skim_only"]["linkstats_file"] = linkstats_file
+                beam_config["full_skim"]["linkstats_file"] = linkstats_file
 
         return beam_config
 

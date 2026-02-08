@@ -11,6 +11,7 @@ file lists, see `docs/lineage_map.md`.
 - ActivitySim → BEAM: `asim_output_dir` (activity plans)
 - BEAM → ActivitySim (next iter): `zarr_skims` (skims cache)
 - BEAM → ActivitySim (final): `final_skims_omx` (optional OMX export)
+- BEAM → Full Skim (optional): `beam_full_skims` (background skims output)
 - ATLAS → BEAM (iter 0): `atlas_vehicles2_input` (vehicles2_<year>.csv)
 
 ## Where Artifacts Are Defined

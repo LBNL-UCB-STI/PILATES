@@ -335,10 +335,24 @@ class ActivitySimConfig(BaseModel):
         }
 
 
-class BackgroundSkimsCreatorConfig(BaseModel):
-    """Configuration for BEAM BackgroundSkimsCreatorApp (skim-only mode)."""
+class FullSkimsCreatorConfig(BaseModel):
+    """Configuration for BEAM FullSkimsCreatorApp (full-skim mode)."""
 
-    enabled: bool = Field(False, description="Enable skim-only mode")
+    run_schedule: Literal[
+        "standalone",
+        "after_each_iteration",
+        "after_final_iteration",
+        "disabled",
+    ] = Field(
+        "standalone",
+        description=(
+            "When to run full-skim. "
+            "'standalone' replaces normal BEAM runs, "
+            "'after_each_iteration' runs after each BEAM iteration, "
+            "'after_final_iteration' runs after the final BEAM iteration, "
+            "'disabled' never runs."
+        ),
+    )
     router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
     skims_geo_type: str = Field("taz", description="Geography: taz or h3")
     skims_kind: str = Field("od", description="Skim type: od")
@@ -400,8 +414,8 @@ class BeamConfig(BaseModel):
     ridehail_path_map: Dict[str, str] = Field(
         default_factory=dict, description="Ridehail path mappings"
     )
-    skim_only: Optional[BackgroundSkimsCreatorConfig] = Field(
-        None, description="Skim-only mode configuration (runs BackgroundSkimsCreatorApp)"
+    full_skim: Optional[FullSkimsCreatorConfig] = Field(
+        None, description="Full-skim mode configuration (runs FullSkimsCreatorApp)"
     )
 
 

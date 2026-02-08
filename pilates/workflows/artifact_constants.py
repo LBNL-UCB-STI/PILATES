@@ -37,3 +37,4 @@ LINKSTATS_WARMSTART = "linkstats_warmstart"
 
 ZARR_SKIMS = "zarr_skims"
 FINAL_SKIMS_OMX = "final_skims_omx"
+BEAM_FULL_SKIMS = "beam_full_skims"

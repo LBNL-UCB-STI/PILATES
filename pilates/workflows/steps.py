@@ -258,6 +258,7 @@ from pilates.beam.outputs import (
     BeamPostprocessOutputs,
     BeamPreprocessOutputs,
     BeamRunOutputs,
+    BeamFullSkimOutputs,
 )
 from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs,
@@ -312,6 +313,8 @@ class StepOutputsHolder:
         Run outputs.
     beam_postprocess : BeamPostprocessOutputs, optional
         Postprocess outputs.
+    beam_full_skim : BeamFullSkimOutputs, optional
+        Full-skim outputs.
     urbansim_preprocess : UrbanSimPreprocessOutputs, optional
         Preprocess outputs.
     urbansim_run : UrbanSimRunOutputs, optional
@@ -332,6 +335,7 @@ class StepOutputsHolder:
     beam_preprocess: Optional[BeamPreprocessOutputs] = None
     beam_run: Optional[BeamRunOutputs] = None
     beam_postprocess: Optional[BeamPostprocessOutputs] = None
+    beam_full_skim: Optional[BeamFullSkimOutputs] = None
     urbansim_preprocess: Optional[UrbanSimPreprocessOutputs] = None
     urbansim_run: Optional[UrbanSimRunOutputs] = None
     urbansim_postprocess: Optional[UrbanSimPostprocessOutputs] = None
@@ -378,6 +382,7 @@ STEP_OUTPUTS_CLASSES = {
     "beam_preprocess": BeamPreprocessOutputs,
     "beam_run": BeamRunOutputs,
     "beam_postprocess": BeamPostprocessOutputs,
+    "beam_full_skim": BeamFullSkimOutputs,
     "urbansim_preprocess": UrbanSimPreprocessOutputs,
     "urbansim_run": UrbanSimRunOutputs,
     "urbansim_postprocess": UrbanSimPostprocessOutputs,
@@ -435,6 +440,10 @@ STEP_DEPENDENCIES = {
     "beam_postprocess": {
         "depends_on": ["beam_run"],
         "holder_inputs": ["beam_run"],
+    },
+    "beam_full_skim": {
+        "depends_on": ["beam_postprocess"],
+        "holder_inputs": ["beam_postprocess"],
     },
 }
 
@@ -806,6 +815,26 @@ def _execute_beam_postprocess(
         raise RuntimeError("BEAM run must complete first")
     raw_outputs = upstream.to_record_store()
     return run_postprocessor(postprocessor, raw_outputs, workspace)
+
+
+def _execute_beam_full_skim(
+    runner: Runner,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    previous_beam_outputs: Optional[RecordStore] = None,
+    **kwargs: Any,
+) -> RecordStore:
+    """
+    Execute the BEAM full-skim runner after a normal BEAM run.
+    """
+    upstream = outputs_holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+    input_store = upstream.to_record_store()
+    if previous_beam_outputs is not None:
+        input_store += previous_beam_outputs
+    return run_runner(runner, input_store, workspace)
 
 
 def _execute_urbansim_run(
@@ -2389,6 +2418,47 @@ def make_beam_postprocess_step(
         component_executor=_execute_beam_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_postprocess", outputs
+        ),
+        output_logger=_log_outputs,
+    )
+
+
+def make_beam_full_skim_step(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+) -> Callable[..., None]:
+    """
+    Build the BEAM full-skim step function.
+    """
+
+    def _log_outputs(
+        outputs: BeamFullSkimOutputs,
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
+
+    return _make_generic_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name="beam_full_skim",
+        phase="run",
+        outputs_class=BeamFullSkimOutputs,
+        component_getter=lambda factory, state: factory.get_runner(
+            "beam_full_skim", state, WorkflowState.Stage.traffic_assignment
+        ),
+        component_executor=_execute_beam_full_skim,
+        outputs_holder_setter=lambda holder, outputs: setattr(
+            holder, "beam_full_skim", outputs
         ),
         output_logger=_log_outputs,
     )
