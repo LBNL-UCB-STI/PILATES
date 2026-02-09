@@ -18,6 +18,11 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     ZARR_SKIMS,
 )
+from pilates.workflows.input_resolution import (
+    first_resolved_key,
+    resolve_preferred_step_input,
+    resolved_value_for_key,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -103,16 +108,31 @@ def build_activitysim_inputs(
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 
-    if usim_inputs and USIM_DATASTORE_CURRENT_H5 in usim_inputs:
-        inputs[USIM_DATASTORE_CURRENT_H5] = usim_inputs[USIM_DATASTORE_CURRENT_H5]
-        descriptions[USIM_DATASTORE_CURRENT_H5] = (
-            f"UrbanSim datastore for ActivitySim year {year}, iter {iteration}"
+    usim_resolution = resolve_preferred_step_input(
+        preferred_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        coupler=coupler,
+        explicit_inputs=usim_inputs,
+    )
+    selected_usim_key = first_resolved_key(
+        usim_resolution,
+        [USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+    )
+    if selected_usim_key is not None:
+        usim_value = resolved_value_for_key(
+            resolved=usim_resolution,
+            key=selected_usim_key,
+            coupler=coupler,
         )
-    elif usim_inputs and USIM_DATASTORE_BASE_H5 in usim_inputs:
-        inputs[USIM_DATASTORE_CURRENT_H5] = usim_inputs[USIM_DATASTORE_BASE_H5]
-        descriptions[USIM_DATASTORE_CURRENT_H5] = (
-            f"UrbanSim datastore for ActivitySim year {year}, iter {iteration} (base fallback)"
-        )
+        if usim_value is not None:
+            inputs[USIM_DATASTORE_CURRENT_H5] = usim_value
+            descriptions[USIM_DATASTORE_CURRENT_H5] = (
+                f"UrbanSim datastore for ActivitySim year {year}, iter {iteration}"
+                if selected_usim_key == USIM_DATASTORE_CURRENT_H5
+                else (
+                    "UrbanSim datastore for ActivitySim year "
+                    f"{year}, iter {iteration} (base fallback)"
+                )
+            )
 
     zarr_skims_input = None
     get_value = getattr(coupler, "get", None)

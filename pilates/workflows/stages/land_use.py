@@ -10,6 +10,7 @@ from workflow_state import WorkflowState
 
 from pilates.utils.formatting import formatted_print
 from pilates.utils.input_logging import log_inputs
+from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -81,6 +82,10 @@ def run_land_use_stage(
         == preprocess_inputs.get(USIM_DATASTORE_CURRENT_H5)
     ):
         preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
+    preprocess_resolution = resolve_step_inputs(
+        keys=preprocess_inputs.keys(),
+        explicit_inputs=preprocess_inputs,
+    )
 
     preprocess_steps = [
         StepRef(
@@ -89,7 +94,8 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=preprocess_inputs,
+            inputs=preprocess_resolution.stepref_inputs(),
+            input_keys=preprocess_resolution.stepref_input_keys(),
         ),
     ]
 
@@ -115,6 +121,21 @@ def run_land_use_stage(
         # than RecordStore outputs; fall back to declared UrbanSim inputs so run
         # identity/provenance still reflects true dependencies.
         run_inputs = {key: value for key, value in usim_inputs.items() if value is not None}
+    run_resolution = resolve_step_inputs(
+        keys=run_inputs.keys(),
+        explicit_inputs=run_inputs,
+    )
+    postprocess_resolution = resolve_step_inputs(
+        keys=[USIM_DATASTORE_CURRENT_H5],
+        coupler=coupler,
+        fallback_inputs=usim_inputs,
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+    )
+    if postprocess_resolution.missing_required:
+        raise RuntimeError(
+            "UrbanSim postprocess requires usim_datastore_h5 but it could not be "
+            "resolved from explicit inputs, coupler, or fallback inputs."
+        )
 
     run_steps = [
         StepRef(
@@ -123,7 +144,8 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=run_inputs,
+            inputs=run_resolution.stepref_inputs(),
+            input_keys=run_resolution.stepref_input_keys(),
         ),
         StepRef(
             name="urbansim_postprocess",
@@ -131,7 +153,8 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=[USIM_DATASTORE_CURRENT_H5],
+            inputs=postprocess_resolution.stepref_inputs(),
+            input_keys=postprocess_resolution.stepref_input_keys(),
         ),
     ]
 

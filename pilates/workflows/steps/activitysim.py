@@ -12,6 +12,11 @@ from .shared import (  # noqa: F401
     _log_step_records,
     _make_generic_step_function,
 )
+from pilates.workflows.input_resolution import (
+    first_resolved_key,
+    resolve_preferred_step_input,
+    resolved_value_for_key,
+)
 
 def make_activitysim_compile_step(
     *,
@@ -166,38 +171,35 @@ def make_activitysim_preprocess_step(
         dict
             Extra runtime kwargs for the step executor (empty for this helper).
         """
-        usim_input = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            updated_value = get_value(USIM_H5_UPDATED)
-            if updated_value is not None:
-                selected_key = USIM_H5_UPDATED
-                selected_value = updated_value
-            else:
-                current_value = get_value(USIM_DATASTORE_CURRENT_H5)
-                if current_value is not None:
-                    selected_key = USIM_DATASTORE_CURRENT_H5
-                    selected_value = current_value
-                else:
-                    selected_key = USIM_DATASTORE_BASE_H5
-                    selected_value = get_value(USIM_DATASTORE_BASE_H5)
-            usim_input = resolve_artifact_from_value(
-                selected_value,
+        resolution = resolve_preferred_step_input(
+            preferred_keys=[
+                USIM_H5_UPDATED,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            ],
+            coupler=coupler,
+        )
+        selected_key = first_resolved_key(
+            resolution,
+            [USIM_H5_UPDATED, USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        )
+        selected_value = (
+            resolved_value_for_key(
+                resolved=resolution,
                 key=selected_key,
-                workspace=workspace,
+                coupler=coupler,
             )
+            if selected_key is not None
+            else None
+        )
+        usim_input = resolve_artifact_from_value(
+            selected_value,
+            key=selected_key or USIM_DATASTORE_CURRENT_H5,
+            workspace=workspace,
+        )
         usim_path = artifact_to_path(usim_input, workspace)
         if usim_path and os.path.exists(usim_path):
-            input_key = (
-                USIM_H5_UPDATED
-                if callable(get_value) and get_value(USIM_H5_UPDATED) is not None
-                else (
-                    USIM_DATASTORE_CURRENT_H5
-                    if callable(get_value)
-                    and get_value(USIM_DATASTORE_CURRENT_H5) is not None
-                    else USIM_DATASTORE_BASE_H5
-                )
-            )
+            input_key = selected_key or USIM_DATASTORE_BASE_H5
             input_desc = (
                 f"UrbanSim datastore updated by ATLAS for ActivitySim year {state.year}"
                 if input_key == USIM_H5_UPDATED
