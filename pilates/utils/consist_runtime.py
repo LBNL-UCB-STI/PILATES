@@ -216,7 +216,10 @@ def log_artifacts(
             for key, value in normalized.items()
         }
     try:
-        return consist.log_artifacts(normalized, enabled=True, **meta)
+        try:
+            return consist.log_artifacts(outputs=normalized, enabled=True, **meta)
+        except TypeError:
+            return consist.log_artifacts(normalized, enabled=True, **meta)
     except RuntimeError:
         logger.debug("Skipping artifact logging outside active Consist run.")
         return {

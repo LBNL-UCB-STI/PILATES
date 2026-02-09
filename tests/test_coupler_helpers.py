@@ -199,8 +199,17 @@ def test_update_coupler_from_beam_outputs_profiles_linkstats_family(
     by_key = {key: meta for key, _path, _desc, meta in log_calls}
     assert by_key["linkstats"]["profile_file_schema"] is True
     assert by_key["linkstats_warmstart"]["profile_file_schema"] is True
+    assert by_key["linkstats"]["facet_schema_version"] == "v1"
+    assert by_key["linkstats"]["facet"]["artifact_family"] == "linkstats"
+    assert by_key["linkstats"]["facet"]["year"] == 2018
+    assert by_key["linkstats"]["facet"]["iteration"] == 0
     assert by_key["linkstats_parquet_2018_0"]["profile_file_schema"] is True
     assert by_key["linkstats_parquet_2018_0_sub1"]["profile_file_schema"] is True
+    assert by_key["linkstats_parquet_2018_0"]["facet_schema_version"] == "v1"
+    assert (
+        by_key["linkstats_parquet_2018_0"]["facet"]["artifact_family"]
+        == "linkstats_parquet"
+    )
     assert (
         by_key[
             "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3__beam_sub_iter1"
@@ -208,6 +217,12 @@ def test_update_coupler_from_beam_outputs_profiles_linkstats_family(
             "profile_file_schema"
         ]
         is True
+    )
+    assert (
+        by_key[
+            "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3__beam_sub_iter1"
+        ]["facet_schema_version"]
+        == "v1"
     )
     assert not any(
         c[1] == "linkstats_parquet_2018_0_sub1"

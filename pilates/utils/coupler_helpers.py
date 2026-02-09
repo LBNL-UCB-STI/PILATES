@@ -400,6 +400,7 @@ def update_coupler_from_beam_outputs(
         coupler=coupler,
         workspace=workspace,
         profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     _log_and_set_beam_record(
         linkstats_record,
@@ -408,8 +409,12 @@ def update_coupler_from_beam_outputs(
         coupler=coupler,
         workspace=workspace,
         profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     for record in linkstats_parquet_records:
+        linkstats_meta = _beam_linkstats_facet_meta(
+            record.short_name, family="linkstats_parquet"
+        )
         if _is_sub_iteration_key(record.short_name):
             _log_beam_record_only(
                 record,
@@ -417,6 +422,7 @@ def update_coupler_from_beam_outputs(
                 description="BEAM linkstats parquet output for downstream runs",
                 workspace=workspace,
                 profile_file_schema=True,
+                **linkstats_meta,
             )
         else:
             _log_and_set_beam_record(
@@ -426,12 +432,18 @@ def update_coupler_from_beam_outputs(
                 coupler=coupler,
                 workspace=workspace,
                 profile_file_schema=True,
+                **linkstats_meta,
             )
     for record in linkstats_unmodified_phys_sim_records:
-        facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
+        record_meta = dict(getattr(record, "metadata", None) or {})
+        facets = record_meta.get("facet")
+        if facets is None:
+            facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
         log_meta = {
-            "facet_schema_version": "beam_linkstats_unmodified_phys_sim_iter_v1",
-            "facet_index": True,
+            "facet_schema_version": record_meta.get(
+                "facet_schema_version", "v1"
+            ),
+            "facet_index": bool(record_meta.get("facet_index", True)),
         }
         if facets:
             log_meta["facet"] = facets
@@ -550,6 +562,49 @@ def _is_sub_iteration_key(short_name: Optional[str]) -> bool:
     if not short_name:
         return False
     return "_sub" in short_name or "__beam_sub_iter" in short_name
+
+
+def _beam_linkstats_facet_meta(
+    short_name: Optional[str],
+    *,
+    family: str,
+) -> Dict[str, Any]:
+    if not short_name:
+        return {}
+    parsed = _parse_linkstats_iteration_key(short_name)
+    if not parsed:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            **parsed,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _parse_linkstats_iteration_key(short_name: str) -> Optional[Dict[str, Any]]:
+    for prefix in ("linkstats_parquet_", "linkstats_"):
+        if not short_name.startswith(prefix):
+            continue
+        tail = short_name[len(prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 2:
+            continue
+        try:
+            year = int(parts[0])
+            iteration = int(parts[1])
+        except ValueError:
+            continue
+        payload: Dict[str, Any] = {"year": year, "iteration": iteration}
+        if len(parts) > 2 and parts[2].startswith("sub"):
+            try:
+                payload["beam_sub_iteration"] = int(parts[2][3:])
+            except ValueError:
+                continue
+        return payload
+    return None
 
 
 def _parse_linkstats_unmodified_phys_sim_facets(

@@ -235,6 +235,8 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
+    USIM_FORECAST_OUTPUT,
     ZARR_SKIMS,
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
@@ -356,6 +358,228 @@ def _log_step_records(
             description=description,
             **meta,
         )
+
+
+def _parse_prefixed_iteration_key(short_name: str, prefix: str) -> Optional[Dict[str, Any]]:
+    marker = f"{prefix}_"
+    if not short_name.startswith(marker):
+        return None
+    tail = short_name[len(marker) :]
+    parts = tail.split("_")
+    if len(parts) < 2:
+        return None
+    try:
+        year = int(parts[0])
+        iteration = int(parts[1])
+    except ValueError:
+        return None
+    payload: Dict[str, Any] = {
+        "year": year,
+        "iteration": iteration,
+    }
+    if len(parts) > 2 and parts[2].startswith("sub"):
+        try:
+            payload["beam_sub_iteration"] = int(parts[2][3:])
+        except ValueError:
+            pass
+    return payload
+
+
+def _beam_artifact_facets(short_name: str) -> Optional[Dict[str, Any]]:
+    for prefix, family in (
+        ("events_parquet", "events_parquet"),
+        ("raw_od_skims", "raw_od_skims"),
+        ("raw_od_skims_zarr", "raw_od_skims_zarr"),
+        ("linkstats_parquet", "linkstats_parquet"),
+    ):
+        parsed = _parse_prefixed_iteration_key(short_name, prefix)
+        if parsed is not None:
+            return {"artifact_family": family, **parsed}
+
+    if short_name.startswith("linkstats_unmodified_parquet__"):
+        tokens = short_name.split("__")
+        payload: Dict[str, Any] = {
+            "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet"
+        }
+        for token in tokens[1:]:
+            if token.startswith("y"):
+                try:
+                    payload["year"] = int(token[1:])
+                except ValueError:
+                    return None
+            elif token.startswith("i"):
+                try:
+                    payload["iteration"] = int(token[1:])
+                except ValueError:
+                    return None
+            elif token.startswith("phys_sim_iter"):
+                try:
+                    payload["phys_sim_iteration"] = int(
+                        token[len("phys_sim_iter") :]
+                    )
+                except ValueError:
+                    return None
+            elif token.startswith("beam_sub_iter"):
+                try:
+                    payload["beam_sub_iteration"] = int(token[len("beam_sub_iter") :])
+                except ValueError:
+                    return None
+        if {"year", "iteration", "phys_sim_iteration"} <= set(payload.keys()):
+            return payload
+        return None
+
+    return None
+
+
+def _beam_log_facet_meta(short_name: str) -> Dict[str, Any]:
+    facet = _beam_artifact_facets(short_name)
+    if not facet:
+        return {}
+    return {
+        "facet": facet,
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _beam_postprocess_split_facet_meta(short_name: str) -> Dict[str, Any]:
+    if short_name.startswith("events_parquet_") and "_type_" in short_name:
+        head, event_type = short_name.split("_type_", 1)
+        parsed = _parse_prefixed_iteration_key(head, "events_parquet")
+        if parsed:
+            return {
+                "facet": {
+                    "artifact_family": "events_parquet_split",
+                    "event_type": event_type,
+                    **parsed,
+                },
+                "facet_schema_version": "v1",
+                "facet_index": True,
+            }
+    if short_name.startswith("path_traversal_links_"):
+        parsed = _parse_prefixed_iteration_key(short_name, "path_traversal_links")
+        if parsed:
+            return {
+                "facet": {
+                    "artifact_family": "path_traversal_links",
+                    **parsed,
+                },
+                "facet_schema_version": "v1",
+                "facet_index": True,
+            }
+    return {}
+
+
+def _activitysim_output_facet_meta(
+    short_name: str,
+    *,
+    year: int,
+    iteration: int,
+) -> Dict[str, Any]:
+    family = None
+    if short_name.endswith("_asim_out"):
+        family = short_name[: -len("_asim_out")]
+    elif short_name.startswith("asim_input_") and short_name.endswith("_archived"):
+        family = "asim_input_archived"
+    elif short_name == ZARR_SKIMS:
+        family = "zarr_skims"
+    if family is None:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            "year": year,
+            "iteration": iteration,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _urbansim_output_facet_meta(
+    short_name: str,
+    *,
+    forecast_year: int,
+) -> Dict[str, Any]:
+    if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
+        family = "usim_input_archive"
+    elif short_name.startswith(USIM_INPUT_MERGED_PREFIX):
+        family = "usim_input_merged"
+    elif short_name == USIM_FORECAST_OUTPUT:
+        family = "usim_forecast_output"
+    elif short_name == USIM_DATASTORE_H5:
+        family = "usim_datastore_h5"
+    elif short_name == USIM_DATASTORE_BASE_H5:
+        family = "usim_datastore_base_h5"
+    else:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            "year": forecast_year,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _atlas_artifact_facet_meta(
+    short_name: str,
+    *,
+    run_scenario: Optional[str],
+    forecast_year: int,
+    artifact_family: str = "atlas_input",
+) -> Dict[str, Any]:
+    key = short_name.replace("\\", "/")
+    key_compact = key.replace("/", "_")
+
+    input_group = "global"
+    parsed_scenario = None
+    input_year = None
+
+    if key.startswith("adopt/") or key_compact.startswith("adopt_"):
+        input_group = "adopt"
+        if key.startswith("adopt/"):
+            parts = key.split("/")
+            if len(parts) >= 2:
+                parsed_scenario = parts[1]
+        else:
+            parts = key_compact.split("_")
+            if len(parts) >= 2:
+                parsed_scenario = parts[1]
+    elif key_compact.startswith("vehicle_type_mapping_"):
+        input_group = "vehicle_type_mapping"
+        if "baseline" in key_compact:
+            parsed_scenario = "baseline"
+        elif "evMandForced2" in key_compact:
+            parsed_scenario = "zev_mandate"
+        elif "ESS_const_220_price" in key_compact:
+            parsed_scenario = "ess_cons"
+    elif key_compact.startswith("atlas_vehicles2"):
+        input_group = "vehicles2"
+    elif key_compact.startswith("usim_"):
+        input_group = "usim"
+
+    tail = key_compact.rsplit("_", 1)
+    if len(tail) == 2 and len(tail[1]) == 4 and tail[1].isdigit():
+        input_year = int(tail[1])
+
+    facet: Dict[str, Any] = {
+        "artifact_family": artifact_family,
+        "input_group": input_group,
+        "forecast_year": forecast_year,
+    }
+    scenario_value = parsed_scenario or run_scenario
+    if scenario_value:
+        facet["scenario"] = str(scenario_value)
+    if input_year is not None:
+        facet["input_year"] = input_year
+
+    return {
+        "facet": facet,
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
 
 
 def _log_beam_r5_osm_input(
@@ -1290,6 +1514,9 @@ def make_urbansim_preprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                **_urbansim_output_facet_meta(
+                    short_name, forecast_year=state.forecast_year
+                ),
             )
         usim_data_dir = outputs.usim_mutable_data_dir
         usim_input_fname = settings.urbansim.input_file_template.format(
@@ -1307,6 +1534,9 @@ def make_urbansim_preprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_DATASTORE_BASE_H5, forecast_year=state.forecast_year
+                ),
             )
 
     return _make_generic_step_function(
@@ -1369,6 +1599,9 @@ def make_urbansim_run_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                ),
             )
 
     return _make_generic_step_function(
@@ -1428,6 +1661,9 @@ def make_urbansim_postprocess_step(
                     profile_file_schema=True,
                     h5_container=True,
                     hash_tables="if_unchanged",
+                    **_urbansim_output_facet_meta(
+                        short_name, forecast_year=state.forecast_year
+                    ),
                 )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
@@ -1441,6 +1677,9 @@ def make_urbansim_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                ),
             )
 
     return _make_generic_step_function(
@@ -1490,10 +1729,17 @@ def make_atlas_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        run_scenario = getattr(getattr(settings, "atlas", None), "scenario", None)
         _log_step_records(
             record_items=outputs._iter_record_items(),
             log_fn=log_output_only,
             profile_schema_suffixes=(".csv", ".parquet"),
+            extra_meta_fn=lambda key, _path, _description: _atlas_artifact_facet_meta(
+                key,
+                run_scenario=run_scenario,
+                forecast_year=state.forecast_year,
+                artifact_family="atlas_preprocess_output",
+            ),
         )
 
     return _make_generic_step_function(
@@ -1545,10 +1791,17 @@ def make_atlas_run_step(
         upstream = holder.atlas_preprocess
         if upstream is None:
             raise RuntimeError("ATLAS preprocess must complete first")
+        run_scenario = getattr(getattr(settings, "atlas", None), "scenario", None)
         _log_step_records(
             record_items=upstream._iter_record_items(),
             log_fn=log_input_only,
             profile_schema_suffixes=(".csv", ".parquet"),
+            extra_meta_fn=lambda key, _path, _description: _atlas_artifact_facet_meta(
+                key,
+                run_scenario=run_scenario,
+                forecast_year=state.forecast_year,
+                artifact_family="atlas_run_input",
+            ),
         )
         return {}
 
@@ -1631,6 +1884,9 @@ def make_atlas_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                ),
             )
 
     return _make_generic_step_function(
@@ -1730,6 +1986,11 @@ def make_activitysim_compile_step(
                 path=zarr_output_path,
                 description="ActivitySim compiled zarr skims",
                 coupler=coupler,
+                **_activitysim_output_facet_meta(
+                    ZARR_SKIMS,
+                    year=state.forecast_year,
+                    iteration=state.iteration,
+                ),
             )
 
     return _decorate_step_with_consist(
@@ -2014,6 +2275,11 @@ def make_activitysim_run_step(
                 str(path),
                 key=short_name,
                 description=description,
+                **_activitysim_output_facet_meta(
+                    short_name,
+                    year=state.forecast_year,
+                    iteration=state.iteration,
+                ),
             )
             if artifact is not None and getattr(artifact, "hash", None):
                 outputs.raw_output_hashes[short_name] = artifact.hash
@@ -2068,7 +2334,11 @@ def make_activitysim_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         def _extra_meta(short_name: str, _path: str, _description: str) -> Dict[str, Any]:
-            meta: Dict[str, Any] = {}
+            meta: Dict[str, Any] = _activitysim_output_facet_meta(
+                short_name,
+                year=state.forecast_year,
+                iteration=state.iteration,
+            )
             content_hash = outputs.processed_output_hashes.get(short_name)
             if content_hash:
                 meta["content_hash"] = content_hash
@@ -2306,19 +2576,24 @@ def make_beam_run_step(
             _path: str,
             _description: str,
         ) -> Dict[str, Any]:
-            if not short_name.startswith("beam_network_final"):
-                return {}
-            meta: Dict[str, Any] = {
-                "profile_file_schema": "if_changed",
-                "reuse_if_unchanged": True,
-                "reuse_scope": "any_uri",
-            }
-            try:
-                from pilates.database.schema.beam_schema import BeamNetworkFinal
-            except Exception:
-                BeamNetworkFinal = None
-            if BeamNetworkFinal is not None:
-                meta["schema"] = BeamNetworkFinal
+            meta: Dict[str, Any] = {}
+            facet_meta = _beam_log_facet_meta(short_name)
+            if facet_meta:
+                meta.update(facet_meta)
+            if short_name.startswith("beam_network_final"):
+                meta.update(
+                    {
+                        "profile_file_schema": "if_changed",
+                        "reuse_if_unchanged": True,
+                        "reuse_scope": "any_uri",
+                    }
+                )
+                try:
+                    from pilates.database.schema.beam_schema import BeamNetworkFinal
+                except Exception:
+                    BeamNetworkFinal = None
+                if BeamNetworkFinal is not None:
+                    meta["schema"] = BeamNetworkFinal
             return meta
 
         _log_step_records(
@@ -2384,18 +2659,22 @@ def make_beam_postprocess_step(
                 coupler=coupler,
             )
         for short_name, path in outputs.split_events.items():
+            facet_meta = _beam_postprocess_split_facet_meta(short_name)
             log_output_only(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events parquet split ({short_name})",
                 profile_file_schema=True,
+                **facet_meta,
             )
         for short_name, path in outputs.split_event_links.items():
+            facet_meta = _beam_postprocess_split_facet_meta(short_name)
             log_output_only(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events link table ({short_name})",
                 profile_file_schema=True,
+                **facet_meta,
             )
         upstream = holder.beam_run
         if upstream is None:

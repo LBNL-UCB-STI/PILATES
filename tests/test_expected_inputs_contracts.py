@@ -199,6 +199,6 @@ def test_update_coupler_logs_phys_sim_linkstats_with_facets(monkeypatch, tmp_pat
     assert target, "Expected phys-sim linkstats artifact to be logged"
     _, _, _, meta = target[0]
     assert meta["facet_index"] is True
-    assert meta["facet_schema_version"] == "beam_linkstats_unmodified_phys_sim_iter_v1"
+    assert meta["facet_schema_version"] == "v1"
     assert meta["facet"]["phys_sim_iteration"] == 2
     assert meta["facet"]["beam_sub_iteration"] == 1

@@ -41,6 +41,10 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
         return
 
     bulk_mapping = {}
+    metadata_by_key = {}
+    facets_by_key = {}
+    facet_schema_versions_by_key = {}
+    facet_index_enabled = False
     for record in record_store.all_records():
         key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
         if not key:
@@ -61,7 +65,7 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
             continue
 
         description = getattr(record, "description", None)
-        meta = getattr(record, "metadata", None) or {}
+        meta = dict(getattr(record, "metadata", None) or {})
         if tables_used:
             table_filter = _h5_table_filter_from_list(tables_used)
             cr.log_h5_container(
@@ -74,9 +78,32 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
             )
         else:
             bulk_mapping[key] = path
+            facet = meta.pop("facet", None)
+            facet_schema_version = meta.pop("facet_schema_version", None)
+            facet_index = bool(meta.pop("facet_index", False))
+
+            if description and "description" not in meta:
+                meta["description"] = description
+            if meta:
+                metadata_by_key[key] = meta
+            if facet is not None:
+                facets_by_key[key] = facet
+            if facet_schema_version is not None:
+                facet_schema_versions_by_key[key] = facet_schema_version
+            if facet_index:
+                facet_index_enabled = True
 
     if bulk_mapping:
-        cr.log_artifacts(bulk_mapping, direction=direction)
+        kwargs = {"direction": direction}
+        if metadata_by_key:
+            kwargs["metadata_by_key"] = metadata_by_key
+        if facets_by_key:
+            kwargs["facets_by_key"] = facets_by_key
+        if facet_schema_versions_by_key:
+            kwargs["facet_schema_versions_by_key"] = facet_schema_versions_by_key
+        if facet_index_enabled:
+            kwargs["facet_index"] = True
+        cr.log_artifacts(bulk_mapping, **kwargs)
 
 
 def provenance_logging(func):
