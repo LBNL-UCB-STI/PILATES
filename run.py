@@ -19,7 +19,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, cast, Dict, Any, Callable, List
+from typing import Optional, Dict, Any, Callable, List
 
 from pilates.workspace import Workspace
 from pilates.generic.initialization import Initialization
@@ -30,7 +30,6 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
-from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.stages import (
@@ -58,6 +57,7 @@ from pilates.workflows.steps import (
     make_urbansim_postprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
+    validate_workflow_step_contracts,
 )
 
 logging.basicConfig(
@@ -361,7 +361,9 @@ def main():
     scenario_kwargs = build_scenario_consist_kwargs(settings)
     scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
     scenario_kwargs.setdefault("cache_epoch", cache_epoch)
-    coupler_schema = build_coupler_schema(_build_schema_steps(), settings=settings)
+    schema_steps = _build_schema_steps()
+    validate_workflow_step_contracts(declared_steps=schema_steps)
+    coupler_schema = build_coupler_schema(schema_steps, settings=settings)
     scenario_kwargs["require_outputs"] = list(coupler_schema.keys())
     try:
         with cr.scenario(
@@ -371,7 +373,6 @@ def main():
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            scenario = cast(ScenarioWithCoupler, scenario)
             coupler = scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),

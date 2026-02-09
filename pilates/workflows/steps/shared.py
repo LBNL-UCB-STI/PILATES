@@ -190,13 +190,16 @@ from __future__ import annotations
 #
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     Mapping,
     Optional,
+    Sequence,
+    Set,
     TYPE_CHECKING,
     Type,
     TypeVar,
@@ -870,6 +873,8 @@ STEP_DEPENDENCIES = {
     },
 }
 
+DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
+
 
 def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> None:
     """
@@ -896,6 +901,146 @@ def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> No
                 f"{step_name} requires {holder_input_key} to complete first, "
                 "but it has not been executed or failed."
             )
+
+
+def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
+    meta = getattr(step_func, "__consist_step__", None)
+    model = getattr(meta, "model", None)
+    if isinstance(model, str) and model:
+        return model
+    return None
+
+
+def validate_workflow_step_contracts(
+    *,
+    declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
+    allow_untracked_declared: Optional[Set[str]] = None,
+) -> None:
+    """
+    Validate internal workflow step contracts.
+
+    This is intended to run at startup to catch integration drift before
+    expensive model execution starts.
+
+    Checks performed:
+    - ``StepOutputsHolder`` fields align with ``STEP_OUTPUTS_CLASSES`` keys.
+    - ``STEP_OUTPUTS_CLASSES`` keys align with ``STEP_DEPENDENCIES`` keys.
+    - Dependency specs reference known step names.
+    - Optionally, declared step models are consistent with tracked step names.
+    """
+    errors: list[str] = []
+
+    holder_fields = {f.name for f in fields(StepOutputsHolder)}
+    output_class_keys = set(STEP_OUTPUTS_CLASSES.keys())
+    dependency_keys = set(STEP_DEPENDENCIES.keys())
+    tracked_step_names = holder_fields | output_class_keys | dependency_keys
+
+    missing_output_class = holder_fields - output_class_keys
+    if missing_output_class:
+        errors.append(
+            "Missing output classes for StepOutputsHolder fields: "
+            + ", ".join(sorted(missing_output_class))
+        )
+    extra_output_class = output_class_keys - holder_fields
+    if extra_output_class:
+        errors.append(
+            "STEP_OUTPUTS_CLASSES has keys not present on StepOutputsHolder: "
+            + ", ".join(sorted(extra_output_class))
+        )
+
+    missing_dependency_spec = output_class_keys - dependency_keys
+    if missing_dependency_spec:
+        errors.append(
+            "Missing STEP_DEPENDENCIES entries for tracked steps: "
+            + ", ".join(sorted(missing_dependency_spec))
+        )
+    extra_dependency_spec = dependency_keys - output_class_keys
+    if extra_dependency_spec:
+        errors.append(
+            "STEP_DEPENDENCIES has extra tracked keys not in STEP_OUTPUTS_CLASSES: "
+            + ", ".join(sorted(extra_dependency_spec))
+        )
+
+    for step_name, spec in STEP_DEPENDENCIES.items():
+        if not isinstance(spec, Mapping):
+            errors.append(
+                f"Dependency spec for {step_name!r} must be a mapping, got {type(spec).__name__}"
+            )
+            continue
+        depends_on = spec.get("depends_on", [])
+        holder_inputs = spec.get("holder_inputs", [])
+        if not isinstance(depends_on, Sequence) or isinstance(depends_on, str):
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}]['depends_on'] must be a sequence of step names"
+            )
+            depends_on = []
+        if not isinstance(holder_inputs, Sequence) or isinstance(holder_inputs, str):
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}]['holder_inputs'] must be a sequence of step names"
+            )
+            holder_inputs = []
+
+        unknown_depends_on = set(depends_on) - tracked_step_names
+        if unknown_depends_on:
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}] depends_on unknown steps: "
+                + ", ".join(sorted(unknown_depends_on))
+            )
+        unknown_holder_inputs = set(holder_inputs) - holder_fields
+        if unknown_holder_inputs:
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}] holder_inputs unknown holder fields: "
+                + ", ".join(sorted(unknown_holder_inputs))
+            )
+
+    if declared_steps is not None:
+        declared_counts: Dict[str, int] = {}
+        undecorated_count = 0
+        for step_func in declared_steps:
+            step_model = _declared_step_model(step_func)
+            if step_model is None:
+                undecorated_count += 1
+                continue
+            declared_counts[step_model] = declared_counts.get(step_model, 0) + 1
+
+        if undecorated_count:
+            errors.append(
+                f"{undecorated_count} declared step callable(s) are missing __consist_step__.model metadata"
+            )
+
+        duplicate_declared = sorted(
+            name for name, count in declared_counts.items() if count > 1
+        )
+        if duplicate_declared:
+            errors.append(
+                "Duplicate declared step model names: "
+                + ", ".join(duplicate_declared)
+            )
+
+        declared_names = set(declared_counts.keys())
+        missing_declared = tracked_step_names - declared_names
+        if missing_declared:
+            errors.append(
+                "Tracked step names missing from declared steps: "
+                + ", ".join(sorted(missing_declared))
+            )
+
+        allowed_untracked = set(DEFAULT_UNTRACKED_STEP_NAMES)
+        if allow_untracked_declared:
+            allowed_untracked |= set(allow_untracked_declared)
+
+        unexpected_untracked = declared_names - tracked_step_names - allowed_untracked
+        if unexpected_untracked:
+            errors.append(
+                "Declared step names are not tracked in holder/output/dependency maps "
+                "(add tracking or allowlist explicitly): "
+                + ", ".join(sorted(unexpected_untracked))
+            )
+
+    if errors:
+        raise RuntimeError(
+            "Workflow step contract validation failed:\n- " + "\n- ".join(errors)
+        )
 
 
 def require_common_runtime(
@@ -1463,4 +1608,3 @@ def _execute_atlas_postprocess(
     raw_outputs = upstream.to_record_store()
     _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
-
