@@ -11,6 +11,7 @@ from consist.utils import collect_step_schema
 
 from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.generic.records import sanitize_artifact_key
+from pilates.workflows.coupler_namespace import namespaced_alias_for_key
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -132,6 +133,14 @@ def build_coupler_schema(
         Coupler key -> description mapping.
     """
     extras = dict(PILATES_COUPLER_SCHEMA)
+    for key, description in list(PILATES_COUPLER_SCHEMA.items()):
+        namespaced_key = namespaced_alias_for_key(key)
+        if not namespaced_key:
+            continue
+        extras.setdefault(
+            namespaced_key,
+            f"{description} (namespaced alias)",
+        )
     extras.update(_atlas_static_key_map(settings))
     try:
         return collect_step_schema(steps, settings=settings, extra_keys=extras)

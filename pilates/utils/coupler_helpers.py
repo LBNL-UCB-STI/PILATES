@@ -17,6 +17,7 @@ from pilates.workflows.artifact_key_migrations import (
     canonicalize_artifact_mapping,
     resolve_artifact_key,
 )
+from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
@@ -400,6 +401,7 @@ def update_coupler_from_beam_outputs(
         coupler=coupler,
         workspace=workspace,
         profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     _log_and_set_beam_record(
         linkstats_record,
@@ -408,8 +410,12 @@ def update_coupler_from_beam_outputs(
         coupler=coupler,
         workspace=workspace,
         profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     for record in linkstats_parquet_records:
+        linkstats_meta = _beam_linkstats_facet_meta(
+            record.short_name, family="linkstats_parquet"
+        )
         if _is_sub_iteration_key(record.short_name):
             _log_beam_record_only(
                 record,
@@ -417,6 +423,7 @@ def update_coupler_from_beam_outputs(
                 description="BEAM linkstats parquet output for downstream runs",
                 workspace=workspace,
                 profile_file_schema=True,
+                **linkstats_meta,
             )
         else:
             _log_and_set_beam_record(
@@ -426,12 +433,18 @@ def update_coupler_from_beam_outputs(
                 coupler=coupler,
                 workspace=workspace,
                 profile_file_schema=True,
+                **linkstats_meta,
             )
     for record in linkstats_unmodified_phys_sim_records:
-        facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
+        record_meta = dict(getattr(record, "metadata", None) or {})
+        facets = record_meta.get("facet")
+        if facets is None:
+            facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
         log_meta = {
-            "facet_schema_version": "beam_linkstats_unmodified_phys_sim_iter_v1",
-            "facet_index": True,
+            "facet_schema_version": record_meta.get(
+                "facet_schema_version", "v1"
+            ),
+            "facet_index": bool(record_meta.get("facet_index", True)),
         }
         if facets:
             log_meta["facet"] = facets
@@ -550,6 +563,49 @@ def _is_sub_iteration_key(short_name: Optional[str]) -> bool:
     if not short_name:
         return False
     return "_sub" in short_name or "__beam_sub_iter" in short_name
+
+
+def _beam_linkstats_facet_meta(
+    short_name: Optional[str],
+    *,
+    family: str,
+) -> Dict[str, Any]:
+    if not short_name:
+        return {}
+    parsed = _parse_linkstats_iteration_key(short_name)
+    if not parsed:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            **parsed,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _parse_linkstats_iteration_key(short_name: str) -> Optional[Dict[str, Any]]:
+    for prefix in ("linkstats_parquet_", "linkstats_"):
+        if not short_name.startswith(prefix):
+            continue
+        tail = short_name[len(prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 2:
+            continue
+        try:
+            year = int(parts[0])
+            iteration = int(parts[1])
+        except ValueError:
+            continue
+        payload: Dict[str, Any] = {"year": year, "iteration": iteration}
+        if len(parts) > 2 and parts[2].startswith("sub"):
+            try:
+                payload["beam_sub_iteration"] = int(parts[2][3:])
+            except ValueError:
+                continue
+        return payload
+    return None
 
 
 def _parse_linkstats_unmodified_phys_sim_facets(
@@ -718,14 +774,36 @@ def set_coupler_from_artifact(
     if artifact is None and fallback is None:
         return
     canonical_key = resolve_artifact_key(key)
-    set_from_artifact = getattr(coupler, "set_from_artifact", None)
-    if callable(set_from_artifact):
-        if artifact is None:
-            set_from_artifact(canonical_key, fallback)
-        else:
-            set_from_artifact(canonical_key, artifact)
-        return
-    coupler.set(canonical_key, artifact or fallback)
+    value = artifact or fallback
+
+    def _set_value(target: Any, target_key: str) -> None:
+        set_from_artifact = getattr(target, "set_from_artifact", None)
+        if callable(set_from_artifact):
+            set_from_artifact(target_key, value)
+            return
+        set_value = getattr(target, "set", None)
+        if callable(set_value):
+            set_value(target_key, value)
+
+    # Preferred path: if available, also publish through model namespace view.
+    target = namespaced_view_target(canonical_key)
+    view_fn = getattr(coupler, "view", None)
+    if target is not None and callable(view_fn):
+        namespace, local_key = target
+        try:
+            view = view_fn(namespace)
+            _set_value(view, local_key)
+        except Exception:
+            logger.debug(
+                "Failed to publish key %s via coupler view namespace %s",
+                canonical_key,
+                namespace,
+                exc_info=True,
+            )
+
+    # Transitional compatibility: keep unscoped key writes so existing consumers
+    # and historical runs remain valid while namespaced lookups are adopted.
+    _set_value(coupler, canonical_key)
 
 
 def _log_with_optional_h5_container(

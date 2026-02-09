@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    record_store_to_outputs,
+    resolve_artifact_from_value,
+    set_coupler_from_artifact,
+)
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
 from pilates.workflows.artifact_keys import (
@@ -26,6 +31,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
+    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     serialize_step_outputs,
 )
@@ -53,6 +59,9 @@ class StepRef:
     cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
     load_inputs: Optional[bool] = None
+    required_outputs: Optional[Sequence[str]] = None
+    output_missing: Optional[str] = None
+    output_mismatch: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
     iteration: Optional[int] = None
@@ -83,6 +92,7 @@ def _build_step_run_kwargs(
         "fn": step.step_func,
         "runtime_kwargs": runtime_kwargs,
     }
+    step_meta = getattr(step.step_func, "__consist_step__", None)
     resolved_year = step.year
     if resolved_year is None:
         resolved_year = getattr(state, "year", None)
@@ -114,6 +124,34 @@ def _build_step_run_kwargs(
         run_kwargs["cache_mode"] = step.cache_mode
     if step.load_inputs is not None:
         run_kwargs["load_inputs"] = step.load_inputs
+    resolved_required_outputs: Optional[Sequence[str]] = step.required_outputs
+    if resolved_required_outputs is None and step_meta is not None:
+        meta_outputs = getattr(step_meta, "outputs", None)
+        if isinstance(meta_outputs, Sequence) and not isinstance(meta_outputs, str):
+            resolved_required_outputs = [
+                output for output in meta_outputs if isinstance(output, str)
+            ]
+    if resolved_required_outputs is None:
+        outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
+        if outputs_class is not None:
+            class_declared_outputs = list(
+                declared_outputs_for_step_outputs_class(outputs_class)
+            )
+            if class_declared_outputs:
+                resolved_required_outputs = class_declared_outputs
+    if resolved_required_outputs:
+        run_kwargs["outputs"] = list(resolved_required_outputs)
+
+    # Apply strict defaults for declared-output steps unless explicitly overridden.
+    if step.output_missing is not None:
+        run_kwargs["output_missing"] = step.output_missing
+    elif resolved_required_outputs:
+        run_kwargs["output_missing"] = "error"
+
+    if step.output_mismatch is not None:
+        run_kwargs["output_mismatch"] = step.output_mismatch
+    elif resolved_required_outputs:
+        run_kwargs["output_mismatch"] = "error"
 
     if step.model is not None:
         run_kwargs["model"] = step.model
@@ -206,11 +244,15 @@ def run_manifested_steps(
         spec = raw_step
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
-            if outputs_holder.get_attribute(spec.name) is None:
+            outputs = outputs_holder.get_attribute(spec.name)
+            if outputs is None:
                 outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
-                    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+            if outputs is not None:
+                _update_coupler_from_outputs(
+                    outputs, coupler=coupler, workspace=workspace
+                )
             continue
 
         validate_step_ready(spec.name, outputs_holder)
@@ -633,14 +675,30 @@ def _update_coupler_from_record_store(
     if record_store is None:
         return
     mapping = record_store.to_mapping()
-    set_value = getattr(coupler, "set", None)
-    if not callable(set_value):
-        return
     for key, value in mapping.items():
+        canonical_key = resolve_artifact_key(key)
+        resolved = resolve_artifact_from_value(
+            value,
+            key=canonical_key,
+            workspace=workspace,
+        )
         path = artifact_to_path(value, workspace)
         if path is None:
             continue
-        set_value(resolve_artifact_key(key), path)
+        artifact = (
+            resolved
+            if (
+                hasattr(resolved, "container_uri")
+                or hasattr(resolved, "uri")
+            )
+            else None
+        )
+        set_coupler_from_artifact(
+            coupler=coupler,
+            key=canonical_key,
+            artifact=artifact,
+            fallback=path,
+        )
 
 
 def _restore_outputs_from_manifest(

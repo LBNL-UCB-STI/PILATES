@@ -14,12 +14,13 @@ import inspect
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, TypeVar, cast
 
 from pilates.utils.consist_types import (
     ArtifactLike,
+    CouplerProtocol,
     RunResultLike,
-    ScenarioLike,
+    ScenarioWithCoupler,
     TrackerLike,
 )
 
@@ -28,11 +29,6 @@ logger = logging.getLogger(__name__)
 import consist
 
 _enabled_override: Optional[bool] = None
-
-
-def consist_available(settings: Optional[Any] = None) -> bool:
-    """Compatibility shim: Consist is always required and available."""
-    return True
 
 
 def _is_enabled(enabled: Optional[bool] = None) -> bool:
@@ -82,14 +78,15 @@ def scenario(
     tracker: Optional[TrackerLike] = None,
     *,
     enabled: Optional[bool] = None,
-    **kwargs,
-) -> Iterator[ScenarioLike]:
+    **kwargs: Any,
+) -> Iterator[ScenarioWithCoupler]:
     resolved_enabled = _is_enabled(enabled)
     if not resolved_enabled:
         yield _NoopScenario()
         return
     with consist.scenario(name, tracker=tracker, enabled=True, **kwargs) as sc:
-        yield sc
+        # Narrow for callers: PILATES requires a coupler-capable scenario.
+        yield cast(ScenarioWithCoupler, sc)
 
 
 def log_input(
@@ -216,7 +213,10 @@ def log_artifacts(
             for key, value in normalized.items()
         }
     try:
-        return consist.log_artifacts(normalized, enabled=True, **meta)
+        try:
+            return consist.log_artifacts(outputs=normalized, enabled=True, **meta)
+        except TypeError:
+            return consist.log_artifacts(normalized, enabled=True, **meta)
     except RuntimeError:
         logger.debug("Skipping artifact logging outside active Consist run.")
         return {
@@ -274,16 +274,19 @@ def require_runtime_kwargs(
     return consist.require_runtime_kwargs(*names)
 
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
 def _noop_require_runtime_kwargs(
     *names: str,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[F], F]:
     if not names:
         raise ValueError("require_runtime_kwargs requires at least one name.")
     for name in names:
         if not isinstance(name, str) or not name:
             raise ValueError("require_runtime_kwargs expects non-empty string names.")
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         func.__consist_runtime_required__ = tuple(names)
         return func
 
@@ -368,6 +371,7 @@ def _ensure_legacy_table_path_meta(
 class _NoopArtifact:
     def __init__(self, path: Any) -> None:
         self._path = str(path)
+        self.meta: Dict[str, Any] = {}
 
     @property
     def path(self) -> str:
@@ -381,6 +385,14 @@ class _NoopArtifact:
     def uri(self) -> str:
         return self._path
 
+    @property
+    def table_path(self) -> Optional[str]:
+        return None
+
+    @property
+    def array_path(self) -> Optional[str]:
+        return None
+
 
 class _NoopCoupler:
     def __init__(self) -> None:
@@ -392,11 +404,17 @@ class _NoopCoupler:
     def get(self, key: str, default: Optional[Any] = None) -> Any:
         return self._store.get(key, default)
 
-    def update(self, mapping: Dict[str, Any]) -> None:
+    def update(self, mapping: Mapping[str, Any]) -> None:
         self._store.update(mapping)
 
     def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
         return None
+
+    def view(self, namespace: str) -> "_NoopCouplerView":
+        normalized = namespace.strip("/")
+        if not normalized:
+            raise ValueError("namespace must be non-empty")
+        return _NoopCouplerView(self, normalized)
 
     def collect_by_keys(
         self,
@@ -415,15 +433,43 @@ class _NoopCoupler:
         return collected
 
 
+class _NoopCouplerView:
+    def __init__(self, coupler: _NoopCoupler, namespace: str) -> None:
+        self._coupler = coupler
+        self._namespace = namespace
+
+    def _qualify(self, key: str) -> str:
+        local = str(key).strip("/")
+        return f"{self._namespace}/{local}"
+
+    def set(self, key: str, value: Any) -> None:
+        self._coupler.set(self._qualify(key), value)
+
+    def get(self, key: str, default: Optional[Any] = None) -> Any:
+        return self._coupler.get(self._qualify(key), default)
+
+    def update(self, mapping: Mapping[str, Any]) -> None:
+        self._coupler.update({self._qualify(key): value for key, value in mapping.items()})
+
+    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def view(self, namespace: str) -> "_NoopCouplerView":
+        normalized = namespace.strip("/")
+        if not normalized:
+            raise ValueError("namespace must be non-empty")
+        return _NoopCouplerView(self._coupler, f"{self._namespace}/{normalized}")
+
+
 class _NoopScenario:
     def __init__(self) -> None:
-        self.coupler = _NoopCoupler()
+        self.coupler: CouplerProtocol = _NoopCoupler()
 
     @contextmanager
     def trace(self, *args: Any, **kwargs: Any) -> Iterator[None]:
         yield None
 
-    def declare_outputs(self, *args, **kwargs) -> None:
+    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
         return None
 
     def coupler_schema(self, schema: Any) -> Any:

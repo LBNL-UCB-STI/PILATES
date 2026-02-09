@@ -190,13 +190,16 @@ from __future__ import annotations
 #
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     Mapping,
     Optional,
+    Sequence,
+    Set,
     TYPE_CHECKING,
     Type,
     TypeVar,
@@ -235,6 +238,8 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
+    USIM_FORECAST_OUTPUT,
     ZARR_SKIMS,
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
@@ -249,6 +254,7 @@ from pilates.workflows.step_exec import (
     run_runner,
     warm_start_activities,
 )
+from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -356,6 +362,228 @@ def _log_step_records(
             description=description,
             **meta,
         )
+
+
+def _parse_prefixed_iteration_key(short_name: str, prefix: str) -> Optional[Dict[str, Any]]:
+    marker = f"{prefix}_"
+    if not short_name.startswith(marker):
+        return None
+    tail = short_name[len(marker) :]
+    parts = tail.split("_")
+    if len(parts) < 2:
+        return None
+    try:
+        year = int(parts[0])
+        iteration = int(parts[1])
+    except ValueError:
+        return None
+    payload: Dict[str, Any] = {
+        "year": year,
+        "iteration": iteration,
+    }
+    if len(parts) > 2 and parts[2].startswith("sub"):
+        try:
+            payload["beam_sub_iteration"] = int(parts[2][3:])
+        except ValueError:
+            pass
+    return payload
+
+
+def _beam_artifact_facets(short_name: str) -> Optional[Dict[str, Any]]:
+    for prefix, family in (
+        ("events_parquet", "events_parquet"),
+        ("raw_od_skims", "raw_od_skims"),
+        ("raw_od_skims_zarr", "raw_od_skims_zarr"),
+        ("linkstats_parquet", "linkstats_parquet"),
+    ):
+        parsed = _parse_prefixed_iteration_key(short_name, prefix)
+        if parsed is not None:
+            return {"artifact_family": family, **parsed}
+
+    if short_name.startswith("linkstats_unmodified_parquet__"):
+        tokens = short_name.split("__")
+        payload: Dict[str, Any] = {
+            "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet"
+        }
+        for token in tokens[1:]:
+            if token.startswith("y"):
+                try:
+                    payload["year"] = int(token[1:])
+                except ValueError:
+                    return None
+            elif token.startswith("i"):
+                try:
+                    payload["iteration"] = int(token[1:])
+                except ValueError:
+                    return None
+            elif token.startswith("phys_sim_iter"):
+                try:
+                    payload["phys_sim_iteration"] = int(
+                        token[len("phys_sim_iter") :]
+                    )
+                except ValueError:
+                    return None
+            elif token.startswith("beam_sub_iter"):
+                try:
+                    payload["beam_sub_iteration"] = int(token[len("beam_sub_iter") :])
+                except ValueError:
+                    return None
+        if {"year", "iteration", "phys_sim_iteration"} <= set(payload.keys()):
+            return payload
+        return None
+
+    return None
+
+
+def _beam_log_facet_meta(short_name: str) -> Dict[str, Any]:
+    facet = _beam_artifact_facets(short_name)
+    if not facet:
+        return {}
+    return {
+        "facet": facet,
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _beam_postprocess_split_facet_meta(short_name: str) -> Dict[str, Any]:
+    if short_name.startswith("events_parquet_") and "_type_" in short_name:
+        head, event_type = short_name.split("_type_", 1)
+        parsed = _parse_prefixed_iteration_key(head, "events_parquet")
+        if parsed:
+            return {
+                "facet": {
+                    "artifact_family": "events_parquet_split",
+                    "event_type": event_type,
+                    **parsed,
+                },
+                "facet_schema_version": "v1",
+                "facet_index": True,
+            }
+    if short_name.startswith("path_traversal_links_"):
+        parsed = _parse_prefixed_iteration_key(short_name, "path_traversal_links")
+        if parsed:
+            return {
+                "facet": {
+                    "artifact_family": "path_traversal_links",
+                    **parsed,
+                },
+                "facet_schema_version": "v1",
+                "facet_index": True,
+            }
+    return {}
+
+
+def _activitysim_output_facet_meta(
+    short_name: str,
+    *,
+    year: int,
+    iteration: int,
+) -> Dict[str, Any]:
+    family = None
+    if short_name.endswith("_asim_out"):
+        family = short_name[: -len("_asim_out")]
+    elif short_name.startswith("asim_input_") and short_name.endswith("_archived"):
+        family = "asim_input_archived"
+    elif short_name == ZARR_SKIMS:
+        family = "zarr_skims"
+    if family is None:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            "year": year,
+            "iteration": iteration,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _urbansim_output_facet_meta(
+    short_name: str,
+    *,
+    forecast_year: int,
+) -> Dict[str, Any]:
+    if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
+        family = "usim_input_archive"
+    elif short_name.startswith(USIM_INPUT_MERGED_PREFIX):
+        family = "usim_input_merged"
+    elif short_name == USIM_FORECAST_OUTPUT:
+        family = "usim_forecast_output"
+    elif short_name == USIM_DATASTORE_H5:
+        family = "usim_datastore_h5"
+    elif short_name == USIM_DATASTORE_BASE_H5:
+        family = "usim_datastore_base_h5"
+    else:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            "year": forecast_year,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _atlas_artifact_facet_meta(
+    short_name: str,
+    *,
+    run_scenario: Optional[str],
+    forecast_year: int,
+    artifact_family: str = "atlas_input",
+) -> Dict[str, Any]:
+    key = short_name.replace("\\", "/")
+    key_compact = key.replace("/", "_")
+
+    input_group = "global"
+    parsed_scenario = None
+    input_year = None
+
+    if key.startswith("adopt/") or key_compact.startswith("adopt_"):
+        input_group = "adopt"
+        if key.startswith("adopt/"):
+            parts = key.split("/")
+            if len(parts) >= 2:
+                parsed_scenario = parts[1]
+        else:
+            parts = key_compact.split("_")
+            if len(parts) >= 2:
+                parsed_scenario = parts[1]
+    elif key_compact.startswith("vehicle_type_mapping_"):
+        input_group = "vehicle_type_mapping"
+        if "baseline" in key_compact:
+            parsed_scenario = "baseline"
+        elif "evMandForced2" in key_compact:
+            parsed_scenario = "zev_mandate"
+        elif "ESS_const_220_price" in key_compact:
+            parsed_scenario = "ess_cons"
+    elif key_compact.startswith("atlas_vehicles2"):
+        input_group = "vehicles2"
+    elif key_compact.startswith("usim_"):
+        input_group = "usim"
+
+    tail = key_compact.rsplit("_", 1)
+    if len(tail) == 2 and len(tail[1]) == 4 and tail[1].isdigit():
+        input_year = int(tail[1])
+
+    facet: Dict[str, Any] = {
+        "artifact_family": artifact_family,
+        "input_group": input_group,
+        "forecast_year": forecast_year,
+    }
+    scenario_value = parsed_scenario or run_scenario
+    if scenario_value:
+        facet["scenario"] = str(scenario_value)
+    if input_year is not None:
+        facet["input_year"] = input_year
+
+    return {
+        "facet": facet,
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
 
 
 def _log_beam_r5_osm_input(
@@ -646,6 +874,8 @@ STEP_DEPENDENCIES = {
     },
 }
 
+DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
+
 
 def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> None:
     """
@@ -674,6 +904,146 @@ def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> No
             )
 
 
+def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
+    meta = getattr(step_func, "__consist_step__", None)
+    model = getattr(meta, "model", None)
+    if isinstance(model, str) and model:
+        return model
+    return None
+
+
+def validate_workflow_step_contracts(
+    *,
+    declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
+    allow_untracked_declared: Optional[Set[str]] = None,
+) -> None:
+    """
+    Validate internal workflow step contracts.
+
+    This is intended to run at startup to catch integration drift before
+    expensive model execution starts.
+
+    Checks performed:
+    - ``StepOutputsHolder`` fields align with ``STEP_OUTPUTS_CLASSES`` keys.
+    - ``STEP_OUTPUTS_CLASSES`` keys align with ``STEP_DEPENDENCIES`` keys.
+    - Dependency specs reference known step names.
+    - Optionally, declared step models are consistent with tracked step names.
+    """
+    errors: list[str] = []
+
+    holder_fields = {f.name for f in fields(StepOutputsHolder)}
+    output_class_keys = set(STEP_OUTPUTS_CLASSES.keys())
+    dependency_keys = set(STEP_DEPENDENCIES.keys())
+    tracked_step_names = holder_fields | output_class_keys | dependency_keys
+
+    missing_output_class = holder_fields - output_class_keys
+    if missing_output_class:
+        errors.append(
+            "Missing output classes for StepOutputsHolder fields: "
+            + ", ".join(sorted(missing_output_class))
+        )
+    extra_output_class = output_class_keys - holder_fields
+    if extra_output_class:
+        errors.append(
+            "STEP_OUTPUTS_CLASSES has keys not present on StepOutputsHolder: "
+            + ", ".join(sorted(extra_output_class))
+        )
+
+    missing_dependency_spec = output_class_keys - dependency_keys
+    if missing_dependency_spec:
+        errors.append(
+            "Missing STEP_DEPENDENCIES entries for tracked steps: "
+            + ", ".join(sorted(missing_dependency_spec))
+        )
+    extra_dependency_spec = dependency_keys - output_class_keys
+    if extra_dependency_spec:
+        errors.append(
+            "STEP_DEPENDENCIES has extra tracked keys not in STEP_OUTPUTS_CLASSES: "
+            + ", ".join(sorted(extra_dependency_spec))
+        )
+
+    for step_name, spec in STEP_DEPENDENCIES.items():
+        if not isinstance(spec, Mapping):
+            errors.append(
+                f"Dependency spec for {step_name!r} must be a mapping, got {type(spec).__name__}"
+            )
+            continue
+        depends_on = spec.get("depends_on", [])
+        holder_inputs = spec.get("holder_inputs", [])
+        if not isinstance(depends_on, Sequence) or isinstance(depends_on, str):
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}]['depends_on'] must be a sequence of step names"
+            )
+            depends_on = []
+        if not isinstance(holder_inputs, Sequence) or isinstance(holder_inputs, str):
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}]['holder_inputs'] must be a sequence of step names"
+            )
+            holder_inputs = []
+
+        unknown_depends_on = set(depends_on) - tracked_step_names
+        if unknown_depends_on:
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}] depends_on unknown steps: "
+                + ", ".join(sorted(unknown_depends_on))
+            )
+        unknown_holder_inputs = set(holder_inputs) - holder_fields
+        if unknown_holder_inputs:
+            errors.append(
+                f"STEP_DEPENDENCIES[{step_name!r}] holder_inputs unknown holder fields: "
+                + ", ".join(sorted(unknown_holder_inputs))
+            )
+
+    if declared_steps is not None:
+        declared_counts: Dict[str, int] = {}
+        undecorated_count = 0
+        for step_func in declared_steps:
+            step_model = _declared_step_model(step_func)
+            if step_model is None:
+                undecorated_count += 1
+                continue
+            declared_counts[step_model] = declared_counts.get(step_model, 0) + 1
+
+        if undecorated_count:
+            errors.append(
+                f"{undecorated_count} declared step callable(s) are missing __consist_step__.model metadata"
+            )
+
+        duplicate_declared = sorted(
+            name for name, count in declared_counts.items() if count > 1
+        )
+        if duplicate_declared:
+            errors.append(
+                "Duplicate declared step model names: "
+                + ", ".join(duplicate_declared)
+            )
+
+        declared_names = set(declared_counts.keys())
+        missing_declared = tracked_step_names - declared_names
+        if missing_declared:
+            errors.append(
+                "Tracked step names missing from declared steps: "
+                + ", ".join(sorted(missing_declared))
+            )
+
+        allowed_untracked = set(DEFAULT_UNTRACKED_STEP_NAMES)
+        if allow_untracked_declared:
+            allowed_untracked |= set(allow_untracked_declared)
+
+        unexpected_untracked = declared_names - tracked_step_names - allowed_untracked
+        if unexpected_untracked:
+            errors.append(
+                "Declared step names are not tracked in holder/output/dependency maps "
+                "(add tracking or allowlist explicitly): "
+                + ", ".join(sorted(unexpected_untracked))
+            )
+
+    if errors:
+        raise RuntimeError(
+            "Workflow step contract validation failed:\n- " + "\n- ".join(errors)
+        )
+
+
 def require_common_runtime(
     *names: str,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -698,6 +1068,22 @@ def _schema_outputs_from_class(outputs_class: Type[StepOutputsT]) -> Optional[li
     values = [value for value in record_keys.values() if isinstance(value, str)]
     unique = sorted(set(values))
     return unique or None
+
+
+def _declared_outputs_from_class(
+    outputs_class: Type[StepOutputsT],
+) -> Optional[list[str]]:
+    """
+    Return strict output contract keys for a step outputs class when available.
+
+    Precedence:
+    1. Explicit ``declared_outputs`` class attribute.
+    2. Fallback to required ``record_keys`` fields only.
+    """
+    declared = list(declared_outputs_for_step_outputs_class(outputs_class))
+    if not declared:
+        return None
+    return declared
 
 
 def _decorate_step_with_consist(
@@ -842,6 +1228,7 @@ def _make_generic_step_function(
         step_model=step_model,
         description=f"{model_name} {phase} workflow step",
         schema_outputs=_schema_outputs_from_class(outputs_class),
+        outputs=_declared_outputs_from_class(outputs_class),
         tags=[model_name, phase],
     )
 
@@ -1239,1226 +1626,3 @@ def _execute_atlas_postprocess(
     raw_outputs = upstream.to_record_store()
     _warn_missing_coupler_inputs(coupler, raw_outputs, context)
     return run_postprocessor(postprocessor, raw_outputs, workspace)
-
-
-def make_urbansim_preprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the UrbanSim preprocess step function.
-
-    This step prepares land-use inputs by materializing the UrbanSim mutable
-    data directory, ensuring warm-start activities (if enabled), and making
-    required input tables available for the land-use runner.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing preprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for UrbanSim preprocess.
-    """
-
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        if state.is_start_year() and settings.activitysim.warm_start_activities:
-            logger.info("[Main] Running warm start activities for ActivitySim.")
-            warm_start_activities(settings, state, workspace)
-        return {}
-
-    def _log_outputs(
-        outputs: UrbanSimPreprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
-                key=short_name,
-                path=str(path),
-                description=description,
-                coupler=coupler,
-            )
-        usim_data_dir = outputs.usim_mutable_data_dir
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=settings.urbansim.region_mappings["region_to_region_id"][
-                settings.run.region
-            ]
-        )
-        usim_input_path = usim_data_dir / usim_input_fname
-        if usim_input_path.exists():
-            log_and_set_output(
-                key=USIM_DATASTORE_BASE_H5,
-                path=str(usim_input_path),
-                description="UrbanSim base datastore for preprocessing",
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="preprocess",
-        outputs_class=UrbanSimPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "urbansim", state, WorkflowState.Stage.land_use
-        ),
-        component_executor=_execute_preprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-    )
-
-
-def make_urbansim_run_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the UrbanSim run step function.
-
-    This step executes the UrbanSim land-use simulation for the forecast year
-    and produces the UrbanSim datastore output.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing run outputs.
-
-    Returns
-    -------
-    callable
-        Step function for UrbanSim run.
-    """
-
-    def _log_outputs(
-        outputs: UrbanSimRunOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        if outputs.usim_datastore_h5 is not None:
-            log_and_set_output(
-                key=USIM_DATASTORE_H5,
-                path=str(outputs.usim_datastore_h5),
-                description=(
-                    f"UrbanSim datastore output for year {state.forecast_year}"
-                ),
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="run",
-        outputs_class=UrbanSimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "urbansim", state, WorkflowState.Stage.land_use
-        ),
-        component_executor=_execute_urbansim_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_run", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_urbansim_postprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the UrbanSim postprocess step function.
-
-    This step merges UrbanSim outputs into the input datastore used by
-    downstream models and prepares the HDF5 for the next stage.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing postprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for UrbanSim postprocess.
-    """
-
-    def _log_outputs(
-        outputs: UrbanSimPostprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
-                log_output_only(
-                    key=short_name,
-                    path=str(path),
-                    description=description,
-                    profile_file_schema=True,
-                    h5_container=True,
-                    hash_tables="if_unchanged",
-                )
-        if outputs.usim_datastore_h5 is not None:
-            log_and_set_output(
-                key=USIM_DATASTORE_H5,
-                path=str(outputs.usim_datastore_h5),
-                description=(
-                    "UrbanSim datastore prepared for next iteration "
-                    f"(year {state.forecast_year})"
-                ),
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="postprocess",
-        outputs_class=UrbanSimPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "urbansim", state, WorkflowState.Stage.land_use
-        ),
-        component_executor=_execute_urbansim_postprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_atlas_preprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ATLAS preprocess step function.
-
-    This step extracts UrbanSim HDF5 tables into ATLAS input CSVs and optionally
-    computes accessibility metrics required by the ATLAS vehicle ownership model.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing preprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ATLAS preprocess.
-    """
-    def _log_outputs(
-        outputs: AtlasPreprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
-            profile_schema_suffixes=(".csv", ".parquet"),
-        )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="preprocess",
-        outputs_class=AtlasPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
-        ),
-        component_executor=_execute_preprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_preprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_atlas_run_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ATLAS run step function.
-
-    This step runs ATLAS to simulate vehicle ownership for the sub-year and
-    produces household/vehicle output CSVs.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing run outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ATLAS run.
-    """
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        upstream = holder.atlas_preprocess
-        if upstream is None:
-            raise RuntimeError("ATLAS preprocess must complete first")
-        _log_step_records(
-            record_items=upstream._iter_record_items(),
-            log_fn=log_input_only,
-            profile_schema_suffixes=(".csv", ".parquet"),
-        )
-        return {}
-
-    def _log_outputs(
-        outputs: AtlasRunOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
-            profile_schema_suffixes=(".csv", ".parquet"),
-        )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="run",
-        outputs_class=AtlasRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
-        ),
-        component_executor=_execute_atlas_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-    )
-
-
-def make_atlas_postprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ATLAS postprocess step function.
-
-    This step updates the UrbanSim HDF5 datastore with ATLAS vehicle ownership
-    results and writes vehicles2 outputs used by BEAM.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing postprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ATLAS postprocess.
-    """
-
-    def _log_outputs(
-        outputs: AtlasPostprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
-            profile_schema_suffixes=(".csv", ".parquet"),
-        )
-        if outputs.usim_datastore_h5 is not None:
-            log_and_set_output(
-                key=USIM_DATASTORE_H5,
-                path=str(outputs.usim_datastore_h5),
-                description=(
-                    "UrbanSim datastore updated by ATLAS for year "
-                    f"{state.forecast_year}"
-                ),
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="postprocess",
-        outputs_class=AtlasPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
-        ),
-        component_executor=_execute_atlas_postprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_activitysim_compile_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ActivitySim compile step function.
-
-    This step compiles ActivitySim inputs (prepared by preprocess) into
-    optimized skim artifacts (Zarr) used by ActivitySim runs and BEAM.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-
-    Returns
-    -------
-    callable
-        Step function for ActivitySim compile.
-    """
-
-    @require_common_runtime("expected_outputs")
-    def _run_activitysim_compile_step(
-        *,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        expected_outputs: Dict[str, Any],
-    ) -> None:
-        factory = ModelFactory()
-        from workflow_state import WorkflowState as _WorkflowState
-
-        compile_runner = factory.get_runner(
-            "activitysim_compile",
-            state,
-            major_stage=_WorkflowState.Stage.activity_demand,
-        )
-
-        upstream = outputs_holder.activitysim_preprocess
-        if upstream is None:
-            raise RuntimeError(
-                "ActivitySim compile must run after activitysim_preprocess"
-            )
-        input_store = upstream.to_record_store()
-        omx_record = None
-        if input_store:
-            for record in input_store.all_records():
-                if getattr(record, "short_name", None) == ASIM_OMX_SKIMS:
-                    omx_record = record
-                    break
-        if omx_record is not None:
-            input_store = RecordStore(recordList=[omx_record])
-        else:
-            input_store = RecordStore()
-        if omx_record is not None:
-            omx_path = omx_record.get_absolute_path(base_path=workspace.full_path)
-            if omx_path and os.path.exists(omx_path):
-                cr.log_input(
-                    omx_path,
-                    key=ASIM_OMX_SKIMS,
-                    description="ActivitySim compile input skims (OMX)",
-                )
-        compile_outputs = compile_runner.run(input_store, workspace)
-
-        zarr_record = None
-        if compile_outputs:
-            for record in compile_outputs.all_records():
-                if record.short_name == ZARR_SKIMS:
-                    zarr_record = record
-                    break
-        zarr_output_path = expected_outputs.get(ZARR_SKIMS)
-        if not zarr_output_path and zarr_record is not None:
-            zarr_output_path = zarr_record.file_path
-        if zarr_output_path and os.path.exists(zarr_output_path):
-            log_and_set_output(
-                key=ZARR_SKIMS,
-                path=zarr_output_path,
-                description="ActivitySim compiled zarr skims",
-                coupler=coupler,
-            )
-
-    return _decorate_step_with_consist(
-        step_func=_run_activitysim_compile_step,
-        step_model="activitysim_compile",
-        description="activitysim compile workflow step",
-        outputs=[ZARR_SKIMS],
-        schema_outputs=[ZARR_SKIMS],
-        tags=["activitysim", "compile"],
-    )
-
-
-def make_activitysim_preprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ActivitySim preprocess step function.
-
-    This step prepares ActivitySim inputs from UrbanSim outputs and ensures
-    the mutable input directory contains the required tables and skims.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing preprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ActivitySim preprocess.
-
-    Notes
-    -----
-    This step focuses on preparing ActivitySim inputs. Config canonicalization
-    is also performed here so config ingestion is tied to the preprocess phase.
-    """
-
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        """
-        Log ActivitySim preprocess inputs.
-
-        This helper logs the UrbanSim datastore input if it exists in the coupler.
-
-        Parameters
-        ----------
-        settings : PilatesConfig
-            Simulation settings for config root resolution.
-        state : WorkflowState
-            Current workflow state (used for log metadata only).
-        workspace : Workspace
-            Workspace used to resolve mutable config paths.
-        holder : StepOutputsHolder
-            Outputs holder (unused for this helper).
-
-        Returns
-        -------
-        dict
-            Extra runtime kwargs for the step executor (empty for this helper).
-        """
-        usim_input = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            updated_value = get_value(USIM_H5_UPDATED)
-            if updated_value is not None:
-                selected_key = USIM_H5_UPDATED
-                selected_value = updated_value
-            else:
-                current_value = get_value(USIM_DATASTORE_CURRENT_H5)
-                if current_value is not None:
-                    selected_key = USIM_DATASTORE_CURRENT_H5
-                    selected_value = current_value
-                else:
-                    selected_key = USIM_DATASTORE_BASE_H5
-                    selected_value = get_value(USIM_DATASTORE_BASE_H5)
-            usim_input = resolve_artifact_from_value(
-                selected_value,
-                key=selected_key,
-                workspace=workspace,
-            )
-        usim_path = artifact_to_path(usim_input, workspace)
-        if usim_path and os.path.exists(usim_path):
-            input_key = (
-                USIM_H5_UPDATED
-                if callable(get_value) and get_value(USIM_H5_UPDATED) is not None
-                else (
-                    USIM_DATASTORE_CURRENT_H5
-                    if callable(get_value)
-                    and get_value(USIM_DATASTORE_CURRENT_H5) is not None
-                    else USIM_DATASTORE_BASE_H5
-                )
-            )
-            input_desc = (
-                f"UrbanSim datastore updated by ATLAS for ActivitySim year {state.year}"
-                if input_key == USIM_H5_UPDATED
-                else (
-                    f"UrbanSim current datastore for ActivitySim year {state.year}"
-                    if input_key == USIM_DATASTORE_CURRENT_H5
-                    else f"UrbanSim base datastore for ActivitySim year {state.year}"
-                )
-            )
-            h5_tables_used = [
-                "households",
-                "persons",
-                "jobs",
-                "blocks",
-            ]
-            start_year = state.start_year
-            if start_year is not None:
-                h5_tables_used.extend(
-                    [
-                        f"/{start_year}/households",
-                        f"/{start_year}/persons",
-                        f"/{start_year}/jobs",
-                        f"/{start_year}/blocks",
-                    ]
-                )
-            log_and_set_input(
-                key=input_key,
-                path=usim_path,
-                description=input_desc,
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                h5_tables_used=h5_tables_used,
-            )
-        return {}
-
-    def _log_outputs(
-        outputs: ActivitySimPreprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        """
-        Log ActivitySim preprocess outputs and update the coupler.
-
-        Parameters
-        ----------
-        outputs : ActivitySimPreprocessOutputs
-            Typed outputs containing ActivitySim input tables and skims.
-        settings : PilatesConfig
-            Simulation settings (unused for output logging).
-        state : WorkflowState
-            Current workflow state (used for log metadata only).
-        workspace : Workspace
-            Workspace for path resolution.
-        holder : StepOutputsHolder
-            Outputs holder (unused for this helper).
-        """
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=lambda key, path, description, **meta: log_and_set_output(
-                key=key,
-                path=path,
-                description=description,
-                coupler=coupler,
-                **meta,
-            ),
-            profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
-        )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="preprocess",
-        outputs_class=ActivitySimPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "activitysim", state, WorkflowState.Stage.activity_demand
-        ),
-        component_executor=_execute_preprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-    )
-
-
-def make_activitysim_run_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ActivitySim run step function.
-
-    This step executes the activity demand model for the year/iteration and
-    produces household/person/tour outputs consumed by BEAM and postprocessing.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing run outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ActivitySim run.
-    """
-
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        upstream = holder.activitysim_preprocess
-        if upstream is None:
-            raise RuntimeError("ActivitySim preprocess must complete first")
-
-        profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
-        for short_name, path, description in upstream._iter_record_items():
-            if short_name == ASIM_OMX_SKIMS:
-                continue
-            meta: Dict[str, Any] = {}
-            if short_name in profile_keys:
-                meta["profile_file_schema"] = True
-            log_and_set_input(
-                key=short_name,
-                path=str(path),
-                description=description,
-                coupler=coupler,
-                **meta,
-            )
-
-        extra_inputs = RecordStore()
-        zarr_value = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            zarr_value = resolve_artifact_from_value(
-                get_value(ZARR_SKIMS),
-                key=ZARR_SKIMS,
-                workspace=workspace,
-            )
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
-        if zarr_path and os.path.exists(zarr_path):
-            extra_inputs.add_record(
-                FileRecord(
-                    file_path=zarr_path,
-                    short_name=ZARR_SKIMS,
-                    description="Compiled ActivitySim skims (Zarr)",
-                )
-            )
-            log_and_set_input(
-                key=ZARR_SKIMS,
-                path=zarr_path,
-                description=(
-                    f"ActivitySim compiled skims for year {state.year}, iter {state.iteration}"
-                ),
-                coupler=coupler,
-            )
-        return {"extra_inputs": extra_inputs}
-
-    def _log_outputs(
-        outputs: ActivitySimRunOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            artifact = cr.log_output(
-                str(path),
-                key=short_name,
-                description=description,
-            )
-            if artifact is not None and getattr(artifact, "hash", None):
-                outputs.raw_output_hashes[short_name] = artifact.hash
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="run",
-        outputs_class=ActivitySimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "activitysim", state, WorkflowState.Stage.activity_demand
-        ),
-        component_executor=_execute_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-    )
-
-
-def make_activitysim_postprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ActivitySim postprocess step function.
-
-    This step converts ActivitySim outputs into downstream inputs and updates
-    the UrbanSim datastore for the next model stages.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing postprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for ActivitySim postprocess.
-    """
-
-    def _log_outputs(
-        outputs: ActivitySimPostprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        def _extra_meta(short_name: str, _path: str, _description: str) -> Dict[str, Any]:
-            meta: Dict[str, Any] = {}
-            content_hash = outputs.processed_output_hashes.get(short_name)
-            if content_hash:
-                meta["content_hash"] = content_hash
-            return meta
-
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
-            profile_schema_keys={
-                "persons_asim_out",
-                "trips_asim_out",
-                "tours_asim_out",
-                "beam_plans_asim_out",
-                "households_asim_out",
-            },
-            extra_meta_fn=_extra_meta,
-        )
-        if outputs.usim_datastore_h5 is not None:
-            log_and_set_output(
-                key=USIM_DATASTORE_H5,
-                path=str(outputs.usim_datastore_h5),
-                description=(
-                    f"UrbanSim datastore updated by ActivitySim for year {state.forecast_year}"
-                ),
-                coupler=coupler,
-                profile_file_schema=True,
-                h5_container=True,
-                hash_tables="if_unchanged",
-            )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="postprocess",
-        outputs_class=ActivitySimPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "activitysim", state, WorkflowState.Stage.activity_demand
-        ),
-        component_executor=_execute_postprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_beam_preprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the BEAM preprocess step function.
-
-    This step builds the BEAM scenario inputs by transforming ActivitySim
-    demand outputs, adding ATLAS vehicles (if enabled), and staging warm-start
-    artifacts such as linkstats.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing preprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for BEAM preprocess.
-
-    Notes
-    -----
-    This step focuses on generating BEAM inputs and canonicalizing BEAM config.
-    """
-
-    def _log_outputs(
-        outputs: BeamPreprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        """
-        Log BEAM preprocess outputs and update the coupler.
-
-        This helper logs prepared BEAM input artifacts into the coupler for
-        downstream BEAM run and postprocess steps.
-
-        Parameters
-        ----------
-        outputs : BeamPreprocessOutputs
-            Typed outputs containing prepared BEAM inputs.
-        settings : PilatesConfig
-            Simulation settings for config root resolution.
-        state : WorkflowState
-            Current workflow state (used for log metadata only).
-        workspace : Workspace
-            Workspace used to resolve mutable BEAM config paths.
-        holder : StepOutputsHolder
-            Outputs holder (unused for this helper).
-        """
-        _log_step_records(
-            record_items=(
-                (
-                    key,
-                    path,
-                    f"BEAM prepared input {key} for year {state.year}, iter {state.iteration}",
-                )
-                for key, path in outputs.prepared_inputs.items()
-            ),
-            log_fn=lambda key, path, description, **meta: log_and_set_output(
-                key=key,
-                path=path,
-                description=description,
-                coupler=coupler,
-                **meta,
-            ),
-            profile_schema_keys={
-                "households_beam_in",
-                "persons_beam_in",
-                "plans_beam_in",
-            },
-        )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="preprocess",
-        outputs_class=BeamPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "beam", state, WorkflowState.Stage.traffic_assignment
-        ),
-        component_executor=_execute_beam_preprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_preprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_beam_run_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the BEAM run step function.
-
-    This step performs the traffic assignment simulation for the current
-    iteration and produces linkstats, skims, plans, and event outputs.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing run outputs.
-
-    Returns
-    -------
-    callable
-        Step function for BEAM run.
-    """
-
-    def _log_inputs(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> Dict[str, Any]:
-        upstream = holder.beam_preprocess
-        if upstream is None:
-            raise RuntimeError("BEAM preprocess must complete first")
-
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            _log_beam_r5_osm_input(
-                tracker=tracker,
-                settings=settings,
-                workspace=workspace,
-            )
-        for short_name, path, description in upstream._iter_record_items():
-            log_and_set_input(
-                key=short_name,
-                path=str(path),
-                description=description,
-                coupler=coupler,
-            )
-
-        from pathlib import Path
-
-        output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-        plans_path, experienced_path = find_last_run_output_plans(
-            output_root, "year-"
-        )
-        if plans_path is not None and plans_path.exists():
-            if plans_path.name == "output_plans.xml.gz":
-                plans_key = BEAM_OUTPUT_PLANS_XML
-            else:
-                plans_key = BEAM_PLANS_OUT
-            log_and_set_input(
-                key=plans_key,
-                path=str(plans_path),
-                description=(
-                    "BEAM warm-start plans (selected by BEAM from previous outputs)"
-                ),
-                coupler=coupler,
-            )
-        if experienced_path is not None and experienced_path.exists():
-            if experienced_path.name == "output_experienced_plans.xml.gz":
-                experienced_key = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
-            else:
-                experienced_key = BEAM_EXPERIENCED_PLANS_XML
-            log_and_set_input(
-                key=experienced_key,
-                path=str(experienced_path),
-                description=(
-                    "BEAM warm-start experienced plans (selected by BEAM from previous outputs)"
-                ),
-                coupler=coupler,
-            )
-        return {}
-
-    def _log_outputs(
-        outputs: BeamRunOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        def _beam_run_extra_meta(
-            short_name: str,
-            _path: str,
-            _description: str,
-        ) -> Dict[str, Any]:
-            if not short_name.startswith("beam_network_final"):
-                return {}
-            meta: Dict[str, Any] = {
-                "profile_file_schema": "if_changed",
-                "reuse_if_unchanged": True,
-                "reuse_scope": "any_uri",
-            }
-            try:
-                from pilates.database.schema.beam_schema import BeamNetworkFinal
-            except Exception:
-                BeamNetworkFinal = None
-            if BeamNetworkFinal is not None:
-                meta["schema"] = BeamNetworkFinal
-            return meta
-
-        _log_step_records(
-            record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
-            extra_meta_fn=_beam_run_extra_meta,
-        )
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="run",
-        outputs_class=BeamRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "beam", state, WorkflowState.Stage.traffic_assignment
-        ),
-        component_executor=_execute_beam_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-    )
-
-
-def make_beam_postprocess_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the BEAM postprocess step function.
-
-    This step merges BEAM outputs into updated skims and produces final
-    skim artifacts for ActivitySim and UrbanSim inputs.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder for storing postprocess outputs.
-
-    Returns
-    -------
-    callable
-        Step function for BEAM postprocess.
-    """
-
-    def _log_outputs(
-        outputs: BeamPostprocessOutputs,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        holder: StepOutputsHolder,
-    ) -> None:
-        for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
-                key=short_name,
-                path=str(path),
-                description=description,
-                coupler=coupler,
-            )
-        for short_name, path in outputs.split_events.items():
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=f"BEAM events parquet split ({short_name})",
-                profile_file_schema=True,
-            )
-        for short_name, path in outputs.split_event_links.items():
-            log_output_only(
-                key=short_name,
-                path=str(path),
-                description=f"BEAM events link table ({short_name})",
-                profile_file_schema=True,
-            )
-        upstream = holder.beam_run
-        if upstream is None:
-            return
-        combined_outputs = RecordStore()
-        combined_outputs += upstream.to_record_store()
-        combined_outputs += outputs.to_record_store()
-        update_coupler_from_beam_outputs(combined_outputs, coupler, workspace)
-
-    return _make_generic_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="postprocess",
-        outputs_class=BeamPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "beam", state, WorkflowState.Stage.traffic_assignment
-        ),
-        component_executor=_execute_beam_postprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-    )
-
-
-def make_postprocessing_step() -> Callable[..., None]:
-    """
-    Build the postprocessing step function.
-
-    This step runs optional post-run cleanup/export routines such as event
-    processing and copying outputs to external destinations.
-
-    Returns
-    -------
-    callable
-        Step function for postprocessing.
-    """
-
-    @require_common_runtime()
-    def _run_postprocessing_step(
-        *,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-    ) -> None:
-        if "postprocessing" in settings:
-            from pilates.postprocessing.postprocessor import (
-                copy_outputs_to_mep,
-                process_event_file,
-            )
-
-            process_event_file(settings, state.forecast_year, state.current_inner_iter)
-            copy_outputs_to_mep(
-                settings,
-                state.forecast_year,
-                state.current_inner_iter,
-                workspace,
-            )
-
-    return _decorate_step_with_consist(
-        step_func=_run_postprocessing_step,
-        step_model="postprocessing",
-        description="postprocessing workflow step",
-        tags=["postprocessing"],
-    )

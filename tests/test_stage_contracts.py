@@ -1,3 +1,21 @@
+"""
+Narrative contract tests for stage orchestration wiring.
+
+This module documents how major workflow stages are expected to assemble and
+exchange inputs/outputs through the scenario coupler:
+
+1. Land use stage must publish UrbanSim datastore handles.
+2. Vehicle ownership stage must consume datastore inputs and preserve coupler
+   continuity for downstream stages.
+3. Supply-demand stage must wire ActivitySim/BEAM inputs with the canonical
+   input resolution rules and avoid over-requiring optional warmstart artifacts.
+4. BEAM postprocess key selection must include only the artifacts required by
+   the postprocess phase and maintain legacy fallback behavior.
+
+The tests use lightweight fakes (``FakeScenario`` and ``CouplerStub``) to make
+contract expectations explicit without running heavy model containers.
+"""
+
 from pathlib import Path
 
 import pytest
@@ -34,6 +52,8 @@ from workflow_state import WorkflowState
 
 
 class CouplerStub:
+    """Minimal in-memory coupler implementation for stage contract tests."""
+
     def __init__(self) -> None:
         self._values = {}
 
@@ -59,6 +79,14 @@ class CouplerStub:
 
 
 class FakeScenario:
+    """
+    Scenario stub that enforces coupler key requirements and records each call.
+
+    This mirrors the contract-level behavior we depend on in production:
+    ``inputs`` materialize concrete values, while ``input_keys`` must already
+    exist in the coupler.
+    """
+
     def __init__(self, coupler: CouplerStub) -> None:
         self.coupler = coupler
         self.calls = []
@@ -106,6 +134,8 @@ class FakeScenario:
 
 
 class DummyPreprocessor:
+    """Deterministic preprocessor stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -115,6 +145,8 @@ class DummyPreprocessor:
 
 
 class DummyRunner:
+    """Deterministic runner stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -124,6 +156,8 @@ class DummyRunner:
 
 
 class DummyPostprocessor:
+    """Deterministic postprocessor stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -138,6 +172,8 @@ def _write_file(path: Path, content: str = "x") -> None:
 
 
 def _build_settings(tmp_path: Path):
+    """Build a compact workflow config that exercises all stage contracts."""
+
     config = {
         "run": {
             "region": "test",
@@ -221,6 +257,13 @@ def _build_settings(tmp_path: Path):
 
 @pytest.fixture
 def stage_env(tmp_path, monkeypatch):
+    """
+    Shared stage test harness with fake models, workspace, and scenario.
+
+    The fixture seeds files/artifacts that each stage expects so individual
+    tests can focus on wiring contracts rather than file setup.
+    """
+
     from pilates.utils import consist_runtime as cr
 
     cr.set_enabled(False)
@@ -370,6 +413,7 @@ def stage_env(tmp_path, monkeypatch):
 
 
 def test_land_use_stage_contract(stage_env):
+    """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
 
     outputs_holder = StepOutputsHolder()
@@ -391,6 +435,7 @@ def test_land_use_stage_contract(stage_env):
 
 
 def test_vehicle_ownership_stage_contract(stage_env):
+    """Vehicle ownership should consume UrbanSim inputs and keep datastore state."""
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     run_vehicle_ownership_stage(
@@ -406,6 +451,7 @@ def test_vehicle_ownership_stage_contract(stage_env):
 
 
 def test_supply_demand_stage_contract(stage_env, tmp_path):
+    """Supply-demand should run ActivitySim with resolved required input keys."""
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     usim_inputs = {
@@ -444,6 +490,12 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
 
 
 def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):
+    """
+    Beam-only mode should source default scenario plans/households/persons.
+
+    This documents behavior when ActivitySim is disabled and BEAM starts from
+    static scenario files instead of coupler-provided activity-demand outputs.
+    """
     settings = stage_env["settings"]
     state = stage_env["state"]
     workspace = stage_env["workspace"]
@@ -619,6 +671,7 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
 
 
 def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
+    """Postprocess key builder should include only artifacts consumed downstream."""
     keys = [
         "beam_output_counts_xml_2018_0",
         "linkstats_parquet_2018_0",
@@ -644,6 +697,7 @@ def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
 
 
 def test_build_beam_postprocess_input_keys_falls_back_for_legacy_names():
+    """Legacy naming fallbacks remain supported for compatibility."""
     keys = [
         "raw_od_skims_legacy",
         "events_parquet_legacy",

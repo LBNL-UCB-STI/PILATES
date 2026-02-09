@@ -10,6 +10,7 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.atlas.inputs import build_atlas_inputs, atlas_static_input_keys
 from pilates.utils.input_logging import log_inputs
+from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.step_io import merge_model_expected_inputs
@@ -144,6 +145,10 @@ def run_vehicle_ownership_stage(
             workspace,
         )
         atlas_preprocess_inputs = dict(step_inputs)
+        atlas_preprocess_resolution = resolve_step_inputs(
+            keys=atlas_preprocess_inputs.keys(),
+            explicit_inputs=atlas_preprocess_inputs,
+        )
         atlas_run_inputs: Dict[str, Any] = {}
         atlas_static_inputs = workspace.input_data.get("atlas")
         if atlas_static_inputs is not None:
@@ -153,14 +158,26 @@ def run_vehicle_ownership_stage(
             atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
 
         atlas_static_keys = atlas_static_input_keys(settings)
-        atlas_run_input_keys = [USIM_DATASTORE_CURRENT_H5]
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            if get_value(USIM_DATASTORE_BASE_H5) is not None:
-                atlas_run_input_keys.append(USIM_DATASTORE_BASE_H5)
-            for key in atlas_static_keys:
-                if get_value(key) is not None:
-                    atlas_run_input_keys.append(key)
+        atlas_run_fallbacks = dict(atlas_run_inputs)
+        atlas_run_fallbacks.setdefault(
+            USIM_DATASTORE_CURRENT_H5,
+            step_inputs.get(USIM_DATASTORE_CURRENT_H5),
+        )
+        atlas_run_fallbacks.setdefault(
+            USIM_DATASTORE_BASE_H5,
+            step_inputs.get(USIM_DATASTORE_BASE_H5),
+        )
+        atlas_run_resolution = resolve_step_inputs(
+            keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5, *atlas_static_keys],
+            coupler=coupler,
+            fallback_inputs=atlas_run_fallbacks,
+            required_keys=[USIM_DATASTORE_CURRENT_H5],
+        )
+        if atlas_run_resolution.missing_required:
+            raise RuntimeError(
+                "ATLAS run requires usim_datastore_h5 but it could not be resolved "
+                "from explicit inputs, coupler, or fallback static inputs."
+            )
 
         preprocess_steps = [
             StepRef(
@@ -169,7 +186,8 @@ def run_vehicle_ownership_stage(
                     coupler=coupler,
                     outputs_holder=outputs_holder_atlas,
                 ),
-                inputs=atlas_preprocess_inputs,
+                inputs=atlas_preprocess_resolution.stepref_inputs(),
+                input_keys=atlas_preprocess_resolution.stepref_input_keys(),
             ),
             StepRef(
                 name="atlas_run",
@@ -177,8 +195,8 @@ def run_vehicle_ownership_stage(
                     coupler=coupler,
                     outputs_holder=outputs_holder_atlas,
                 ),
-                input_keys=atlas_run_input_keys,
-                inputs=atlas_run_inputs or None,
+                input_keys=atlas_run_resolution.stepref_input_keys(),
+                inputs=atlas_run_resolution.stepref_inputs(),
             ),
         ]
 

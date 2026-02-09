@@ -258,7 +258,7 @@ class BeamRunner(GenericRunner):
                         description=f"BEAM output artifact: {dataset_name}",
                         metadata={
                             "facet": facet,
-                            "facet_schema_version": "beam_linkstats_unmodified_phys_sim_iter_v1",
+                            "facet_schema_version": "v1",
                             "facet_index": True,
                         },
                     )

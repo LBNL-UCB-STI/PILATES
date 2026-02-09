@@ -17,6 +17,12 @@ from pilates.utils.coupler_helpers import (
     clean_expected_outputs,
     resolve_artifact_from_value,
 )
+from pilates.workflows.input_resolution import (
+    ResolvedStepInputs,
+    resolved_value_for_key,
+    resolve_preferred_step_input,
+    resolve_step_inputs,
+)
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
@@ -313,34 +319,62 @@ def _run_activity_demand_phase(
     # 1) Preprocess (per-iteration) to prepare compile inputs.
     # 2) Compile (per-year) outside manifest checkpointing.
     # 3) Run/Postprocess (per-iteration) for demand outputs.
-    preprocess_inputs = None
-    preprocess_input_keys = [USIM_DATASTORE_CURRENT_H5]
-    if USIM_DATASTORE_CURRENT_H5 in inputs.usim_inputs:
-        preprocess_inputs = {
-            USIM_DATASTORE_CURRENT_H5: inputs.usim_inputs[USIM_DATASTORE_CURRENT_H5]
-        }
-        preprocess_input_keys = None
-    else:
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            updated_value = get_value(USIM_H5_UPDATED)
-            if updated_value is not None:
-                preprocess_input_keys = [USIM_H5_UPDATED]
-            elif get_value(USIM_DATASTORE_CURRENT_H5) is not None:
-                preprocess_input_keys = [USIM_DATASTORE_CURRENT_H5]
-            elif get_value(USIM_DATASTORE_BASE_H5) is not None:
-                preprocess_input_keys = [USIM_DATASTORE_BASE_H5]
-        else:
-            fallback_inputs, _ = build_urbansim_inputs(
-                settings, state, workspace, inputs.year
-            )
-            if USIM_DATASTORE_CURRENT_H5 in fallback_inputs:
-                preprocess_inputs = {
-                    USIM_DATASTORE_CURRENT_H5: fallback_inputs[
-                        USIM_DATASTORE_CURRENT_H5
-                    ]
-                }
-                preprocess_input_keys = None
+    preprocess_resolution = resolve_step_inputs(
+        keys=[USIM_DATASTORE_CURRENT_H5],
+        explicit_inputs=inputs.usim_inputs,
+    )
+    if preprocess_resolution.source_by_key.get(USIM_DATASTORE_CURRENT_H5) == "missing":
+        preprocess_resolution = resolve_preferred_step_input(
+            preferred_keys=[
+                USIM_H5_UPDATED,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            ],
+            coupler=coupler,
+            explicit_inputs=inputs.usim_inputs,
+            required=False,
+        )
+
+    preferred_sources = {"explicit", "coupler", "fallback"}
+    if not any(
+        source in preferred_sources
+        for source in preprocess_resolution.source_by_key.values()
+    ):
+        fallback_inputs, _ = build_urbansim_inputs(
+            settings, state, workspace, inputs.year
+        )
+        preprocess_resolution = resolve_preferred_step_input(
+            preferred_keys=[
+                USIM_H5_UPDATED,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            ],
+            coupler=coupler,
+            explicit_inputs=inputs.usim_inputs,
+            fallback_inputs=fallback_inputs,
+            required=True,
+        )
+
+    if preprocess_resolution.missing_required:
+        raise RuntimeError(
+            "ActivitySim preprocess requires a resolved UrbanSim datastore input "
+            "(explicit, coupler, or fallback), but none were available."
+        )
+
+    if (
+        not preprocess_resolution.inputs
+        and not preprocess_resolution.input_keys
+    ):
+        # Keep existing behavior for provenance/cache identity compatibility:
+        # require the canonical current datastore key when no concrete source
+        # could be selected from the preferred chain.
+        preprocess_resolution = ResolvedStepInputs(
+            inputs={},
+            input_keys=[USIM_DATASTORE_CURRENT_H5],
+            source_by_key={USIM_DATASTORE_CURRENT_H5: "missing"},
+            coupler_key_by_key={},
+            missing_required=[USIM_DATASTORE_CURRENT_H5],
+        )
 
     preprocess_specs = [
         StepRef(
@@ -349,8 +383,8 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            input_keys=preprocess_input_keys,
-            inputs=preprocess_inputs,
+            input_keys=preprocess_resolution.stepref_input_keys(),
+            inputs=preprocess_resolution.stepref_inputs(),
         )
     ]
     _run_supply_demand_manifested_steps(
@@ -372,16 +406,23 @@ def _run_activity_demand_phase(
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
-        compile_inputs = upstream.to_record_store().to_mapping()
-        compile_input_keys = [
-            short_name for short_name, _, _ in upstream._iter_record_items()
-        ]
-        if not compile_input_keys:
-            compile_input_keys = None
-        if ASIM_OMX_SKIMS in compile_inputs:
-            compile_inputs = {ASIM_OMX_SKIMS: compile_inputs[ASIM_OMX_SKIMS]}
-        else:
-            compile_inputs = {}
+        compile_store_inputs = upstream.to_record_store().to_mapping()
+        compile_explicit_inputs: Dict[str, Any] = {}
+        if ASIM_OMX_SKIMS in compile_store_inputs:
+            compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
+                ASIM_OMX_SKIMS
+            ]
+        compile_resolution = resolve_step_inputs(
+            keys=[ASIM_OMX_SKIMS],
+            coupler=coupler,
+            explicit_inputs=compile_explicit_inputs or None,
+            required_keys=[ASIM_OMX_SKIMS],
+        )
+        if compile_resolution.missing_required:
+            raise RuntimeError(
+                "ActivitySim compile requires omx_skims input, but it could not be "
+                "resolved from explicit preprocess outputs or coupler keys."
+            )
         expected_compile_outputs = clean_expected_outputs(
             build_outputs(
                 "activitysim_compile",
@@ -401,8 +442,8 @@ def _run_activity_demand_phase(
                 StepRef(
                     name="activitysim_compile",
                     step_func=activitysim_compile_step,
-                    inputs=compile_inputs or None,
-                    input_keys=compile_input_keys,
+                    inputs=compile_resolution.stepref_inputs(),
+                    input_keys=compile_resolution.stepref_input_keys(),
                     output_paths=expected_compile_outputs or None,
                     cache_mode="overwrite",
                     load_inputs=False,
@@ -460,18 +501,26 @@ def _run_activity_demand_phase(
     asim_run_input_keys.append(ZARR_SKIMS)
 
     activitysim_postprocess_inputs: Dict[str, str] = {}
-    usim_base_input = inputs.usim_inputs.get(USIM_DATASTORE_BASE_H5)
-    if usim_base_input is None:
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            usim_base_input = get_value(USIM_DATASTORE_BASE_H5)
-    if usim_base_input is None:
-        usim_input_fname = get_usim_datastore_fname(settings, io="input")
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        if os.path.exists(usim_input_path):
-            usim_base_input = usim_input_path
+    usim_base_fallback = None
+    usim_input_fname = get_usim_datastore_fname(settings, io="input")
+    usim_input_path = os.path.join(
+        workspace.get_usim_mutable_data_dir(), usim_input_fname
+    )
+    if os.path.exists(usim_input_path):
+        usim_base_fallback = usim_input_path
+    usim_base_resolution = resolve_step_inputs(
+        keys=[USIM_DATASTORE_BASE_H5],
+        coupler=coupler,
+        explicit_inputs=inputs.usim_inputs,
+        fallback_inputs={USIM_DATASTORE_BASE_H5: usim_base_fallback}
+        if usim_base_fallback is not None
+        else None,
+    )
+    usim_base_input = resolved_value_for_key(
+        resolved=usim_base_resolution,
+        key=USIM_DATASTORE_BASE_H5,
+        coupler=coupler,
+    )
     usim_base_path = artifact_to_path(usim_base_input, workspace)
     if usim_base_path and os.path.exists(usim_base_path):
         activitysim_postprocess_inputs[USIM_DATASTORE_BASE_H5] = usim_base_path
@@ -759,7 +808,10 @@ def _run_beam_steps(
                 outputs_holder=outputs_holder,
             ),
             input_keys=None,
-            inputs=dict(beam_preprocess_inputs) or None,
+            inputs=resolve_step_inputs(
+                keys=beam_preprocess_inputs.keys(),
+                explicit_inputs=beam_preprocess_inputs,
+            ).stepref_inputs(),
         ),
         StepRef(
             name="beam_run",

@@ -47,11 +47,10 @@ def test_provenance_logging_requires_active_run_when_enabled(monkeypatch):
         def do(self, input_store: RecordStore) -> RecordStore:
             return RecordStore(recordList=[])
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: None)
 
     model = DummyModel("dummy", state)
-    with pytest.raises(RuntimeError, match="active run context"):
+    with pytest.raises(RuntimeError, match="No active Consist run context"):
         model.do(RecordStore())
 
 
@@ -70,7 +69,6 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
                 ]
             )
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: object())
 
     def _log_artifacts(mapping, **meta):
@@ -94,6 +92,60 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
     assert calls[0][0] == {"input_store": "/tmp/in.txt"}
     assert calls[1][1]["direction"] == "output"
     assert calls[1][0] == {"out": "/tmp/out.txt"}
+
+
+def test_provenance_logging_forwards_batch_artifact_facets(monkeypatch):
+    state = _StubState()
+    calls = []
+
+    class DummyModel(Model):
+        @provenance_logging
+        def do(self, input_store: RecordStore) -> RecordStore:
+            return RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path="/tmp/linkstats.parquet",
+                        short_name="linkstats_ps2",
+                        description="linkstats",
+                        metadata={
+                            "facet": {
+                                "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+                                "year": 2030,
+                                "iteration": 7,
+                                "beam_sub_iteration": 0,
+                                "phys_sim_iteration": 2,
+                            },
+                            "facet_schema_version": "v1",
+                            "facet_index": True,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(cr, "current_run", lambda: object())
+    monkeypatch.setattr(cr, "log_meta", lambda **_: None)
+
+    def _log_artifacts(mapping, **meta):
+        calls.append((mapping, meta))
+
+    monkeypatch.setattr(cr, "log_artifacts", _log_artifacts)
+
+    input_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path="/tmp/in.txt", short_name="input_store", description="in"
+            )
+        ]
+    )
+    model = DummyModel("dummy", state)
+    model.do(input_store=input_store)
+
+    output_calls = [c for c in calls if c[1].get("direction") == "output"]
+    assert output_calls, "Expected output log_artifacts call"
+    _mapping, meta = output_calls[0]
+    assert meta["facet_index"] is True
+    assert meta["facets_by_key"]["linkstats_ps2"]["phys_sim_iteration"] == 2
+    assert meta["facet_schema_versions_by_key"]["linkstats_ps2"] == "v1"
 
 
 def test_decorator_logs_artifacts_with_consist(monkeypatch, tmp_path):

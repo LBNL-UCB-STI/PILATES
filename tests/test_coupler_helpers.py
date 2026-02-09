@@ -27,6 +27,19 @@ class CouplerWithSetOnly:
         self.calls.append(("set", key, value))
 
 
+class CouplerWithNamespaceView(CouplerWithSetFromArtifact):
+    class _View:
+        def __init__(self, outer, namespace) -> None:
+            self._outer = outer
+            self._namespace = namespace
+
+        def set(self, key, value) -> None:
+            self._outer.calls.append(("view.set", f"{self._namespace}/{key}", value))
+
+    def view(self, namespace):
+        return self._View(self, namespace)
+
+
 def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
     coupler = CouplerWithSetFromArtifact()
     coupler_helpers.set_coupler_from_artifact(
@@ -49,6 +62,18 @@ def test_set_coupler_from_artifact_resolves_alias_key() -> None:
         coupler, "asim_households_in", None, fallback="/tmp/households.csv"
     )
     assert coupler.calls == [("set", "households_asim_in", "/tmp/households.csv")]
+
+
+def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> None:
+    coupler = CouplerWithNamespaceView()
+    coupler_helpers.set_coupler_from_artifact(
+        coupler,
+        "linkstats_warmstart",
+        None,
+        fallback="/tmp/linkstats.csv.gz",
+    )
+    assert ("view.set", "beam/linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
+    assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
 
 
 @dataclass
@@ -199,8 +224,17 @@ def test_update_coupler_from_beam_outputs_profiles_linkstats_family(
     by_key = {key: meta for key, _path, _desc, meta in log_calls}
     assert by_key["linkstats"]["profile_file_schema"] is True
     assert by_key["linkstats_warmstart"]["profile_file_schema"] is True
+    assert by_key["linkstats"]["facet_schema_version"] == "v1"
+    assert by_key["linkstats"]["facet"]["artifact_family"] == "linkstats"
+    assert by_key["linkstats"]["facet"]["year"] == 2018
+    assert by_key["linkstats"]["facet"]["iteration"] == 0
     assert by_key["linkstats_parquet_2018_0"]["profile_file_schema"] is True
     assert by_key["linkstats_parquet_2018_0_sub1"]["profile_file_schema"] is True
+    assert by_key["linkstats_parquet_2018_0"]["facet_schema_version"] == "v1"
+    assert (
+        by_key["linkstats_parquet_2018_0"]["facet"]["artifact_family"]
+        == "linkstats_parquet"
+    )
     assert (
         by_key[
             "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3__beam_sub_iter1"
@@ -208,6 +242,12 @@ def test_update_coupler_from_beam_outputs_profiles_linkstats_family(
             "profile_file_schema"
         ]
         is True
+    )
+    assert (
+        by_key[
+            "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3__beam_sub_iter1"
+        ]["facet_schema_version"]
+        == "v1"
     )
     assert not any(
         c[1] == "linkstats_parquet_2018_0_sub1"

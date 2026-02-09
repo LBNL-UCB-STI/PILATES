@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, runtime_checkable
 
 try:
     from consist.protocols import (  # type: ignore[assignment]
@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - optional Consist dependency
     class ScenarioLike(Protocol):
         def run(
             self,
-            fn=None,
+            fn: Optional[Callable[..., Any]] = None,
             name: Optional[str] = None,
             *,
             output_paths: Optional[Mapping[str, Any]] = None,
@@ -43,6 +43,13 @@ except Exception:  # pragma: no cover - optional Consist dependency
         ) -> RunResultLike: ...
 
         def trace(self, *args: Any, **kwargs: Any): ...
+
+        def collect_by_keys(
+            self,
+            artifacts: Dict[str, Any],
+            *keys: str,
+            prefix: str = "",
+        ) -> Dict[str, Any]: ...
 
     @runtime_checkable
     class TrackerLike(Protocol):
@@ -57,6 +64,25 @@ except Exception:  # pragma: no cover - optional Consist dependency
         def log_artifacts(
             self, outputs: Mapping[str, Any], **metadata: Any
         ) -> Mapping[str, ArtifactLike]: ...
+
+        def log_h5_container(
+            self,
+            path: Any,
+            key: Optional[str] = None,
+            *,
+            direction: str = "input",
+            **metadata: Any,
+        ) -> Optional[ArtifactLike]: ...
+
+        def log_h5_table(
+            self,
+            path: Any,
+            key: Optional[str] = None,
+            *,
+            table_path: str,
+            direction: str = "input",
+            **metadata: Any,
+        ) -> Optional[ArtifactLike]: ...
 
         def scenario(self, name: str, **kwargs: Any): ...
 
@@ -81,6 +107,8 @@ class CouplerProtocol(Protocol):
     def get(self, key: str, default: Optional[Any] = None) -> Any: ...
 
     def update(self, mapping: Mapping[str, Any]) -> None: ...
+
+    def view(self, namespace: str) -> "CouplerProtocol": ...
 
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 

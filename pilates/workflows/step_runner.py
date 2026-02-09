@@ -29,6 +29,12 @@ class StepConfig:
         Output keys to declare.
     output_paths : dict, optional
         Output paths mapping keyed by output name.
+    required_outputs : list of str, optional
+        Deprecated alias for ``outputs`` (kept for compatibility).
+    output_missing : str, optional
+        Consist behavior when required outputs are missing.
+    output_mismatch : str, optional
+        Consist behavior when observed outputs mismatch declared outputs.
     runtime_kwargs : dict, optional
         Runtime kwargs passed into `fn`.
     cache_mode : str, optional
@@ -50,6 +56,9 @@ class StepConfig:
     input_keys: Optional[Sequence[str]] = None
     outputs: Optional[Sequence[str]] = None
     output_paths: Optional[Mapping[str, Any]] = None
+    required_outputs: Optional[Sequence[str]] = None
+    output_missing: Optional[str] = None
+    output_mismatch: Optional[str] = None
     runtime_kwargs: Optional[Mapping[str, Any]] = None
     cache_mode: Optional[str] = None
     cache_hydration: Optional[str] = None
@@ -78,10 +87,17 @@ class StepConfig:
             kwargs["inputs"] = self.inputs
         if self.input_keys is not None:
             kwargs["input_keys"] = self.input_keys
-        if self.outputs is not None:
-            kwargs["outputs"] = self.outputs
+        resolved_outputs = self.outputs
+        if self.required_outputs is not None:
+            resolved_outputs = self.required_outputs
+        if resolved_outputs is not None:
+            kwargs["outputs"] = list(resolved_outputs)
         if self.output_paths is not None:
             kwargs["output_paths"] = self.output_paths
+        if self.output_missing is not None:
+            kwargs["output_missing"] = self.output_missing
+        if self.output_mismatch is not None:
+            kwargs["output_mismatch"] = self.output_mismatch
         if self.runtime_kwargs is not None:
             kwargs["runtime_kwargs"] = self.runtime_kwargs
         if self.cache_mode is not None:
@@ -159,6 +175,9 @@ def build_step_config(
     input_keys: Optional[Sequence[str]] = None,
     outputs: Optional[Sequence[str]] = None,
     output_paths: Optional[Mapping[str, Any]] = None,
+    required_outputs: Optional[Sequence[str]] = None,
+    output_missing: Optional[str] = None,
+    output_mismatch: Optional[str] = None,
     runtime_kwargs: Optional[Mapping[str, Any]] = None,
     cache_mode: Optional[str] = None,
     cache_hydration: Optional[str] = None,
@@ -190,6 +209,12 @@ def build_step_config(
         Output keys to declare.
     output_paths : dict, optional
         Output paths mapping keyed by output name.
+    required_outputs : list of str, optional
+        Deprecated alias for ``outputs``.
+    output_missing : str, optional
+        Consist behavior when required outputs are missing.
+    output_mismatch : str, optional
+        Consist behavior when observed outputs mismatch declared outputs.
     runtime_kwargs : dict, optional
         Runtime kwargs passed into `fn`.
     cache_mode : str, optional
@@ -224,6 +249,9 @@ def build_step_config(
         input_keys=input_keys,
         outputs=outputs,
         output_paths=output_paths,
+        required_outputs=required_outputs,
+        output_missing=output_missing,
+        output_mismatch=output_mismatch,
         runtime_kwargs=runtime_kwargs,
         cache_mode=cache_mode,
         cache_hydration=cache_hydration,
