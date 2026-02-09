@@ -377,11 +377,8 @@ def update_coupler_from_beam_outputs(
                     coupler=coupler,
                 )
         elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
-            if "_sub" not in record.short_name:
-                linkstats_parquet_records.append(record)
-        elif record.short_name and record.short_name.startswith(
-            "linkstats_unmodified_phys_sim_iter_parquet_"
-        ):
+            linkstats_parquet_records.append(record)
+        elif _is_linkstats_unmodified_phys_sim_key(getattr(record, "short_name", None)):
             linkstats_unmodified_phys_sim_records.append(record)
         elif (
             record.short_name
@@ -402,6 +399,7 @@ def update_coupler_from_beam_outputs(
         description="BEAM linkstats output for downstream runs",
         coupler=coupler,
         workspace=workspace,
+        profile_file_schema=True,
     )
     _log_and_set_beam_record(
         linkstats_record,
@@ -412,13 +410,23 @@ def update_coupler_from_beam_outputs(
         profile_file_schema=True,
     )
     for record in linkstats_parquet_records:
-        _log_and_set_beam_record(
-            record,
-            key=record.short_name,
-            description="BEAM linkstats parquet output for downstream runs",
-            coupler=coupler,
-            workspace=workspace,
-        )
+        if _is_sub_iteration_key(record.short_name):
+            _log_beam_record_only(
+                record,
+                key=record.short_name,
+                description="BEAM linkstats parquet output for downstream runs",
+                workspace=workspace,
+                profile_file_schema=True,
+            )
+        else:
+            _log_and_set_beam_record(
+                record,
+                key=record.short_name,
+                description="BEAM linkstats parquet output for downstream runs",
+                coupler=coupler,
+                workspace=workspace,
+                profile_file_schema=True,
+            )
     for record in linkstats_unmodified_phys_sim_records:
         facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
         log_meta = {
@@ -427,16 +435,29 @@ def update_coupler_from_beam_outputs(
         }
         if facets:
             log_meta["facet"] = facets
-        _log_and_set_beam_record(
-            record,
-            key=record.short_name,
-            description=(
-                "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
-            ),
-            coupler=coupler,
-            workspace=workspace,
-            **log_meta,
-        )
+        if _is_sub_iteration_key(record.short_name):
+            _log_beam_record_only(
+                record,
+                key=record.short_name,
+                description=(
+                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
+                ),
+                workspace=workspace,
+                profile_file_schema=True,
+                **log_meta,
+            )
+        else:
+            _log_and_set_beam_record(
+                record,
+                key=record.short_name,
+                description=(
+                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
+                ),
+                coupler=coupler,
+                workspace=workspace,
+                profile_file_schema=True,
+                **log_meta,
+            )
     _log_and_set_beam_record(
         beam_plans_record,
         key=BEAM_PLANS_OUT,
@@ -517,6 +538,20 @@ def _beam_record_rank(record: Any, base_key: str) -> Optional[tuple]:
     return (year, iteration)
 
 
+def _is_linkstats_unmodified_phys_sim_key(short_name: Optional[str]) -> bool:
+    if not short_name:
+        return False
+    return short_name.startswith(
+        "linkstats_unmodified_phys_sim_iter_parquet_"
+    ) or short_name.startswith("linkstats_unmodified_parquet__")
+
+
+def _is_sub_iteration_key(short_name: Optional[str]) -> bool:
+    if not short_name:
+        return False
+    return "_sub" in short_name or "__beam_sub_iter" in short_name
+
+
 def _parse_linkstats_unmodified_phys_sim_facets(
     short_name: Optional[str],
 ) -> Optional[Dict[str, Any]]:
@@ -529,32 +564,48 @@ def _parse_linkstats_unmodified_phys_sim_facets(
     if not short_name:
         return None
 
-    prefix = "linkstats_unmodified_phys_sim_iter_parquet_"
-    if not short_name.startswith(prefix):
-        return None
-
-    tail = short_name[len(prefix) :]
-    parts = tail.split("_")
-    if len(parts) < 3:
-        return None
-
+    year = None
+    iteration = None
+    phys_sim_iteration = None
     sub_iteration = None
-    if parts[-1].startswith("sub"):
+
+    modern_match = re.fullmatch(
+        r"linkstats_unmodified_parquet__y(?P<year>\d+)__i(?P<iteration>\d+)"
+        r"__phys_sim_iter(?P<phys>\d+)(?:__beam_sub_iter(?P<sub>\d+))?",
+        short_name,
+    )
+    if modern_match:
+        year = int(modern_match.group("year"))
+        iteration = int(modern_match.group("iteration"))
+        phys_sim_iteration = int(modern_match.group("phys"))
+        if modern_match.group("sub") is not None:
+            sub_iteration = int(modern_match.group("sub"))
+    else:
+        legacy_prefix = "linkstats_unmodified_phys_sim_iter_parquet_"
+        if not short_name.startswith(legacy_prefix):
+            return None
+
+        tail = short_name[len(legacy_prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 3:
+            return None
+
+        if parts[-1].startswith("sub"):
+            try:
+                sub_iteration = int(parts[-1][3:])
+            except ValueError:
+                return None
+            parts = parts[:-1]
+
+        if len(parts) != 3:
+            return None
+
         try:
-            sub_iteration = int(parts[-1][3:])
+            phys_sim_iteration = int(parts[0])
+            year = int(parts[1])
+            iteration = int(parts[2])
         except ValueError:
             return None
-        parts = parts[:-1]
-
-    if len(parts) != 3:
-        return None
-
-    try:
-        phys_sim_iteration = int(parts[0])
-        year = int(parts[1])
-        iteration = int(parts[2])
-    except ValueError:
-        return None
 
     facets: Dict[str, Any] = {
         "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
@@ -602,6 +653,27 @@ def _log_and_set_beam_record(
         path=output_path,
         description=description,
         coupler=coupler,
+        **meta,
+    )
+
+
+def _log_beam_record_only(
+    record: Optional[Any],
+    *,
+    key: str,
+    description: str,
+    workspace: "Workspace",
+    **meta: Any,
+) -> None:
+    if record is None:
+        return
+    output_path = artifact_to_path(record.file_path, workspace)
+    if not output_path or not os.path.exists(output_path):
+        return
+    log_output_only(
+        key=key,
+        path=output_path,
+        description=description,
         **meta,
     )
 

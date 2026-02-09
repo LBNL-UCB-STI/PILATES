@@ -239,13 +239,15 @@ class BeamRunner(GenericRunner):
                     facet["beam_sub_iteration"] = it
                 if it == last_iter:
                     dataset_name = (
-                        "linkstats_unmodified_phys_sim_iter_parquet_"
-                        f"{phys_sim_iter}_{self.state.forecast_year}_{self.state.iteration}"
+                        "linkstats_unmodified_parquet__"
+                        f"y{self.state.forecast_year}__i{self.state.iteration}"
+                        f"__phys_sim_iter{phys_sim_iter}"
                     )
                 else:
                     dataset_name = (
-                        "linkstats_unmodified_phys_sim_iter_parquet_"
-                        f"{phys_sim_iter}_{self.state.forecast_year}_{self.state.iteration}_sub{it}"
+                        "linkstats_unmodified_parquet__"
+                        f"y{self.state.forecast_year}__i{self.state.iteration}"
+                        f"__phys_sim_iter{phys_sim_iter}__beam_sub_iter{it}"
                     )
                 output_records.append(
                     FileRecord(

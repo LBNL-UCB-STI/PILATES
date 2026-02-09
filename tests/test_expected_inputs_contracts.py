@@ -139,7 +139,7 @@ def test_update_coupler_from_beam_outputs_sets_outputs(monkeypatch, tmp_path):
 
 def test_parse_phys_sim_linkstats_facets():
     facets = _parse_linkstats_unmodified_phys_sim_facets(
-        "linkstats_unmodified_phys_sim_iter_parquet_2_2030_7_sub1"
+        "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter2__beam_sub_iter1"
     )
     assert facets == {
         "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
@@ -150,7 +150,7 @@ def test_parse_phys_sim_linkstats_facets():
     }
 
     facets_no_sub = _parse_linkstats_unmodified_phys_sim_facets(
-        "linkstats_unmodified_phys_sim_iter_parquet_4_2030_7"
+        "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter4"
     )
     assert facets_no_sub == {
         "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
@@ -168,7 +168,10 @@ def test_update_coupler_logs_phys_sim_linkstats_with_facets(monkeypatch, tmp_pat
         recordList=[
             FileRecord(
                 file_path=str(path),
-                short_name="linkstats_unmodified_phys_sim_iter_parquet_2_2030_7_sub1",
+                short_name=(
+                    "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter2"
+                    "__beam_sub_iter1"
+                ),
                 description="phys sim parquet",
             )
         ]
