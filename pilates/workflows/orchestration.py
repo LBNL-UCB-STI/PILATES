@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import inspect
 from dataclasses import dataclass
 import os
 from datetime import datetime
@@ -141,7 +140,7 @@ def _build_step_run_kwargs(
             if class_declared_outputs:
                 resolved_required_outputs = class_declared_outputs
     if resolved_required_outputs:
-        run_kwargs["required_outputs"] = list(resolved_required_outputs)
+        run_kwargs["outputs"] = list(resolved_required_outputs)
 
     # Apply strict defaults for declared-output steps unless explicitly overridden.
     if step.output_missing is not None:
@@ -157,46 +156,6 @@ def _build_step_run_kwargs(
     if step.model is not None:
         run_kwargs["model"] = step.model
     return run_kwargs
-
-
-def _filter_run_kwargs_for_scenario(
-    scenario: Any,
-    run_kwargs: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """
-    Drop unsupported kwargs for scenario.run on older Consist builds.
-
-    Newer Consist versions accept strict contract kwargs like
-    ``required_outputs``/``output_missing``/``output_mismatch``; older versions
-    may reject them. This helper keeps forward behavior while preserving
-    compatibility in mixed-version environments.
-    """
-    run_fn = getattr(scenario, "run", None)
-    if run_fn is None:
-        return dict(run_kwargs)
-    try:
-        signature = inspect.signature(run_fn)
-    except (TypeError, ValueError):
-        return dict(run_kwargs)
-    if any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    ):
-        return dict(run_kwargs)
-    accepted = set(signature.parameters.keys())
-    filtered: Dict[str, Any] = {}
-    dropped: list[str] = []
-    for key, value in run_kwargs.items():
-        if key in accepted:
-            filtered[key] = value
-        else:
-            dropped.append(key)
-    if dropped:
-        logger.debug(
-            "Dropping unsupported scenario.run kwargs for this Consist build: %s",
-            sorted(dropped),
-        )
-    return filtered
 
 
 @dataclass
@@ -304,8 +263,7 @@ def run_manifested_steps(
             stage_name=stage_name,
             default_iteration=iteration,
         )
-        filtered_run_kwargs = _filter_run_kwargs_for_scenario(scenario, run_kwargs)
-        result = scenario.run(**filtered_run_kwargs)
+        result = scenario.run(**run_kwargs)
         outputs = outputs_holder.get_attribute(spec.name)
         if outputs is None and getattr(result, "cache_hit", False):
             outputs = _recover_cached_outputs(
@@ -400,8 +358,7 @@ def run_workflow(
                 coupler_keys,
             )
 
-        filtered_run_kwargs = _filter_run_kwargs_for_scenario(scenario, run_kwargs)
-        result = scenario.run(**filtered_run_kwargs)
+        result = scenario.run(**run_kwargs)
         if (
             outputs_holder.get_attribute(spec.name) is None
             and getattr(result, "cache_hit", False)

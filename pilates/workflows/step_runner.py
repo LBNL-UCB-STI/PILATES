@@ -30,7 +30,7 @@ class StepConfig:
     output_paths : dict, optional
         Output paths mapping keyed by output name.
     required_outputs : list of str, optional
-        Required output keys enforced by Consist.
+        Deprecated alias for ``outputs`` (kept for compatibility).
     output_missing : str, optional
         Consist behavior when required outputs are missing.
     output_mismatch : str, optional
@@ -87,12 +87,13 @@ class StepConfig:
             kwargs["inputs"] = self.inputs
         if self.input_keys is not None:
             kwargs["input_keys"] = self.input_keys
-        if self.outputs is not None:
-            kwargs["outputs"] = self.outputs
+        resolved_outputs = self.outputs
+        if self.required_outputs is not None:
+            resolved_outputs = self.required_outputs
+        if resolved_outputs is not None:
+            kwargs["outputs"] = list(resolved_outputs)
         if self.output_paths is not None:
             kwargs["output_paths"] = self.output_paths
-        if self.required_outputs is not None:
-            kwargs["required_outputs"] = list(self.required_outputs)
         if self.output_missing is not None:
             kwargs["output_missing"] = self.output_missing
         if self.output_mismatch is not None:
@@ -209,7 +210,7 @@ def build_step_config(
     output_paths : dict, optional
         Output paths mapping keyed by output name.
     required_outputs : list of str, optional
-        Required output keys enforced by Consist.
+        Deprecated alias for ``outputs``.
     output_missing : str, optional
         Consist behavior when required outputs are missing.
     output_mismatch : str, optional

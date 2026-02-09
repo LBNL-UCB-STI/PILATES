@@ -4,11 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.coupler_namespace import (
-    infer_namespace_for_key,
-    local_key_for_namespace,
-    qualify_key,
-)
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 
 
 @dataclass(frozen=True)
@@ -59,30 +55,9 @@ def _resolve_single_key(
         if value is not None:
             return "explicit", value, None
 
-    get_value = getattr(coupler, "get", None) if coupler is not None else None
-    view_fn = getattr(coupler, "view", None) if coupler is not None else None
-    namespace = infer_namespace_for_key(key)
-    if namespace and callable(view_fn):
-        try:
-            namespaced_view = view_fn(namespace)
-            view_get = getattr(namespaced_view, "get", None)
-            if callable(view_get):
-                local_key = local_key_for_namespace(key, namespace)
-                value = view_get(local_key)
-                if value is not None:
-                    return "coupler", value, qualify_key(namespace, local_key)
-        except Exception:
-            pass
-    if callable(get_value):
-        value = get_value(key)
-        if value is not None:
-            return "coupler", value, key
-        if namespace:
-            qualified_key = qualify_key(namespace, key)
-            if qualified_key != key:
-                value = get_value(qualified_key)
-                if value is not None:
-                    return "coupler", value, qualified_key
+    value, resolved_key = resolve_coupler_value(coupler, key)
+    if value is not None:
+        return "coupler", value, resolved_key or key
 
     if fallback_inputs is not None and key in fallback_inputs:
         value = fallback_inputs.get(key)

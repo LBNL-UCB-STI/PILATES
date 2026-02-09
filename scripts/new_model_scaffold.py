@@ -705,7 +705,8 @@ def _render_checklist(spec: ScaffoldSpec) -> str:
         - [ ] Prefer declaring expected outputs on the step metadata path (for example
               `@define_step(outputs=[...])`) and rely on orchestration's strict
               inferred defaults (`output_missing=\"error\"`, `output_mismatch=\"error\"`).
-              Use `StepRef.required_outputs` / `StepRef.output_*` only as overrides.
+              Use explicit `outputs` (or `StepRef.required_outputs` alias) /
+              `StepRef.output_*` only as overrides.
         - [ ] Set `declared_outputs` on generated `StepOutputs` classes for stable output keys
               so decorator metadata and runtime fallback use one canonical contract.
         - [ ] Add the new `make_{spec.model}_*_step` call(s) into `run.py::_build_schema_steps()` so

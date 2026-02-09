@@ -137,7 +137,7 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_outputs_metad
     )
 
     call = scenario.calls[0]
-    assert call["required_outputs"] == ["artifact_a", "artifact_b"]
+    assert call["outputs"] == ["artifact_a", "artifact_b"]
     assert call["output_missing"] == "error"
     assert call["output_mismatch"] == "error"
 
@@ -168,7 +168,7 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
     )
 
     call = scenario.calls[0]
-    assert call["required_outputs"] == [USIM_DATASTORE_H5]
+    assert call["outputs"] == [USIM_DATASTORE_H5]
     assert call["output_missing"] == "error"
     assert call["output_mismatch"] == "error"
 
@@ -204,7 +204,7 @@ def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
     )
 
     call = scenario.calls[0]
-    assert call["required_outputs"] == ["artifact_override"]
+    assert call["outputs"] == ["artifact_override"]
     assert call["output_missing"] == "warn"
     assert call["output_mismatch"] == "warn"
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -117,3 +117,69 @@ def local_key_for_namespace(key: str, namespace: str) -> str:
     if local_key.startswith(prefix):
         return local_key[len(prefix) :]
     return local_key
+
+
+def namespaced_alias_for_key(key: str) -> Optional[str]:
+    """
+    Return the namespaced alias for an unscoped key when one can be inferred.
+    """
+    namespace = infer_namespace_for_key(key)
+    if not namespace:
+        return None
+    alias = qualify_key(namespace, key)
+    if alias == key:
+        return None
+    return alias
+
+
+def resolve_coupler_value(coupler: Any, key: str) -> Tuple[Any, Optional[str]]:
+    """
+    Resolve a key from a coupler using canonical namespace-aware lookup order.
+
+    Lookup order:
+    1. namespaced view (`coupler.view(namespace).get(local_key)`)
+    2. legacy/global key (`coupler.get(key)`)
+    3. namespaced global alias (`coupler.get(namespace/key)`)
+    """
+    if coupler is None:
+        return None, None
+
+    namespace = infer_namespace_for_key(key)
+    view_fn = getattr(coupler, "view", None)
+    if namespace and callable(view_fn):
+        try:
+            namespaced_view = view_fn(namespace)
+            view_get = getattr(namespaced_view, "get", None)
+            if callable(view_get):
+                local_key = local_key_for_namespace(key, namespace)
+                value = view_get(local_key)
+                if value is not None:
+                    return value, qualify_key(namespace, local_key)
+        except Exception:
+            pass
+
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None, None
+
+    value = get_value(key)
+    if value is not None:
+        return value, key
+
+    alias = namespaced_alias_for_key(key)
+    if alias is not None:
+        value = get_value(alias)
+        if value is not None:
+            return value, alias
+
+    return None, None
+
+
+def namespaced_view_target(key: str) -> Optional[Tuple[str, str]]:
+    """
+    Return ``(namespace, local_key)`` for publishing through a namespace view.
+    """
+    namespace = infer_namespace_for_key(key)
+    if not namespace:
+        return None
+    return namespace, local_key_for_namespace(key, namespace)

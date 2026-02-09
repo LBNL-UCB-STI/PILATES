@@ -85,7 +85,6 @@ def test_run_step_unpacks_config() -> None:
         "inputs": {"input": "path"},
         "outputs": ["out"],
         "output_paths": {"out": "path"},
-        "required_outputs": ["out"],
         "output_missing": "error",
         "output_mismatch": "error",
         "runtime_kwargs": {"settings": "settings"},

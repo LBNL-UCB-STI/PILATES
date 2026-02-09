@@ -17,10 +17,7 @@ from pilates.workflows.artifact_key_migrations import (
     canonicalize_artifact_mapping,
     resolve_artifact_key,
 )
-from pilates.workflows.coupler_namespace import (
-    infer_namespace_for_key,
-    local_key_for_namespace,
-)
+from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
@@ -789,12 +786,12 @@ def set_coupler_from_artifact(
             set_value(target_key, value)
 
     # Preferred path: if available, also publish through model namespace view.
-    namespace = infer_namespace_for_key(canonical_key)
+    target = namespaced_view_target(canonical_key)
     view_fn = getattr(coupler, "view", None)
-    if namespace and callable(view_fn):
+    if target is not None and callable(view_fn):
+        namespace, local_key = target
         try:
             view = view_fn(namespace)
-            local_key = local_key_for_namespace(canonical_key, namespace)
             _set_value(view, local_key)
         except Exception:
             logger.debug(

@@ -238,7 +238,8 @@ Common fields:
 - `input_keys` (keys expected to already exist in coupler)
 - `output_paths` (declared expected outputs)
 - optional output-contract overrides:
-  `required_outputs`, `output_missing`, `output_mismatch`
+  `outputs` (or `StepRef.required_outputs` alias), `output_missing`,
+  `output_mismatch`
 - cache controls: `cache_mode`, `cache_hydration`, `load_inputs`
 
 Guidelines:
@@ -251,8 +252,9 @@ Guidelines:
    declare step outputs in step metadata (`@define_step(outputs=[...])` or the
    step factory metadata path), and let orchestration infer strict defaults
    (`output_missing="error"`, `output_mismatch="error"`).
-5. Use `StepRef.required_outputs` / `StepRef.output_*` only when overriding the
-   default inferred behavior for a specific step.
+5. Use `StepRef.required_outputs` (alias for explicit `outputs`) /
+   `StepRef.output_*` only when overriding the default inferred behavior for a
+   specific step.
 6. For generic step factories, define canonical outputs once on the
    `StepOutputs` class (`declared_outputs`) so decoration and runtime fallback
    share the same contract source.
@@ -333,7 +335,7 @@ If you add a compile variant, register it explicitly (example:
 7. Add or reuse artifact keys and coupler schema descriptions.
 8. Add/extend Consist config hashing and facet policy.
 9. Prefer output contracts declared on step metadata and rely on inferred strict
-   defaults; use `StepRef.output_*` / `required_outputs` only for explicit
+   defaults; use `StepRef.output_*` / explicit `outputs` only for explicit
    overrides.
 10. Add tests for contracts, wiring, and restart/cache behavior.
 11. Update docs.
