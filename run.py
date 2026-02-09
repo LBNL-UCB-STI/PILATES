@@ -83,6 +83,9 @@ class _SchemaCoupler:
     def update(self, _mapping: Dict[str, Any]) -> None:
         return None
 
+    def view(self, _namespace: str) -> "_SchemaCoupler":
+        return self
+
     def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
         return None
 

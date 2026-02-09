@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.workflows.coupler_namespace import (
+    infer_namespace_for_key,
+    local_key_for_namespace,
+    qualify_key,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,8 @@ class ResolvedStepInputs:
         Coupler keys to pass via ``StepRef.input_keys``.
     source_by_key : dict
         Resolution source per key: ``explicit`` / ``coupler`` / ``fallback`` / ``missing``.
+    coupler_key_by_key : dict
+        Actual coupler key used for each resolved coupler-backed input.
     missing_required : list
         Required keys that could not be resolved from any source.
     """
@@ -26,6 +33,7 @@ class ResolvedStepInputs:
     inputs: Dict[str, Any]
     input_keys: list[str]
     source_by_key: Dict[str, str]
+    coupler_key_by_key: Dict[str, str]
     missing_required: list[str]
 
     def stepref_inputs(self) -> Optional[Dict[str, Any]]:
@@ -41,7 +49,7 @@ def _resolve_single_key(
     coupler: Optional[CouplerProtocol],
     explicit_inputs: Optional[Mapping[str, Any]],
     fallback_inputs: Optional[Mapping[str, Any]],
-) -> tuple[str, Any]:
+) -> tuple[str, Any, Optional[str]]:
     """
     Resolve one key using canonical precedence:
     explicit input -> coupler key -> fallback input.
@@ -49,20 +57,39 @@ def _resolve_single_key(
     if explicit_inputs is not None and key in explicit_inputs:
         value = explicit_inputs.get(key)
         if value is not None:
-            return "explicit", value
+            return "explicit", value, None
 
     get_value = getattr(coupler, "get", None) if coupler is not None else None
+    view_fn = getattr(coupler, "view", None) if coupler is not None else None
+    namespace = infer_namespace_for_key(key)
+    if namespace and callable(view_fn):
+        try:
+            namespaced_view = view_fn(namespace)
+            view_get = getattr(namespaced_view, "get", None)
+            if callable(view_get):
+                local_key = local_key_for_namespace(key, namespace)
+                value = view_get(local_key)
+                if value is not None:
+                    return "coupler", value, qualify_key(namespace, local_key)
+        except Exception:
+            pass
     if callable(get_value):
         value = get_value(key)
         if value is not None:
-            return "coupler", value
+            return "coupler", value, key
+        if namespace:
+            qualified_key = qualify_key(namespace, key)
+            if qualified_key != key:
+                value = get_value(qualified_key)
+                if value is not None:
+                    return "coupler", value, qualified_key
 
     if fallback_inputs is not None and key in fallback_inputs:
         value = fallback_inputs.get(key)
         if value is not None:
-            return "fallback", value
+            return "fallback", value, None
 
-    return "missing", None
+    return "missing", None, None
 
 
 def resolve_step_inputs(
@@ -79,9 +106,10 @@ def resolve_step_inputs(
     resolved_inputs: Dict[str, Any] = {}
     resolved_input_keys: list[str] = []
     source_by_key: Dict[str, str] = {}
+    coupler_key_by_key: Dict[str, str] = {}
 
     for key in keys:
-        source, value = _resolve_single_key(
+        source, value, coupler_key = _resolve_single_key(
             key=key,
             coupler=coupler,
             explicit_inputs=explicit_inputs,
@@ -89,7 +117,9 @@ def resolve_step_inputs(
         )
         source_by_key[key] = source
         if source == "coupler":
-            resolved_input_keys.append(key)
+            selected_key = coupler_key or key
+            resolved_input_keys.append(selected_key)
+            coupler_key_by_key[key] = selected_key
         elif source in {"explicit", "fallback"}:
             resolved_inputs[key] = value
 
@@ -99,6 +129,7 @@ def resolve_step_inputs(
         inputs=resolved_inputs,
         input_keys=resolved_input_keys,
         source_by_key=source_by_key,
+        coupler_key_by_key=coupler_key_by_key,
         missing_required=missing_required,
     )
 
@@ -133,6 +164,7 @@ def resolve_preferred_step_input(
         inputs={},
         input_keys=[],
         source_by_key={key: "missing" for key in preferred_keys},
+        coupler_key_by_key={},
         missing_required=missing_required,
     )
 
@@ -167,7 +199,12 @@ def resolved_value_for_key(
     if source == "coupler":
         get_value = getattr(coupler, "get", None) if coupler is not None else None
         if callable(get_value):
-            return get_value(key)
+            selected_key = resolved.coupler_key_by_key.get(key, key)
+            value = get_value(selected_key)
+            if value is not None:
+                return value
+            if selected_key != key:
+                return get_value(key)
         return None
     if source in {"explicit", "fallback"}:
         return resolved.inputs.get(key)

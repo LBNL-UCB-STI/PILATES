@@ -185,10 +185,20 @@ Core structures:
 - `STEP_DEPENDENCIES`
 - `validate_step_ready(...)`
 - `validate_workflow_step_contracts(...)`
+- `StepOutputsBase.declared_outputs` (canonical strict-output contract source)
 
 Why this matters: restart/hydration logic assumes these registries are
 consistent. If you add a step name in one place but not the others, workflow
 validation or restoration will fail.
+
+Declared output contract rule:
+
+1. Prefer setting `declared_outputs` directly on each `StepOutputs` dataclass
+   when output keys are stable.
+2. If `declared_outputs` is omitted, shared step wiring falls back to
+   `required_path_fields` + `record_keys`.
+3. Orchestration uses step metadata first (`@define_step(outputs=[...])`), then
+   `StepOutputs` declared outputs, then `StepRef` overrides.
 
 ## 6) Canonical Input Resolution (Use This)
 
@@ -227,6 +237,8 @@ Common fields:
 - `inputs` (explicit key -> value mapping)
 - `input_keys` (keys expected to already exist in coupler)
 - `output_paths` (declared expected outputs)
+- optional output-contract overrides:
+  `required_outputs`, `output_missing`, `output_mismatch`
 - cache controls: `cache_mode`, `cache_hydration`, `load_inputs`
 
 Guidelines:
@@ -235,6 +247,15 @@ Guidelines:
 2. Keep required input checks explicit (`required_keys` + clear errors).
 3. Prefer `outputs_holder` in-memory outputs first; use coupler for cross-step
    handoff rather than extra DB passes unless there is a clear benefit.
+4. Preferred output-contract pattern:
+   declare step outputs in step metadata (`@define_step(outputs=[...])` or the
+   step factory metadata path), and let orchestration infer strict defaults
+   (`output_missing="error"`, `output_mismatch="error"`).
+5. Use `StepRef.required_outputs` / `StepRef.output_*` only when overriding the
+   default inferred behavior for a specific step.
+6. For generic step factories, define canonical outputs once on the
+   `StepOutputs` class (`declared_outputs`) so decoration and runtime fallback
+   share the same contract source.
 
 ## 8) Coupler Keys and Schema
 
@@ -253,6 +274,14 @@ When adding a cross-step artifact:
 2. add a schema description
 3. ensure the producer step logs/sets it
 4. ensure the consumer step requests it via `input_keys` or explicit `inputs`
+
+Namespace behavior:
+
+1. Coupler gateway helpers now use `coupler.view("<model>")` when available.
+2. During migration, helpers also keep writing legacy unscoped keys for
+   compatibility.
+3. Input resolution prefers namespaced keys when present and automatically
+   falls back to unscoped keys.
 
 For key migrations, use `pilates/workflows/artifact_key_migrations.py`.
 
@@ -295,6 +324,7 @@ If you add a compile variant, register it explicitly (example:
 1. Run `python scripts/new_model_scaffold.py <model_name> --major-stage <stage>`.
 2. Implement model behavior in generated components under `pilates/<model>/`.
 3. Refine typed output dataclasses in `pilates/<model>/outputs.py`.
+   Add `declared_outputs` for stable, queryable contract keys.
 4. Refine `make_<model>_<phase>_step` factories under
    `pilates/workflows/steps/`.
 5. Wire step sequence into an existing or new stage module.
@@ -302,8 +332,11 @@ If you add a compile variant, register it explicitly (example:
    contract validation includes them.
 7. Add or reuse artifact keys and coupler schema descriptions.
 8. Add/extend Consist config hashing and facet policy.
-9. Add tests for contracts, wiring, and restart/cache behavior.
-10. Update docs.
+9. Prefer output contracts declared on step metadata and rely on inferred strict
+   defaults; use `StepRef.output_*` / `required_outputs` only for explicit
+   overrides.
+10. Add tests for contracts, wiring, and restart/cache behavior.
+11. Update docs.
 
 ## 12) Testing Expectations
 

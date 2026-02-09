@@ -22,6 +22,7 @@ from pilates.workflows.input_resolution import (
     resolve_step_inputs,
     resolved_value_for_key,
 )
+from pilates.workflows.artifact_keys import LINKSTATS_WARMSTART
 
 
 class _CouplerStub:
@@ -30,6 +31,20 @@ class _CouplerStub:
 
     def get(self, key, default=None):
         return self._values.get(key, default)
+
+
+class _CouplerViewStub:
+    def __init__(self, values, namespace):
+        self._values = values
+        self._namespace = namespace
+
+    def get(self, key, default=None):
+        return self._values.get(f"{self._namespace}/{key}", default)
+
+
+class _NamespacedCouplerStub(_CouplerStub):
+    def view(self, namespace):
+        return _CouplerViewStub(self._values, namespace)
 
 
 def test_resolve_step_inputs_prefers_explicit_over_coupler_and_fallback():
@@ -128,3 +143,33 @@ def test_resolved_value_for_key_fetches_coupler_values():
         coupler=coupler,
     )
     assert resolved_value_for_key(resolved=resolved, key="foo", coupler=coupler) == "from-coupler"
+
+
+def test_resolve_step_inputs_prefers_namespaced_view_key_when_available():
+    """When a coupler view exists, resolution should use the namespaced key."""
+    coupler = _NamespacedCouplerStub({"beam/linkstats_warmstart": "from-namespaced"})
+    resolved = resolve_step_inputs(keys=[LINKSTATS_WARMSTART], coupler=coupler)
+    assert resolved.inputs == {}
+    assert resolved.input_keys == ["beam/linkstats_warmstart"]
+    assert resolved.source_by_key[LINKSTATS_WARMSTART] == "coupler"
+    assert (
+        resolved.coupler_key_by_key[LINKSTATS_WARMSTART]
+        == "beam/linkstats_warmstart"
+    )
+    assert (
+        resolved_value_for_key(
+            resolved=resolved,
+            key=LINKSTATS_WARMSTART,
+            coupler=coupler,
+        )
+        == "from-namespaced"
+    )
+
+
+def test_resolve_step_inputs_falls_back_to_legacy_unscoped_coupler_key():
+    """Legacy unscoped coupler keys remain valid during namespace migration."""
+    coupler = _NamespacedCouplerStub({LINKSTATS_WARMSTART: "from-legacy"})
+    resolved = resolve_step_inputs(keys=[LINKSTATS_WARMSTART], coupler=coupler)
+    assert resolved.inputs == {}
+    assert resolved.input_keys == [LINKSTATS_WARMSTART]
+    assert resolved.source_by_key[LINKSTATS_WARMSTART] == "coupler"

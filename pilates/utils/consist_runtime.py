@@ -410,6 +410,12 @@ class _NoopCoupler:
     def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
         return None
 
+    def view(self, namespace: str) -> "_NoopCouplerView":
+        normalized = namespace.strip("/")
+        if not normalized:
+            raise ValueError("namespace must be non-empty")
+        return _NoopCouplerView(self, normalized)
+
     def collect_by_keys(
         self,
         artifacts: Dict[str, Any],
@@ -425,6 +431,34 @@ class _NoopCoupler:
             self.set(coupler_key, artifact)
             collected[coupler_key] = artifact
         return collected
+
+
+class _NoopCouplerView:
+    def __init__(self, coupler: _NoopCoupler, namespace: str) -> None:
+        self._coupler = coupler
+        self._namespace = namespace
+
+    def _qualify(self, key: str) -> str:
+        local = str(key).strip("/")
+        return f"{self._namespace}/{local}"
+
+    def set(self, key: str, value: Any) -> None:
+        self._coupler.set(self._qualify(key), value)
+
+    def get(self, key: str, default: Optional[Any] = None) -> Any:
+        return self._coupler.get(self._qualify(key), default)
+
+    def update(self, mapping: Mapping[str, Any]) -> None:
+        self._coupler.update({self._qualify(key): value for key, value in mapping.items()})
+
+    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def view(self, namespace: str) -> "_NoopCouplerView":
+        normalized = namespace.strip("/")
+        if not normalized:
+            raise ValueError("namespace must be non-empty")
+        return _NoopCouplerView(self._coupler, f"{self._namespace}/{normalized}")
 
 
 class _NoopScenario:

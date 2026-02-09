@@ -372,6 +372,7 @@ def _run_activity_demand_phase(
             inputs={},
             input_keys=[USIM_DATASTORE_CURRENT_H5],
             source_by_key={USIM_DATASTORE_CURRENT_H5: "missing"},
+            coupler_key_by_key={},
             missing_required=[USIM_DATASTORE_CURRENT_H5],
         )
 
@@ -405,16 +406,23 @@ def _run_activity_demand_phase(
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
-        compile_inputs = upstream.to_record_store().to_mapping()
-        compile_input_keys = [
-            short_name for short_name, _, _ in upstream._iter_record_items()
-        ]
-        if not compile_input_keys:
-            compile_input_keys = None
-        if ASIM_OMX_SKIMS in compile_inputs:
-            compile_inputs = {ASIM_OMX_SKIMS: compile_inputs[ASIM_OMX_SKIMS]}
-        else:
-            compile_inputs = {}
+        compile_store_inputs = upstream.to_record_store().to_mapping()
+        compile_explicit_inputs: Dict[str, Any] = {}
+        if ASIM_OMX_SKIMS in compile_store_inputs:
+            compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
+                ASIM_OMX_SKIMS
+            ]
+        compile_resolution = resolve_step_inputs(
+            keys=[ASIM_OMX_SKIMS],
+            coupler=coupler,
+            explicit_inputs=compile_explicit_inputs or None,
+            required_keys=[ASIM_OMX_SKIMS],
+        )
+        if compile_resolution.missing_required:
+            raise RuntimeError(
+                "ActivitySim compile requires omx_skims input, but it could not be "
+                "resolved from explicit preprocess outputs or coupler keys."
+            )
         expected_compile_outputs = clean_expected_outputs(
             build_outputs(
                 "activitysim_compile",
@@ -434,8 +442,8 @@ def _run_activity_demand_phase(
                 StepRef(
                     name="activitysim_compile",
                     step_func=activitysim_compile_step,
-                    inputs=compile_inputs or None,
-                    input_keys=compile_input_keys,
+                    inputs=compile_resolution.stepref_inputs(),
+                    input_keys=compile_resolution.stepref_input_keys(),
                     output_paths=expected_compile_outputs or None,
                     cache_mode="overwrite",
                     load_inputs=False,

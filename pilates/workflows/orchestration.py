@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from dataclasses import dataclass
 import os
 from datetime import datetime
@@ -8,7 +9,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    record_store_to_outputs,
+    resolve_artifact_from_value,
+    set_coupler_from_artifact,
+)
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
 from pilates.workflows.artifact_keys import (
@@ -26,6 +32,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
+    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     serialize_step_outputs,
 )
@@ -53,6 +60,9 @@ class StepRef:
     cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
     load_inputs: Optional[bool] = None
+    required_outputs: Optional[Sequence[str]] = None
+    output_missing: Optional[str] = None
+    output_mismatch: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
     iteration: Optional[int] = None
@@ -83,6 +93,7 @@ def _build_step_run_kwargs(
         "fn": step.step_func,
         "runtime_kwargs": runtime_kwargs,
     }
+    step_meta = getattr(step.step_func, "__consist_step__", None)
     resolved_year = step.year
     if resolved_year is None:
         resolved_year = getattr(state, "year", None)
@@ -114,10 +125,78 @@ def _build_step_run_kwargs(
         run_kwargs["cache_mode"] = step.cache_mode
     if step.load_inputs is not None:
         run_kwargs["load_inputs"] = step.load_inputs
+    resolved_required_outputs: Optional[Sequence[str]] = step.required_outputs
+    if resolved_required_outputs is None and step_meta is not None:
+        meta_outputs = getattr(step_meta, "outputs", None)
+        if isinstance(meta_outputs, Sequence) and not isinstance(meta_outputs, str):
+            resolved_required_outputs = [
+                output for output in meta_outputs if isinstance(output, str)
+            ]
+    if resolved_required_outputs is None:
+        outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
+        if outputs_class is not None:
+            class_declared_outputs = list(
+                declared_outputs_for_step_outputs_class(outputs_class)
+            )
+            if class_declared_outputs:
+                resolved_required_outputs = class_declared_outputs
+    if resolved_required_outputs:
+        run_kwargs["required_outputs"] = list(resolved_required_outputs)
+
+    # Apply strict defaults for declared-output steps unless explicitly overridden.
+    if step.output_missing is not None:
+        run_kwargs["output_missing"] = step.output_missing
+    elif resolved_required_outputs:
+        run_kwargs["output_missing"] = "error"
+
+    if step.output_mismatch is not None:
+        run_kwargs["output_mismatch"] = step.output_mismatch
+    elif resolved_required_outputs:
+        run_kwargs["output_mismatch"] = "error"
 
     if step.model is not None:
         run_kwargs["model"] = step.model
     return run_kwargs
+
+
+def _filter_run_kwargs_for_scenario(
+    scenario: Any,
+    run_kwargs: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """
+    Drop unsupported kwargs for scenario.run on older Consist builds.
+
+    Newer Consist versions accept strict contract kwargs like
+    ``required_outputs``/``output_missing``/``output_mismatch``; older versions
+    may reject them. This helper keeps forward behavior while preserving
+    compatibility in mixed-version environments.
+    """
+    run_fn = getattr(scenario, "run", None)
+    if run_fn is None:
+        return dict(run_kwargs)
+    try:
+        signature = inspect.signature(run_fn)
+    except (TypeError, ValueError):
+        return dict(run_kwargs)
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return dict(run_kwargs)
+    accepted = set(signature.parameters.keys())
+    filtered: Dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in run_kwargs.items():
+        if key in accepted:
+            filtered[key] = value
+        else:
+            dropped.append(key)
+    if dropped:
+        logger.debug(
+            "Dropping unsupported scenario.run kwargs for this Consist build: %s",
+            sorted(dropped),
+        )
+    return filtered
 
 
 @dataclass
@@ -225,7 +304,8 @@ def run_manifested_steps(
             stage_name=stage_name,
             default_iteration=iteration,
         )
-        result = scenario.run(**run_kwargs)
+        filtered_run_kwargs = _filter_run_kwargs_for_scenario(scenario, run_kwargs)
+        result = scenario.run(**filtered_run_kwargs)
         outputs = outputs_holder.get_attribute(spec.name)
         if outputs is None and getattr(result, "cache_hit", False):
             outputs = _recover_cached_outputs(
@@ -320,7 +400,8 @@ def run_workflow(
                 coupler_keys,
             )
 
-        result = scenario.run(**run_kwargs)
+        filtered_run_kwargs = _filter_run_kwargs_for_scenario(scenario, run_kwargs)
+        result = scenario.run(**filtered_run_kwargs)
         if (
             outputs_holder.get_attribute(spec.name) is None
             and getattr(result, "cache_hit", False)
@@ -637,14 +718,30 @@ def _update_coupler_from_record_store(
     if record_store is None:
         return
     mapping = record_store.to_mapping()
-    set_value = getattr(coupler, "set", None)
-    if not callable(set_value):
-        return
     for key, value in mapping.items():
+        canonical_key = resolve_artifact_key(key)
+        resolved = resolve_artifact_from_value(
+            value,
+            key=canonical_key,
+            workspace=workspace,
+        )
         path = artifact_to_path(value, workspace)
         if path is None:
             continue
-        set_value(resolve_artifact_key(key), path)
+        artifact = (
+            resolved
+            if (
+                hasattr(resolved, "container_uri")
+                or hasattr(resolved, "uri")
+            )
+            else None
+        )
+        set_coupler_from_artifact(
+            coupler=coupler,
+            key=canonical_key,
+            artifact=artifact,
+            fallback=path,
+        )
 
 
 def _restore_outputs_from_manifest(

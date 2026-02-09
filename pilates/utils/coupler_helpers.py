@@ -17,6 +17,10 @@ from pilates.workflows.artifact_key_migrations import (
     canonicalize_artifact_mapping,
     resolve_artifact_key,
 )
+from pilates.workflows.coupler_namespace import (
+    infer_namespace_for_key,
+    local_key_for_namespace,
+)
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
@@ -773,14 +777,36 @@ def set_coupler_from_artifact(
     if artifact is None and fallback is None:
         return
     canonical_key = resolve_artifact_key(key)
-    set_from_artifact = getattr(coupler, "set_from_artifact", None)
-    if callable(set_from_artifact):
-        if artifact is None:
-            set_from_artifact(canonical_key, fallback)
-        else:
-            set_from_artifact(canonical_key, artifact)
-        return
-    coupler.set(canonical_key, artifact or fallback)
+    value = artifact or fallback
+
+    def _set_value(target: Any, target_key: str) -> None:
+        set_from_artifact = getattr(target, "set_from_artifact", None)
+        if callable(set_from_artifact):
+            set_from_artifact(target_key, value)
+            return
+        set_value = getattr(target, "set", None)
+        if callable(set_value):
+            set_value(target_key, value)
+
+    # Preferred path: if available, also publish through model namespace view.
+    namespace = infer_namespace_for_key(canonical_key)
+    view_fn = getattr(coupler, "view", None)
+    if namespace and callable(view_fn):
+        try:
+            view = view_fn(namespace)
+            local_key = local_key_for_namespace(canonical_key, namespace)
+            _set_value(view, local_key)
+        except Exception:
+            logger.debug(
+                "Failed to publish key %s via coupler view namespace %s",
+                canonical_key,
+                namespace,
+                exc_info=True,
+            )
+
+    # Transitional compatibility: keep unscoped key writes so existing consumers
+    # and historical runs remain valid while namespaced lookups are adopted.
+    _set_value(coupler, canonical_key)
 
 
 def _log_with_optional_h5_container(

@@ -429,6 +429,7 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
             """Typed outputs from {spec.class_prefix} preprocess."""
 
             primary_output_attr: ClassVar[str] = "output_root"
+            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
 
@@ -461,6 +462,7 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
             """Typed outputs from {spec.class_prefix} run."""
 
             primary_output_attr: ClassVar[str] = "output_root"
+            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
 
@@ -493,6 +495,7 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
             """Typed outputs from {spec.class_prefix} postprocess."""
 
             primary_output_attr: ClassVar[str] = "output_root"
+            declared_outputs: ClassVar[Tuple[str, ...]] = ()
             required_path_fields: ClassVar[Tuple[str, ...]] = ("output_root",)
             dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
 
@@ -699,6 +702,12 @@ def _render_checklist(spec: ScaffoldSpec) -> str:
 
         - [ ] Add stage assembly `StepRef(...)` calls in the appropriate stage module:
               `pilates/workflows/stages/*.py`
+        - [ ] Prefer declaring expected outputs on the step metadata path (for example
+              `@define_step(outputs=[...])`) and rely on orchestration's strict
+              inferred defaults (`output_missing=\"error\"`, `output_mismatch=\"error\"`).
+              Use `StepRef.required_outputs` / `StepRef.output_*` only as overrides.
+        - [ ] Set `declared_outputs` on generated `StepOutputs` classes for stable output keys
+              so decorator metadata and runtime fallback use one canonical contract.
         - [ ] Add the new `make_{spec.model}_*_step` call(s) into `run.py::_build_schema_steps()` so
               startup contract validation includes this model.
         - [ ] Add/extend coupler keys in `pilates/workflows/artifact_keys.py`.

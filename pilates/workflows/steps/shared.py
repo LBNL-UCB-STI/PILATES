@@ -254,6 +254,7 @@ from pilates.workflows.step_exec import (
     run_runner,
     warm_start_activities,
 )
+from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -1069,6 +1070,22 @@ def _schema_outputs_from_class(outputs_class: Type[StepOutputsT]) -> Optional[li
     return unique or None
 
 
+def _declared_outputs_from_class(
+    outputs_class: Type[StepOutputsT],
+) -> Optional[list[str]]:
+    """
+    Return strict output contract keys for a step outputs class when available.
+
+    Precedence:
+    1. Explicit ``declared_outputs`` class attribute.
+    2. Fallback to required ``record_keys`` fields only.
+    """
+    declared = list(declared_outputs_for_step_outputs_class(outputs_class))
+    if not declared:
+        return None
+    return declared
+
+
 def _decorate_step_with_consist(
     *,
     step_func: Callable[..., Any],
@@ -1211,6 +1228,7 @@ def _make_generic_step_function(
         step_model=step_model,
         description=f"{model_name} {phase} workflow step",
         schema_outputs=_schema_outputs_from_class(outputs_class),
+        outputs=_declared_outputs_from_class(outputs_class),
         tags=[model_name, phase],
     )
 
