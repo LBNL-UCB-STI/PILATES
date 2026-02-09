@@ -856,4 +856,9 @@ def run_supply_demand_stage(
                 outputs_holder=outputs_holder,
             ).previous_beam_outputs
 
-    state.complete_step(state.Stage.supply_demand_loop)
+    # Only complete the major stage if it is still active for this year.
+    if (
+        state.current_major_stage == state.Stage.supply_demand_loop
+        and state.current_year == year
+    ):
+        state.complete_step(state.Stage.supply_demand_loop)

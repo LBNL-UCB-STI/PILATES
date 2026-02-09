@@ -7,7 +7,13 @@ from pilates.config import load_config
 from workflow_state import WorkflowState
 
 
-def _make_settings(tmp_path, start_year=2020, end_year=2021):
+def _make_settings(
+    tmp_path,
+    start_year=2020,
+    end_year=2021,
+    activity_demand_enabled=False,
+    traffic_assignment_enabled=False,
+):
     state_path = tmp_path / "state.yaml"
     config = {
         "run": {
@@ -70,8 +76,8 @@ def _make_settings(tmp_path, start_year=2020, end_year=2021):
     settings = load_config(str(config_path))
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = False
-    settings.activity_demand_enabled = False
-    settings.traffic_assignment_enabled = False
+    settings.activity_demand_enabled = activity_demand_enabled
+    settings.traffic_assignment_enabled = traffic_assignment_enabled
     settings.replanning_enabled = False
     settings.state_file_loc = str(state_path)
     return settings
@@ -147,3 +153,32 @@ def test_state_consistency_across_years(tmp_path):
     state.complete_step(WorkflowState.Stage.land_use)
     assert state.current_year == 2022
     assert state.current_major_stage is None
+
+
+def test_supply_demand_major_completion_guard(tmp_path):
+    settings = _make_settings(
+        tmp_path,
+        start_year=2017,
+        end_year=2017,
+        activity_demand_enabled=False,
+        traffic_assignment_enabled=True,
+    )
+    state = WorkflowState.from_settings(settings)
+    state.current_year = 2017
+    state.current_major_stage = WorkflowState.Stage.supply_demand_loop
+    state.current_inner_iter = 0
+    state.current_sub_stage = WorkflowState.Stage.traffic_assignment
+
+    # Complete the last substage of the last iteration; this advances past end_year.
+    state.complete_step(
+        WorkflowState.Stage.supply_demand_loop,
+        completed_inner_iter=0,
+        completed_sub=WorkflowState.Stage.traffic_assignment,
+    )
+
+    assert state.current_year == 2018
+    assert state.current_major_stage is None
+    assert not (
+        state.current_major_stage == WorkflowState.Stage.supply_demand_loop
+        and state.current_year == 2017
+    )
