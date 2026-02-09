@@ -206,11 +206,15 @@ def run_manifested_steps(
         spec = raw_step
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
-            if outputs_holder.get_attribute(spec.name) is None:
+            outputs = outputs_holder.get_attribute(spec.name)
+            if outputs is None:
                 outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
-                    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+            if outputs is not None:
+                _update_coupler_from_outputs(
+                    outputs, coupler=coupler, workspace=workspace
+                )
             continue
 
         validate_step_ready(spec.name, outputs_holder)

@@ -47,11 +47,10 @@ def test_provenance_logging_requires_active_run_when_enabled(monkeypatch):
         def do(self, input_store: RecordStore) -> RecordStore:
             return RecordStore(recordList=[])
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: None)
 
     model = DummyModel("dummy", state)
-    with pytest.raises(RuntimeError, match="active run context"):
+    with pytest.raises(RuntimeError, match="No active Consist run context"):
         model.do(RecordStore())
 
 
@@ -70,7 +69,6 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
                 ]
             )
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: object())
 
     def _log_artifacts(mapping, **meta):
@@ -124,7 +122,6 @@ def test_provenance_logging_forwards_batch_artifact_facets(monkeypatch):
                 ]
             )
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: object())
     monkeypatch.setattr(cr, "log_meta", lambda **_: None)
 

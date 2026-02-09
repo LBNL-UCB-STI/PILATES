@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+"""
+Narrative tests for startup workflow step contract validation.
+
+These tests document the invariant that step wiring must be internally
+consistent before long runs begin.
+
+The validator checks four layers together:
+
+1. ``StepOutputsHolder`` fields (runtime in-memory handoff contract)
+2. ``STEP_OUTPUTS_CLASSES`` (typed output reconstruction contract)
+3. ``STEP_DEPENDENCIES`` (execution ordering contract)
+4. Declared step models (Consist metadata contract)
+
+This file intentionally mutates one layer at a time to show what class of
+integration drift is caught and what the expected startup failure looks like.
+"""
+
 import pytest
 from consist import define_step
 
@@ -54,12 +71,14 @@ def _declared_schema_steps():
 
 
 def test_validate_workflow_step_contracts_passes_for_current_setup():
+    """Happy-path: current declared steps satisfy all contract invariants."""
     step_shared.validate_workflow_step_contracts(
         declared_steps=_declared_schema_steps()
     )
 
 
 def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatch):
+    """Removing a tracked output class is detected as holder/output drift."""
     patched_classes = dict(step_shared.STEP_OUTPUTS_CLASSES)
     patched_classes.pop("beam_run", None)
     monkeypatch.setattr(step_shared, "STEP_OUTPUTS_CLASSES", patched_classes)
@@ -71,6 +90,7 @@ def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatc
 
 
 def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monkeypatch):
+    """Dependencies referencing unknown steps fail validation."""
     patched_deps = {key: dict(value) for key, value in step_shared.STEP_DEPENDENCIES.items()}
     beam_run_spec = dict(patched_deps["beam_run"])
     beam_run_spec["depends_on"] = ["not_a_real_step"]
@@ -84,6 +104,7 @@ def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monke
 
 
 def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
+    """New declared steps must be tracked or explicitly allowlisted."""
     @define_step(model="unexpected_new_step")
     def _extra_step(*args, **kwargs):
         return None
@@ -95,6 +116,7 @@ def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
 
 
 def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
+    """Allowlist supports intentional transitional or non-tracked step models."""
     @define_step(model="intentional_untracked_step")
     def _extra_step(*args, **kwargs):
         return None

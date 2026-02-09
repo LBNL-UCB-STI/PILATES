@@ -157,9 +157,9 @@ def provenance_logging(func):
                 "Ensure Model was instantiated with a valid WorkflowState."
             )
 
-        if cr.consist_available(self.state.full_settings) and cr.current_run() is None:
+        if cr.current_run() is None:
             raise RuntimeError(
-                f"[{self.model_name}] Consist enabled but no active run context. "
+                f"[{self.model_name}] No active Consist run context. "
                 "Ensure this method is called within `scenario.run(...)` or `scenario.trace(...)`."
             )
 

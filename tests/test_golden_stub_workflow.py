@@ -1,3 +1,32 @@
+"""
+Golden stub workflow contract test (with real Consist runtime).
+
+This module is intentionally broader than the focused invariant tests. It acts
+as executable documentation for how a full PILATES year/iteration passes
+through the staged workflow when:
+
+1. The orchestrator uses real Consist scenario/step contexts.
+2. Model execution is replaced with deterministic stubs that emit realistic
+   records and file shapes.
+3. Stage boundaries still honor the same coupler/input/output contracts used in
+   production.
+
+What this test demonstrates:
+- Land use stage publishes UrbanSim datastore handles into coupler state.
+- Vehicle ownership stage consumes datastore inputs and materializes expected
+  Atlas side effects.
+- Supply-demand stage executes ActivitySim + BEAM wiring, archives ActivitySim
+  outputs, and writes a manifest.
+- Provenance plumbing remains healthy: scenario runs/steps exist, artifacts are
+  attached, and a markdown provenance report can be produced.
+
+Why keep this large:
+- It is a guardrail against regressions caused by refactors that are individually
+  type-safe but break cross-stage integration behavior.
+- It doubles as a reference implementation for developers adding new models or
+  changing stage orchestration.
+"""
+
 from __future__ import annotations
 
 import re
@@ -41,6 +70,8 @@ from workflow_state import WorkflowState
 
 
 class DummyPreprocessor:
+    """Deterministic preprocessor stub delegated to ``record_builder``."""
+
     def __init__(self, model_name, record_builder, state=None):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -53,6 +84,8 @@ class DummyPreprocessor:
 
 
 class DummyRunner:
+    """Deterministic runner stub delegated to ``record_builder``."""
+
     def __init__(self, model_name, record_builder, state=None):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -65,6 +98,8 @@ class DummyRunner:
 
 
 class DummyPostprocessor:
+    """Deterministic postprocessor stub delegated to ``record_builder``."""
+
     def __init__(self, model_name, record_builder, state=None):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -96,6 +131,7 @@ def _write_parquet(path: Path, df: pd.DataFrame) -> None:
 
 
 def _write_usim_toy_h5(path: Path, *, with_year_prefix: Optional[int] = None) -> None:
+    """Create a minimal UrbanSim-style HDF5 with core tables used in tests."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
     table_prefix = f"/{with_year_prefix}" if with_year_prefix is not None else ""
@@ -141,6 +177,7 @@ def _write_usim_toy_h5(path: Path, *, with_year_prefix: Optional[int] = None) ->
 
 
 def _build_settings(tmp_path: Path):
+    """Build a compact, fully-enabled workflow config for golden-path testing."""
     config = {
         "run": {
             "region": "test",
@@ -228,6 +265,15 @@ def _build_settings(tmp_path: Path):
 
 @pytest.fixture
 def golden_stub_env(tmp_path, monkeypatch):
+    """
+    Assemble a full workflow harness with real Consist and stub model behavior.
+
+    The fixture creates realistic input/output files, patches ``ModelFactory``
+    to return deterministic stubs, and yields a live Consist ``scenario`` with
+    a working coupler so the stage runners execute their normal orchestration
+    logic.
+    """
+
     consist = pytest.importorskip("consist")
 
     settings = _build_settings(tmp_path)
@@ -651,6 +697,15 @@ def golden_stub_env(tmp_path, monkeypatch):
 
 
 def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, tmp_path):
+    """
+    End-to-end narrative test for stage contracts and provenance continuity.
+
+    The assertions are grouped by workflow phase:
+    - Phase 1: land use contract and coupler publication.
+    - Phase 2: vehicle ownership contract and Atlas/ActivitySim side effects.
+    - Phase 3: supply-demand contract, manifest creation, and archived outputs.
+    - Phase 4: Consist run/artifact/report integrity.
+    """
     settings = golden_stub_env["settings"]
     workspace = golden_stub_env["workspace"]
     state = golden_stub_env["state"]
@@ -658,6 +713,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     coupler = golden_stub_env["coupler"]
     tracker = golden_stub_env["tracker"]
 
+    # Phase 1: land-use stage publishes UrbanSim datastore handles.
     outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
@@ -677,6 +733,8 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert coupler.get(USIM_DATASTORE_BASE_H5) is not None
     assert coupler.get(USIM_DATASTORE_H5) is not None
 
+    # Phase 2: vehicle ownership stage consumes datastore handles and
+    # produces Atlas outputs plus ActivitySim-ready tables.
     run_vehicle_ownership_stage(
         scenario=scenario,
         state=state,
@@ -697,6 +755,8 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert {"household_id", "block_id", "income", "persons", "TAZ"} <= households_cols
     assert {"person_id", "household_id", "age", "TAZ", "ptype", "pemploy", "pstudent"} <= persons_cols
 
+    # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs,
+    # manifest state, and year/iteration archives.
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
@@ -753,6 +813,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert (asim_archive_dir / "persons.parquet").exists()
     assert (asim_archive_dir / "beam_plans.parquet").exists()
 
+    # Phase 4: provenance sanity checks against real Consist tracker output.
     runs = tracker.find_runs(tags=["golden_stub_workflow"])
     assert runs, "Expected at least one scenario run for golden stub workflow"
     scenario_run = runs[0]
