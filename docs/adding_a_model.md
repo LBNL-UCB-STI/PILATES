@@ -19,6 +19,29 @@ Before touching files, keep this flow in mind:
 If you keep stage assembly + step contracts + coupler keys aligned, integration
 is straightforward.
 
+## 0.05) Ownership Rules (Hard Boundaries)
+
+PILATES uses three distinct ownership layers:
+
+1. `StepOutputsHolder` owns typed in-process handoff between steps.
+2. Coupler owns published cross-step artifact references and provenance-facing
+   keys.
+3. Manifest/checkpoint state owns restart durability.
+
+Code boundaries:
+
+1. Direct coupler reads/writes belong in gateway modules:
+   `pilates/workflows/input_resolution.py`,
+   `pilates/utils/coupler_helpers.py`,
+   with limited diagnostics in `pilates/workflows/orchestration.py`.
+2. Stage modules should assemble `StepRef`s and call input-resolution helpers,
+   not call coupler methods directly.
+3. Step modules should use shared logging/publish helpers, not direct coupler
+   mutation.
+
+These boundaries are enforced by
+`tests/test_coupler_ownership_contracts.py`.
+
 ## 0.1) Jargon Quick Reference
 
 - **Stage**: A major block in the yearly simulation loop (for example land use,
