@@ -437,10 +437,13 @@ class BeamRunner(GenericRunner):
                 f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
             )
             os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, "skimsODFull.csv.gz")
+            host_output_file = os.path.join(output_dir, "skimsODFull.csv.gz")
+            container_output_file = _map_host_path_to_container(
+                host_output_file, abs_beam_input, abs_beam_output
+            )
             cmd_parts = [
                 f"--configPath={path_to_beam_config}",
-                f"--output={output_path}",
+                f"--output={container_output_file}",
                 f"--parallelism={parallelism}",
                 f"--routerType={skim_cfg.router_type}",
                 f"--skimsGeoType={skim_cfg.skims_geo_type}",
@@ -457,11 +460,27 @@ class BeamRunner(GenericRunner):
                 modes_str = ",".join(enabled_modes)
                 cmd_parts.append(f"--modesToBuild={modes_str}")
 
-            if skim_cfg.linkstats_file:
-                # Prepend the region directory so the path resolves inside the container
-                region = get_setting(settings, "run.region")
-                # Build an absolute container‑side path: /app/input/<region>/<linkstats_file>
-                linkstats_path = os.path.join("/app/input", region, skim_cfg.linkstats_file)
+            linkstats_path = _select_latest_linkstats_path(
+                store, abs_beam_input, abs_beam_output
+            )
+            if linkstats_path is None:
+                router_dir = getattr(settings.beam, "router_directory", None)
+                if router_dir:
+                    init_parquet = os.path.join(
+                        abs_beam_input, region, router_dir, "init.linkstats.parquet"
+                    )
+                    init_csv = os.path.join(
+                        abs_beam_input, region, router_dir, "init.linkstats.csv.gz"
+                    )
+                    if os.path.exists(init_parquet):
+                        linkstats_path = _map_host_path_to_container(
+                            init_parquet, abs_beam_input, abs_beam_output
+                        )
+                    elif os.path.exists(init_csv):
+                        linkstats_path = _map_host_path_to_container(
+                            init_csv, abs_beam_input, abs_beam_output
+                        )
+            if linkstats_path is not None:
                 cmd_parts.append(f"--linkstatsPath={linkstats_path}")
             command = " ".join(cmd_parts)
 
