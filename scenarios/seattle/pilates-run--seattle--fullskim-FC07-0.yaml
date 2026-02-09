@@ -122,7 +122,7 @@ beam_simulated_hwy_paths:
   - HOV3
 file_format: "parquet"
 
-beam_full_skim_run_schedule: after_each_iteration # after_each_iteration, after_final_iteration, standalone, disabled
+beam_full_skim_run_schedule: standalone # after_each_iteration, after_final_iteration, standalone, disabled
 beam_full_skim_router_type: "r5+gh"        # Options: "r5", "r5+gh", "gh"
 beam_full_skim_skims_geo_type: "taz"       # Options: "taz", "h3"
 beam_full_skim_skims_kind: "od"
