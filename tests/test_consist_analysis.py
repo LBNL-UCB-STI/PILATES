@@ -8,6 +8,7 @@ from pilates.utils.consist_analysis import (
     print_duckdb_health,
     summarize_linkstats_artifacts,
     summarize_linkstats_deltas,
+    summarize_linkstats_traveltime_deltas,
 )
 
 
@@ -353,11 +354,11 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
     assert calls[1][0] == "summarize_grouped"
 
 
-def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
+def test_summarize_linkstats_traveltime_deltas_uses_metric_delta_helper(monkeypatch):
     calls = []
 
-    def _fake_delta(*, tracker, view_name, summary_df):
-        calls.append((view_name, len(summary_df)))
+    def _fake_delta(*, tracker, view_name, summary_df, metric_column):
+        calls.append((view_name, len(summary_df), metric_column))
         import pandas as pd
 
         return pd.DataFrame(
@@ -373,8 +374,6 @@ def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
                     "key_prev": "k1",
                     "key_curr": "k2",
                     "group_count": 2,
-                    "volume_delta_mean": 1.5,
-                    "volume_delta_abs_mean": 1.5,
                     "traveltime_delta_mean": 0.5,
                     "traveltime_delta_abs_mean": 0.5,
                 }
@@ -382,7 +381,7 @@ def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "pilates.utils.consist_analysis._summarize_linkstats_grouped_view_deltas_from_summary",
+        "pilates.utils.consist_analysis._summarize_linkstats_metric_deltas_from_summary",
         _fake_delta,
     )
 
@@ -411,9 +410,68 @@ def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
         ]
     )
 
-    delta_df = summarize_linkstats_deltas(summary_df, tracker=object())
+    delta_df = summarize_linkstats_traveltime_deltas(summary_df, tracker=object())
     assert len(delta_df) == 1
     assert delta_df.iloc[0]["key_prev"] == "k1"
     assert delta_df.iloc[0]["key_curr"] == "k2"
-    assert delta_df.iloc[0]["volume_delta_mean"] == 1.5
-    assert calls == [("v1", 2)]
+    assert delta_df.iloc[0]["traveltime_delta_mean"] == 0.5
+    assert calls == [("v1", 2, "traveltime")]
+
+
+def test_summarize_linkstats_deltas_merges_metric_queries(monkeypatch):
+    import pandas as pd
+
+    travel_df = pd.DataFrame(
+        [
+            {
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration_prev": 1,
+                "phys_sim_iteration_curr": 2,
+                "artifact_id_prev": "a1",
+                "artifact_id_curr": "a2",
+                "key_prev": "k1",
+                "key_curr": "k2",
+                "group_count": 2,
+                "traveltime_delta_mean": 0.5,
+                "traveltime_delta_abs_mean": 0.5,
+                "view_prev": "v1",
+                "view_curr": "v1",
+            }
+        ]
+    )
+    volume_df = pd.DataFrame(
+        [
+            {
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration_prev": 1,
+                "phys_sim_iteration_curr": 2,
+                "artifact_id_prev": "a1",
+                "artifact_id_curr": "a2",
+                "key_prev": "k1",
+                "key_curr": "k2",
+                "group_count": 2,
+                "volume_delta_mean": 1.5,
+                "volume_delta_abs_mean": 1.5,
+                "view_prev": "v1",
+                "view_curr": "v1",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(
+        "pilates.utils.consist_analysis.summarize_linkstats_traveltime_deltas",
+        lambda *args, **kwargs: travel_df,
+    )
+    monkeypatch.setattr(
+        "pilates.utils.consist_analysis.summarize_linkstats_volume_deltas",
+        lambda *args, **kwargs: volume_df,
+    )
+
+    merged = summarize_linkstats_deltas(pd.DataFrame([{"x": 1}]), tracker=object())
+    assert len(merged) == 1
+    assert merged.iloc[0]["traveltime_delta_mean"] == 0.5
+    assert merged.iloc[0]["volume_delta_mean"] == 1.5
