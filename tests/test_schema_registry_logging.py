@@ -68,3 +68,28 @@ def test_log_input_alias_key_attaches_schema(monkeypatch):
     _, key, meta = calls[0]
     assert key == "asim_households_in"
     assert meta["schema"].__name__ == "HouseholdsAsimIn"
+
+
+def test_log_output_linkstats_key_attaches_beam_linkstats_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    cr.log_output("/tmp/linkstats.parquet", key="linkstats", enabled=True)
+
+    assert calls
+    _, key, meta = calls[0]
+    assert key == "linkstats"
+    assert meta["schema"].__name__ == "BeamLinkstats"
+
+
+def test_log_output_phys_sim_linkstats_key_attaches_beam_linkstats_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter9__beam_sub_iter1"
+    cr.log_output("/tmp/linkstats.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamLinkstats"

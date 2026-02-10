@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, Float, ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, Column, Float, ForeignKey, Integer, String
 from sqlmodel import Field, SQLModel
 
 
@@ -208,4 +208,82 @@ class BeamNetworkFinal(SQLModel, table=True):
         default=None,
         description="Y coordinate for the to-node.",
         sa_column=Column("toLocationY", Float, nullable=True),
+    )
+
+
+class BeamLinkstats(SQLModel, table=True):
+    __tablename__ = "BeamLinkstats"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    link_id: Optional[int] = Field(
+        default=None,
+        description="BEAM link identifier aligned with BeamNetworkFinal.link_id.",
+        sa_column=Column(
+            "link",
+            BigInteger,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    from_node_id: Optional[int] = Field(
+        default=None,
+        description="From-node identifier for the link segment.",
+        sa_column=Column("from", BigInteger, nullable=True, index=True),
+    )
+    to_node_id: Optional[int] = Field(
+        default=None,
+        description="To-node identifier for the link segment.",
+        sa_column=Column("to", BigInteger, nullable=True, index=True),
+    )
+    hour: Optional[int] = Field(
+        default=None,
+        description="Hour of day for this linkstats observation.",
+        sa_column=Column("hour", Integer, nullable=True, index=True),
+    )
+    length: Optional[float] = Field(
+        default=None,
+        description="Link length in meters.",
+        sa_column=Column("length", Float, nullable=True),
+    )
+    freespeed: Optional[float] = Field(
+        default=None,
+        description="Link free-flow speed.",
+        sa_column=Column("freespeed", Float, nullable=True),
+    )
+    capacity: Optional[float] = Field(
+        default=None,
+        description="Link capacity used during assignment.",
+        sa_column=Column("capacity", Float, nullable=True),
+    )
+    stat: Optional[str] = Field(
+        default=None,
+        description="Statistic type for the row (for example, average or sum).",
+        sa_column=Column("stat", String, nullable=True),
+    )
+    volume: Optional[float] = Field(
+        default=None,
+        description="Total assigned volume on the link for the hour.",
+        sa_column=Column("volume", Float, nullable=True),
+    )
+    volume_class_456_vocational: Optional[float] = Field(
+        default=None,
+        description="Assigned volume for class 4-6 vocational vehicles.",
+        sa_column=Column("volume_Class456Vocational", Float, nullable=True),
+    )
+    volume_class_78_vocational: Optional[float] = Field(
+        default=None,
+        description="Assigned volume for class 7-8 vocational vehicles.",
+        sa_column=Column("volume_Class78Vocational", Float, nullable=True),
+    )
+    volume_class_78_tractor: Optional[float] = Field(
+        default=None,
+        description="Assigned volume for class 7-8 tractor vehicles.",
+        sa_column=Column("volume_Class78Tractor", Float, nullable=True),
+    )
+    traveltime: Optional[float] = Field(
+        default=None,
+        description="Observed or simulated travel time for the link-hour.",
+        sa_column=Column("traveltime", Float, nullable=True),
     )
