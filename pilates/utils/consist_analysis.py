@@ -535,6 +535,21 @@ def _first_non_null_string(series: Optional[pd.Series]) -> Optional[str]:
     return None
 
 
+def _single_string_value(series: Optional[pd.Series]) -> Optional[str]:
+    if series is None:
+        return None
+    values: set[str] = set()
+    for value in series:
+        if pd.isna(value):
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            values.add(normalized)
+    if len(values) == 1:
+        return next(iter(values))
+    return None
+
+
 def _single_numeric_value(series: Optional[pd.Series]) -> Optional[int]:
     if series is None:
         return None
@@ -570,7 +585,7 @@ def _create_linkstats_grouped_view(
     artifact_family = _first_non_null_string(artifacts_df.get("artifact_family"))
     year = _single_numeric_value(artifacts_df.get("year"))
     iteration = _single_numeric_value(artifacts_df.get("iteration"))
-    run_id = _first_non_null_string(artifacts_df.get("run_id"))
+    run_id = _single_string_value(artifacts_df.get("run_id"))
     facet_source_values = (
         artifacts_df.get("facet_source").dropna().astype(str)
         if "facet_source" in artifacts_df.columns
@@ -627,7 +642,7 @@ def _summarize_linkstats_grouped_view(
     quoted_view = _quote_ident(view_name)
     query = f"""
         SELECT
-            CAST(src.consist_artifact_id AS VARCHAR) AS artifact_id,
+            src.consist_artifact_id AS artifact_id,
             COUNT(*) AS row_count,
             COUNT(DISTINCT src.link) AS distinct_links,
             SUM(src.volume) AS volume_sum,
@@ -644,7 +659,7 @@ def _summarize_linkstats_grouped_view(
                     VALUES {values_sql}
                 )
                 SELECT
-                    CAST(src.consist_artifact_id AS VARCHAR) AS artifact_id,
+                    src.consist_artifact_id AS artifact_id,
                     COUNT(*) AS row_count,
                     COUNT(DISTINCT src.link) AS distinct_links,
                     SUM(src.volume) AS volume_sum,
@@ -652,7 +667,7 @@ def _summarize_linkstats_grouped_view(
                     quantile_cont(src.traveltime, 0.95) AS traveltime_p95
                 FROM {quoted_view} src
                 JOIN target_artifacts ta
-                  ON CAST(src.consist_artifact_id AS VARCHAR) = ta.artifact_id
+                  ON src.consist_artifact_id = ta.artifact_id
             """
     query += "\nGROUP BY 1"
 
@@ -756,13 +771,13 @@ def _summarize_linkstats_grouped_view_deltas_bulk(
         ),
         agg AS (
             SELECT
-                CAST(consist_artifact_id AS VARCHAR) AS artifact_id,
+                consist_artifact_id AS artifact_id,
                 link,
                 hour,
                 SUM(volume) AS volume,
                 AVG(traveltime) AS traveltime
             FROM {quoted_view}
-            WHERE CAST(consist_artifact_id AS VARCHAR) IN (
+            WHERE consist_artifact_id IN (
                 SELECT artifact_id FROM relevant_artifacts
             )
             GROUP BY 1, 2, 3
@@ -992,13 +1007,13 @@ def _summarize_linkstats_grouped_view_deltas_from_summary(
         ),
         agg AS (
             SELECT
-                CAST(consist_artifact_id AS VARCHAR) AS artifact_id,
+                consist_artifact_id AS artifact_id,
                 link,
                 hour,
                 SUM(volume) AS volume,
                 AVG(traveltime) AS traveltime
             FROM {quoted_view}
-            WHERE CAST(consist_artifact_id AS VARCHAR) IN (
+            WHERE consist_artifact_id IN (
                 SELECT artifact_id FROM relevant_artifacts
             )
             GROUP BY 1, 2, 3
