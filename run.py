@@ -52,6 +52,7 @@ from pilates.workflows.steps import (
     make_atlas_preprocess_step,
     make_atlas_run_step,
     make_beam_postprocess_step,
+    make_beam_full_skim_step,
     make_beam_preprocess_step,
     make_beam_run_step,
     make_urbansim_postprocess_step,
@@ -119,6 +120,7 @@ def _build_schema_steps() -> List[Callable[..., Any]]:
         make_beam_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
         make_beam_run_step(coupler=coupler, outputs_holder=outputs_holder),
         make_beam_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_beam_full_skim_step(coupler=coupler, outputs_holder=outputs_holder),
     ]
 
 

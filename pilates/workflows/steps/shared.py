@@ -261,6 +261,7 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.beam.outputs import (
+    BeamFullSkimOutputs,
     BeamPostprocessOutputs,
     BeamPreprocessOutputs,
     BeamRunOutputs,
@@ -748,6 +749,8 @@ class StepOutputsHolder:
         Run outputs.
     beam_postprocess : BeamPostprocessOutputs, optional
         Postprocess outputs.
+    beam_full_skim : BeamFullSkimOutputs, optional
+        Full-skim outputs.
     urbansim_preprocess : UrbanSimPreprocessOutputs, optional
         Preprocess outputs.
     urbansim_run : UrbanSimRunOutputs, optional
@@ -768,6 +771,7 @@ class StepOutputsHolder:
     beam_preprocess: Optional[BeamPreprocessOutputs] = None
     beam_run: Optional[BeamRunOutputs] = None
     beam_postprocess: Optional[BeamPostprocessOutputs] = None
+    beam_full_skim: Optional[BeamFullSkimOutputs] = None
     urbansim_preprocess: Optional[UrbanSimPreprocessOutputs] = None
     urbansim_run: Optional[UrbanSimRunOutputs] = None
     urbansim_postprocess: Optional[UrbanSimPostprocessOutputs] = None
@@ -814,6 +818,7 @@ STEP_OUTPUTS_CLASSES = {
     "beam_preprocess": BeamPreprocessOutputs,
     "beam_run": BeamRunOutputs,
     "beam_postprocess": BeamPostprocessOutputs,
+    "beam_full_skim": BeamFullSkimOutputs,
     "urbansim_preprocess": UrbanSimPreprocessOutputs,
     "urbansim_run": UrbanSimRunOutputs,
     "urbansim_postprocess": UrbanSimPostprocessOutputs,
@@ -871,6 +876,10 @@ STEP_DEPENDENCIES = {
     "beam_postprocess": {
         "depends_on": ["beam_run"],
         "holder_inputs": ["beam_run"],
+    },
+    "beam_full_skim": {
+        "depends_on": ["beam_preprocess"],
+        "holder_inputs": ["beam_preprocess"],
     },
 }
 
@@ -1478,6 +1487,32 @@ def _execute_beam_postprocess(
         raise RuntimeError("BEAM run must complete first")
     raw_outputs = upstream.to_record_store()
     return run_postprocessor(postprocessor, raw_outputs, workspace)
+
+
+def _execute_beam_full_skim(
+    runner: Runner,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_full_skim_run",
+    previous_beam_outputs: Optional[RecordStore] = None,
+    **kwargs: Any,
+) -> RecordStore:
+    """
+    Execute the BEAM full-skim runner using preprocess outputs.
+
+    The full-skim runner consumes canonical BEAM inputs plus optional
+    previous BEAM outputs (for linkstats warm-start selection).
+    """
+    upstream = outputs_holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+    input_store = upstream.to_record_store()
+    if previous_beam_outputs is not None:
+        input_store += previous_beam_outputs
+    _warn_missing_coupler_inputs(coupler, input_store, context)
+    return run_runner(runner, input_store, workspace)
 
 
 def _execute_urbansim_run(

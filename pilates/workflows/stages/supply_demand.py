@@ -35,6 +35,7 @@ from pilates.workflows.steps import (
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
+    make_beam_full_skim_step,
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
@@ -211,6 +212,26 @@ def _find_initial_linkstats_warmstart(
         if os.path.exists(candidate):
             return candidate
     return None
+
+
+def _full_skim_run_schedule(settings: PilatesConfig) -> str:
+    beam_cfg = getattr(settings, "beam", None)
+    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+    if skim_cfg is None:
+        return "disabled"
+    return getattr(skim_cfg, "run_schedule", "standalone")
+
+
+def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
+    schedule = _full_skim_run_schedule(settings)
+    if schedule == "standalone":
+        return True
+    if schedule == "after_each_iteration":
+        return True
+    if schedule == "after_final_iteration":
+        total_iters = settings.run.supply_demand_iters
+        return iteration == total_iters - 1
+    return False
 
 
 def _is_iteration_scoped_artifact_key(
@@ -781,6 +802,50 @@ def _derive_beam_run_input_keys(
     return run_input_keys
 
 
+def _run_beam_preprocess_step(
+    *,
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+    beam_preprocess_inputs: Mapping[str, Any],
+    runtime_kwargs_extra: Mapping[str, Any],
+) -> None:
+    """
+    Execute BEAM preprocess with explicit resolved inputs.
+    """
+    _run_supply_demand_workflow(
+        stage_name="beam",
+        steps=[
+            StepRef(
+                name="beam_preprocess",
+                step_func=make_beam_preprocess_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                input_keys=None,
+                inputs=resolve_step_inputs(
+                    keys=beam_preprocess_inputs.keys(),
+                    explicit_inputs=beam_preprocess_inputs,
+                ).stepref_inputs(),
+            )
+        ],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+        runtime_kwargs_extra=dict(runtime_kwargs_extra),
+    )
+
+
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
@@ -799,32 +864,31 @@ def _run_beam_steps(
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
     """
-    beam_pre_run_steps = [
-        StepRef(
-            name="beam_preprocess",
-            step_func=make_beam_preprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            input_keys=None,
-            inputs=resolve_step_inputs(
-                keys=beam_preprocess_inputs.keys(),
-                explicit_inputs=beam_preprocess_inputs,
-            ).stepref_inputs(),
-        ),
-        StepRef(
-            name="beam_run",
-            step_func=make_beam_run_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            input_keys=beam_run_input_keys,
-        ),
-    ]
+    _run_beam_preprocess_step(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+        beam_preprocess_inputs=beam_preprocess_inputs,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
 
     _run_supply_demand_workflow(
         stage_name="beam",
-        steps=beam_pre_run_steps,
+        steps=[
+            StepRef(
+                name="beam_run",
+                step_func=make_beam_run_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                input_keys=beam_run_input_keys,
+            )
+        ],
         scenario=scenario,
         state=state,
         settings=settings,
@@ -880,6 +944,53 @@ def _run_beam_steps(
     if outputs_holder.beam_postprocess is not None:
         combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
     return combined_beam_outputs
+
+
+def _run_beam_full_skim_step(
+    *,
+    scenario: ScenarioWithCoupler,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+    previous_beam_outputs: Optional[RecordStore],
+    runtime_kwargs_extra: Mapping[str, Any],
+) -> Optional[RecordStore]:
+    """
+    Execute dedicated BEAM full-skim step and return its outputs.
+    """
+    runtime_kwargs = dict(runtime_kwargs_extra)
+    runtime_kwargs["previous_beam_outputs"] = previous_beam_outputs
+
+    _run_supply_demand_workflow(
+        stage_name="beam",
+        steps=[
+            StepRef(
+                name="beam_full_skim",
+                step_func=make_beam_full_skim_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                input_keys=None,
+            )
+        ],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs,
+    )
+
+    if outputs_holder.beam_full_skim is None:
+        return None
+    return outputs_holder.beam_full_skim.to_record_store()
 
 
 def _run_traffic_assignment_phase(
@@ -948,20 +1059,64 @@ def _run_traffic_assignment_phase(
         "previous_beam_outputs": previous_beam_outputs,
         "beam_preprocess_inputs": beam_preprocess_inputs,
     }
-    combined_beam_outputs = _run_beam_steps(
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        year=inputs.year,
-        iteration=inputs.iteration,
-        beam_preprocess_inputs=beam_preprocess_inputs,
-        beam_run_input_keys=beam_run_input_keys,
-        include_zarr_skims=bool(inputs.activity_demand_outputs),
-        runtime_kwargs_extra=traffic_runtime_kwargs,
-    )
+    schedule = _full_skim_run_schedule(settings)
+    if schedule == "standalone":
+        _run_beam_preprocess_step(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            year=inputs.year,
+            iteration=inputs.iteration,
+            beam_preprocess_inputs=beam_preprocess_inputs,
+            runtime_kwargs_extra=traffic_runtime_kwargs,
+        )
+        combined_beam_outputs = _run_beam_full_skim_step(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            year=inputs.year,
+            iteration=inputs.iteration,
+            previous_beam_outputs=previous_beam_outputs,
+            runtime_kwargs_extra=traffic_runtime_kwargs,
+        )
+    else:
+        combined_beam_outputs = _run_beam_steps(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            year=inputs.year,
+            iteration=inputs.iteration,
+            beam_preprocess_inputs=beam_preprocess_inputs,
+            beam_run_input_keys=beam_run_input_keys,
+            include_zarr_skims=bool(inputs.activity_demand_outputs),
+            runtime_kwargs_extra=traffic_runtime_kwargs,
+        )
+        if _should_run_full_skim(settings, inputs.iteration):
+            full_skim_outputs = _run_beam_full_skim_step(
+                scenario=scenario,
+                state=state,
+                settings=settings,
+                workspace=workspace,
+                coupler=coupler,
+                outputs_holder=outputs_holder,
+                year=inputs.year,
+                iteration=inputs.iteration,
+                previous_beam_outputs=combined_beam_outputs,
+                runtime_kwargs_extra=traffic_runtime_kwargs,
+            )
+            if full_skim_outputs is not None:
+                if combined_beam_outputs is None:
+                    combined_beam_outputs = RecordStore()
+                combined_beam_outputs += full_skim_outputs
 
     state.complete_step(
         state.Stage.supply_demand_loop,

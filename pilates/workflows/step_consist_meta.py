@@ -148,7 +148,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 config_root,
             )
 
-        if model == "beam_run":
+        if model in {"beam_run", "beam_full_skim"}:
             try:
                 from consist.integrations.beam import BeamConfigAdapter
             except Exception:

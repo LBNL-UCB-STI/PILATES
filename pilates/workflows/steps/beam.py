@@ -4,6 +4,7 @@ from __future__ import annotations
 # Shared helpers/infrastructure are imported from shared.py.
 from .shared import *  # noqa: F401,F403
 from .shared import (  # noqa: F401
+    _execute_beam_full_skim,
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
     _execute_beam_postprocess,
@@ -324,6 +325,50 @@ def make_beam_postprocess_step(
         component_executor=_execute_beam_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_postprocess", outputs
+        ),
+        output_logger=_log_outputs,
+    )
+
+
+def make_beam_full_skim_step(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+) -> Callable[..., None]:
+    """
+    Build the BEAM full-skim step function.
+
+    This step runs BEAM's FullSkimsCreatorApp to produce background skims
+    from prepared BEAM inputs and optional warm-start linkstats.
+    """
+
+    def _log_outputs(
+        outputs: BeamFullSkimOutputs,
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> None:
+        for short_name, path, description in outputs._iter_record_items():
+            log_and_set_output(
+                key=short_name,
+                path=str(path),
+                description=description,
+                coupler=coupler,
+            )
+
+    return _make_generic_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name="beam_full",
+        phase="skim",
+        outputs_class=BeamFullSkimOutputs,
+        component_getter=lambda factory, state: factory.get_runner(
+            "beam_full_skim", state, WorkflowState.Stage.traffic_assignment
+        ),
+        component_executor=_execute_beam_full_skim,
+        outputs_holder_setter=lambda holder, outputs: setattr(
+            holder, "beam_full_skim", outputs
         ),
         output_logger=_log_outputs,
     )

@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from pilates.config import load_config
+from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -31,6 +32,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_FULL_SKIMS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -97,10 +99,14 @@ class FakeScenario:
         inputs = kwargs.get("inputs") or {}
         input_keys = kwargs.get("input_keys") or []
         fn = kwargs["fn"]
+        model = kwargs.get("model")
+        if model is None:
+            step_meta = getattr(fn, "__consist_step__", None)
+            model = getattr(step_meta, "model", None)
         self.calls.append(
             {
                 "fn_name": getattr(fn, "__name__", "<unknown>"),
-                "model": kwargs.get("model"),
+                "model": model,
                 "inputs": dict(inputs),
                 "input_keys": list(input_keys),
             }
@@ -329,10 +335,12 @@ def stage_env(tmp_path, monkeypatch):
     beam_households_path = beam_dir / "households.csv"
     beam_persons_path = beam_dir / "persons.csv"
     beam_linkstats_path = beam_dir / "linkstats.csv.gz"
+    beam_full_skims_path = beam_out_dir / "skimsODFull.csv.gz"
     _write_file(beam_plans_path)
     _write_file(beam_households_path)
     _write_file(beam_persons_path)
     _write_file(beam_linkstats_path)
+    _write_file(beam_full_skims_path)
 
     def record_builder(model_name, phase):
         if phase == "preprocess":
@@ -365,6 +373,15 @@ def stage_env(tmp_path, monkeypatch):
             if model_name == "activitysim_compile":
                 return RecordStore(
                     recordList=[FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS)]
+                )
+            if model_name == "beam_full_skim":
+                return RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(beam_full_skims_path),
+                            short_name=BEAM_FULL_SKIMS,
+                        )
+                    ]
                 )
             return RecordStore()
         if phase == "postprocess":
@@ -569,6 +586,89 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert BEAM_PLANS_IN in run_input_keys
     assert BEAM_HOUSEHOLDS_IN in run_input_keys
     assert BEAM_PERSONS_IN in run_input_keys
+
+
+def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_path):
+    """
+    Full-skim schedule after_each_iteration should run dedicated full-skim step.
+    """
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.beam.full_skim = FullSkimsCreatorConfig(
+        run_schedule="after_each_iteration"
+    )
+    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_full_skim_each_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=stage_env["workspace"],
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    full_skim_calls = [call for call in scenario.calls if call.get("model") == "beam_full_skim"]
+    assert full_skim_calls, "Expected BEAM full-skim step call."
+    assert coupler.get(BEAM_FULL_SKIMS) is not None
+
+
+def test_supply_demand_stage_standalone_full_skim_skips_beam_run(stage_env, tmp_path):
+    """
+    Standalone full-skim schedule should bypass normal BEAM run/postprocess steps.
+    """
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="standalone")
+    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_full_skim_standalone_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=stage_env["workspace"],
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    assert not any(call.get("model") == "beam_run" for call in scenario.calls)
+    assert not any(call.get("model") == "beam_postprocess" for call in scenario.calls)
+    assert any(call.get("model") == "beam_full_skim" for call in scenario.calls)
+    assert coupler.get(BEAM_FULL_SKIMS) is not None
 
 
 def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(

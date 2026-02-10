@@ -32,6 +32,7 @@ from .activitysim import (  # noqa: F401
     make_activitysim_run_step,
 )
 from .beam import (  # noqa: F401
+    make_beam_full_skim_step,
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
@@ -40,4 +41,3 @@ from .postprocessing import make_postprocessing_step  # noqa: F401
 
 # Re-export modules for callers/tests that monkeypatch module-level symbols.
 from . import activitysim, beam, postprocessing, shared, urbansim_atlas  # noqa: F401,E402
-
