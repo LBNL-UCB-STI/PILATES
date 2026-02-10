@@ -26,6 +26,9 @@ _LINKSTATS_FACET_KEYS = (
     "phys_sim_iteration",
     "beam_sub_iteration",
 )
+_DEFAULT_LINKSTATS_SCHEMA_ID = (
+    "a0490d6beb290b489cf08c7fd6b93177095d4a9d7d6d4782d613dcbc94e4199b"
+)
 
 
 def _quote_ident(identifier: str) -> str:
@@ -35,6 +38,25 @@ def _quote_ident(identifier: str) -> str:
 def _stable_linkstats_view_name(key: str) -> str:
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
     return f"v_linkstats_{digest}"
+
+
+def _stable_linkstats_grouped_view_name(
+    *,
+    namespace: str,
+    artifact_family: Optional[str],
+    year: Optional[int],
+    iteration: Optional[int],
+) -> str:
+    payload = "|".join(
+        [
+            namespace,
+            artifact_family or "",
+            str(year) if year is not None else "",
+            str(iteration) if iteration is not None else "",
+        ]
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return f"v_linkstats_grouped_{digest}"
 
 
 def build_archive_mounts(
@@ -437,6 +459,93 @@ def _create_linkstats_view(
     return view_name
 
 
+def _first_non_null_string(series: Optional[pd.Series]) -> Optional[str]:
+    if series is None:
+        return None
+    for value in series:
+        if pd.isna(value):
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _single_numeric_value(series: Optional[pd.Series]) -> Optional[int]:
+    if series is None:
+        return None
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    unique = sorted({int(value) for value in numeric.tolist()})
+    if len(unique) == 1:
+        return unique[0]
+    return None
+
+
+def _resolve_linkstats_schema_model() -> Optional[type]:
+    try:
+        from pilates.database.schema.beam_schema import BeamLinkstats
+    except Exception:
+        return None
+    return BeamLinkstats
+
+
+def _create_linkstats_grouped_view(
+    *,
+    tracker: Any,
+    artifacts_df: pd.DataFrame,
+    namespace: str = "beam",
+    drivers: Optional[list[str]] = None,
+    mode: str = "hybrid",
+    missing_files: str = "warn",
+    view_name: Optional[str] = None,
+    schema_id: str = _DEFAULT_LINKSTATS_SCHEMA_ID,
+) -> str:
+    if not hasattr(tracker, "create_grouped_view"):
+        raise AttributeError("Tracker does not support create_grouped_view().")
+
+    artifact_family = _first_non_null_string(artifacts_df.get("artifact_family"))
+    year = _single_numeric_value(artifacts_df.get("year"))
+    iteration = _single_numeric_value(artifacts_df.get("iteration"))
+
+    params: list[str] = []
+    if artifact_family:
+        params.append(f"{namespace}.artifact_family={artifact_family}")
+    if year is not None:
+        params.append(f"{namespace}.year={year}")
+    if iteration is not None:
+        params.append(f"{namespace}.iteration={iteration}")
+
+    grouped_view_name = view_name or _stable_linkstats_grouped_view_name(
+        namespace=namespace,
+        artifact_family=artifact_family,
+        year=year,
+        iteration=iteration,
+    )
+
+    schema_model = _resolve_linkstats_schema_model()
+    selector: Dict[str, Any] = {}
+    if schema_model is not None:
+        selector["schema"] = schema_model
+    else:
+        selector["schema_id"] = schema_id
+
+    tracker.create_grouped_view(
+        view_name=grouped_view_name,
+        namespace=namespace,
+        params=params or None,
+        drivers=drivers or ["parquet"],
+        attach_facets=list(_LINKSTATS_FACET_KEYS),
+        include_system_columns=True,
+        mode=mode,
+        if_exists="replace",
+        missing_files=missing_files,
+        **selector,
+    )
+    return grouped_view_name
+
+
 def _summarize_linkstats_view(
     *,
     tracker: Any,
@@ -465,6 +574,56 @@ def _summarize_linkstats_view(
         "traveltime_mean": float(row[3]) if row and row[3] is not None else 0.0,
         "traveltime_p95": float(row[4]) if row and row[4] is not None else 0.0,
     }
+
+
+def _summarize_linkstats_grouped_view(
+    *,
+    tracker: Any,
+    view_name: str,
+) -> pd.DataFrame:
+    quoted_view = _quote_ident(view_name)
+    with Session(tracker.engine) as session:
+        rows = session.exec(
+            text(
+                f"""
+                SELECT
+                    CAST(consist_artifact_id AS VARCHAR) AS artifact_id,
+                    COUNT(*) AS row_count,
+                    COUNT(DISTINCT link) AS distinct_links,
+                    SUM(volume) AS volume_sum,
+                    AVG(traveltime) AS traveltime_mean,
+                    quantile_cont(traveltime, 0.95) AS traveltime_p95
+                FROM {quoted_view}
+                GROUP BY 1
+                """
+            )
+        ).all()
+
+    frame = pd.DataFrame(
+        rows,
+        columns=[
+            "artifact_id",
+            "row_count",
+            "distinct_links",
+            "volume_sum",
+            "traveltime_mean",
+            "traveltime_p95",
+        ],
+    )
+    if frame.empty:
+        return frame
+    frame["artifact_id"] = frame["artifact_id"].astype(str)
+    for column in (
+        "row_count",
+        "distinct_links",
+        "volume_sum",
+        "traveltime_mean",
+        "traveltime_p95",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
+    frame["row_count"] = frame["row_count"].astype(int)
+    frame["distinct_links"] = frame["distinct_links"].astype(int)
+    return frame
 
 
 def _summarize_linkstats_view_delta(
@@ -533,10 +692,84 @@ def _summarize_linkstats_view_delta(
     }
 
 
+def _summarize_linkstats_grouped_view_delta(
+    *,
+    tracker: Any,
+    view_name: str,
+    current_artifact_id: str,
+    previous_artifact_id: str,
+) -> Dict[str, Any]:
+    quoted_view = _quote_ident(view_name)
+    with Session(tracker.engine) as session:
+        row = session.exec(
+            text(
+                f"""
+                WITH current_agg AS (
+                    SELECT
+                        link,
+                        hour,
+                        SUM(volume) AS volume,
+                        AVG(traveltime) AS traveltime
+                    FROM {quoted_view}
+                    WHERE CAST(consist_artifact_id AS VARCHAR) = :current_artifact_id
+                    GROUP BY 1, 2
+                ),
+                previous_agg AS (
+                    SELECT
+                        link,
+                        hour,
+                        SUM(volume) AS volume,
+                        AVG(traveltime) AS traveltime
+                    FROM {quoted_view}
+                    WHERE CAST(consist_artifact_id AS VARCHAR) = :previous_artifact_id
+                    GROUP BY 1, 2
+                ),
+                joined AS (
+                    SELECT
+                        COALESCE(c.link, p.link) AS link,
+                        COALESCE(c.hour, p.hour) AS hour,
+                        COALESCE(c.volume, 0.0) AS volume_current,
+                        COALESCE(p.volume, 0.0) AS volume_previous,
+                        COALESCE(c.traveltime, 0.0) AS traveltime_current,
+                        COALESCE(p.traveltime, 0.0) AS traveltime_previous
+                    FROM current_agg c
+                    FULL OUTER JOIN previous_agg p
+                        ON c.link = p.link AND c.hour = p.hour
+                )
+                SELECT
+                    COUNT(*) AS group_count,
+                    AVG(volume_current - volume_previous) AS volume_delta_mean,
+                    AVG(ABS(volume_current - volume_previous)) AS volume_delta_abs_mean,
+                    AVG(traveltime_current - traveltime_previous) AS traveltime_delta_mean,
+                    AVG(ABS(traveltime_current - traveltime_previous)) AS traveltime_delta_abs_mean
+                FROM joined
+                """
+            ),
+            {
+                "current_artifact_id": str(current_artifact_id),
+                "previous_artifact_id": str(previous_artifact_id),
+            },
+        ).first()
+    row = row or (0, 0.0, 0.0, 0.0, 0.0)
+    return {
+        "group_count": int(row[0]) if row and row[0] is not None else 0,
+        "volume_delta_mean": float(row[1]) if row and row[1] is not None else 0.0,
+        "volume_delta_abs_mean": float(row[2]) if row and row[2] is not None else 0.0,
+        "traveltime_delta_mean": float(row[3]) if row and row[3] is not None else 0.0,
+        "traveltime_delta_abs_mean": float(row[4]) if row and row[4] is not None else 0.0,
+    }
+
+
 def summarize_linkstats_artifacts(
     artifacts_df: pd.DataFrame,
     *,
     tracker: Any,
+    namespace: str = "beam",
+    grouped_mode: str = "hybrid",
+    grouped_missing_files: str = "warn",
+    grouped_view_name: Optional[str] = None,
+    grouped_schema_id: str = _DEFAULT_LINKSTATS_SCHEMA_ID,
+    grouped_drivers: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Compute per-artifact summary metrics using Consist hybrid views.
@@ -545,6 +778,33 @@ def summarize_linkstats_artifacts(
         return artifacts_df.copy()
     if "key" not in artifacts_df.columns:
         raise ValueError("artifacts_df must contain a 'key' column")
+
+    if "artifact_id" in artifacts_df.columns and hasattr(tracker, "create_grouped_view"):
+        grouped_view = _create_linkstats_grouped_view(
+            tracker=tracker,
+            artifacts_df=artifacts_df,
+            namespace=namespace,
+            drivers=grouped_drivers,
+            mode=grouped_mode,
+            missing_files=grouped_missing_files,
+            view_name=grouped_view_name,
+            schema_id=grouped_schema_id,
+        )
+
+        stats_df = _summarize_linkstats_grouped_view(
+            tracker=tracker,
+            view_name=grouped_view,
+        )
+        if stats_df.empty:
+            return pd.DataFrame()
+
+        metadata_df = artifacts_df.copy()
+        metadata_df["artifact_id"] = metadata_df["artifact_id"].astype(str)
+        metadata_df = metadata_df.drop_duplicates(subset=["artifact_id"], keep="first")
+
+        summary_df = metadata_df.merge(stats_df, on="artifact_id", how="inner")
+        summary_df["view_name"] = grouped_view
+        return summary_df
 
     summary_rows = []
     for row in artifacts_df.itertuples(index=False):
@@ -577,10 +837,16 @@ def summarize_linkstats_deltas(
     if summary_df.empty:
         return pd.DataFrame()
 
-    required_cols = {"year", "iteration", "phys_sim_iteration", "view_name"}
+    required_cols = {"year", "iteration", "phys_sim_iteration"}
     missing = sorted(required_cols - set(summary_df.columns))
     if missing:
         raise ValueError(f"summary_df missing required columns: {missing}")
+
+    grouped_view_name = None
+    if {"artifact_id", "view_name"}.issubset(summary_df.columns):
+        non_null_views = summary_df["view_name"].dropna().astype(str).unique().tolist()
+        if len(non_null_views) == 1:
+            grouped_view_name = non_null_views[0]
 
     rows = []
     group_cols = ["year", "iteration", "beam_sub_iteration"]
@@ -592,11 +858,25 @@ def summarize_linkstats_deltas(
             ordered.iloc[:-1].itertuples(index=False),
             ordered.iloc[1:].itertuples(index=False),
         ):
-            delta = _summarize_linkstats_view_delta(
-                tracker=tracker,
-                current_view=str(getattr(curr_row, "view_name")),
-                previous_view=str(getattr(prev_row, "view_name")),
-            )
+            prev_artifact_id = getattr(prev_row, "artifact_id", None)
+            curr_artifact_id = getattr(curr_row, "artifact_id", None)
+            if (
+                grouped_view_name
+                and prev_artifact_id is not None
+                and curr_artifact_id is not None
+            ):
+                delta = _summarize_linkstats_grouped_view_delta(
+                    tracker=tracker,
+                    view_name=grouped_view_name,
+                    current_artifact_id=str(curr_artifact_id),
+                    previous_artifact_id=str(prev_artifact_id),
+                )
+            else:
+                delta = _summarize_linkstats_view_delta(
+                    tracker=tracker,
+                    current_view=str(getattr(curr_row, "view_name")),
+                    previous_view=str(getattr(prev_row, "view_name")),
+                )
             rows.append(
                 {
                     "year": getattr(curr_row, "year"),
@@ -604,6 +884,8 @@ def summarize_linkstats_deltas(
                     "beam_sub_iteration": getattr(curr_row, "beam_sub_iteration"),
                     "phys_sim_iteration_prev": getattr(prev_row, "phys_sim_iteration"),
                     "phys_sim_iteration_curr": getattr(curr_row, "phys_sim_iteration"),
+                    "artifact_id_prev": prev_artifact_id,
+                    "artifact_id_curr": curr_artifact_id,
                     "key_prev": getattr(prev_row, "key", None),
                     "key_curr": getattr(curr_row, "key", None),
                     "view_prev": getattr(prev_row, "view_name", None),
