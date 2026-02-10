@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 import pandas as pd
 from sqlmodel import Session, col, select, text
@@ -147,14 +147,32 @@ def _decode_artifact_kv_value(row: Any) -> Any:
     return None
 
 
-def _facet_from_artifact_kv(
+def _normalize_artifact_id(artifact_id: Any) -> Optional[str]:
+    if artifact_id is None:
+        return None
+    value = str(artifact_id).strip()
+    return value or None
+
+
+def _chunked(values: Iterable[Any], size: int) -> Iterable[list[Any]]:
+    chunk: list[Any] = []
+    for value in values:
+        chunk.append(value)
+        if len(chunk) >= size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
+def _facet_map_from_artifact_kv(
     tracker: Any,
-    artifact_id: Any,
+    artifact_ids: Iterable[Any],
     *,
     namespace: Optional[str],
-) -> Dict[str, Any]:
+) -> Dict[str, Dict[str, Any]]:
     """
-    Load linkstats facet fields from the artifact_kv index via SQLModel queries.
+    Load linkstats facet fields from artifact_kv with batched artifact_id queries.
     """
     db = getattr(tracker, "db", None)
     if db is None or not hasattr(db, "session_scope"):
@@ -165,25 +183,80 @@ def _facet_from_artifact_kv(
     except Exception:
         return {}
 
-    def _query_rows(ns: Optional[str]) -> list[Any]:
-        with db.session_scope() as session:
-            statement = select(ArtifactKV).where(ArtifactKV.artifact_id == artifact_id)
-            if ns is not None:
-                statement = statement.where(ArtifactKV.namespace == ns)
-            statement = statement.where(col(ArtifactKV.key_path).in_(_LINKSTATS_FACET_KEYS))
-            return list(session.exec(statement).all())
-
-    rows = _query_rows(namespace)
-    if not rows and namespace is not None:
-        rows = _query_rows(None)
-
-    facet: Dict[str, Any] = {}
-    for row in rows:
-        key_path = str(getattr(row, "key_path", "") or "")
-        if key_path not in _LINKSTATS_FACET_KEYS:
+    unique_ids: list[Any] = []
+    seen: set[str] = set()
+    for artifact_id in artifact_ids:
+        normalized = _normalize_artifact_id(artifact_id)
+        if normalized is None or normalized in seen:
             continue
-        facet[key_path] = _decode_artifact_kv_value(row)
-    return facet
+        seen.add(normalized)
+        unique_ids.append(artifact_id)
+
+    if not unique_ids:
+        return {}
+
+    facet_map: Dict[str, Dict[str, Any]] = {}
+
+    def _consume_rows(rows: list[Any]) -> set[str]:
+        resolved_ids: set[str] = set()
+        for row in rows:
+            normalized = _normalize_artifact_id(getattr(row, "artifact_id", None))
+            if normalized is None:
+                continue
+            key_path = str(getattr(row, "key_path", "") or "")
+            if key_path not in _LINKSTATS_FACET_KEYS:
+                continue
+            resolved_ids.add(normalized)
+            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(row)
+        return resolved_ids
+
+    def _query_rows(artifact_ids_subset: list[Any], ns: Optional[str]) -> list[Any]:
+        if not artifact_ids_subset:
+            return []
+        rows: list[Any] = []
+        for chunk in _chunked(artifact_ids_subset, 1000):
+            with db.session_scope() as session:
+                statement = select(ArtifactKV).where(col(ArtifactKV.artifact_id).in_(chunk))
+                if ns is not None:
+                    statement = statement.where(ArtifactKV.namespace == ns)
+                statement = statement.where(col(ArtifactKV.key_path).in_(_LINKSTATS_FACET_KEYS))
+                rows.extend(session.exec(statement).all())
+        return rows
+
+    if namespace is None:
+        _consume_rows(_query_rows(unique_ids, None))
+        return facet_map
+
+    rows_for_namespace = _query_rows(unique_ids, namespace)
+    resolved_in_namespace = _consume_rows(rows_for_namespace)
+    unresolved_ids = [
+        artifact_id
+        for artifact_id in unique_ids
+        if (_normalize_artifact_id(artifact_id) or "") not in resolved_in_namespace
+    ]
+    if unresolved_ids:
+        _consume_rows(_query_rows(unresolved_ids, None))
+    return facet_map
+
+
+def _facet_from_artifact_kv(
+    tracker: Any,
+    artifact_id: Any,
+    *,
+    namespace: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Load linkstats facet fields for one artifact via batched artifact_kv helper.
+    """
+    normalized = _normalize_artifact_id(artifact_id)
+    if normalized is None:
+        return {}
+    facet_map = _facet_map_from_artifact_kv(
+        tracker,
+        [artifact_id],
+        namespace=namespace,
+    )
+    return facet_map.get(normalized, {})
 
 
 def _filter_linkstats_facet(facet: Mapping[str, Any]) -> Dict[str, Any]:
@@ -275,21 +348,30 @@ def find_linkstats_artifacts(
             ]
         )
 
+    artifact_ids = [getattr(artifact, "id", None) for artifact in artifacts]
+    facet_map_from_kv = _facet_map_from_artifact_kv(
+        tracker,
+        artifact_ids,
+        namespace=namespace,
+    )
+
     output_rows = []
     for artifact in artifacts:
         key = str(getattr(artifact, "key", "") or "")
         meta = dict(getattr(artifact, "meta", None) or {})
+        artifact_id = getattr(artifact, "id", None)
+        normalized_artifact_id = _normalize_artifact_id(artifact_id)
 
         facet = {}
         facet_source = "none"
 
-        facet_from_kv = _facet_from_artifact_kv(
-            tracker,
-            getattr(artifact, "id", None),
-            namespace=namespace,
-        )
+        facet_from_kv = {}
+        if normalized_artifact_id is not None:
+            facet_from_kv = _filter_linkstats_facet(
+                facet_map_from_kv.get(normalized_artifact_id, {})
+            )
         if facet_from_kv:
-            facet.update(_filter_linkstats_facet(facet_from_kv))
+            facet.update(facet_from_kv)
             facet_source = "artifact_kv"
 
         meta_facet = meta.get("facet") if isinstance(meta.get("facet"), dict) else {}
@@ -318,7 +400,7 @@ def find_linkstats_artifacts(
         output_rows.append(
             {
                 "key": key,
-                "artifact_id": str(getattr(artifact, "id", "") or ""),
+                "artifact_id": str(artifact_id or ""),
                 "run_id": getattr(artifact, "run_id", None),
                 "container_uri": getattr(artifact, "container_uri", None),
                 "facet_source": facet_source,
