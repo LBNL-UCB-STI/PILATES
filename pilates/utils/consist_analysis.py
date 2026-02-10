@@ -769,18 +769,17 @@ def _summarize_linkstats_grouped_view_deltas_bulk(
             UNION
             SELECT artifact_id_curr FROM pairs
         ),
-        agg AS (
+        artifact_rows AS (
             SELECT
                 consist_artifact_id AS artifact_id,
                 link,
                 hour,
-                SUM(volume) AS volume,
-                AVG(traveltime) AS traveltime
+                volume,
+                traveltime
             FROM {quoted_view}
             WHERE consist_artifact_id IN (
                 SELECT artifact_id FROM relevant_artifacts
             )
-            GROUP BY 1, 2, 3
         ),
         pair_rows AS (
             SELECT
@@ -801,7 +800,7 @@ def _summarize_linkstats_grouped_view_deltas_bulk(
                 a.traveltime AS traveltime_prev,
                 0.0 AS traveltime_curr
             FROM pairs p
-            JOIN agg a ON a.artifact_id = p.artifact_id_prev
+            JOIN artifact_rows a ON a.artifact_id = p.artifact_id_prev
             UNION ALL
             SELECT
                 p.pair_id,
@@ -821,7 +820,7 @@ def _summarize_linkstats_grouped_view_deltas_bulk(
                 0.0 AS traveltime_prev,
                 a.traveltime AS traveltime_curr
             FROM pairs p
-            JOIN agg a ON a.artifact_id = p.artifact_id_curr
+            JOIN artifact_rows a ON a.artifact_id = p.artifact_id_curr
         ),
         joined AS (
             SELECT
@@ -1005,18 +1004,17 @@ def _summarize_linkstats_grouped_view_deltas_from_summary(
             UNION
             SELECT artifact_id_curr FROM pairs
         ),
-        agg AS (
+        artifact_rows AS (
             SELECT
                 consist_artifact_id AS artifact_id,
                 link,
                 hour,
-                SUM(volume) AS volume,
-                AVG(traveltime) AS traveltime
+                volume,
+                traveltime
             FROM {quoted_view}
             WHERE consist_artifact_id IN (
                 SELECT artifact_id FROM relevant_artifacts
             )
-            GROUP BY 1, 2, 3
         ),
         pair_rows AS (
             SELECT
@@ -1036,7 +1034,7 @@ def _summarize_linkstats_grouped_view_deltas_from_summary(
                 a.traveltime AS traveltime_prev,
                 0.0 AS traveltime_curr
             FROM pairs p
-            JOIN agg a ON a.artifact_id = p.artifact_id_prev
+            JOIN artifact_rows a ON a.artifact_id = p.artifact_id_prev
             UNION ALL
             SELECT
                 p.year,
@@ -1055,7 +1053,7 @@ def _summarize_linkstats_grouped_view_deltas_from_summary(
                 0.0 AS traveltime_prev,
                 a.traveltime AS traveltime_curr
             FROM pairs p
-            JOIN agg a ON a.artifact_id = p.artifact_id_curr
+            JOIN artifact_rows a ON a.artifact_id = p.artifact_id_curr
         ),
         joined AS (
             SELECT
