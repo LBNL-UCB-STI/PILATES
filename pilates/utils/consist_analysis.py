@@ -30,6 +30,7 @@ _LINKSTATS_FACET_KEYS = (
 _DEFAULT_LINKSTATS_SCHEMA_ID = (
     "a0490d6beb290b489cf08c7fd6b93177095d4a9d7d6d4782d613dcbc94e4199b"
 )
+_METERS_PER_MILE = 1609.344
 
 
 def _quote_ident(identifier: str) -> str:
@@ -702,6 +703,7 @@ def _summarize_linkstats_grouped_view(
             COUNT(*) AS row_count,
             COUNT(DISTINCT src.link) AS distinct_links,
             SUM(src.volume) AS volume_sum,
+            SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE} AS vmt_miles,
             {traveltime_mean_expr} AS traveltime_mean,
             quantile_cont(src.traveltime, 0.95) AS traveltime_p95
         FROM {quoted_view} src
@@ -719,6 +721,7 @@ def _summarize_linkstats_grouped_view(
                     COUNT(*) AS row_count,
                     COUNT(DISTINCT src.link) AS distinct_links,
                     SUM(src.volume) AS volume_sum,
+                    SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE} AS vmt_miles,
                     {traveltime_mean_expr} AS traveltime_mean,
                     quantile_cont(src.traveltime, 0.95) AS traveltime_p95
                 FROM {quoted_view} src
@@ -737,6 +740,7 @@ def _summarize_linkstats_grouped_view(
             "row_count",
             "distinct_links",
             "volume_sum",
+            "vmt_miles",
             "traveltime_mean",
             "traveltime_p95",
         ],
@@ -748,6 +752,7 @@ def _summarize_linkstats_grouped_view(
         "row_count",
         "distinct_links",
         "volume_sum",
+        "vmt_miles",
         "traveltime_mean",
         "traveltime_p95",
     ):

@@ -363,6 +363,7 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
                     "row_count": 10,
                     "distinct_links": 5,
                     "volume_sum": 100.0,
+                    "vmt_miles": 6.2,
                     "traveltime_mean": 8.0,
                     "traveltime_p95": 12.0,
                 }
@@ -422,6 +423,7 @@ def test_summarize_linkstats_artifacts_passes_volume_weighted_option(monkeypatch
                     "row_count": 1,
                     "distinct_links": 1,
                     "volume_sum": 1.0,
+                    "vmt_miles": 0.1,
                     "traveltime_mean": 1.0,
                     "traveltime_p95": 1.0,
                 }
