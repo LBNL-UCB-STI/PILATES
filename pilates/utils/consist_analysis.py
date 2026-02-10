@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Mapping, Optional
+from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence
 
 import pandas as pd
 from sqlmodel import Session, col, select, text
@@ -521,6 +521,50 @@ def find_linkstats_artifacts(
         if col in frame.columns
     ]
     return frame.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+
+
+def assign_effective_beam_sub_iteration(
+    artifacts_df: pd.DataFrame,
+    *,
+    group_cols: Sequence[str] = ("run_id", "year", "iteration", "phys_sim_iteration"),
+    source_col: str = "beam_sub_iteration",
+    output_col: str = "beam_sub_iteration_effective",
+    ordinal_output_col: Optional[str] = "beam_sub_iteration_ordinal",
+) -> pd.DataFrame:
+    """
+    Derive an effective sub-iteration index for promoted final BEAM sub-iterations.
+
+    For each group, null sub-iteration values are mapped to `max(non-null) + 1`.
+    This avoids hard-coding the number of BEAM sub-iterations.
+    """
+    frame = artifacts_df.copy()
+    if frame.empty:
+        if output_col not in frame.columns:
+            frame[output_col] = pd.Series(dtype="float64")
+        if ordinal_output_col and ordinal_output_col not in frame.columns:
+            frame[ordinal_output_col] = pd.Series(dtype="float64")
+        return frame
+
+    missing = [col for col in (*group_cols, source_col) if col not in frame.columns]
+    if missing:
+        raise ValueError(
+            "assign_effective_beam_sub_iteration missing required columns: "
+            f"{missing}"
+        )
+
+    frame[source_col] = pd.to_numeric(frame[source_col], errors="coerce")
+    max_sub = frame.groupby(list(group_cols), dropna=False)[source_col].transform("max")
+
+    effective = frame[source_col].copy()
+    fill_mask = effective.isna() & max_sub.notna()
+    effective.loc[fill_mask] = max_sub.loc[fill_mask] + 1
+    frame[output_col] = effective
+
+    if ordinal_output_col:
+        ordinal = frame[output_col] + 1
+        frame[ordinal_output_col] = ordinal.where(frame[output_col].notna())
+
+    return frame
 
 
 def _first_non_null_string(series: Optional[pd.Series]) -> Optional[str]:

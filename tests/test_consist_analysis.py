@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pilates.utils.consist_analysis import (
+    assign_effective_beam_sub_iteration,
     build_archive_mounts,
     find_linkstats_artifacts,
     get_duckdb_health,
@@ -51,6 +52,51 @@ def test_print_duckdb_health_without_open_probe(tmp_path, capsys):
     assert "DB exists: True" in output
     assert info["db_exists"] is True
     assert info["duckdb_open_seconds"] is None
+
+
+def test_assign_effective_beam_sub_iteration_promotes_null_to_max_plus_one():
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [
+            {
+                "run_id": "r1",
+                "year": 2018,
+                "iteration": 0,
+                "phys_sim_iteration": 1,
+                "beam_sub_iteration": 0,
+            },
+            {
+                "run_id": "r1",
+                "year": 2018,
+                "iteration": 0,
+                "phys_sim_iteration": 1,
+                "beam_sub_iteration": 1,
+            },
+            {
+                "run_id": "r1",
+                "year": 2018,
+                "iteration": 0,
+                "phys_sim_iteration": 1,
+                "beam_sub_iteration": None,
+            },
+            {
+                "run_id": "r1",
+                "year": 2018,
+                "iteration": 0,
+                "phys_sim_iteration": 2,
+                "beam_sub_iteration": None,
+            },
+        ]
+    )
+
+    normalized = assign_effective_beam_sub_iteration(frame)
+    ps1 = normalized[normalized["phys_sim_iteration"] == 1]
+    assert sorted(ps1["beam_sub_iteration_effective"].dropna().astype(int).tolist()) == [0, 1, 2]
+    assert sorted(ps1["beam_sub_iteration_ordinal"].dropna().astype(int).tolist()) == [1, 2, 3]
+
+    ps2 = normalized[normalized["phys_sim_iteration"] == 2]
+    assert ps2["beam_sub_iteration_effective"].isna().all()
 
 
 def test_parse_linkstats_facets_parses_phys_sim_and_sub_iteration():
