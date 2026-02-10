@@ -788,6 +788,14 @@ def _summarize_linkstats_metric_deltas_from_summary(
         ),
         pairs AS (
             SELECT
+                ROW_NUMBER() OVER (
+                    ORDER BY
+                        year,
+                        iteration,
+                        beam_sub_iteration,
+                        phys_sim_iteration,
+                        artifact_id
+                ) AS pair_id,
                 year,
                 iteration,
                 beam_sub_iteration,
