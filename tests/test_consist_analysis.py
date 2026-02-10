@@ -9,6 +9,7 @@ from pilates.utils.consist_analysis import (
     summarize_linkstats_artifacts,
     summarize_linkstats_deltas,
     summarize_linkstats_traveltime_deltas,
+    summarize_linkstats_traveltime_deltas_hourly_weighted,
 )
 
 
@@ -475,3 +476,70 @@ def test_summarize_linkstats_deltas_merges_metric_queries(monkeypatch):
     assert len(merged) == 1
     assert merged.iloc[0]["traveltime_delta_mean"] == 0.5
     assert merged.iloc[0]["volume_delta_mean"] == 1.5
+
+
+def test_summarize_linkstats_traveltime_deltas_hourly_weighted_uses_helper(monkeypatch):
+    calls = []
+
+    def _fake_hourly(*, tracker, view_name, summary_df, exclude_zero_volume):
+        calls.append((view_name, len(summary_df), exclude_zero_volume))
+        import pandas as pd
+
+        return pd.DataFrame(
+            [
+                {
+                    "year": 2018,
+                    "iteration": 0,
+                    "beam_sub_iteration": 0,
+                    "phys_sim_iteration_prev": 1,
+                    "phys_sim_iteration_curr": 2,
+                    "artifact_id_prev": "a1",
+                    "artifact_id_curr": "a2",
+                    "key_prev": "k1",
+                    "key_curr": "k2",
+                    "hour_count": 24,
+                    "prev_volume_total": 100.0,
+                    "curr_volume_total": 120.0,
+                    "traveltime_delta_mean": 0.2,
+                    "traveltime_delta_abs_mean": 0.3,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(
+        "pilates.utils.consist_analysis._summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary",
+        _fake_hourly,
+    )
+
+    import pandas as pd
+
+    summary_df = pd.DataFrame(
+        [
+            {
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration": 1,
+                "artifact_id": "a1",
+                "key": "k1",
+                "view_name": "v1",
+            },
+            {
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration": 2,
+                "artifact_id": "a2",
+                "key": "k2",
+                "view_name": "v1",
+            },
+        ]
+    )
+
+    delta_df = summarize_linkstats_traveltime_deltas_hourly_weighted(
+        summary_df, tracker=object()
+    )
+    assert len(delta_df) == 1
+    assert delta_df.iloc[0]["hour_count"] == 24
+    assert delta_df.iloc[0]["traveltime_delta_mean"] == 0.2
+    assert calls == [("v1", 2, True)]

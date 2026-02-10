@@ -956,6 +956,276 @@ def summarize_linkstats_traveltime_deltas(
     return delta_df
 
 
+def _summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary(
+    *,
+    tracker: Any,
+    view_name: str,
+    summary_df: pd.DataFrame,
+    exclude_zero_volume: bool = True,
+) -> pd.DataFrame:
+    """
+    Compute travel-time deltas using hourly, volume-weighted aggregates.
+    """
+    if summary_df.empty:
+        return pd.DataFrame()
+
+    rows_sql: list[str] = []
+    for row in summary_df.itertuples(index=False):
+        rows_sql.append(
+            "("
+            + ", ".join(
+                [
+                    _sql_literal(getattr(row, "year", None)),
+                    _sql_literal(getattr(row, "iteration", None)),
+                    _sql_literal(getattr(row, "beam_sub_iteration", None)),
+                    _sql_literal(getattr(row, "phys_sim_iteration", None)),
+                    _sql_literal(str(getattr(row, "artifact_id", "") or "")),
+                    _sql_literal(getattr(row, "key", None)),
+                ]
+            )
+            + ")"
+        )
+    if not rows_sql:
+        return pd.DataFrame()
+
+    volume_filter = "AND volume > 0" if exclude_zero_volume else ""
+    quoted_view = _quote_ident(view_name)
+    query = text(
+        f"""
+        WITH summary_input(
+            year,
+            iteration,
+            beam_sub_iteration,
+            phys_sim_iteration,
+            artifact_id,
+            key
+        ) AS (
+            VALUES
+                {", ".join(rows_sql)}
+        ),
+        ordered_summary AS (
+            SELECT
+                CAST(year AS BIGINT) AS year,
+                CAST(iteration AS BIGINT) AS iteration,
+                CAST(beam_sub_iteration AS BIGINT) AS beam_sub_iteration,
+                CAST(phys_sim_iteration AS BIGINT) AS phys_sim_iteration,
+                CAST(artifact_id AS VARCHAR) AS artifact_id,
+                key,
+                LAG(CAST(phys_sim_iteration AS BIGINT)) OVER (
+                    PARTITION BY
+                        CAST(year AS BIGINT),
+                        CAST(iteration AS BIGINT),
+                        CAST(beam_sub_iteration AS BIGINT)
+                    ORDER BY CAST(phys_sim_iteration AS BIGINT), CAST(artifact_id AS VARCHAR)
+                ) AS phys_sim_iteration_prev,
+                LAG(CAST(artifact_id AS VARCHAR)) OVER (
+                    PARTITION BY
+                        CAST(year AS BIGINT),
+                        CAST(iteration AS BIGINT),
+                        CAST(beam_sub_iteration AS BIGINT)
+                    ORDER BY CAST(phys_sim_iteration AS BIGINT), CAST(artifact_id AS VARCHAR)
+                ) AS artifact_id_prev,
+                LAG(key) OVER (
+                    PARTITION BY
+                        CAST(year AS BIGINT),
+                        CAST(iteration AS BIGINT),
+                        CAST(beam_sub_iteration AS BIGINT)
+                    ORDER BY CAST(phys_sim_iteration AS BIGINT), CAST(artifact_id AS VARCHAR)
+                ) AS key_prev
+            FROM summary_input
+            WHERE artifact_id IS NOT NULL
+              AND CAST(artifact_id AS VARCHAR) != ''
+              AND phys_sim_iteration IS NOT NULL
+        ),
+        pairs AS (
+            SELECT
+                ROW_NUMBER() OVER (
+                    ORDER BY
+                        year,
+                        iteration,
+                        beam_sub_iteration,
+                        phys_sim_iteration,
+                        artifact_id
+                ) AS pair_id,
+                year,
+                iteration,
+                beam_sub_iteration,
+                phys_sim_iteration_prev,
+                phys_sim_iteration AS phys_sim_iteration_curr,
+                artifact_id_prev,
+                artifact_id AS artifact_id_curr,
+                key_prev,
+                key AS key_curr
+            FROM ordered_summary
+            WHERE artifact_id_prev IS NOT NULL
+              AND phys_sim_iteration_prev IS NOT NULL
+        ),
+        relevant_artifacts(artifact_id) AS (
+            SELECT artifact_id_prev FROM pairs
+            UNION
+            SELECT artifact_id_curr FROM pairs
+        ),
+        hourly AS (
+            SELECT
+                consist_artifact_id AS artifact_id,
+                hour,
+                SUM(CAST(volume AS DOUBLE)) AS hour_volume,
+                CASE
+                    WHEN SUM(CAST(volume AS DOUBLE)) > 0
+                    THEN SUM(CAST(volume AS DOUBLE) * CAST(traveltime AS DOUBLE))
+                         / SUM(CAST(volume AS DOUBLE))
+                    ELSE NULL
+                END AS hour_traveltime_weighted
+            FROM {quoted_view}
+            WHERE consist_artifact_id IN (
+                SELECT artifact_id FROM relevant_artifacts
+            )
+            {volume_filter}
+            GROUP BY 1, 2
+        ),
+        prev_hours AS (
+            SELECT
+                p.pair_id,
+                p.year,
+                p.iteration,
+                p.beam_sub_iteration,
+                p.phys_sim_iteration_prev,
+                p.phys_sim_iteration_curr,
+                p.artifact_id_prev,
+                p.artifact_id_curr,
+                p.key_prev,
+                p.key_curr,
+                h.hour,
+                h.hour_volume AS prev_volume,
+                h.hour_traveltime_weighted AS prev_tt
+            FROM pairs p
+            JOIN hourly h ON h.artifact_id = p.artifact_id_prev
+        ),
+        curr_hours AS (
+            SELECT
+                p.pair_id,
+                p.year,
+                p.iteration,
+                p.beam_sub_iteration,
+                p.phys_sim_iteration_prev,
+                p.phys_sim_iteration_curr,
+                p.artifact_id_prev,
+                p.artifact_id_curr,
+                p.key_prev,
+                p.key_curr,
+                h.hour,
+                h.hour_volume AS curr_volume,
+                h.hour_traveltime_weighted AS curr_tt
+            FROM pairs p
+            JOIN hourly h ON h.artifact_id = p.artifact_id_curr
+        ),
+        joined AS (
+            SELECT
+                COALESCE(c.year, p.year) AS year,
+                COALESCE(c.iteration, p.iteration) AS iteration,
+                COALESCE(c.beam_sub_iteration, p.beam_sub_iteration) AS beam_sub_iteration,
+                COALESCE(c.phys_sim_iteration_prev, p.phys_sim_iteration_prev) AS phys_sim_iteration_prev,
+                COALESCE(c.phys_sim_iteration_curr, p.phys_sim_iteration_curr) AS phys_sim_iteration_curr,
+                COALESCE(c.artifact_id_prev, p.artifact_id_prev) AS artifact_id_prev,
+                COALESCE(c.artifact_id_curr, p.artifact_id_curr) AS artifact_id_curr,
+                COALESCE(c.key_prev, p.key_prev) AS key_prev,
+                COALESCE(c.key_curr, p.key_curr) AS key_curr,
+                COALESCE(c.hour, p.hour) AS hour,
+                COALESCE(p.prev_volume, 0.0) AS prev_volume,
+                COALESCE(c.curr_volume, 0.0) AS curr_volume,
+                COALESCE(p.prev_tt, 0.0) AS prev_tt,
+                COALESCE(c.curr_tt, 0.0) AS curr_tt
+            FROM curr_hours c
+            FULL OUTER JOIN prev_hours p
+                ON c.pair_id = p.pair_id
+               AND c.hour = p.hour
+        )
+        SELECT
+            year,
+            iteration,
+            beam_sub_iteration,
+            phys_sim_iteration_prev,
+            phys_sim_iteration_curr,
+            artifact_id_prev,
+            artifact_id_curr,
+            key_prev,
+            key_curr,
+            COUNT(*) AS hour_count,
+            SUM(prev_volume) AS prev_volume_total,
+            SUM(curr_volume) AS curr_volume_total,
+            AVG(curr_tt - prev_tt) AS traveltime_delta_mean,
+            AVG(ABS(curr_tt - prev_tt)) AS traveltime_delta_abs_mean
+        FROM joined
+        GROUP BY 1,2,3,4,5,6,7,8,9
+        ORDER BY year, iteration, beam_sub_iteration, phys_sim_iteration_curr
+        """
+    )
+    with Session(tracker.engine) as session:
+        result_rows = session.exec(query).all()
+
+    frame = pd.DataFrame(
+        result_rows,
+        columns=[
+            "year",
+            "iteration",
+            "beam_sub_iteration",
+            "phys_sim_iteration_prev",
+            "phys_sim_iteration_curr",
+            "artifact_id_prev",
+            "artifact_id_curr",
+            "key_prev",
+            "key_curr",
+            "hour_count",
+            "prev_volume_total",
+            "curr_volume_total",
+            "traveltime_delta_mean",
+            "traveltime_delta_abs_mean",
+        ],
+    )
+    if frame.empty:
+        return frame
+    for column in (
+        "year",
+        "iteration",
+        "beam_sub_iteration",
+        "phys_sim_iteration_prev",
+        "phys_sim_iteration_curr",
+        "hour_count",
+        "prev_volume_total",
+        "curr_volume_total",
+        "traveltime_delta_mean",
+        "traveltime_delta_abs_mean",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame["hour_count"] = frame["hour_count"].fillna(0).astype(int)
+    return frame
+
+
+def summarize_linkstats_traveltime_deltas_hourly_weighted(
+    summary_df: pd.DataFrame,
+    *,
+    tracker: Any,
+    exclude_zero_volume: bool = True,
+) -> pd.DataFrame:
+    """
+    Compute consecutive phys-sim travel-time deltas using hourly volume weighting.
+    """
+    if summary_df.empty:
+        return pd.DataFrame()
+    grouped_view_name = _resolve_delta_grouped_view_name(summary_df)
+    delta_df = _summarize_linkstats_traveltime_deltas_hourly_weighted_from_summary(
+        tracker=tracker,
+        view_name=grouped_view_name,
+        summary_df=summary_df,
+        exclude_zero_volume=exclude_zero_volume,
+    )
+    if delta_df.empty:
+        return delta_df
+    delta_df["view_prev"] = grouped_view_name
+    delta_df["view_curr"] = grouped_view_name
+    return delta_df
+
+
 def summarize_linkstats_volume_deltas(
     summary_df: pd.DataFrame,
     *,
