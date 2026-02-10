@@ -574,56 +574,54 @@ def _summarize_linkstats_grouped_view_delta(
     previous_artifact_id: str,
 ) -> Dict[str, Any]:
     quoted_view = _quote_ident(view_name)
+    delta_query = text(
+        f"""
+        WITH current_agg AS (
+            SELECT
+                link,
+                hour,
+                SUM(volume) AS volume,
+                AVG(traveltime) AS traveltime
+            FROM {quoted_view}
+            WHERE CAST(consist_artifact_id AS VARCHAR) = :current_artifact_id
+            GROUP BY 1, 2
+        ),
+        previous_agg AS (
+            SELECT
+                link,
+                hour,
+                SUM(volume) AS volume,
+                AVG(traveltime) AS traveltime
+            FROM {quoted_view}
+            WHERE CAST(consist_artifact_id AS VARCHAR) = :previous_artifact_id
+            GROUP BY 1, 2
+        ),
+        joined AS (
+            SELECT
+                COALESCE(c.link, p.link) AS link,
+                COALESCE(c.hour, p.hour) AS hour,
+                COALESCE(c.volume, 0.0) AS volume_current,
+                COALESCE(p.volume, 0.0) AS volume_previous,
+                COALESCE(c.traveltime, 0.0) AS traveltime_current,
+                COALESCE(p.traveltime, 0.0) AS traveltime_previous
+            FROM current_agg c
+            FULL OUTER JOIN previous_agg p
+                ON c.link = p.link AND c.hour = p.hour
+        )
+        SELECT
+            COUNT(*) AS group_count,
+            AVG(volume_current - volume_previous) AS volume_delta_mean,
+            AVG(ABS(volume_current - volume_previous)) AS volume_delta_abs_mean,
+            AVG(traveltime_current - traveltime_previous) AS traveltime_delta_mean,
+            AVG(ABS(traveltime_current - traveltime_previous)) AS traveltime_delta_abs_mean
+        FROM joined
+        """
+    ).bindparams(
+        current_artifact_id=str(current_artifact_id),
+        previous_artifact_id=str(previous_artifact_id),
+    )
     with Session(tracker.engine) as session:
-        row = session.exec(
-            text(
-                f"""
-                WITH current_agg AS (
-                    SELECT
-                        link,
-                        hour,
-                        SUM(volume) AS volume,
-                        AVG(traveltime) AS traveltime
-                    FROM {quoted_view}
-                    WHERE CAST(consist_artifact_id AS VARCHAR) = :current_artifact_id
-                    GROUP BY 1, 2
-                ),
-                previous_agg AS (
-                    SELECT
-                        link,
-                        hour,
-                        SUM(volume) AS volume,
-                        AVG(traveltime) AS traveltime
-                    FROM {quoted_view}
-                    WHERE CAST(consist_artifact_id AS VARCHAR) = :previous_artifact_id
-                    GROUP BY 1, 2
-                ),
-                joined AS (
-                    SELECT
-                        COALESCE(c.link, p.link) AS link,
-                        COALESCE(c.hour, p.hour) AS hour,
-                        COALESCE(c.volume, 0.0) AS volume_current,
-                        COALESCE(p.volume, 0.0) AS volume_previous,
-                        COALESCE(c.traveltime, 0.0) AS traveltime_current,
-                        COALESCE(p.traveltime, 0.0) AS traveltime_previous
-                    FROM current_agg c
-                    FULL OUTER JOIN previous_agg p
-                        ON c.link = p.link AND c.hour = p.hour
-                )
-                SELECT
-                    COUNT(*) AS group_count,
-                    AVG(volume_current - volume_previous) AS volume_delta_mean,
-                    AVG(ABS(volume_current - volume_previous)) AS volume_delta_abs_mean,
-                    AVG(traveltime_current - traveltime_previous) AS traveltime_delta_mean,
-                    AVG(ABS(traveltime_current - traveltime_previous)) AS traveltime_delta_abs_mean
-                FROM joined
-                """
-            ),
-            {
-                "current_artifact_id": str(current_artifact_id),
-                "previous_artifact_id": str(previous_artifact_id),
-            },
-        ).first()
+        row = session.exec(delta_query).first()
     row = row or (0, 0.0, 0.0, 0.0, 0.0)
     return {
         "group_count": int(row[0]) if row and row[0] is not None else 0,
