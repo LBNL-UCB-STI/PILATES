@@ -5,16 +5,15 @@ This schema documents coupler keys that are explicitly set during the workflow.
 """
 
 import os
-from typing import Dict
+from typing import Any, Callable, Dict, Iterable, Optional
 
-from pilates.atlas.static_inputs import (
-    ATLAS_STATIC_INPUTS_BY_SCENARIO,
-    ATLAS_STATIC_INPUTS_COMMON,
-)
+from consist.utils import collect_step_schema
+
+from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.generic.records import sanitize_artifact_key
-from pilates.utils.path_utils import find_project_root
+from pilates.workflows.coupler_namespace import namespaced_alias_for_key
 
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -32,7 +31,8 @@ from pilates.workflows.artifact_constants import (
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_H5,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
@@ -40,7 +40,12 @@ from pilates.workflows.artifact_constants import (
 
 
 PILATES_COUPLER_SCHEMA: Dict[str, str] = {
-    USIM_DATASTORE_H5: "UrbanSim datastore (H5) produced by land use/ATLAS.",
+    USIM_DATASTORE_BASE_H5: (
+        "UrbanSim base datastore (H5): static/exogenous input for the run year."
+    ),
+    USIM_DATASTORE_CURRENT_H5: (
+        "UrbanSim current datastore (H5): latest mutable version produced by workflow steps."
+    ),
     USIM_H5_UPDATED: "UrbanSim datastore updated by ATLAS postprocess.",
     USIM_MUTABLE_DATA_DIR: "UrbanSim mutable data directory in workspace.",
     ASIM_MUTABLE_DATA_DIR: "ActivitySim mutable data directory from preprocess.",
@@ -68,11 +73,15 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "relmap": "UrbanSim relationship map input CSV.",
     "schools": "UrbanSim schools input CSV.",
     "school_districts": "UrbanSim school districts input CSV.",
+    "canonical_zones": "Canonical zones file copied into ActivitySim workspace.",
+    "clipped_geoms": "Clipped geometry inputs for ActivitySim if available.",
 }
 
 _NAMESPACED_INIT_KEYS = {
     "urbansim": {
         "usim_data_reference": "UrbanSim reference datastore input.",
+        "usim_datastore_base_h5": "UrbanSim base datastore in mutable workspace.",
+        "usim_datastore_current_h5": "UrbanSim current datastore in mutable workspace.",
         "usim_datastore_h5": "UrbanSim datastore in mutable workspace.",
         "omx_skims": "UrbanSim OMX skims input.",
         "hh_size": "UrbanSim household size input CSV.",
@@ -93,27 +102,9 @@ for model_name, key_map in _NAMESPACED_INIT_KEYS.items():
             PILATES_COUPLER_SCHEMA[namespaced_key] = description
 
 
-def _atlas_static_key_map() -> Dict[str, str]:
+def _atlas_static_key_map(settings: Optional[Any]) -> Dict[str, str]:
     keys: Dict[str, str] = {}
-    all_paths = []
-    project_root = find_project_root(start_path=os.path.dirname(__file__))
-    if project_root:
-        atlas_input_root = os.path.join(project_root, "pilates", "atlas", "atlas_input")
-        if os.path.isdir(atlas_input_root):
-            for root, _, files in os.walk(atlas_input_root):
-                for filename in files:
-                    if "readme" in filename.lower():
-                        continue
-                    full_path = os.path.join(root, filename)
-                    relpath = os.path.relpath(full_path, atlas_input_root)
-                    all_paths.append(relpath.replace("\\", "/"))
-
-    if not all_paths:
-        all_paths = list(ATLAS_STATIC_INPUTS_COMMON)
-        for scenario_paths in ATLAS_STATIC_INPUTS_BY_SCENARIO.values():
-            all_paths.extend(scenario_paths)
-
-    for relpath in all_paths:
+    for relpath in atlas_static_input_relpaths(settings):
         rel_no_ext, _ = os.path.splitext(relpath)
         key = rel_no_ext.replace("\\", "/")
         key = sanitize_artifact_key(key) or key
@@ -122,4 +113,36 @@ def _atlas_static_key_map() -> Dict[str, str]:
     return keys
 
 
-PILATES_COUPLER_SCHEMA.update(_atlas_static_key_map())
+def build_coupler_schema(
+    steps: Iterable[Callable[..., Any]],
+    settings: Optional[Any] = None,
+) -> Dict[str, str]:
+    """
+    Build the workflow coupler schema from step metadata plus static extras.
+
+    Parameters
+    ----------
+    steps : iterable of callables
+        Canonical workflow step functions decorated with ``@define_step``.
+    settings : Any, optional
+        Settings object used to resolve callable schema metadata.
+
+    Returns
+    -------
+    dict
+        Coupler key -> description mapping.
+    """
+    extras = dict(PILATES_COUPLER_SCHEMA)
+    for key, description in list(PILATES_COUPLER_SCHEMA.items()):
+        namespaced_key = namespaced_alias_for_key(key)
+        if not namespaced_key:
+            continue
+        extras.setdefault(
+            namespaced_key,
+            f"{description} (namespaced alias)",
+        )
+    extras.update(_atlas_static_key_map(settings))
+    try:
+        return collect_step_schema(steps, settings=settings, extra_keys=extras)
+    except Exception:
+        return extras

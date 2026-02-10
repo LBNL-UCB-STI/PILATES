@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import yaml
 
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -14,7 +14,7 @@ from pilates.workflows.artifact_constants import (
 )
 from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
 from pilates.workflows.orchestration import run_manifested_steps
-from pilates.workflows.orchestration import WorkflowStepSpec
+from pilates.workflows.orchestration import StepRef
 from pilates.workflows.steps import StepOutputsHolder
 
 
@@ -44,14 +44,17 @@ class DummyWorkspace:
 
 
 class DummyCoupler:
+    def __init__(self) -> None:
+        self.values = {}
+
     def get(self, _key, default=None):
-        return default
+        return self.values.get(_key, default)
 
     def set(self, _key, _value):
-        return None
+        self.values[_key] = _value
 
     def update(self, _mapping):
-        return None
+        self.values.update(_mapping)
 
 
 def _write_file(path: Path) -> None:
@@ -67,6 +70,7 @@ def test_recover_activitysim_preprocess_outputs(tmp_path):
     _write_file(asim_dir / "land_use.csv")
     _write_file(asim_dir / "skims.omx")
 
+    coupler = DummyCoupler()
     holder = StepOutputsHolder()
     outputs = _recover_cached_outputs(
         step_name="activitysim_preprocess",
@@ -74,13 +78,16 @@ def test_recover_activitysim_preprocess_outputs(tmp_path):
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=coupler,
         step_inputs=None,
     )
 
     assert outputs is not None
     assert holder.activitysim_preprocess is not None
     assert holder.activitysim_preprocess.mutable_data_dir == asim_dir
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
+    assert coupler.get(ASIM_PERSONS_IN) is not None
+    assert coupler.get(ASIM_LAND_USE_IN) is not None
     holder.activitysim_preprocess.validate()
 
 
@@ -94,6 +101,7 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     for path in (plans_path, households_path, persons_path, linkstats_path):
         _write_file(path)
 
+    coupler = DummyCoupler()
     holder = StepOutputsHolder()
     outputs = _recover_cached_outputs(
         step_name="beam_preprocess",
@@ -101,7 +109,7 @@ def test_recover_beam_preprocess_outputs(tmp_path):
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=coupler,
         step_inputs={
             BEAM_PLANS_IN: str(plans_path),
             BEAM_HOUSEHOLDS_IN: str(households_path),
@@ -113,26 +121,27 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     assert outputs is not None
     assert holder.beam_preprocess is not None
     assert holder.beam_preprocess.prepared_inputs[BEAM_PLANS_IN] == plans_path
+    assert coupler.get(BEAM_PLANS_IN) is not None
+    assert coupler.get(BEAM_HOUSEHOLDS_IN) is not None
+    assert coupler.get(BEAM_PERSONS_IN) is not None
+    assert coupler.get(LINKSTATS_WARMSTART) is not None
     holder.beam_preprocess.validate()
 
 
-def test_run_manifested_steps_recovers_cache_hit(monkeypatch, tmp_path):
+def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     _write_file(asim_dir / "households.csv")
     _write_file(asim_dir / "persons.csv")
     _write_file(asim_dir / "land_use.csv")
 
-    monkeypatch.setattr(
-        "pilates.workflows.orchestration.build_step_consist_kwargs",
-        lambda *_args, **_kwargs: {},
-    )
-
     def _noop_step(**_kwargs):
         raise AssertionError("step function should not execute on cache hit")
+    _noop_step.__consist_step__ = object()
 
     holder = StepOutputsHolder()
     scenario = DummyScenario(cache_hit=True)
+    coupler = DummyCoupler()
     manifest_path = tmp_path / "manifest.json"
     manifest_config = ManifestConfig(path=manifest_path)
     state = SimpleNamespace(year=2018, iteration=0)
@@ -140,7 +149,7 @@ def test_run_manifested_steps_recovers_cache_hit(monkeypatch, tmp_path):
     run_manifested_steps(
         stage_name="activity_demand_preprocess",
         steps=[
-            WorkflowStepSpec(
+            StepRef(
                 name="activitysim_preprocess",
                 step_func=_noop_step,
                 input_keys=None,
@@ -153,12 +162,13 @@ def test_run_manifested_steps_recovers_cache_hit(monkeypatch, tmp_path):
         state=state,
         settings=SimpleNamespace(),
         workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=coupler,
         name_suffix="2018_iter0",
         iteration=0,
     )
 
     assert holder.activitysim_preprocess is not None
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     holder.activitysim_preprocess.validate()
     manifest = yaml.safe_load(manifest_path.read_text())
     assert manifest["activitysim_preprocess"]["cache_hit"]

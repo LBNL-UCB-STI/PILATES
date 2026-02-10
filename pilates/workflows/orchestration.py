@@ -8,9 +8,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.utils.coupler_helpers import artifact_to_path, record_store_to_outputs
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    record_store_to_outputs,
+    resolve_artifact_from_value,
+    set_coupler_from_artifact,
+)
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -19,16 +25,17 @@ from pilates.workflows.artifact_constants import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_H5,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
 )
-from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
+    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     serialize_step_outputs,
 )
-from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
+from pilates.workflows.step_runner import common_runtime_kwargs
 from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
     StepOutputsHolder,
@@ -39,9 +46,9 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class WorkflowStepSpec:
+class StepRef:
     """
-    Declarative specification for a workflow step invocation.
+    Declarative reference to a workflow step invocation.
     """
 
     name: str
@@ -49,9 +56,106 @@ class WorkflowStepSpec:
     input_keys: Optional[Sequence[str]] = None
     inputs: Optional[Dict[str, Any]] = None
     output_paths: Optional[Dict[str, Any]] = None
-    cache_hydration: str = "outputs-all"
+    cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
-    load_inputs: bool = False
+    load_inputs: Optional[bool] = None
+    required_outputs: Optional[Sequence[str]] = None
+    output_missing: Optional[str] = None
+    output_mismatch: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    iteration: Optional[int] = None
+    phase: Optional[str] = None
+    stage: Optional[str] = None
+
+
+def _infer_phase(step_name: str) -> Optional[str]:
+    if "_" not in step_name:
+        return None
+    return step_name.rsplit("_", 1)[-1] or None
+
+
+def _build_step_run_kwargs(
+    *,
+    step: StepRef,
+    state: Any,
+    runtime_kwargs: Mapping[str, Any],
+    stage_name: str,
+    default_iteration: int,
+) -> Dict[str, Any]:
+    if not hasattr(step.step_func, "__consist_step__"):
+        raise TypeError(
+            f"Step '{step.name}' must be decorated with @define_step metadata."
+        )
+
+    run_kwargs: Dict[str, Any] = {
+        "fn": step.step_func,
+        "runtime_kwargs": runtime_kwargs,
+    }
+    step_meta = getattr(step.step_func, "__consist_step__", None)
+    resolved_year = step.year
+    if resolved_year is None:
+        resolved_year = getattr(state, "year", None)
+    if resolved_year is not None:
+        run_kwargs["year"] = resolved_year
+
+    resolved_iteration = step.iteration
+    if resolved_iteration is None:
+        resolved_iteration = default_iteration
+    if resolved_iteration is not None:
+        run_kwargs["iteration"] = resolved_iteration
+
+    resolved_phase = step.phase or _infer_phase(step.name)
+    if resolved_phase:
+        run_kwargs["phase"] = resolved_phase
+    resolved_stage = step.stage or stage_name
+    if resolved_stage:
+        run_kwargs["stage"] = resolved_stage
+
+    if step.inputs is not None:
+        run_kwargs["inputs"] = step.inputs
+    if step.input_keys is not None:
+        run_kwargs["input_keys"] = step.input_keys
+    if step.output_paths is not None:
+        run_kwargs["output_paths"] = step.output_paths
+    if step.cache_hydration is not None:
+        run_kwargs["cache_hydration"] = step.cache_hydration
+    if step.cache_mode is not None:
+        run_kwargs["cache_mode"] = step.cache_mode
+    if step.load_inputs is not None:
+        run_kwargs["load_inputs"] = step.load_inputs
+    resolved_required_outputs: Optional[Sequence[str]] = step.required_outputs
+    if resolved_required_outputs is None and step_meta is not None:
+        meta_outputs = getattr(step_meta, "outputs", None)
+        if isinstance(meta_outputs, Sequence) and not isinstance(meta_outputs, str):
+            resolved_required_outputs = [
+                output for output in meta_outputs if isinstance(output, str)
+            ]
+    if resolved_required_outputs is None:
+        outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
+        if outputs_class is not None:
+            class_declared_outputs = list(
+                declared_outputs_for_step_outputs_class(outputs_class)
+            )
+            if class_declared_outputs:
+                resolved_required_outputs = class_declared_outputs
+    if resolved_required_outputs:
+        run_kwargs["outputs"] = list(resolved_required_outputs)
+
+    # Apply strict defaults for declared-output steps unless explicitly overridden.
+    if step.output_missing is not None:
+        run_kwargs["output_missing"] = step.output_missing
+    elif resolved_required_outputs:
+        run_kwargs["output_missing"] = "error"
+
+    if step.output_mismatch is not None:
+        run_kwargs["output_mismatch"] = step.output_mismatch
+    elif resolved_required_outputs:
+        run_kwargs["output_mismatch"] = "error"
+
+    if step.model is not None:
+        run_kwargs["model"] = step.model
+    return run_kwargs
 
 
 @dataclass
@@ -62,7 +166,7 @@ class WorkflowStage:
 
     name: str
     stage_type: Any
-    steps: Sequence[WorkflowStepSpec]
+    steps: Sequence[StepRef]
 
     def run(
         self,
@@ -80,84 +184,19 @@ class WorkflowStage:
         """
         Execute all steps in sequence for this stage.
         """
-        runtime_kwargs = common_runtime_kwargs(
-            settings=settings,
+        run_workflow(
+            stage_name=self.name,
+            steps=self.steps,
+            scenario=scenario,
             state=state,
+            settings=settings,
             workspace=workspace,
-            **(runtime_kwargs_extra or {}),
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix=name_suffix,
+            iteration=iteration,
+            runtime_kwargs_extra=runtime_kwargs_extra,
         )
-
-        for spec in self.steps:
-            validate_step_ready(spec.name, outputs_holder)
-            step_config = build_step_config(
-                fn=spec.step_func,
-                name=f"{spec.name}_{name_suffix}",
-                model=spec.name,
-                state=state,
-                iteration=iteration,
-                inputs=spec.inputs or None,
-                input_keys=spec.input_keys or None,
-                output_paths=spec.output_paths or None,
-                cache_hydration=spec.cache_hydration,
-                cache_mode=spec.cache_mode,
-                load_inputs=spec.load_inputs,
-                runtime_kwargs=runtime_kwargs,
-                consist_kwargs=build_step_consist_kwargs(
-                    spec.name, settings, workspace_path=workspace.full_path
-                ),
-            )
-
-            coupler_keys = None
-            if hasattr(coupler, "keys"):
-                try:
-                    coupler_keys = list(coupler.keys())
-                except TypeError:
-                    coupler_keys = None
-            logger.debug(
-                "[%s] StepConfig for %s: inputs=%s input_keys=%s outputs=%s",
-                self.name,
-                spec.name,
-                bool(spec.inputs),
-                spec.input_keys,
-                spec.output_paths,
-            )
-            if coupler_keys is not None:
-                logger.debug(
-                    "[%s] Coupler keys before %s: %s",
-                    self.name,
-                    spec.name,
-                    coupler_keys,
-                )
-
-            result = scenario.run(**step_config.to_kwargs())
-            if (
-                outputs_holder.get_attribute(spec.name) is None
-                and getattr(result, "cache_hit", False)
-            ):
-                _recover_cached_outputs(
-                    step_name=spec.name,
-                    outputs_holder=outputs_holder,
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    coupler=coupler,
-                    step_inputs=spec.inputs,
-                )
-
-            if coupler_keys is not None:
-                try:
-                    logger.debug(
-                        "[%s] Coupler keys after %s: %s",
-                        self.name,
-                        spec.name,
-                        list(coupler.keys()),
-                    )
-                except TypeError:
-                    logger.debug(
-                        "[%s] Coupler keys after %s: <unavailable>",
-                        self.name,
-                        spec.name,
-                    )
 
 
 @dataclass(frozen=True)
@@ -172,7 +211,7 @@ class ManifestConfig:
 def run_manifested_steps(
     *,
     stage_name: str,
-    steps: Sequence[WorkflowStepSpec],
+    steps: Sequence[StepRef],
     outputs_holder: StepOutputsHolder,
     manifest_config: ManifestConfig,
     scenario: Any,
@@ -201,35 +240,30 @@ def run_manifested_steps(
         **(runtime_kwargs_extra or {}),
     )
 
-    for spec in steps:
+    for raw_step in steps:
+        spec = raw_step
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
-            if outputs_holder.get_attribute(spec.name) is None:
+            outputs = outputs_holder.get_attribute(spec.name)
+            if outputs is None:
                 outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
+            if outputs is not None:
+                _update_coupler_from_outputs(
+                    outputs, coupler=coupler, workspace=workspace
+                )
             continue
 
         validate_step_ready(spec.name, outputs_holder)
-        step_config = build_step_config(
-            fn=spec.step_func,
-            name=f"{spec.name}_{name_suffix}",
-            model=spec.name,
+        run_kwargs = _build_step_run_kwargs(
+            step=spec,
             state=state,
-            iteration=iteration,
-            inputs=spec.inputs or None,
-            input_keys=spec.input_keys or None,
-            output_paths=spec.output_paths or None,
-            cache_hydration=spec.cache_hydration,
-            cache_mode=spec.cache_mode,
-            load_inputs=spec.load_inputs,
             runtime_kwargs=runtime_kwargs,
-            consist_kwargs=build_step_consist_kwargs(
-                spec.name, settings, workspace_path=workspace.full_path
-            ),
+            stage_name=stage_name,
+            default_iteration=iteration,
         )
-
-        result = scenario.run(**step_config.to_kwargs())
+        result = scenario.run(**run_kwargs)
         outputs = outputs_holder.get_attribute(spec.name)
         if outputs is None and getattr(result, "cache_hit", False):
             outputs = _recover_cached_outputs(
@@ -249,6 +283,110 @@ def run_manifested_steps(
             "outputs": serialize_step_outputs(outputs),
         }
         save_step_manifest(manifest, manifest_config.path)
+
+
+def run_workflow(
+    *,
+    stage_name: str,
+    steps: Sequence[StepRef],
+    scenario: Any,
+    state: Any,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    name_suffix: str,
+    iteration: int = 0,
+    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
+    manifest_config: Optional[ManifestConfig] = None,
+) -> None:
+    """
+    Execute a sequence of workflow steps using native step metadata.
+    """
+    if manifest_config is not None:
+        run_manifested_steps(
+            stage_name=stage_name,
+            steps=steps,
+            outputs_holder=outputs_holder,
+            manifest_config=manifest_config,
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            name_suffix=name_suffix,
+            iteration=iteration,
+            runtime_kwargs_extra=runtime_kwargs_extra,
+        )
+        return
+
+    runtime_kwargs = common_runtime_kwargs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        **(runtime_kwargs_extra or {}),
+    )
+    for raw_step in steps:
+        spec = raw_step
+        validate_step_ready(spec.name, outputs_holder)
+        run_kwargs = _build_step_run_kwargs(
+            step=spec,
+            state=state,
+            runtime_kwargs=runtime_kwargs,
+            stage_name=stage_name,
+            default_iteration=iteration,
+        )
+        coupler_keys = None
+        if hasattr(coupler, "keys"):
+            try:
+                coupler_keys = list(coupler.keys())
+            except TypeError:
+                coupler_keys = None
+        logger.debug(
+            "[%s] Running %s: inputs=%s input_keys=%s outputs=%s",
+            stage_name,
+            spec.name,
+            bool(spec.inputs),
+            spec.input_keys,
+            spec.output_paths,
+        )
+        if coupler_keys is not None:
+            logger.debug(
+                "[%s] Coupler keys before %s: %s",
+                stage_name,
+                spec.name,
+                coupler_keys,
+            )
+
+        result = scenario.run(**run_kwargs)
+        if (
+            outputs_holder.get_attribute(spec.name) is None
+            and getattr(result, "cache_hit", False)
+        ):
+            _recover_cached_outputs(
+                step_name=spec.name,
+                outputs_holder=outputs_holder,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                coupler=coupler,
+                step_inputs=spec.inputs,
+            )
+
+        if coupler_keys is not None:
+            try:
+                logger.debug(
+                    "[%s] Coupler keys after %s: %s",
+                    stage_name,
+                    spec.name,
+                    list(coupler.keys()),
+                )
+            except TypeError:
+                logger.debug(
+                    "[%s] Coupler keys after %s: <unavailable>",
+                    stage_name,
+                    spec.name,
+                )
 
 
 def _detect_stale_steps(
@@ -411,8 +549,14 @@ def _recover_cached_outputs(
                 )
 
         usim_path = None
-        if step_inputs and USIM_DATASTORE_H5 in step_inputs:
-            usim_path = artifact_to_path(step_inputs[USIM_DATASTORE_H5], workspace)
+        if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
+            usim_path = artifact_to_path(
+                step_inputs[USIM_DATASTORE_BASE_H5], workspace
+            )
+        if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
+            usim_path = artifact_to_path(
+                step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
+            )
         if not usim_path:
             region_id = settings.urbansim.region_id
             if not region_id:
@@ -505,7 +649,56 @@ def _recover_cached_outputs(
     if callable(validate):
         validate()
     outputs_holder.set_attribute(step_name, outputs)
+    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
     return outputs
+
+
+def _update_coupler_from_outputs(
+    outputs: Any,
+    *,
+    coupler: CouplerProtocol,
+    workspace: Any,
+) -> None:
+    to_record_store = getattr(outputs, "to_record_store", None)
+    if not callable(to_record_store):
+        return
+    record_store = to_record_store()
+    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
+
+
+def _update_coupler_from_record_store(
+    record_store: RecordStore,
+    *,
+    coupler: CouplerProtocol,
+    workspace: Any,
+) -> None:
+    if record_store is None:
+        return
+    mapping = record_store.to_mapping()
+    for key, value in mapping.items():
+        canonical_key = resolve_artifact_key(key)
+        resolved = resolve_artifact_from_value(
+            value,
+            key=canonical_key,
+            workspace=workspace,
+        )
+        path = artifact_to_path(value, workspace)
+        if path is None:
+            continue
+        artifact = (
+            resolved
+            if (
+                hasattr(resolved, "container_uri")
+                or hasattr(resolved, "uri")
+            )
+            else None
+        )
+        set_coupler_from_artifact(
+            coupler=coupler,
+            key=canonical_key,
+            artifact=artifact,
+            fallback=path,
+        )
 
 
 def _restore_outputs_from_manifest(

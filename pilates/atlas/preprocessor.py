@@ -16,6 +16,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
@@ -37,6 +38,97 @@ def _get_usim_datastore_fname(settings, io, year=None):
         datastore_name = usim_base_fname.format(region_id=region_id)
 
     return datastore_name
+
+
+def _prepare_atlas_table_for_export(
+    table_data: pd.DataFrame,
+    *,
+    table_name_in_h5: str,
+    expected_index_name: str,
+) -> pd.DataFrame:
+    """
+    Ensure Atlas export tables have the expected logical identifier as index.
+
+    UrbanSim often stores key identifiers (e.g., household_id, block_id) as the
+    DataFrame index rather than a normal column. Atlas CSV exports rely on that
+    logical key being present and named consistently.
+    """
+    if table_data.index.name == expected_index_name:
+        return table_data
+
+    if expected_index_name in table_data.columns:
+        logger.warning(
+            "[AtlasPreprocessor] Table %s uses %s as a column; promoting it to index "
+            "for CSV export.",
+            table_name_in_h5,
+            expected_index_name,
+        )
+        return table_data.set_index(expected_index_name, drop=True)
+
+    raise ValueError(
+        f"ATLAS table {table_name_in_h5!r} is missing expected logical key "
+        f"{expected_index_name!r} as index or column."
+    )
+
+
+def _export_atlas_table_to_csv(
+    table_data: pd.DataFrame,
+    *,
+    table_name_in_h5: str,
+    expected_index_name: str,
+    output_csv_path: str,
+) -> None:
+    """
+    Export a table to CSV with explicit, validated index semantics.
+    """
+    prepared = _prepare_atlas_table_for_export(
+        table_data,
+        table_name_in_h5=table_name_in_h5,
+        expected_index_name=expected_index_name,
+    )
+    # Keep identifier index in output explicitly so downstream schema alignment
+    # is deterministic and does not depend on pandas defaults.
+    prepared.to_csv(
+        output_csv_path,
+        index=True,
+        index_label=expected_index_name,
+    )
+
+
+def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def _resolve_atlas_h5_table_key(
+    store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
+) -> str:
+    """
+    Resolve the HDF5 key for an ATLAS-required table.
+
+    For non-start years, prefer ``/{year}/{table}`` when present. Fall back to
+    root-level ``{table}`` to support merged/current datastores that do not keep
+    per-year table prefixes.
+    """
+    if is_start_year:
+        return table
+
+    year_key = f"/{year}/{table}"
+    if year_key in store:
+        return year_key
+
+    if table in store:
+        logger.warning(
+            "[AtlasPreprocessor] Year-specific table %s not found; falling back "
+            "to root table %s.",
+            year_key,
+            table,
+        )
+        return table
+
+    return year_key
 
 
 class AtlasPreprocessor(GenericPreprocessor):
@@ -122,23 +214,12 @@ class AtlasPreprocessor(GenericPreprocessor):
             source_dir = os.path.join(project_root, source_dir)
         scenario = get_setting(settings, "atlas.scenario")
         adscen = get_setting(settings, "atlas.adscen")
-        scenario_key = str(scenario).lower() if scenario else None
-        vehicle_type_mapping_by_scenario = {
-            "baseline": "vehicle_type_mapping_baseline.csv",
-            "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
-            "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
-        }
-        selected_vehicle_type_mapping = None
-        if scenario_key:
-            selected_vehicle_type_mapping = vehicle_type_mapping_by_scenario.get(
-                scenario_key
+        scenario_key = str(scenario).lower() if scenario else ""
+        if scenario and scenario_key not in {"baseline", "ess_cons", "zev_mandate"}:
+            logger.warning(
+                "[AtlasPreprocessor] Unknown atlas.scenario=%s; using deterministic static input fallback.",
+                scenario,
             )
-            if selected_vehicle_type_mapping is None:
-                logger.warning(
-                    "[AtlasPreprocessor] Unknown atlas.scenario=%s; "
-                    "vehicle_type_mapping inputs will not be filtered.",
-                    scenario,
-                )
         if adscen and scenario and adscen != scenario:
             logger.warning(
                 "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
@@ -146,6 +227,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 adscen,
                 scenario,
             )
+        allowed_relpaths = set(atlas_static_input_relpaths(settings))
         logger.info(
             f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}"
         )
@@ -157,23 +239,17 @@ class AtlasPreprocessor(GenericPreprocessor):
 
                 source_path = os.path.join(root, filename)
                 relative_path = os.path.relpath(source_path, source_dir)
-                if scenario:
-                    rel_parts = relative_path.split(os.sep)
-                    if rel_parts[0] == "adopt":
-                        if len(rel_parts) < 2 or rel_parts[1] != scenario:
-                            continue
-                if selected_vehicle_type_mapping:
-                    if filename.startswith("vehicle_type_mapping_"):
-                        if filename != selected_vehicle_type_mapping:
-                            continue
+                normalized_relpath = relative_path.replace("\\", "/")
+                if normalized_relpath not in allowed_relpaths:
+                    continue
 
                 dest_path = os.path.join(output_dir, relative_path)
 
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy(source_path, dest_path)
 
-                rel_no_ext = os.path.splitext(relative_path)[0]
-                rel_key = rel_no_ext.replace(os.sep, "/")
+                rel_no_ext = os.path.splitext(normalized_relpath)[0]
+                rel_key = rel_no_ext
                 short_name = sanitize_artifact_key(rel_key) or rel_key
 
                 input_meta = {}
@@ -291,13 +367,30 @@ class AtlasPreprocessor(GenericPreprocessor):
             # This is a fresh run
             urbansim_output_path = workspace.get_usim_mutable_data_dir()
 
-        if self.state.is_start_year():
-            urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
+        artifact_current_h5 = getattr(self.state, "atlas_usim_datastore_h5", None)
+        artifact_base_h5 = getattr(self.state, "atlas_usim_datastore_base_h5", None)
+        preferred_h5 = _first_existing_path(
+            artifact_base_h5 if self.state.is_start_year() else artifact_current_h5,
+            artifact_current_h5 if self.state.is_start_year() else artifact_base_h5,
+        )
+
+        if preferred_h5 is not None:
+            urbansim_output = preferred_h5
         else:
-            urbansim_output_fname = _get_usim_datastore_fname(
-                settings, io="output", year=self.state.main_forecast_year
+            if self.state.is_start_year():
+                urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
+            else:
+                urbansim_output_fname = _get_usim_datastore_fname(
+                    settings, io="output", year=self.state.forecast_year
+                )
+            urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
+            logger.warning(
+                "[AtlasPreprocessor] Falling back to template-resolved UrbanSim H5. "
+                "Preferred artifacts were unavailable: current=%s base=%s fallback=%s",
+                artifact_current_h5,
+                artifact_base_h5,
+                urbansim_output,
             )
-        urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
 
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
@@ -391,18 +484,40 @@ class AtlasPreprocessor(GenericPreprocessor):
             logger.error(
                 "[AtlasPreprocessor] Cannot process HDF5 tables, container record not found."
             )
-            return RecordStore()
+            raise RuntimeError(
+                "ATLAS preprocess cannot continue: UrbanSim input H5 was not found "
+                f"for year {self.state.year} (resolved path: {urbansim_output})"
+            )
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
 
+            missing_required_tables: List[str] = []
+
             def process_table(
-                table_name_in_h5, output_csv_name, output_short_name, output_description
+                table_name_in_h5,
+                output_csv_name,
+                output_short_name,
+                output_description,
+                expected_index_name,
+                table_name_root,
+                required=True,
             ):
+                resolved_table_name = _resolve_atlas_h5_table_key(
+                    data,
+                    year=self.state.year,
+                    table=table_name_root,
+                    is_start_year=self.state.is_start_year(),
+                )
                 try:
-                    table_data = data[table_name_in_h5]
+                    table_data = data[resolved_table_name]
                     output_csv_path = f"{atlas_input_path}/{output_csv_name}.csv"
                     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
-                    table_data.to_csv(output_csv_path)
+                    _export_atlas_table_to_csv(
+                        table_data,
+                        table_name_in_h5=resolved_table_name,
+                        expected_index_name=expected_index_name,
+                        output_csv_path=output_csv_path,
+                    )
 
                     output_records.append(
                         FileRecord(
@@ -413,9 +528,18 @@ class AtlasPreprocessor(GenericPreprocessor):
                         )
                     )
                 except KeyError:
-                    logger.warning(
-                        f"[AtlasPreprocessor] Table '{table_name_in_h5}' not found in HDF5 file."
-                    )
+                    if required:
+                        missing_required_tables.append(table_name_in_h5)
+                        logger.error(
+                            "[AtlasPreprocessor] Required table '%s' not found in HDF5 file: %s",
+                            table_name_in_h5,
+                            urbansim_output,
+                        )
+                    else:
+                        logger.warning(
+                            "[AtlasPreprocessor] Optional table '%s' not found in HDF5 file.",
+                            table_name_in_h5,
+                        )
                 except Exception as e:
                     logger.error(
                         f"[AtlasPreprocessor] Error processing table {table_name_in_h5}: {e}"
@@ -430,18 +554,27 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "households",
                 "atlas_households_csv",
                 "ATLAS households input CSV",
+                "household_id",
+                "households",
+                required=True,
             )
             process_table(
                 f"{year_prefix}/blocks",
                 "blocks",
                 "atlas_blocks_csv",
                 "ATLAS blocks input CSV",
+                "block_id",
+                "blocks",
+                required=True,
             )
             process_table(
                 f"{year_prefix}/persons",
                 "persons",
                 "atlas_persons_csv",
                 "ATLAS persons input CSV",
+                "person_id",
+                "persons",
+                required=True,
             )
             if not self.state.is_start_year():
                 process_table(
@@ -449,16 +582,36 @@ class AtlasPreprocessor(GenericPreprocessor):
                     "grave",
                     "atlas_grave_csv",
                     "ATLAS graveyard input CSV",
+                    "person_id",
+                    "graveyard",
+                    required=True,
                 )
             process_table(
                 f"{year_prefix}/residential_units",
                 "residential",
                 "atlas_residential_csv",
                 "ATLAS residential units input CSV",
+                "unit_id",
+                "residential_units",
+                required=True,
             )
             process_table(
-                f"{year_prefix}/jobs", "jobs", "atlas_jobs_csv", "ATLAS jobs input CSV"
+                f"{year_prefix}/jobs",
+                "jobs",
+                "atlas_jobs_csv",
+                "ATLAS jobs input CSV",
+                "job_id",
+                "jobs",
+                required=True,
             )
+
+            if missing_required_tables:
+                missing_msg = ", ".join(sorted(set(missing_required_tables)))
+                raise RuntimeError(
+                    "ATLAS preprocess missing required UrbanSim tables for "
+                    f"year {self.state.year}: {missing_msg} "
+                    f"(source H5: {urbansim_output})"
+                )
 
             logger.info(
                 f"[AtlasPreprocessor] Prepared ATLAS Year {self.state.year} input from UrbanSim output."

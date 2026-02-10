@@ -2,17 +2,23 @@ import os
 import logging
 import atexit
 import fnmatch
+import re
 import queue
 import shutil
 import threading
 import time
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, TYPE_CHECKING, Type
+from typing import Any, Callable, Dict, Optional, Sequence, TYPE_CHECKING, Type, Union
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_key_migrations import (
+    canonicalize_artifact_mapping,
+    resolve_artifact_key,
+)
+from pilates.workflows.coupler_namespace import namespaced_view_target
+from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
@@ -351,6 +357,7 @@ def update_coupler_from_beam_outputs(
     linkstats_record = None
     beam_plans_record = None
     linkstats_parquet_records = []
+    linkstats_unmodified_phys_sim_records = []
     for record in output_store.all_records():
         if record.short_name == ZARR_SKIMS:
             zarr_path = artifact_to_path(record.file_path, workspace)
@@ -371,8 +378,9 @@ def update_coupler_from_beam_outputs(
                     coupler=coupler,
                 )
         elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
-            if "_sub" not in record.short_name:
-                linkstats_parquet_records.append(record)
+            linkstats_parquet_records.append(record)
+        elif _is_linkstats_unmodified_phys_sim_key(getattr(record, "short_name", None)):
+            linkstats_unmodified_phys_sim_records.append(record)
         elif (
             record.short_name
             and record.short_name.startswith(LINKSTATS)
@@ -392,6 +400,8 @@ def update_coupler_from_beam_outputs(
         description="BEAM linkstats output for downstream runs",
         coupler=coupler,
         workspace=workspace,
+        profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     _log_and_set_beam_record(
         linkstats_record,
@@ -400,15 +410,67 @@ def update_coupler_from_beam_outputs(
         coupler=coupler,
         workspace=workspace,
         profile_file_schema=True,
+        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
     )
     for record in linkstats_parquet_records:
-        _log_and_set_beam_record(
-            record,
-            key=record.short_name,
-            description="BEAM linkstats parquet output for downstream runs",
-            coupler=coupler,
-            workspace=workspace,
+        linkstats_meta = _beam_linkstats_facet_meta(
+            record.short_name, family="linkstats_parquet"
         )
+        if _is_sub_iteration_key(record.short_name):
+            _log_beam_record_only(
+                record,
+                key=record.short_name,
+                description="BEAM linkstats parquet output for downstream runs",
+                workspace=workspace,
+                profile_file_schema=True,
+                **linkstats_meta,
+            )
+        else:
+            _log_and_set_beam_record(
+                record,
+                key=record.short_name,
+                description="BEAM linkstats parquet output for downstream runs",
+                coupler=coupler,
+                workspace=workspace,
+                profile_file_schema=True,
+                **linkstats_meta,
+            )
+    for record in linkstats_unmodified_phys_sim_records:
+        record_meta = dict(getattr(record, "metadata", None) or {})
+        facets = record_meta.get("facet")
+        if facets is None:
+            facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
+        log_meta = {
+            "facet_schema_version": record_meta.get(
+                "facet_schema_version", "v1"
+            ),
+            "facet_index": bool(record_meta.get("facet_index", True)),
+        }
+        if facets:
+            log_meta["facet"] = facets
+        if _is_sub_iteration_key(record.short_name):
+            _log_beam_record_only(
+                record,
+                key=record.short_name,
+                description=(
+                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
+                ),
+                workspace=workspace,
+                profile_file_schema=True,
+                **log_meta,
+            )
+        else:
+            _log_and_set_beam_record(
+                record,
+                key=record.short_name,
+                description=(
+                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
+                ),
+                coupler=coupler,
+                workspace=workspace,
+                profile_file_schema=True,
+                **log_meta,
+            )
     _log_and_set_beam_record(
         beam_plans_record,
         key=BEAM_PLANS_OUT,
@@ -489,6 +551,129 @@ def _beam_record_rank(record: Any, base_key: str) -> Optional[tuple]:
     return (year, iteration)
 
 
+def _is_linkstats_unmodified_phys_sim_key(short_name: Optional[str]) -> bool:
+    if not short_name:
+        return False
+    return short_name.startswith(
+        "linkstats_unmodified_phys_sim_iter_parquet_"
+    ) or short_name.startswith("linkstats_unmodified_parquet__")
+
+
+def _is_sub_iteration_key(short_name: Optional[str]) -> bool:
+    if not short_name:
+        return False
+    return "_sub" in short_name or "__beam_sub_iter" in short_name
+
+
+def _beam_linkstats_facet_meta(
+    short_name: Optional[str],
+    *,
+    family: str,
+) -> Dict[str, Any]:
+    if not short_name:
+        return {}
+    parsed = _parse_linkstats_iteration_key(short_name)
+    if not parsed:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": family,
+            **parsed,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _parse_linkstats_iteration_key(short_name: str) -> Optional[Dict[str, Any]]:
+    for prefix in ("linkstats_parquet_", "linkstats_"):
+        if not short_name.startswith(prefix):
+            continue
+        tail = short_name[len(prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 2:
+            continue
+        try:
+            year = int(parts[0])
+            iteration = int(parts[1])
+        except ValueError:
+            continue
+        payload: Dict[str, Any] = {"year": year, "iteration": iteration}
+        if len(parts) > 2 and parts[2].startswith("sub"):
+            try:
+                payload["beam_sub_iteration"] = int(parts[2][3:])
+            except ValueError:
+                continue
+        return payload
+    return None
+
+
+def _parse_linkstats_unmodified_phys_sim_facets(
+    short_name: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse structured facets from phys-sim unmodified linkstats artifact keys.
+
+    Expected key format:
+      linkstats_unmodified_phys_sim_iter_parquet_<phys_sim_iter>_<year>_<iteration>[_sub<beam_sub_iteration>]
+    """
+    if not short_name:
+        return None
+
+    year = None
+    iteration = None
+    phys_sim_iteration = None
+    sub_iteration = None
+
+    modern_match = re.fullmatch(
+        r"linkstats_unmodified_parquet__y(?P<year>\d+)__i(?P<iteration>\d+)"
+        r"__phys_sim_iter(?P<phys>\d+)(?:__beam_sub_iter(?P<sub>\d+))?",
+        short_name,
+    )
+    if modern_match:
+        year = int(modern_match.group("year"))
+        iteration = int(modern_match.group("iteration"))
+        phys_sim_iteration = int(modern_match.group("phys"))
+        if modern_match.group("sub") is not None:
+            sub_iteration = int(modern_match.group("sub"))
+    else:
+        legacy_prefix = "linkstats_unmodified_phys_sim_iter_parquet_"
+        if not short_name.startswith(legacy_prefix):
+            return None
+
+        tail = short_name[len(legacy_prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 3:
+            return None
+
+        if parts[-1].startswith("sub"):
+            try:
+                sub_iteration = int(parts[-1][3:])
+            except ValueError:
+                return None
+            parts = parts[:-1]
+
+        if len(parts) != 3:
+            return None
+
+        try:
+            phys_sim_iteration = int(parts[0])
+            year = int(parts[1])
+            iteration = int(parts[2])
+        except ValueError:
+            return None
+
+    facets: Dict[str, Any] = {
+        "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+        "year": year,
+        "iteration": iteration,
+        "phys_sim_iteration": phys_sim_iteration,
+    }
+    if sub_iteration is not None:
+        facets["beam_sub_iteration"] = sub_iteration
+    return facets
+
+
 def _log_and_set_beam_record(
     record: Optional[Any],
     *,
@@ -524,6 +709,27 @@ def _log_and_set_beam_record(
         path=output_path,
         description=description,
         coupler=coupler,
+        **meta,
+    )
+
+
+def _log_beam_record_only(
+    record: Optional[Any],
+    *,
+    key: str,
+    description: str,
+    workspace: "Workspace",
+    **meta: Any,
+) -> None:
+    if record is None:
+        return
+    output_path = artifact_to_path(record.file_path, workspace)
+    if not output_path or not os.path.exists(output_path):
+        return
+    log_output_only(
+        key=key,
+        path=output_path,
+        description=description,
         **meta,
     )
 
@@ -567,14 +773,37 @@ def set_coupler_from_artifact(
     """
     if artifact is None and fallback is None:
         return
-    set_from_artifact = getattr(coupler, "set_from_artifact", None)
-    if callable(set_from_artifact):
-        if artifact is None:
-            set_from_artifact(key, fallback)
-        else:
-            set_from_artifact(key, artifact)
-        return
-    coupler.set(key, artifact or fallback)
+    canonical_key = resolve_artifact_key(key)
+    value = artifact or fallback
+
+    def _set_value(target: Any, target_key: str) -> None:
+        set_from_artifact = getattr(target, "set_from_artifact", None)
+        if callable(set_from_artifact):
+            set_from_artifact(target_key, value)
+            return
+        set_value = getattr(target, "set", None)
+        if callable(set_value):
+            set_value(target_key, value)
+
+    # Preferred path: if available, also publish through model namespace view.
+    target = namespaced_view_target(canonical_key)
+    view_fn = getattr(coupler, "view", None)
+    if target is not None and callable(view_fn):
+        namespace, local_key = target
+        try:
+            view = view_fn(namespace)
+            _set_value(view, local_key)
+        except Exception:
+            logger.debug(
+                "Failed to publish key %s via coupler view namespace %s",
+                canonical_key,
+                namespace,
+                exc_info=True,
+            )
+
+    # Transitional compatibility: keep unscoped key writes so existing consumers
+    # and historical runs remain valid while namespaced lookups are adopted.
+    _set_value(coupler, canonical_key)
 
 
 def _log_with_optional_h5_container(
@@ -588,6 +817,32 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
+    def _is_internal_h5_table(table_name: str) -> bool:
+        leaf = table_name.rsplit("/", 1)[-1]
+        if re.match(r"^axis\d+$", leaf):
+            return True
+        if re.match(r"^block\d+_(items|values)$", leaf):
+            return True
+        if re.match(r"^level\d+$", leaf):
+            return True
+        if re.match(r".*label\d*$", leaf):
+            return True
+        return False
+
+    def _table_filter_to_callable(
+        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]
+    ) -> Optional[Callable[[str], bool]]:
+        if table_filter is None:
+            return None
+        if callable(table_filter):
+            return table_filter
+        normalized = {
+            name if str(name).startswith("/") else f"/{name}"
+            for name in table_filter
+            if name
+        }
+        return lambda table_name: table_name in normalized
+
     def _h5_table_filter_from_list(tables_used):
         normalized = {
             name if name.startswith("/") else f"/{name}"
@@ -596,23 +851,34 @@ def _log_with_optional_h5_container(
         }
 
         def _filter(table_name: str) -> bool:
-            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+            if _is_internal_h5_table(table_name):
                 return False
             return table_name in normalized
 
         return _filter
 
     tables_used = meta.pop("h5_tables_used", None)
+    requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        base_filter = (
+            _h5_table_filter_from_list(tables_used)
+            if tables_used
+            else (lambda table_name: not _is_internal_h5_table(table_name))
+        )
+        if requested_filter is None:
+            table_filter = base_filter
+        else:
+            table_filter = (
+                lambda table_name: base_filter(table_name)
+                and requested_filter(table_name)
+            )
         return cr.log_h5_container(
             path,
             key=key,
             direction=direction,
             description=description,
-            table_filter=_h5_table_filter_from_list(tables_used)
-            if tables_used
-            else None,
+            table_filter=table_filter,
             **meta,
         )
     if direction == "output":
@@ -769,6 +1035,7 @@ def record_store_to_outputs(
         )
 
     mapping = record_store.to_mapping() if record_store is not None else {}
+    mapping = canonicalize_artifact_mapping(mapping)
     record_keys = getattr(output_class, "record_keys", {}) or {}
     values: Dict[str, Any] = {}
 

@@ -10,6 +10,7 @@ from workflow_state import WorkflowState
 
 from pilates.utils.formatting import formatted_print
 from pilates.utils.input_logging import log_inputs
+from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -17,8 +18,11 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
-from pilates.workflows.orchestration import WorkflowStage, WorkflowStepSpec
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
 from pilates.urbansim.inputs import build_urbansim_inputs
 
 
@@ -72,23 +76,32 @@ def run_land_use_stage(
     usim_inputs = merge_model_expected_inputs(
         "urbansim", usim_inputs, settings, state, workspace
     )
+    preprocess_inputs = dict(usim_inputs)
+    if (
+        preprocess_inputs.get(USIM_DATASTORE_BASE_H5)
+        == preprocess_inputs.get(USIM_DATASTORE_CURRENT_H5)
+    ):
+        preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
+    preprocess_resolution = resolve_step_inputs(
+        keys=preprocess_inputs.keys(),
+        explicit_inputs=preprocess_inputs,
+    )
 
     preprocess_steps = [
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_preprocess",
             step_func=make_urbansim_preprocess_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=usim_inputs,
+            inputs=preprocess_resolution.stepref_inputs(),
+            input_keys=preprocess_resolution.stepref_input_keys(),
         ),
     ]
 
-    WorkflowStage(
-        name="land_use",
-        stage_type=state.Stage.land_use,
+    run_workflow(
+        stage_name="land_use",
         steps=preprocess_steps,
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,
@@ -102,38 +115,52 @@ def run_land_use_stage(
     if upstream_preprocess is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
 
-    run_input_keys = [
-        short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
-    ]
-    if USIM_DATASTORE_H5 in usim_inputs:
-        run_input_keys.append(USIM_DATASTORE_H5)
-    if not run_input_keys:
-        run_input_keys = None
+    run_inputs = upstream_preprocess.to_record_store().to_mapping()
+    if not run_inputs:
+        # Some preprocessors materialize key artifacts via explicit logging rather
+        # than RecordStore outputs; fall back to declared UrbanSim inputs so run
+        # identity/provenance still reflects true dependencies.
+        run_inputs = {key: value for key, value in usim_inputs.items() if value is not None}
+    run_resolution = resolve_step_inputs(
+        keys=run_inputs.keys(),
+        explicit_inputs=run_inputs,
+    )
+    postprocess_resolution = resolve_step_inputs(
+        keys=[USIM_DATASTORE_CURRENT_H5],
+        coupler=coupler,
+        fallback_inputs=usim_inputs,
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+    )
+    if postprocess_resolution.missing_required:
+        raise RuntimeError(
+            "UrbanSim postprocess requires usim_datastore_h5 but it could not be "
+            "resolved from explicit inputs, coupler, or fallback inputs."
+        )
 
     run_steps = [
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_run",
             step_func=make_urbansim_run_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=run_input_keys,
+            inputs=run_resolution.stepref_inputs(),
+            input_keys=run_resolution.stepref_input_keys(),
         ),
-        WorkflowStepSpec(
+        StepRef(
             name="urbansim_postprocess",
             step_func=make_urbansim_postprocess_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            input_keys=[USIM_DATASTORE_H5],
+            inputs=postprocess_resolution.stepref_inputs(),
+            input_keys=postprocess_resolution.stepref_input_keys(),
         ),
     ]
 
-    WorkflowStage(
-        name="land_use",
-        stage_type=state.Stage.land_use,
+    run_workflow(
+        stage_name="land_use",
         steps=run_steps,
-    ).run(
         scenario=scenario,
         state=state,
         settings=settings,
@@ -146,8 +173,17 @@ def run_land_use_stage(
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
     run_outputs = outputs_holder_year.urbansim_run
     if postprocess_outputs is not None and postprocess_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_H5] = str(postprocess_outputs.usim_datastore_h5)
+        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(
+            postprocess_outputs.usim_datastore_h5
+        )
     elif run_outputs is not None and run_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_H5] = str(run_outputs.usim_datastore_h5)
+        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(run_outputs.usim_datastore_h5)
+
+    # Preserve base semantics as the static/exogenous input.
+    if (
+        USIM_DATASTORE_BASE_H5 not in usim_inputs
+        and USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    ):
+        usim_inputs[USIM_DATASTORE_BASE_H5] = usim_inputs[USIM_DATASTORE_CURRENT_H5]
 
     return usim_inputs

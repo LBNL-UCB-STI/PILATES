@@ -16,7 +16,10 @@ if "geopandas" not in sys.modules:
 from pilates.beam.runner import BeamRunner
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.urbansim.runner import UrbansimRunner
-from pilates.utils.coupler_helpers import update_coupler_from_beam_outputs
+from pilates.utils.coupler_helpers import (
+    _parse_linkstats_unmodified_phys_sim_facets,
+    update_coupler_from_beam_outputs,
+)
 
 
 class _StubState:
@@ -132,3 +135,70 @@ def test_update_coupler_from_beam_outputs_sets_outputs(monkeypatch, tmp_path):
 
     assert coupler._store["zarr_skims"] == "artifact:zarr_skims"
     assert coupler._store["final_skims_omx"] == "artifact:final_skims_omx"
+
+
+def test_parse_phys_sim_linkstats_facets():
+    facets = _parse_linkstats_unmodified_phys_sim_facets(
+        "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter2__beam_sub_iter1"
+    )
+    assert facets == {
+        "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+        "year": 2030,
+        "iteration": 7,
+        "phys_sim_iteration": 2,
+        "beam_sub_iteration": 1,
+    }
+
+    facets_no_sub = _parse_linkstats_unmodified_phys_sim_facets(
+        "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter4"
+    )
+    assert facets_no_sub == {
+        "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+        "year": 2030,
+        "iteration": 7,
+        "phys_sim_iteration": 4,
+    }
+
+
+def test_update_coupler_logs_phys_sim_linkstats_with_facets(monkeypatch, tmp_path):
+    path = tmp_path / "0.linkstats_unmodified_physSimIter2.parquet"
+    path.write_text("stub")
+
+    records = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(path),
+                short_name=(
+                    "linkstats_unmodified_parquet__y2030__i7__phys_sim_iter2"
+                    "__beam_sub_iter1"
+                ),
+                description="phys sim parquet",
+            )
+        ]
+    )
+
+    class _Coupler:
+        def set(self, _key, _value):
+            return None
+
+    coupler = _Coupler()
+    calls = []
+
+    def _log_output(path, key=None, description=None, **meta):
+        calls.append((path, key, description, meta))
+        return f"artifact:{key}"
+
+    monkeypatch.setattr("pilates.utils.coupler_helpers.cr.log_output", _log_output)
+    monkeypatch.setattr("pilates.utils.coupler_helpers.cr.current_run", lambda: object())
+
+    update_coupler_from_beam_outputs(
+        records, coupler, workspace=SimpleNamespace(full_path=str(tmp_path))
+    )
+
+    target = [call for call in calls if call[1] == records.all_records()[0].short_name]
+    assert target, "Expected phys-sim linkstats artifact to be logged"
+    _, _, _, meta = target[0]
+    assert meta["facet_index"] is True
+    assert meta["facet_schema_version"] == "v1"
+    assert meta["facet"]["phys_sim_iteration"] == 2
+    assert meta["facet"]["beam_sub_iteration"] == 1

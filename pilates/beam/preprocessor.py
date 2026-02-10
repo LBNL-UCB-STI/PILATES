@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
 import re
 
@@ -19,7 +18,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
@@ -774,10 +773,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if file_format == "parquet":
                 df.to_parquet(path, index=True)
             else:
-                df.to_csv(path, index=(name != "plans"), compression="gzip")
-
-            # Re-enforce CSV behavior from original
-            if file_format != "parquet":
                 df.to_csv(path, index=False, compression="gzip")
 
             record_list.extend(
@@ -899,28 +894,43 @@ class BeamPreprocessor(GenericPreprocessor):
                 os.path.join(str(workspace.full_path), rec.file_path)
             )
 
-        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`), which is
-        # named like `linkstats_<year>_<inner_iter>` by BeamRunner.gather_outputs().
+        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`).
+        # Supported warm-start record keys:
+        #   - linkstats_<year>_<inner_iter>                 (csv.gz)
+        #   - linkstats_parquet_<year>_<inner_iter>         (parquet)
         beam_output_linkstats = None
-        pattern = re.compile(r"^linkstats_\d+_\d+$")
+        csv_pattern = re.compile(r"^linkstats_\d+_\d+$")
+        parquet_pattern = re.compile(r"^linkstats_parquet_\d+_\d+$")
         for rec in previous_beam_records or []:
             sn = getattr(rec, "short_name", "") or ""
             if "_sub" in sn:
                 continue
-            if pattern.match(sn):
+            if csv_pattern.match(sn):
                 beam_output_linkstats = rec
                 break
 
-        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
-        # record, use it, but make it very obvious that this is not ideal.
         if beam_output_linkstats is None:
             for rec in previous_beam_records or []:
                 sn = getattr(rec, "short_name", "") or ""
-                if sn == "linkstats":
+                if "_sub" in sn:
+                    continue
+                if parquet_pattern.match(sn):
+                    beam_output_linkstats = rec
+                    break
+
+        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
+        # (or `linkstats_parquet`) record, use it, but make it very obvious that
+        # this is not ideal.
+        if beam_output_linkstats is None:
+            for rec in previous_beam_records or []:
+                sn = getattr(rec, "short_name", "") or ""
+                if sn in {"linkstats", "linkstats_parquet"}:
                     beam_output_linkstats = rec
                     logger.warning(
-                        "[NOT IDEAL] Using an unversioned `linkstats` record as warm-start input. "
-                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` so lineage is unambiguous."
+                        "[NOT IDEAL] Using an unversioned `%s` record as warm-start input. "
+                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` "
+                        "or `linkstats_parquet_<year>_<inner_iter>` so lineage is unambiguous.",
+                        sn,
                     )
                     break
 

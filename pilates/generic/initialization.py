@@ -166,6 +166,57 @@ def _log_record_store(
                 record.content_hash = record_hash
 
 
+def _merge_workspace_records(
+    workspace: Workspace, model_key: str, rec_in: RecordStore, rec_out: RecordStore
+) -> None:
+    """Store copied records under the model key, appending if already present."""
+    if model_key in workspace.input_data:
+        workspace.input_data[model_key] += rec_in
+    else:
+        workspace.input_data[model_key] = rec_in
+
+    if model_key in workspace.output_data:
+        workspace.output_data[model_key] += rec_out
+    else:
+        workspace.output_data[model_key] = rec_out
+
+
+def _accumulate_copy_result(
+    *,
+    result: Optional[Tuple[RecordStore, RecordStore]],
+    model_name: str,
+    initialization_records_in: RecordStore,
+    initialization_records_out: RecordStore,
+    workspace: Optional[Workspace] = None,
+    workspace_model_key: Optional[str] = None,
+) -> bool:
+    """
+    Tag and append copy outputs, optionally storing them on workspace caches.
+
+    Returns
+    -------
+    bool
+        True when records were added; False when `result` was empty.
+    """
+    if not result:
+        return False
+
+    rec_in, rec_out = result
+    _tag_record_store(rec_in, model_name)
+    _tag_record_store(rec_out, model_name)
+    initialization_records_in += rec_in
+    initialization_records_out += rec_out
+
+    if workspace is not None:
+        _merge_workspace_records(
+            workspace,
+            workspace_model_key or model_name,
+            rec_in,
+            rec_out,
+        )
+    return True
+
+
 class Initialization(Model):
     """
     A dedicated class to handle the initialization of mutable data and
@@ -200,15 +251,14 @@ class Initialization(Model):
                 result = beam_preprocessor.copy_data_to_mutable_location(
                     settings, beam_input_dir
                 )
-                if result:
-                    rec_in, rec_out = result
-                    _tag_record_store(rec_in, "beam")
-                    _tag_record_store(rec_out, "beam")
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
-                    # Make available to later preprocess()
-                    workspace.input_data["beam"] = rec_in
-                    workspace.output_data["beam"] = rec_out
+                _accumulate_copy_result(
+                    result=result,
+                    model_name="beam",
+                    initialization_records_in=initialization_records_in,
+                    initialization_records_out=initialization_records_out,
+                    workspace=workspace,
+                    workspace_model_key="beam",
+                )
 
             if (
                 settings.run.models.travel == "beam"
@@ -284,23 +334,15 @@ class Initialization(Model):
                     result = usim_preprocessor.copy_data_to_mutable_location(
                         settings, output_dir
                     )
-                    if result:
-                        rec_in, rec_out = result
-                        _tag_record_store(rec_in, model_name)
-                        _tag_record_store(rec_out, model_name)
-                        if model_name in workspace.input_data:
-                            workspace.input_data[model_name] += rec_in
-                        else:
-                            workspace.input_data[model_name] = rec_in
-                        if model_name in workspace.output_data:
-                            workspace.output_data[model_name] += rec_out
-                        else:
-                            workspace.output_data[model_name] = rec_out
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
                     have_not_copied_usim_data = False
-                    if result:
-                        rec_in, rec_out = result
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
 
                 # Atlas data copy
                 if model_name == "atlas":
@@ -312,20 +354,14 @@ class Initialization(Model):
                     result = atlas_preprocessor.copy_data_to_mutable_location(
                         settings, input_dir
                     )
-                    if result:
-                        rec_in, rec_out = result
-                        _tag_record_store(rec_in, model_name)
-                        _tag_record_store(rec_out, model_name)
-                        if model_name in workspace.input_data:
-                            workspace.input_data[model_name] += rec_in
-                        else:
-                            workspace.input_data[model_name] = rec_in
-                        if model_name in workspace.output_data:
-                            workspace.output_data[model_name] += rec_out
-                        else:
-                            workspace.output_data[model_name] = rec_out
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
 
                 # ActivitySim config copy
@@ -340,18 +376,14 @@ class Initialization(Model):
                             settings, asim_input_dir
                         )
                     )
-                    _tag_record_store(rec_in, model_name)
-                    _tag_record_store(rec_out, model_name)
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
-                    if model_name in workspace.input_data:
-                        workspace.input_data[model_name] += rec_in
-                    else:
-                        workspace.input_data[model_name] = rec_in
-                    if model_name in workspace.output_data:
-                        workspace.output_data[model_name] += rec_out
-                    else:
-                        workspace.output_data[model_name] = rec_out
+                    _accumulate_copy_result(
+                        result=(rec_in, rec_out),
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
 
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 

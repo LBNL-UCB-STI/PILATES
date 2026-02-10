@@ -144,8 +144,10 @@ class GenericRunner(ABC, Model):
         lineage_mode: str = None,
     ) -> bool:
         """
-        Executes container with Consist if available, otherwise falls back to direct
-        Docker/Singularity execution without provenance.
+        Execute container with Consist container integration.
+
+        Uses Consist integration for container execution and falls back to direct
+        execution only when the integration import/call path fails.
         """
         run_cfg = getattr(settings, "run", None)
         use_stubs = (
@@ -172,73 +174,82 @@ class GenericRunner(ABC, Model):
         pull_latest = get_setting(
             settings, "infrastructure.docker_config.pull_latest", False
         )
+
+        tracker = cr.current_tracker()
+        if not tracker:
+            raise RuntimeError(
+                "A Consist tracker must be active for container execution. "
+                "Ensure the call occurs within a Consist scenario/run context."
+            )
+
+        strict_mounts = True
+        local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
+        archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
+        if output_paths and local_root and archive_root:
+            local_root = os.path.abspath(local_root)
+            archive_root = os.path.abspath(archive_root)
+            if local_root != archive_root:
+                for path in output_paths:
+                    if not isinstance(path, str) or "://" in path:
+                        continue
+                    abs_path = os.path.abspath(path)
+                    try:
+                        in_local = (
+                            os.path.commonpath([abs_path, local_root]) == local_root
+                        )
+                        in_archive = (
+                            os.path.commonpath([abs_path, archive_root])
+                            == archive_root
+                        )
+                    except ValueError:
+                        continue
+                    if in_local and not in_archive:
+                        strict_mounts = False
+                        break
+
+        try:
+            from consist.integrations.containers import (
+                run_container as consist_run_container,
+            )
+        except ImportError as exc:
+            logger.error(
+                "Consist container integration unavailable: %s. "
+                "Falling back to direct execution.",
+                exc,
+            )
+        else:
+            logger.info(
+                "[%s] Delegating container execution to Consist", model_name
+            )
+            try:
+                return consist_run_container(
+                    tracker=tracker,
+                    run_id=f"{model_name}_container",
+                    image=image,
+                    command=full_command_list,
+                    volumes=consist_volumes,
+                    inputs=input_artifacts or [],
+                    outputs=output_paths or [],
+                    environment=environment or {},
+                    working_dir=working_dir,
+                    backend_type=backend_type,
+                    pull_latest=pull_latest,
+                    lineage_mode=lineage_mode,
+                    strict_mounts=strict_mounts,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Consist container execution failed: %s. "
+                    "Falling back to direct execution.",
+                    exc,
+                    exc_info=True,
+                )
+
         docker_stdout = get_setting(
             settings, "infrastructure.docker_config.stdout", None
         )
         if docker_stdout is None:
             docker_stdout = get_setting(settings, "docker_stdout", False)
-
-        if cr.consist_available(settings):
-            tracker = cr.current_tracker()
-            if not tracker:
-                raise RuntimeError(
-                    "A Consist tracker must be active for container execution. "
-                    "Ensure the call occurs within a Consist scenario/run context."
-                )
-            strict_mounts = True
-            local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
-            archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
-            if output_paths and local_root and archive_root:
-                local_root = os.path.abspath(local_root)
-                archive_root = os.path.abspath(archive_root)
-                if local_root != archive_root:
-                    for path in output_paths:
-                        if not isinstance(path, str) or "://" in path:
-                            continue
-                        abs_path = os.path.abspath(path)
-                        try:
-                            in_local = os.path.commonpath([abs_path, local_root]) == local_root
-                            in_archive = os.path.commonpath([abs_path, archive_root]) == archive_root
-                        except ValueError:
-                            continue
-                        if in_local and not in_archive:
-                            strict_mounts = False
-                            break
-            try:
-                from consist.integrations.containers import (
-                    run_container as consist_run_container,
-                )
-            except ImportError as e:
-                logger.error(
-                    f"Consist container integration unavailable: {e}. Falling back to direct execution."
-                )
-            else:
-                logger.info(f"[{model_name}] Delegating container execution to Consist")
-                try:
-                    return consist_run_container(
-                        tracker=tracker,
-                        run_id=f"{model_name}_container",
-                        image=image,
-                        command=full_command_list,
-                        volumes=consist_volumes,
-                        inputs=input_artifacts or [],
-                        outputs=output_paths or [],
-                        environment=environment or {},
-                        working_dir=working_dir,
-                        backend_type=backend_type,
-                        pull_latest=pull_latest,
-                        lineage_mode=lineage_mode,
-                        strict_mounts=strict_mounts,
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Consist container execution failed: {e}",
-                        exc_info=True,
-                    )
-
-        logger.info(
-            f"[{model_name}] Consist disabled/unavailable; using direct container execution."
-        )
         return GenericRunner._run_container_direct(
             image=image,
             command=full_command_list,

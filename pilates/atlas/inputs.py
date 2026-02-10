@@ -1,9 +1,20 @@
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+import re
+from typing import Any, Dict, Optional, Set, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.records import sanitize_artifact_key
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_H5_UPDATED,
+)
+from pilates.workflows.input_resolution import (
+    first_resolved_key,
+    resolve_preferred_step_input,
+    resolve_step_inputs,
+    resolved_value_for_key,
+)
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_COMMON,
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
@@ -48,8 +59,9 @@ def build_atlas_inputs(
     Notes
     -----
     Input keys
-        - ``usim_datastore_h5``: UrbanSim datastore used as the land use input
-          for ATLAS scenario generation.
+        - ``usim_datastore_h5``: UrbanSim current datastore used as the land
+          use input for ATLAS scenario generation.
+        - ``usim_datastore_base_h5``: UrbanSim base datastore for the run year.
         - ``atlas_mutable_input_dir``: ATLAS mutable input directory (configs
           and data mounted into the container).
     Related outputs
@@ -61,25 +73,88 @@ def build_atlas_inputs(
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}
 
-    atlas_usim_input = None
-    get_value = getattr(coupler, "get", None)
-    if callable(get_value):
-        atlas_usim_input = get_value(USIM_DATASTORE_H5)
-    if atlas_usim_input is None:
-        atlas_usim_input = usim_datastore_h5_path
+    atlas_current_resolution = resolve_preferred_step_input(
+        preferred_keys=[USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
+        coupler=coupler,
+    )
+    selected_current_key = first_resolved_key(
+        atlas_current_resolution,
+        [USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
+    )
+    if selected_current_key is None and usim_datastore_h5_path is not None:
+        atlas_current_resolution = resolve_step_inputs(
+            keys=[USIM_DATASTORE_CURRENT_H5],
+            fallback_inputs={USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path},
+        )
+        selected_current_key = USIM_DATASTORE_CURRENT_H5
 
-    inputs[USIM_DATASTORE_H5] = atlas_usim_input
+    atlas_usim_input = (
+        resolved_value_for_key(
+            resolved=atlas_current_resolution,
+            key=selected_current_key,
+            coupler=coupler,
+        )
+        if selected_current_key is not None
+        else None
+    )
 
-    descriptions[USIM_DATASTORE_H5] = f"UrbanSim datastore for ATLAS year {year}"
+    atlas_base_resolution = resolve_step_inputs(
+        keys=[USIM_DATASTORE_BASE_H5],
+        coupler=coupler,
+        fallback_inputs={USIM_DATASTORE_BASE_H5: atlas_usim_input}
+        if atlas_usim_input is not None
+        else None,
+    )
+    atlas_base_input = resolved_value_for_key(
+        resolved=atlas_base_resolution,
+        key=USIM_DATASTORE_BASE_H5,
+        coupler=coupler,
+    )
+    if atlas_base_input is None:
+        atlas_base_input = atlas_usim_input
+
+    inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_input
+    inputs[USIM_DATASTORE_BASE_H5] = atlas_base_input
+
+    descriptions[USIM_DATASTORE_CURRENT_H5] = (
+        f"UrbanSim current datastore for ATLAS year {year}"
+    )
+    descriptions[USIM_DATASTORE_BASE_H5] = (
+        f"UrbanSim base datastore for ATLAS year {year}"
+    )
 
     return inputs, descriptions
 
 
-def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
-    scenario = getattr(settings, "atlas", None)
-    scenario_name = None
-    if scenario is not None:
-        scenario_name = getattr(settings.atlas, "scenario", None)
+_YEAR_SUFFIX = re.compile(r"_(\d{4})$")
+
+
+def atlas_run_years(settings: PilatesConfig) -> Set[int]:
+    """
+    Determine ATLAS run years from global run configuration.
+    """
+    run_cfg = getattr(settings, "run", None)
+    if run_cfg is None:
+        return set()
+    start_year = getattr(run_cfg, "start_year", None)
+    end_year = getattr(run_cfg, "end_year", None)
+    freq = getattr(run_cfg, "vehicle_ownership_freq", 1) or 1
+    if start_year is None or end_year is None:
+        return set()
+    return set(range(int(start_year), int(end_year) + 1, max(1, int(freq))))
+
+
+def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
+    """
+    Deterministic static ATLAS input relpaths based on settings.
+
+    Rules align with `AtlasPreprocessor.copy_data_to_mutable_location()`:
+    - scenario-specific adopt folder selection by `settings.atlas.scenario`
+    - one selected `vehicle_type_mapping_*` file for known scenarios
+    - unknown/no scenario falls back to all mapping files
+    - year-stamped files are limited to configured ATLAS run years
+    """
+    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
     scenario_key = str(scenario_name).lower() if scenario_name else None
 
     vehicle_type_mapping_by_scenario = {
@@ -87,23 +162,61 @@ def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
         "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
         "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
     }
+    all_vehicle_mappings = [
+        relpath
+        for relpath in ATLAS_STATIC_INPUTS_COMMON
+        if relpath.startswith("vehicle_type_mapping_")
+    ]
 
     relpaths = [
         relpath
         for relpath in ATLAS_STATIC_INPUTS_COMMON
         if not relpath.startswith("vehicle_type_mapping_")
     ]
-    selected_mapping = vehicle_type_mapping_by_scenario.get(scenario_key)
+    selected_mapping = (
+        vehicle_type_mapping_by_scenario.get(scenario_key) if scenario_key else None
+    )
     if selected_mapping is not None:
         relpaths.append(selected_mapping)
+    else:
+        relpaths.extend(all_vehicle_mappings)
 
     if scenario_key:
         relpaths.extend(ATLAS_STATIC_INPUTS_BY_SCENARIO.get(scenario_key, []))
+    else:
+        for values in ATLAS_STATIC_INPUTS_BY_SCENARIO.values():
+            relpaths.extend(values)
+
+    run_years = atlas_run_years(settings)
+    if run_years:
+        filtered = []
+        for relpath in relpaths:
+            rel_no_ext = relpath.rsplit(".", 1)[0]
+            rel_key = rel_no_ext.replace("/", "_")
+            match = _YEAR_SUFFIX.search(rel_key)
+            if match and int(match.group(1)) not in run_years:
+                continue
+            filtered.append(relpath)
+        relpaths = filtered
+
+    # Preserve order while removing duplicates.
+    seen = set()
+    deduped = []
+    for relpath in relpaths:
+        if relpath in seen:
+            continue
+        seen.add(relpath)
+        deduped.append(relpath)
+    return tuple(deduped)
+
+
+def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
+    relpaths = atlas_static_input_relpaths(settings)
 
     keys = []
     for relpath in relpaths:
         rel_no_ext = relpath.rsplit(".", 1)[0]
-        candidate = rel_no_ext.replace("/", "_")
+        candidate = rel_no_ext.replace("\\", "/")
         key = sanitize_artifact_key(candidate) or candidate
         keys.append(key)
     return tuple(keys)

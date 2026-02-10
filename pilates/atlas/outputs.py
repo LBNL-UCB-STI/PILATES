@@ -7,7 +7,7 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.outputs_base import StepOutputsBase
-from pilates.workflows.artifact_constants import USIM_H5_UPDATED
+from pilates.workflows.artifact_keys import USIM_H5_UPDATED
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace

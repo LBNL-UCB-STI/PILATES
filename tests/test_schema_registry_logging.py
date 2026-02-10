@@ -56,3 +56,15 @@ def test_log_input_unknown_key_has_no_schema(monkeypatch):
     assert calls
     _, _, meta = calls[0]
     assert "schema" not in meta
+
+
+def test_log_input_alias_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    cr.log_input("/tmp/households.csv", key="asim_households_in", enabled=True)
+
+    assert calls
+    _, key, meta = calls[0]
+    assert key == "asim_households_in"
+    assert meta["schema"].__name__ == "HouseholdsAsimIn"

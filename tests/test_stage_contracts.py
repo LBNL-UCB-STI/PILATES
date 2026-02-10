@@ -1,3 +1,21 @@
+"""
+Narrative contract tests for stage orchestration wiring.
+
+This module documents how major workflow stages are expected to assemble and
+exchange inputs/outputs through the scenario coupler:
+
+1. Land use stage must publish UrbanSim datastore handles.
+2. Vehicle ownership stage must consume datastore inputs and preserve coupler
+   continuity for downstream stages.
+3. Supply-demand stage must wire ActivitySim/BEAM inputs with the canonical
+   input resolution rules and avoid over-requiring optional warmstart artifacts.
+4. BEAM postprocess key selection must include only the artifacts required by
+   the postprocess phase and maintain legacy fallback behavior.
+
+The tests use lightweight fakes (``FakeScenario`` and ``CouplerStub``) to make
+contract expectations explicit without running heavy model containers.
+"""
+
 from pathlib import Path
 
 import pytest
@@ -5,7 +23,7 @@ import yaml
 
 from pilates.config import load_config
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -14,6 +32,8 @@ from pilates.workflows.artifact_constants import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
@@ -22,11 +42,18 @@ from pilates.workflows.artifact_constants import (
 from pilates.workspace import Workspace
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages.supply_demand import (
+    _build_beam_postprocess_input_keys,
+    _run_traffic_assignment_phase,
+    TrafficAssignmentPhaseInputs,
+)
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from workflow_state import WorkflowState
 
 
 class CouplerStub:
+    """Minimal in-memory coupler implementation for stage contract tests."""
+
     def __init__(self) -> None:
         self._values = {}
 
@@ -52,14 +79,32 @@ class CouplerStub:
 
 
 class FakeScenario:
+    """
+    Scenario stub that enforces coupler key requirements and records each call.
+
+    This mirrors the contract-level behavior we depend on in production:
+    ``inputs`` materialize concrete values, while ``input_keys`` must already
+    exist in the coupler.
+    """
+
     def __init__(self, coupler: CouplerStub) -> None:
         self.coupler = coupler
+        self.calls = []
 
     def run(self, **kwargs):
         import inspect
 
         inputs = kwargs.get("inputs") or {}
         input_keys = kwargs.get("input_keys") or []
+        fn = kwargs["fn"]
+        self.calls.append(
+            {
+                "fn_name": getattr(fn, "__name__", "<unknown>"),
+                "model": kwargs.get("model"),
+                "inputs": dict(inputs),
+                "input_keys": list(input_keys),
+            }
+        )
         for key, value in inputs.items():
             self.coupler.set(key, value)
         for key in input_keys:
@@ -67,7 +112,6 @@ class FakeScenario:
 
         runtime_kwargs = kwargs.get("runtime_kwargs") or {}
         fn_kwargs = dict(runtime_kwargs)
-        fn = kwargs["fn"]
         sig = inspect.signature(fn)
         accepts_kwargs = any(
             param.kind == inspect.Parameter.VAR_KEYWORD
@@ -90,6 +134,8 @@ class FakeScenario:
 
 
 class DummyPreprocessor:
+    """Deterministic preprocessor stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -99,6 +145,8 @@ class DummyPreprocessor:
 
 
 class DummyRunner:
+    """Deterministic runner stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -108,6 +156,8 @@ class DummyRunner:
 
 
 class DummyPostprocessor:
+    """Deterministic postprocessor stub backed by ``record_builder``."""
+
     def __init__(self, model_name, record_builder):
         self.model_name = model_name
         self._record_builder = record_builder
@@ -122,6 +172,8 @@ def _write_file(path: Path, content: str = "x") -> None:
 
 
 def _build_settings(tmp_path: Path):
+    """Build a compact workflow config that exercises all stage contracts."""
+
     config = {
         "run": {
             "region": "test",
@@ -205,6 +257,13 @@ def _build_settings(tmp_path: Path):
 
 @pytest.fixture
 def stage_env(tmp_path, monkeypatch):
+    """
+    Shared stage test harness with fake models, workspace, and scenario.
+
+    The fixture seeds files/artifacts that each stage expects so individual
+    tests can focus on wiring contracts rather than file setup.
+    """
+
     from pilates.utils import consist_runtime as cr
 
     cr.set_enabled(False)
@@ -354,6 +413,7 @@ def stage_env(tmp_path, monkeypatch):
 
 
 def test_land_use_stage_contract(stage_env):
+    """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
 
     outputs_holder = StepOutputsHolder()
@@ -367,12 +427,17 @@ def test_land_use_stage_contract(stage_env):
         year=stage_env["state"].forecast_year,
         outputs_holder_year=outputs_holder,
     )
-    assert USIM_DATASTORE_H5 in usim_inputs
+    assert USIM_DATASTORE_BASE_H5 in usim_inputs
+    assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+    assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
 def test_vehicle_ownership_stage_contract(stage_env):
-    stage_env["coupler"].set(USIM_DATASTORE_H5, stage_env["usim_input_path"])
+    """Vehicle ownership should consume UrbanSim inputs and keep datastore state."""
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     run_vehicle_ownership_stage(
         scenario=stage_env["scenario"],
         state=stage_env["state"],
@@ -386,8 +451,13 @@ def test_vehicle_ownership_stage_contract(stage_env):
 
 
 def test_supply_demand_stage_contract(stage_env, tmp_path):
-    stage_env["coupler"].set(USIM_DATASTORE_H5, stage_env["usim_input_path"])
-    usim_inputs = {USIM_DATASTORE_H5: stage_env["usim_input_path"]}
+    """Supply-demand should run ActivitySim with resolved required input keys."""
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
     state = stage_env["state"]
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
@@ -407,3 +477,236 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
         build_manifest_path=_build_manifest_path,
     )
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
+    asim_run_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if ZARR_SKIMS in (call.get("input_keys") or [])
+        and ASIM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and ASIM_PERSONS_IN in (call.get("input_keys") or [])
+        and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
+    ]
+    assert asim_run_calls, "Expected an ActivitySim run step call."
+    assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
+
+
+def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):
+    """
+    Beam-only mode should source default scenario plans/households/persons.
+
+    This documents behavior when ActivitySim is disabled and BEAM starts from
+    static scenario files instead of coupler-provided activity-demand outputs.
+    """
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    state._settings["activity_demand_enabled"] = False
+    state.enabled_stages.discard(state.Stage.activity_demand)
+    state.loop_substages = [state.Stage.traffic_assignment]
+
+    scenario_dir = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.scenario_folder
+    )
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    default_plans = scenario_dir / "plans.parquet"
+    default_households = scenario_dir / "households.parquet"
+    default_persons = scenario_dir / "persons.parquet"
+    _write_file(default_plans)
+    _write_file(default_households)
+    _write_file(default_persons)
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_beam_only_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    beam_preprocess_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in call["inputs"]
+        and BEAM_HOUSEHOLDS_IN in call["inputs"]
+        and BEAM_PERSONS_IN in call["inputs"]
+    ]
+    assert beam_preprocess_calls, "Expected a BEAM preprocess step call with default inputs."
+    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
+    assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
+    assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
+    assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
+
+    beam_run_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
+    ]
+    assert beam_run_calls, "Expected BEAM run step call."
+    run_input_keys = beam_run_calls[0].get("input_keys") or []
+    assert BEAM_PLANS_IN in run_input_keys
+    assert BEAM_HOUSEHOLDS_IN in run_input_keys
+    assert BEAM_PERSONS_IN in run_input_keys
+
+
+def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
+    stage_env, monkeypatch, tmp_path
+):
+    """
+    Regression: do not require LINKSTATS_WARMSTART unless that exact key is
+    present in beam_preprocess_inputs.
+    """
+    from pilates.generic.model_factory import ModelFactory
+    from pilates.workflows.steps import StepOutputsHolder
+    from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    asim_outputs = RecordStore(
+        recordList=[
+            FileRecord(file_path=str(tmp_path / "beam_plans_out.parquet"), short_name="beam_plans_out"),
+            FileRecord(file_path=str(tmp_path / "households_asim_out.parquet"), short_name="households_asim_out"),
+            FileRecord(file_path=str(tmp_path / "persons_asim_out.parquet"), short_name="persons_asim_out"),
+        ]
+    )
+    zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    coupler.set(ZARR_SKIMS, str(zarr_path))
+    linkstats_history_path = tmp_path / "linkstats_parquet_2018_0.parquet"
+    _write_file(linkstats_history_path)
+    previous_beam_outputs = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(linkstats_history_path),
+                short_name="linkstats_parquet_2018_0",
+            )
+        ]
+    )
+
+    class _BeamPreprocessorNoWarmstart:
+        def preprocess(self, workspace, previous_records=RecordStore()):
+            beam_dir = Path(workspace.get_beam_mutable_data_dir())
+            plans = beam_dir / "plans.csv"
+            households = beam_dir / "households.csv"
+            persons = beam_dir / "persons.csv"
+            for path in (plans, households, persons):
+                _write_file(path)
+            return RecordStore(
+                recordList=[
+                    FileRecord(file_path=str(plans), short_name=BEAM_PLANS_IN),
+                    FileRecord(file_path=str(households), short_name=BEAM_HOUSEHOLDS_IN),
+                    FileRecord(file_path=str(persons), short_name=BEAM_PERSONS_IN),
+                ]
+            )
+
+    original_get_preprocessor = ModelFactory.get_preprocessor
+
+    def _patched_get_preprocessor(self, model_name, state=None, major_stage=None):
+        if model_name == "beam":
+            return _BeamPreprocessorNoWarmstart()
+        return original_get_preprocessor(self, model_name, state, major_stage)
+
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
+
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path(workspace.get_asim_output_dir()),
+    )
+
+    _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            activity_demand_outputs=asim_outputs,
+            previous_beam_outputs=previous_beam_outputs,
+        ),
+        outputs_holder=outputs_holder,
+    )
+
+    beam_run_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
+    ]
+    assert beam_run_calls, "Expected BEAM run step to execute."
+    assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
+
+
+def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
+    """Postprocess key builder should include only artifacts consumed downstream."""
+    keys = [
+        "beam_output_counts_xml_2018_0",
+        "linkstats_parquet_2018_0",
+        "raw_od_skims_2018_0",
+        "raw_od_skims_2018_0_sub0",
+        "raw_od_skims_zarr_2018_0",
+        "events_parquet_2018_0",
+        "events_parquet_2018_0_sub0",
+    ]
+    selected = _build_beam_postprocess_input_keys(
+        upstream_keys=keys,
+        year=2018,
+        iteration=0,
+        include_zarr_skims=True,
+    )
+    assert selected is not None
+    assert "raw_od_skims_2018_0" in selected
+    assert "raw_od_skims_zarr_2018_0" in selected
+    assert "events_parquet_2018_0" in selected
+    assert ZARR_SKIMS in selected
+    assert "beam_output_counts_xml_2018_0" not in selected
+    assert "linkstats_parquet_2018_0" not in selected
+
+
+def test_build_beam_postprocess_input_keys_falls_back_for_legacy_names():
+    """Legacy naming fallbacks remain supported for compatibility."""
+    keys = [
+        "raw_od_skims_legacy",
+        "events_parquet_legacy",
+        "beam_output_network_xml_2018_0",
+    ]
+    selected = _build_beam_postprocess_input_keys(
+        upstream_keys=keys,
+        year=2018,
+        iteration=0,
+        include_zarr_skims=False,
+    )
+    assert selected == ["raw_od_skims_legacy", "events_parquet_legacy"]

@@ -1,9 +1,12 @@
 from pathlib import Path
-from typing import Any, Dict, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.urbansim import postprocessor as usim_post
-from pilates.workflows.artifact_constants import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -38,8 +41,10 @@ def build_urbansim_inputs(
     Notes
     -----
     Input keys
-        - ``usim_datastore_h5``: UrbanSim datastore containing base-year or
-          prior-year land use and demographic tables (H5).
+        - ``usim_datastore_base_h5``: UrbanSim datastore treated as static/
+          exogenous baseline input for the run year (H5).
+        - ``usim_datastore_h5``: UrbanSim current mutable datastore used by
+          active workflow steps for this year (H5).
         - ``usim_mutable_data_dir``: UrbanSim mutable data directory used as
           the container input/output mount.
     Related outputs
@@ -55,17 +60,44 @@ def build_urbansim_inputs(
     usim_input_fname = usim_post.get_usim_datastore_fname(settings, io="input")
     usim_input_path = usim_data_dir / usim_input_fname
 
-    if usim_input_path.exists():
-        inputs[USIM_DATASTORE_H5] = str(usim_input_path)
-    elif not state.is_start_year():
+    base_path: Optional[Path] = usim_input_path if usim_input_path.exists() else None
+
+    current_path: Optional[Path] = None
+    if state.is_start_year():
+        current_path = base_path
+    else:
         usim_output_fname = usim_post.get_usim_datastore_fname(
             settings, io="output", year=year
         )
         usim_output_path = usim_data_dir / usim_output_fname
         if usim_output_path.exists():
-            inputs[USIM_DATASTORE_H5] = str(usim_output_path)
+            current_path = usim_output_path
+        elif base_path is not None:
+            # Fallback for workflows that intentionally operate from base only.
+            current_path = base_path
 
-    if USIM_DATASTORE_H5 in inputs:
-        descriptions[USIM_DATASTORE_H5] = f"UrbanSim input datastore for year {year}"
+    if base_path is not None:
+        inputs[USIM_DATASTORE_BASE_H5] = str(base_path)
+        descriptions[USIM_DATASTORE_BASE_H5] = (
+            f"UrbanSim base datastore for year {year}"
+        )
+
+    if current_path is not None:
+        inputs[USIM_DATASTORE_CURRENT_H5] = str(current_path)
+        descriptions[USIM_DATASTORE_CURRENT_H5] = (
+            f"UrbanSim current datastore for year {year}"
+        )
+
+    # If only one path exists, keep both semantics available.
+    if USIM_DATASTORE_BASE_H5 not in inputs and USIM_DATASTORE_CURRENT_H5 in inputs:
+        inputs[USIM_DATASTORE_BASE_H5] = inputs[USIM_DATASTORE_CURRENT_H5]
+        descriptions[USIM_DATASTORE_BASE_H5] = (
+            f"UrbanSim base datastore for year {year} (fallback)"
+        )
+    if USIM_DATASTORE_CURRENT_H5 not in inputs and USIM_DATASTORE_BASE_H5 in inputs:
+        inputs[USIM_DATASTORE_CURRENT_H5] = inputs[USIM_DATASTORE_BASE_H5]
+        descriptions[USIM_DATASTORE_CURRENT_H5] = (
+            f"UrbanSim current datastore for year {year} (fallback)"
+        )
 
     return inputs, descriptions

@@ -8,7 +8,7 @@ import json
 
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -111,6 +111,11 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "mutable_data_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+    )
     record_keys: ClassVar[Dict[str, str]] = {
         "land_use_table": ASIM_LAND_USE_IN,
         "households_table": ASIM_HOUSEHOLDS_IN,

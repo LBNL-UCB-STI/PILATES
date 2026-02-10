@@ -12,7 +12,7 @@ from pilates.activitysim.outputs import (
     write_asim_run_marker,
     clear_asim_run_marker,
 )
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -88,7 +88,6 @@ class ActivitysimCompileRunner(GenericRunner):
         self.required_input_files = [
             ASIM_OMX_SKIMS,
             "asim_geoms",
-            "asim_configs",
             ASIM_PERSONS_IN,
             ASIM_HOUSEHOLDS_IN,
             ASIM_LAND_USE_IN,
@@ -239,7 +238,6 @@ class ActivitysimRunner(GenericRunner):
             ASIM_OMX_SKIMS,
             "zarr_skims",
             "asim_geoms",
-            "asim_configs",
         ]
 
     @staticmethod

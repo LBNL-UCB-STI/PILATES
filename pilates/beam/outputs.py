@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import FINAL_SKIMS_OMX, ZARR_SKIMS
+from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX, ZARR_SKIMS
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:

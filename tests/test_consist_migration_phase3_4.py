@@ -47,11 +47,10 @@ def test_provenance_logging_requires_active_run_when_enabled(monkeypatch):
         def do(self, input_store: RecordStore) -> RecordStore:
             return RecordStore(recordList=[])
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: None)
 
     model = DummyModel("dummy", state)
-    with pytest.raises(RuntimeError, match="active run context"):
+    with pytest.raises(RuntimeError, match="No active Consist run context"):
         model.do(RecordStore())
 
 
@@ -70,7 +69,6 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
                 ]
             )
 
-    monkeypatch.setattr(cr, "consist_available", lambda _: True)
     monkeypatch.setattr(cr, "current_run", lambda: object())
 
     def _log_artifacts(mapping, **meta):
@@ -94,6 +92,60 @@ def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
     assert calls[0][0] == {"input_store": "/tmp/in.txt"}
     assert calls[1][1]["direction"] == "output"
     assert calls[1][0] == {"out": "/tmp/out.txt"}
+
+
+def test_provenance_logging_forwards_batch_artifact_facets(monkeypatch):
+    state = _StubState()
+    calls = []
+
+    class DummyModel(Model):
+        @provenance_logging
+        def do(self, input_store: RecordStore) -> RecordStore:
+            return RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path="/tmp/linkstats.parquet",
+                        short_name="linkstats_ps2",
+                        description="linkstats",
+                        metadata={
+                            "facet": {
+                                "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+                                "year": 2030,
+                                "iteration": 7,
+                                "beam_sub_iteration": 0,
+                                "phys_sim_iteration": 2,
+                            },
+                            "facet_schema_version": "v1",
+                            "facet_index": True,
+                        },
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(cr, "current_run", lambda: object())
+    monkeypatch.setattr(cr, "log_meta", lambda **_: None)
+
+    def _log_artifacts(mapping, **meta):
+        calls.append((mapping, meta))
+
+    monkeypatch.setattr(cr, "log_artifacts", _log_artifacts)
+
+    input_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path="/tmp/in.txt", short_name="input_store", description="in"
+            )
+        ]
+    )
+    model = DummyModel("dummy", state)
+    model.do(input_store=input_store)
+
+    output_calls = [c for c in calls if c[1].get("direction") == "output"]
+    assert output_calls, "Expected output log_artifacts call"
+    _mapping, meta = output_calls[0]
+    assert meta["facet_index"] is True
+    assert meta["facets_by_key"]["linkstats_ps2"]["phys_sim_iteration"] == 2
+    assert meta["facet_schema_versions_by_key"]["linkstats_ps2"] == "v1"
 
 
 def test_decorator_logs_artifacts_with_consist(monkeypatch, tmp_path):
@@ -202,3 +254,77 @@ def test_run_container_uses_current_tracker(monkeypatch, tmp_path):
 
     assert ok is True
     assert called.get("tracker") is tracker
+
+
+def test_scenario_run_hash_includes_coupler_input_keys(tmp_path):
+    pytest.importorskip("consist")
+    from consist import Tracker
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "consist_test.duckdb"),
+        mounts={"workspace": str(tmp_path)},
+    )
+
+    plans_path = tmp_path / "plans.parquet"
+    consumer_out = tmp_path / "consumer.out"
+    plans_path.write_text("plans-v1")
+    consume_calls = {"count": 0}
+
+    def _consume():
+        consume_calls["count"] += 1
+        consumer_out.write_text(f"consume-{consume_calls['count']}")
+
+    with cr.scenario("hash-inputs-test", tracker=tracker) as scenario:
+        scenario.run(
+            fn=lambda: None,
+            name="seed_plans",
+            model="seed_plans",
+            output_paths={"plans_beam_in": str(plans_path)},
+            cache_mode="off",
+        )
+
+        first = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+        second = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+
+        plans_path.write_text("plans-v2")
+        scenario.run(
+            fn=lambda: None,
+            name="seed_plans_refresh",
+            model="seed_plans",
+            output_paths={"plans_beam_in": str(plans_path)},
+            cache_mode="off",
+        )
+        third = scenario.run(
+            fn=_consume,
+            name="beam_run_consumer",
+            model="beam_run",
+            year=2018,
+            iteration=0,
+            phase="run",
+            input_keys=["plans_beam_in"],
+            output_paths={"consumer_out": str(consumer_out)},
+        )
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert third.cache_hit is False
+    assert consume_calls["count"] == 2

@@ -146,17 +146,60 @@ def deserialize_step_outputs(
     return output_class(**kwargs)
 
 
+def declared_outputs_for_step_outputs_class(
+    outputs_class: Type[Any],
+) -> Tuple[str, ...]:
+    """
+    Resolve canonical declared output keys for a ``StepOutputs`` class.
+
+    Precedence:
+    1. Explicit ``declared_outputs`` class attribute.
+    2. Fallback to required ``record_keys`` fields.
+
+    Parameters
+    ----------
+    outputs_class : type
+        Step outputs dataclass type.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered, deduplicated output key tuple.
+    """
+    explicit = getattr(outputs_class, "declared_outputs", None) or ()
+    explicit_keys = [key for key in explicit if isinstance(key, str)]
+    if explicit_keys:
+        return tuple(dict.fromkeys(explicit_keys))
+
+    record_keys = getattr(outputs_class, "record_keys", None) or {}
+    required_fields = getattr(outputs_class, "required_path_fields", ()) or ()
+    inferred: list[str] = []
+    for field_name in required_fields:
+        key = record_keys.get(field_name)
+        if isinstance(key, str):
+            inferred.append(key)
+    return tuple(dict.fromkeys(inferred))
+
+
 class StepOutputsBase:
     """
     Base class for typed step outputs with RecordStore conversion.
     """
 
+    declared_outputs: ClassVar[Tuple[str, ...]] = ()
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = ()
     dict_path_fields: ClassVar[Tuple[str, ...]] = ()
+
+    @classmethod
+    def declared_output_keys(cls) -> Tuple[str, ...]:
+        """
+        Return canonical declared output keys for this ``StepOutputs`` class.
+        """
+        return declared_outputs_for_step_outputs_class(cls)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

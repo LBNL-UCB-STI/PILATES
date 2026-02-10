@@ -1,0 +1,3 @@
+PROBS_SPEC: atwork_probs.csv
+CONSTANTS:
+  ATWORK_FLAG: true

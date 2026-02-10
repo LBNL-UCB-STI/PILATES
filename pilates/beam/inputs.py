@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import resolve_artifact_from_value, log_coupler_value
-from pilates.workflows.artifact_constants import ZARR_SKIMS
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace

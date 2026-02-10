@@ -1,0 +1,5 @@
+include_settings: constants.yaml
+SPEC: stop_frequency_coeffs.csv
+PROBS_SPEC: stop_frequency_probs.csv
+COEFFICIENTS: cdap_interaction_coefficients.csv
+COEFFICIENT_TEMPLATE: tour_mode_choice_coefficients_template.csv

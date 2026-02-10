@@ -40,6 +40,11 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
     if not isinstance(record_store, _RecordStore):
         return
 
+    bulk_mapping = {}
+    metadata_by_key = {}
+    facets_by_key = {}
+    facet_schema_versions_by_key = {}
+    facet_index_enabled = False
     for record in record_store.all_records():
         key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
         if not key:
@@ -60,7 +65,7 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
             continue
 
         description = getattr(record, "description", None)
-        meta = getattr(record, "metadata", None) or {}
+        meta = dict(getattr(record, "metadata", None) or {})
         if tables_used:
             table_filter = _h5_table_filter_from_list(tables_used)
             cr.log_h5_container(
@@ -72,10 +77,33 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
                 **meta,
             )
         else:
-            if direction == "input":
-                cr.log_input(path, key=key, description=description, **meta)
-            else:
-                cr.log_output(path, key=key, description=description, **meta)
+            bulk_mapping[key] = path
+            facet = meta.pop("facet", None)
+            facet_schema_version = meta.pop("facet_schema_version", None)
+            facet_index = bool(meta.pop("facet_index", False))
+
+            if description and "description" not in meta:
+                meta["description"] = description
+            if meta:
+                metadata_by_key[key] = meta
+            if facet is not None:
+                facets_by_key[key] = facet
+            if facet_schema_version is not None:
+                facet_schema_versions_by_key[key] = facet_schema_version
+            if facet_index:
+                facet_index_enabled = True
+
+    if bulk_mapping:
+        kwargs = {"direction": direction}
+        if metadata_by_key:
+            kwargs["metadata_by_key"] = metadata_by_key
+        if facets_by_key:
+            kwargs["facets_by_key"] = facets_by_key
+        if facet_schema_versions_by_key:
+            kwargs["facet_schema_versions_by_key"] = facet_schema_versions_by_key
+        if facet_index_enabled:
+            kwargs["facet_index"] = True
+        cr.log_artifacts(bulk_mapping, **kwargs)
 
 
 def provenance_logging(func):
@@ -129,9 +157,9 @@ def provenance_logging(func):
                 "Ensure Model was instantiated with a valid WorkflowState."
             )
 
-        if cr.consist_available(self.state.full_settings) and cr.current_run() is None:
+        if cr.current_run() is None:
             raise RuntimeError(
-                f"[{self.model_name}] Consist enabled but no active run context. "
+                f"[{self.model_name}] No active Consist run context. "
                 "Ensure this method is called within `scenario.run(...)` or `scenario.trace(...)`."
             )
 

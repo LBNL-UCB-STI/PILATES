@@ -6,7 +6,8 @@ from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
 )
@@ -88,6 +89,7 @@ class UrbanSimRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     usim_datastore_h5: Optional[Path]
