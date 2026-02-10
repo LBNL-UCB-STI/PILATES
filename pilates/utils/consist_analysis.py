@@ -35,6 +35,20 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and pd.isna(value):
+            return "NULL"
+        return str(value)
+    if pd.isna(value):
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _stable_linkstats_grouped_view_name(
     *,
     namespace: str,
@@ -520,24 +534,42 @@ def _summarize_linkstats_grouped_view(
     *,
     tracker: Any,
     view_name: str,
+    artifact_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     quoted_view = _quote_ident(view_name)
-    with Session(tracker.engine) as session:
-        rows = session.exec(
-            text(
-                f"""
+    query = f"""
+        SELECT
+            CAST(src.consist_artifact_id AS VARCHAR) AS artifact_id,
+            COUNT(*) AS row_count,
+            COUNT(DISTINCT src.link) AS distinct_links,
+            SUM(src.volume) AS volume_sum,
+            AVG(src.traveltime) AS traveltime_mean,
+            quantile_cont(src.traveltime, 0.95) AS traveltime_p95
+        FROM {quoted_view} src
+    """
+    if artifact_ids:
+        unique_ids = sorted({str(v) for v in artifact_ids if str(v).strip()})
+        if unique_ids:
+            values_sql = ", ".join(f"({_sql_literal(v)})" for v in unique_ids)
+            query = f"""
+                WITH target_artifacts(artifact_id) AS (
+                    VALUES {values_sql}
+                )
                 SELECT
-                    CAST(consist_artifact_id AS VARCHAR) AS artifact_id,
+                    CAST(src.consist_artifact_id AS VARCHAR) AS artifact_id,
                     COUNT(*) AS row_count,
-                    COUNT(DISTINCT link) AS distinct_links,
-                    SUM(volume) AS volume_sum,
-                    AVG(traveltime) AS traveltime_mean,
-                    quantile_cont(traveltime, 0.95) AS traveltime_p95
-                FROM {quoted_view}
-                GROUP BY 1
-                """
-            )
-        ).all()
+                    COUNT(DISTINCT src.link) AS distinct_links,
+                    SUM(src.volume) AS volume_sum,
+                    AVG(src.traveltime) AS traveltime_mean,
+                    quantile_cont(src.traveltime, 0.95) AS traveltime_p95
+                FROM {quoted_view} src
+                JOIN target_artifacts ta
+                  ON CAST(src.consist_artifact_id AS VARCHAR) = ta.artifact_id
+            """
+    query += "\nGROUP BY 1"
+
+    with Session(tracker.engine) as session:
+        rows = session.exec(text(query)).all()
 
     frame = pd.DataFrame(
         rows,
@@ -566,70 +598,208 @@ def _summarize_linkstats_grouped_view(
     return frame
 
 
-def _summarize_linkstats_grouped_view_delta(
+def _summarize_linkstats_grouped_view_deltas_bulk(
     *,
     tracker: Any,
     view_name: str,
-    current_artifact_id: str,
-    previous_artifact_id: str,
-) -> Dict[str, Any]:
+    pairs_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if pairs_df.empty:
+        return pd.DataFrame()
+
+    required = {
+        "year",
+        "iteration",
+        "beam_sub_iteration",
+        "phys_sim_iteration_prev",
+        "phys_sim_iteration_curr",
+        "artifact_id_prev",
+        "artifact_id_curr",
+        "key_prev",
+        "key_curr",
+    }
+    missing = sorted(required - set(pairs_df.columns))
+    if missing:
+        raise ValueError(f"pairs_df missing required columns: {missing}")
+
+    rows_sql: list[str] = []
+    for pair_id, row in enumerate(pairs_df.itertuples(index=False)):
+        rows_sql.append(
+            "("
+            + ", ".join(
+                [
+                    str(pair_id),
+                    _sql_literal(getattr(row, "year")),
+                    _sql_literal(getattr(row, "iteration")),
+                    _sql_literal(getattr(row, "beam_sub_iteration")),
+                    _sql_literal(getattr(row, "phys_sim_iteration_prev")),
+                    _sql_literal(getattr(row, "phys_sim_iteration_curr")),
+                    _sql_literal(str(getattr(row, "artifact_id_prev"))),
+                    _sql_literal(str(getattr(row, "artifact_id_curr"))),
+                    _sql_literal(getattr(row, "key_prev")),
+                    _sql_literal(getattr(row, "key_curr")),
+                ]
+            )
+            + ")"
+        )
+
     quoted_view = _quote_ident(view_name)
-    delta_query = text(
+    query = text(
         f"""
-        WITH current_agg AS (
-            SELECT
-                link,
-                hour,
-                SUM(volume) AS volume,
-                AVG(traveltime) AS traveltime
-            FROM {quoted_view}
-            WHERE CAST(consist_artifact_id AS VARCHAR) = :current_artifact_id
-            GROUP BY 1, 2
+        WITH pairs(
+            pair_id,
+            year,
+            iteration,
+            beam_sub_iteration,
+            phys_sim_iteration_prev,
+            phys_sim_iteration_curr,
+            artifact_id_prev,
+            artifact_id_curr,
+            key_prev,
+            key_curr
+        ) AS (
+            VALUES
+                {", ".join(rows_sql)}
         ),
-        previous_agg AS (
+        relevant_artifacts(artifact_id) AS (
+            SELECT artifact_id_prev FROM pairs
+            UNION
+            SELECT artifact_id_curr FROM pairs
+        ),
+        agg AS (
             SELECT
+                CAST(consist_artifact_id AS VARCHAR) AS artifact_id,
                 link,
                 hour,
                 SUM(volume) AS volume,
                 AVG(traveltime) AS traveltime
             FROM {quoted_view}
-            WHERE CAST(consist_artifact_id AS VARCHAR) = :previous_artifact_id
-            GROUP BY 1, 2
+            WHERE CAST(consist_artifact_id AS VARCHAR) IN (
+                SELECT artifact_id FROM relevant_artifacts
+            )
+            GROUP BY 1, 2, 3
+        ),
+        pair_rows AS (
+            SELECT
+                p.pair_id,
+                p.year,
+                p.iteration,
+                p.beam_sub_iteration,
+                p.phys_sim_iteration_prev,
+                p.phys_sim_iteration_curr,
+                p.artifact_id_prev,
+                p.artifact_id_curr,
+                p.key_prev,
+                p.key_curr,
+                a.link,
+                a.hour,
+                a.volume AS volume_prev,
+                0.0 AS volume_curr,
+                a.traveltime AS traveltime_prev,
+                0.0 AS traveltime_curr
+            FROM pairs p
+            JOIN agg a ON a.artifact_id = p.artifact_id_prev
+            UNION ALL
+            SELECT
+                p.pair_id,
+                p.year,
+                p.iteration,
+                p.beam_sub_iteration,
+                p.phys_sim_iteration_prev,
+                p.phys_sim_iteration_curr,
+                p.artifact_id_prev,
+                p.artifact_id_curr,
+                p.key_prev,
+                p.key_curr,
+                a.link,
+                a.hour,
+                0.0 AS volume_prev,
+                a.volume AS volume_curr,
+                0.0 AS traveltime_prev,
+                a.traveltime AS traveltime_curr
+            FROM pairs p
+            JOIN agg a ON a.artifact_id = p.artifact_id_curr
         ),
         joined AS (
             SELECT
-                COALESCE(c.link, p.link) AS link,
-                COALESCE(c.hour, p.hour) AS hour,
-                COALESCE(c.volume, 0.0) AS volume_current,
-                COALESCE(p.volume, 0.0) AS volume_previous,
-                COALESCE(c.traveltime, 0.0) AS traveltime_current,
-                COALESCE(p.traveltime, 0.0) AS traveltime_previous
-            FROM current_agg c
-            FULL OUTER JOIN previous_agg p
-                ON c.link = p.link AND c.hour = p.hour
+                pair_id,
+                year,
+                iteration,
+                beam_sub_iteration,
+                phys_sim_iteration_prev,
+                phys_sim_iteration_curr,
+                artifact_id_prev,
+                artifact_id_curr,
+                key_prev,
+                key_curr,
+                link,
+                hour,
+                SUM(volume_prev) AS volume_previous,
+                SUM(volume_curr) AS volume_current,
+                SUM(traveltime_prev) AS traveltime_previous,
+                SUM(traveltime_curr) AS traveltime_current
+            FROM pair_rows
+            GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12
         )
         SELECT
+            year,
+            iteration,
+            beam_sub_iteration,
+            phys_sim_iteration_prev,
+            phys_sim_iteration_curr,
+            artifact_id_prev,
+            artifact_id_curr,
+            key_prev,
+            key_curr,
             COUNT(*) AS group_count,
             AVG(volume_current - volume_previous) AS volume_delta_mean,
             AVG(ABS(volume_current - volume_previous)) AS volume_delta_abs_mean,
             AVG(traveltime_current - traveltime_previous) AS traveltime_delta_mean,
             AVG(ABS(traveltime_current - traveltime_previous)) AS traveltime_delta_abs_mean
         FROM joined
+        GROUP BY 1,2,3,4,5,6,7,8,9
+        ORDER BY year, iteration, beam_sub_iteration, phys_sim_iteration_curr
         """
-    ).bindparams(
-        current_artifact_id=str(current_artifact_id),
-        previous_artifact_id=str(previous_artifact_id),
     )
     with Session(tracker.engine) as session:
-        row = session.exec(delta_query).first()
-    row = row or (0, 0.0, 0.0, 0.0, 0.0)
-    return {
-        "group_count": int(row[0]) if row and row[0] is not None else 0,
-        "volume_delta_mean": float(row[1]) if row and row[1] is not None else 0.0,
-        "volume_delta_abs_mean": float(row[2]) if row and row[2] is not None else 0.0,
-        "traveltime_delta_mean": float(row[3]) if row and row[3] is not None else 0.0,
-        "traveltime_delta_abs_mean": float(row[4]) if row and row[4] is not None else 0.0,
-    }
+        result_rows = session.exec(query).all()
+
+    frame = pd.DataFrame(
+        result_rows,
+        columns=[
+            "year",
+            "iteration",
+            "beam_sub_iteration",
+            "phys_sim_iteration_prev",
+            "phys_sim_iteration_curr",
+            "artifact_id_prev",
+            "artifact_id_curr",
+            "key_prev",
+            "key_curr",
+            "group_count",
+            "volume_delta_mean",
+            "volume_delta_abs_mean",
+            "traveltime_delta_mean",
+            "traveltime_delta_abs_mean",
+        ],
+    )
+    if frame.empty:
+        return frame
+    for column in (
+        "year",
+        "iteration",
+        "beam_sub_iteration",
+        "phys_sim_iteration_prev",
+        "phys_sim_iteration_curr",
+        "group_count",
+        "volume_delta_mean",
+        "volume_delta_abs_mean",
+        "traveltime_delta_mean",
+        "traveltime_delta_abs_mean",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame["group_count"] = frame["group_count"].fillna(0).astype(int)
+    return frame
 
 
 def summarize_linkstats_artifacts(
@@ -666,6 +836,7 @@ def summarize_linkstats_artifacts(
     stats_df = _summarize_linkstats_grouped_view(
         tracker=tracker,
         view_name=grouped_view,
+        artifact_ids=artifacts_df["artifact_id"].astype(str).tolist(),
     )
     if stats_df.empty and not artifacts_df.empty:
         grouped_view = _create_linkstats_grouped_view(
@@ -682,6 +853,7 @@ def summarize_linkstats_artifacts(
         stats_df = _summarize_linkstats_grouped_view(
             tracker=tracker,
             view_name=grouped_view,
+            artifact_ids=artifacts_df["artifact_id"].astype(str).tolist(),
         )
     if stats_df.empty:
         return pd.DataFrame()
@@ -716,7 +888,7 @@ def summarize_linkstats_deltas(
         raise ValueError("summary_df must reference exactly one grouped view in 'view_name'")
     grouped_view_name = non_null_views[0]
 
-    rows = []
+    pair_rows: list[Dict[str, Any]] = []
     group_cols = ["year", "iteration", "beam_sub_iteration"]
     for _, group in summary_df.groupby(group_cols, dropna=False):
         ordered = group.sort_values("phys_sim_iteration")
@@ -730,26 +902,31 @@ def summarize_linkstats_deltas(
             curr_artifact_id = getattr(curr_row, "artifact_id", None)
             if prev_artifact_id is None or curr_artifact_id is None:
                 continue
-            delta = _summarize_linkstats_grouped_view_delta(
-                tracker=tracker,
-                view_name=grouped_view_name,
-                current_artifact_id=str(curr_artifact_id),
-                previous_artifact_id=str(prev_artifact_id),
-            )
-            rows.append(
+            pair_rows.append(
                 {
                     "year": getattr(curr_row, "year"),
                     "iteration": getattr(curr_row, "iteration"),
                     "beam_sub_iteration": getattr(curr_row, "beam_sub_iteration"),
                     "phys_sim_iteration_prev": getattr(prev_row, "phys_sim_iteration"),
                     "phys_sim_iteration_curr": getattr(curr_row, "phys_sim_iteration"),
-                    "artifact_id_prev": prev_artifact_id,
-                    "artifact_id_curr": curr_artifact_id,
+                    "artifact_id_prev": str(prev_artifact_id),
+                    "artifact_id_curr": str(curr_artifact_id),
                     "key_prev": getattr(prev_row, "key", None),
                     "key_curr": getattr(curr_row, "key", None),
-                    "view_prev": getattr(prev_row, "view_name", None),
-                    "view_curr": getattr(curr_row, "view_name", None),
-                    **delta,
                 }
             )
-    return pd.DataFrame(rows)
+
+    if not pair_rows:
+        return pd.DataFrame()
+
+    pairs_df = pd.DataFrame(pair_rows)
+    delta_df = _summarize_linkstats_grouped_view_deltas_bulk(
+        tracker=tracker,
+        view_name=grouped_view_name,
+        pairs_df=pairs_df,
+    )
+    if delta_df.empty:
+        return delta_df
+    delta_df["view_prev"] = grouped_view_name
+    delta_df["view_curr"] = grouped_view_name
+    return delta_df
