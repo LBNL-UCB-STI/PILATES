@@ -132,16 +132,19 @@ _YEAR_SUFFIX = re.compile(r"_(\d{4})$")
 def atlas_run_years(settings: PilatesConfig) -> Set[int]:
     """
     Determine ATLAS run years from global run configuration.
+
+    ATLAS sub-runs advance in biannual cadence between configured run bounds.
+    This is intentionally independent of ``run.vehicle_ownership_freq``, which
+    controls higher-level stage cadence, not ATLAS internal sub-year steps.
     """
     run_cfg = getattr(settings, "run", None)
     if run_cfg is None:
         return set()
     start_year = getattr(run_cfg, "start_year", None)
     end_year = getattr(run_cfg, "end_year", None)
-    freq = getattr(run_cfg, "vehicle_ownership_freq", 1) or 1
     if start_year is None or end_year is None:
         return set()
-    return set(range(int(start_year), int(end_year) + 1, max(1, int(freq))))
+    return set(range(int(start_year), int(end_year) + 1, 2))
 
 
 def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
@@ -152,7 +155,7 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
     - scenario-specific adopt folder selection by `settings.atlas.scenario`
     - one selected `vehicle_type_mapping_*` file for known scenarios
     - unknown/no scenario falls back to all mapping files
-    - year-stamped files are limited to configured ATLAS run years
+    - year-stamped non-ADOPT files may be limited to configured ATLAS run years
     """
     scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
     scenario_key = str(scenario_name).lower() if scenario_name else None
@@ -191,6 +194,12 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
     if run_years:
         filtered = []
         for relpath in relpaths:
+            # ADOPT files are year-stamped snapshots that ATLAS may read from
+            # neighboring years (for example, outyear 2021 needs *_2019 files).
+            # Do not prune them by run-frequency year selection.
+            if relpath.replace("\\", "/").startswith("adopt/"):
+                filtered.append(relpath)
+                continue
             rel_no_ext = relpath.rsplit(".", 1)[0]
             rel_key = rel_no_ext.replace("/", "_")
             match = _YEAR_SUFFIX.search(rel_key)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Callable, Dict, Mapping, Union, Any
+from typing import Callable, Dict, Mapping, Union, Any, Optional
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -52,6 +52,52 @@ def _resolve_input_path(value: Any, workspace: Workspace) -> Union[str, None]:
     if isinstance(value, (str, os.PathLike)):
         return os.fspath(value)
     return None
+
+
+def select_atlas_usim_input_path(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    fallback_current_path: Optional[Union[str, os.PathLike]],
+    fallback_default_path: Optional[Union[str, os.PathLike]],
+) -> str:
+    """
+    Resolve the UrbanSim datastore path used by ATLAS preprocess.
+
+    Precedence:
+    1. Forecast output datastore (year-scoped snapshots).
+    2. Current datastore resolved from UrbanSim input builder.
+    3. Legacy default path.
+    """
+    if state.run_info_path and os.path.exists(state.run_info_path):
+        previous_run_dir = os.path.dirname(state.run_info_path)
+        usim_dir = os.path.join(previous_run_dir, "urbansim", "data")
+    else:
+        usim_dir = workspace.get_usim_mutable_data_dir()
+
+    forecast_output_path = os.path.join(
+        usim_dir,
+        settings.urbansim.output_file_template.format(year=state.forecast_year),
+    )
+
+    candidates = [
+        forecast_output_path,
+        os.fspath(fallback_current_path)
+        if isinstance(fallback_current_path, (str, os.PathLike))
+        else None,
+        os.fspath(fallback_default_path)
+        if isinstance(fallback_default_path, (str, os.PathLike))
+        else None,
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    for candidate in candidates[1:]:
+        if candidate:
+            return candidate
+    return forecast_output_path
 
 
 def run_vehicle_ownership_stage(
@@ -111,10 +157,25 @@ def run_vehicle_ownership_stage(
             year=state.forecast_year
         )
 
-    usim_datastore_h5_path = os.path.join(urbansim_datastore_dir, usim_datastore_fname)
+    usim_datastore_h5_default_path = os.path.join(
+        urbansim_datastore_dir, usim_datastore_fname
+    )
     fallback_usim_inputs, _ = build_urbansim_inputs(settings, state, workspace, year)
-    usim_datastore_h5_path = str(
-        fallback_usim_inputs.get(USIM_DATASTORE_CURRENT_H5, usim_datastore_h5_path)
+    usim_datastore_h5_current_path = str(
+        fallback_usim_inputs.get(
+            USIM_DATASTORE_CURRENT_H5, usim_datastore_h5_default_path
+        )
+    )
+    usim_datastore_h5_path = select_atlas_usim_input_path(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        fallback_current_path=usim_datastore_h5_current_path,
+        fallback_default_path=usim_datastore_h5_default_path,
+    )
+    logger.info(
+        "[ATLAS] Selected UrbanSim datastore for sub-year preprocessing: %s",
+        usim_datastore_h5_path,
     )
 
     yrs = _atlas_sub_years(state)
@@ -135,6 +196,8 @@ def run_vehicle_ownership_stage(
         step_inputs = merge_model_expected_inputs(
             "atlas", step_inputs, settings, atlas_state, workspace
         )
+        step_inputs[USIM_DATASTORE_CURRENT_H5] = usim_datastore_h5_path
+        step_inputs[USIM_DATASTORE_BASE_H5] = usim_datastore_h5_path
         # Keep ATLAS preprocessor H5 selection artifact-driven.
         atlas_state.atlas_usim_datastore_h5 = _resolve_input_path(
             step_inputs.get(USIM_DATASTORE_CURRENT_H5),
@@ -170,6 +233,10 @@ def run_vehicle_ownership_stage(
         atlas_run_resolution = resolve_step_inputs(
             keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5, *atlas_static_keys],
             coupler=coupler,
+            explicit_inputs={
+                USIM_DATASTORE_CURRENT_H5: step_inputs.get(USIM_DATASTORE_CURRENT_H5),
+                USIM_DATASTORE_BASE_H5: step_inputs.get(USIM_DATASTORE_BASE_H5),
+            },
             fallback_inputs=atlas_run_fallbacks,
             required_keys=[USIM_DATASTORE_CURRENT_H5],
         )
