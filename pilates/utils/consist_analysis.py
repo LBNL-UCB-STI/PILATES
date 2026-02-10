@@ -638,7 +638,19 @@ def _summarize_linkstats_grouped_view(
     tracker: Any,
     view_name: str,
     artifact_ids: Optional[list[str]] = None,
+    traveltime_weighting: Literal["unweighted", "volume_weighted"] = "unweighted",
 ) -> pd.DataFrame:
+    if traveltime_weighting == "volume_weighted":
+        traveltime_mean_expr = (
+            "CASE "
+            "WHEN SUM(CAST(src.volume AS DOUBLE)) > 0 "
+            "THEN SUM(CAST(src.volume AS DOUBLE) * CAST(src.traveltime AS DOUBLE)) "
+            "/ SUM(CAST(src.volume AS DOUBLE)) "
+            "ELSE NULL END"
+        )
+    else:
+        traveltime_mean_expr = "AVG(src.traveltime)"
+
     quoted_view = _quote_ident(view_name)
     query = f"""
         SELECT
@@ -646,7 +658,7 @@ def _summarize_linkstats_grouped_view(
             COUNT(*) AS row_count,
             COUNT(DISTINCT src.link) AS distinct_links,
             SUM(src.volume) AS volume_sum,
-            AVG(src.traveltime) AS traveltime_mean,
+            {traveltime_mean_expr} AS traveltime_mean,
             quantile_cont(src.traveltime, 0.95) AS traveltime_p95
         FROM {quoted_view} src
     """
@@ -663,7 +675,7 @@ def _summarize_linkstats_grouped_view(
                     COUNT(*) AS row_count,
                     COUNT(DISTINCT src.link) AS distinct_links,
                     SUM(src.volume) AS volume_sum,
-                    AVG(src.traveltime) AS traveltime_mean,
+                    {traveltime_mean_expr} AS traveltime_mean,
                     quantile_cont(src.traveltime, 0.95) AS traveltime_p95
                 FROM {quoted_view} src
                 JOIN target_artifacts ta
@@ -1260,6 +1272,7 @@ def summarize_linkstats_artifacts(
     grouped_view_name: Optional[str] = None,
     grouped_schema_id: str = _DEFAULT_LINKSTATS_SCHEMA_ID,
     grouped_drivers: Optional[list[str]] = None,
+    traveltime_weighting: Literal["unweighted", "volume_weighted"] = "unweighted",
 ) -> pd.DataFrame:
     """
     Compute per-artifact summary metrics using Consist hybrid views.
@@ -1285,6 +1298,7 @@ def summarize_linkstats_artifacts(
         tracker=tracker,
         view_name=grouped_view,
         artifact_ids=artifacts_df["artifact_id"].astype(str).tolist(),
+        traveltime_weighting=traveltime_weighting,
     )
     if stats_df.empty and not artifacts_df.empty:
         grouped_view = _create_linkstats_grouped_view(
@@ -1302,6 +1316,7 @@ def summarize_linkstats_artifacts(
             tracker=tracker,
             view_name=grouped_view,
             artifact_ids=artifacts_df["artifact_id"].astype(str).tolist(),
+            traveltime_weighting=traveltime_weighting,
         )
     if stats_df.empty:
         return pd.DataFrame()

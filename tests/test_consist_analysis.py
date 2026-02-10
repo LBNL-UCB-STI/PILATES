@@ -307,7 +307,7 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
         return "v_linkstats_grouped_test"
 
     def _fake_summarize_grouped(*, tracker, view_name, **kwargs):
-        calls.append(("summarize_grouped", view_name))
+        calls.append(("summarize_grouped", view_name, kwargs.get("traveltime_weighting")))
         import pandas as pd
 
         return pd.DataFrame(
@@ -352,7 +352,56 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
     assert summary_df.iloc[0]["view_name"] == "v_linkstats_grouped_test"
     assert summary_df.iloc[0]["row_count"] == 10
     assert calls[0][0] == "create_grouped"
-    assert calls[1][0] == "summarize_grouped"
+    assert calls[1] == ("summarize_grouped", "v_linkstats_grouped_test", "unweighted")
+
+
+def test_summarize_linkstats_artifacts_passes_volume_weighted_option(monkeypatch):
+    class _FakeTracker:
+        pass
+
+    tracker = _FakeTracker()
+    calls = []
+
+    def _fake_create_grouped_view(*, tracker, artifacts_df, **kwargs):
+        return "v_linkstats_grouped_test"
+
+    def _fake_summarize_grouped(*, tracker, view_name, **kwargs):
+        calls.append(kwargs.get("traveltime_weighting"))
+        import pandas as pd
+
+        return pd.DataFrame(
+            [
+                {
+                    "artifact_id": "a1",
+                    "row_count": 1,
+                    "distinct_links": 1,
+                    "volume_sum": 1.0,
+                    "traveltime_mean": 1.0,
+                    "traveltime_p95": 1.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(
+        "pilates.utils.consist_analysis._create_linkstats_grouped_view",
+        _fake_create_grouped_view,
+    )
+    monkeypatch.setattr(
+        "pilates.utils.consist_analysis._summarize_linkstats_grouped_view",
+        _fake_summarize_grouped,
+    )
+
+    import pandas as pd
+
+    artifacts_df = pd.DataFrame(
+        [{"artifact_id": "a1", "key": "k1", "year": 2018, "iteration": 0, "phys_sim_iteration": 1}]
+    )
+    _ = summarize_linkstats_artifacts(
+        artifacts_df,
+        tracker=tracker,
+        traveltime_weighting="volume_weighted",
+    )
+    assert calls == ["volume_weighted"]
 
 
 def test_summarize_linkstats_traveltime_deltas_uses_metric_delta_helper(monkeypatch):
