@@ -463,18 +463,22 @@ def _create_linkstats_grouped_view(
     missing_files: str = "warn",
     view_name: Optional[str] = None,
     schema_id: str = _DEFAULT_LINKSTATS_SCHEMA_ID,
+    use_facet_filters: bool = True,
 ) -> str:
     artifact_family = _first_non_null_string(artifacts_df.get("artifact_family"))
     year = _single_numeric_value(artifacts_df.get("year"))
     iteration = _single_numeric_value(artifacts_df.get("iteration"))
+    run_id = _first_non_null_string(artifacts_df.get("run_id"))
+    facet_source_values = (
+        artifacts_df.get("facet_source").dropna().astype(str)
+        if "facet_source" in artifacts_df.columns
+        else pd.Series(dtype=str)
+    )
+    has_artifact_kv_facets = bool((facet_source_values == "artifact_kv").any())
 
     params: list[str] = []
-    if artifact_family:
+    if use_facet_filters and has_artifact_kv_facets and artifact_family:
         params.append(f"{namespace}.artifact_family={artifact_family}")
-    if year is not None:
-        params.append(f"{namespace}.year={year}")
-    if iteration is not None:
-        params.append(f"{namespace}.iteration={iteration}")
 
     grouped_view_name = view_name or _stable_linkstats_grouped_view_name(
         namespace=namespace,
@@ -483,12 +487,16 @@ def _create_linkstats_grouped_view(
         iteration=iteration,
     )
 
-    schema_model = _resolve_linkstats_schema_model()
     selector: Dict[str, Any] = {}
-    if schema_model is not None:
-        selector["schema"] = schema_model
-    else:
+    if schema_id:
         selector["schema_id"] = schema_id
+    else:
+        schema_model = _resolve_linkstats_schema_model()
+        if schema_model is None:
+            raise ValueError(
+                "Unable to resolve BeamLinkstats schema model and no schema_id provided."
+            )
+        selector["schema"] = schema_model
 
     tracker.create_grouped_view(
         view_name=grouped_view_name,
@@ -500,6 +508,9 @@ def _create_linkstats_grouped_view(
         mode=mode,
         if_exists="replace",
         missing_files=missing_files,
+        run_id=run_id,
+        year=year,
+        iteration=iteration,
         **selector,
     )
     return grouped_view_name
@@ -651,12 +662,29 @@ def summarize_linkstats_artifacts(
         missing_files=grouped_missing_files,
         view_name=grouped_view_name,
         schema_id=grouped_schema_id,
+        use_facet_filters=True,
     )
 
     stats_df = _summarize_linkstats_grouped_view(
         tracker=tracker,
         view_name=grouped_view,
     )
+    if stats_df.empty and not artifacts_df.empty:
+        grouped_view = _create_linkstats_grouped_view(
+            tracker=tracker,
+            artifacts_df=artifacts_df,
+            namespace=namespace,
+            drivers=grouped_drivers,
+            mode=grouped_mode,
+            missing_files=grouped_missing_files,
+            view_name=grouped_view_name,
+            schema_id=grouped_schema_id,
+            use_facet_filters=False,
+        )
+        stats_df = _summarize_linkstats_grouped_view(
+            tracker=tracker,
+            view_name=grouped_view,
+        )
     if stats_df.empty:
         return pd.DataFrame()
 
