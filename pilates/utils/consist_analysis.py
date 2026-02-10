@@ -35,11 +35,6 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def _stable_linkstats_view_name(key: str) -> str:
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
-    return f"v_linkstats_{digest}"
-
-
 def _stable_linkstats_grouped_view_name(
     *,
     namespace: str,
@@ -261,26 +256,6 @@ def _facet_map_from_artifact_kv(
     return facet_map
 
 
-def _facet_from_artifact_kv(
-    tracker: Any,
-    artifact_id: Any,
-    *,
-    namespace: Optional[str],
-) -> Dict[str, Any]:
-    """
-    Load linkstats facet fields for one artifact via batched artifact_kv helper.
-    """
-    normalized = _normalize_artifact_id(artifact_id)
-    if normalized is None:
-        return {}
-    facet_map = _facet_map_from_artifact_kv(
-        tracker,
-        [artifact_id],
-        namespace=namespace,
-    )
-    return facet_map.get(normalized, {})
-
-
 def _filter_linkstats_facet(facet: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         key: facet.get(key)
@@ -446,19 +421,6 @@ def find_linkstats_artifacts(
     return frame.sort_values(sort_cols, na_position="last").reset_index(drop=True)
 
 
-def _create_linkstats_view(
-    *,
-    tracker: Any,
-    artifact_key: str,
-) -> str:
-    """
-    Create (or refresh) a hybrid view for one linkstats artifact key.
-    """
-    view_name = _stable_linkstats_view_name(artifact_key)
-    tracker.create_view(view_name=view_name, concept_key=artifact_key)
-    return view_name
-
-
 def _first_non_null_string(series: Optional[pd.Series]) -> Optional[str]:
     if series is None:
         return None
@@ -502,9 +464,6 @@ def _create_linkstats_grouped_view(
     view_name: Optional[str] = None,
     schema_id: str = _DEFAULT_LINKSTATS_SCHEMA_ID,
 ) -> str:
-    if not hasattr(tracker, "create_grouped_view"):
-        raise AttributeError("Tracker does not support create_grouped_view().")
-
     artifact_family = _first_non_null_string(artifacts_df.get("artifact_family"))
     year = _single_numeric_value(artifacts_df.get("year"))
     iteration = _single_numeric_value(artifacts_df.get("iteration"))
@@ -544,36 +503,6 @@ def _create_linkstats_grouped_view(
         **selector,
     )
     return grouped_view_name
-
-
-def _summarize_linkstats_view(
-    *,
-    tracker: Any,
-    view_name: str,
-) -> Dict[str, Any]:
-    quoted_view = _quote_ident(view_name)
-    with Session(tracker.engine) as session:
-        row = session.exec(
-            text(
-                f"""
-                SELECT
-                    COUNT(*) AS row_count,
-                    COUNT(DISTINCT link) AS distinct_links,
-                    SUM(volume) AS volume_sum,
-                    AVG(traveltime) AS traveltime_mean,
-                    quantile_cont(traveltime, 0.95) AS traveltime_p95
-                FROM {quoted_view}
-                """
-            )
-        ).first()
-    row = row or (0, 0, 0.0, 0.0, 0.0)
-    return {
-        "row_count": int(row[0]) if row and row[0] is not None else 0,
-        "distinct_links": int(row[1]) if row and row[1] is not None else 0,
-        "volume_sum": float(row[2]) if row and row[2] is not None else 0.0,
-        "traveltime_mean": float(row[3]) if row and row[3] is not None else 0.0,
-        "traveltime_p95": float(row[4]) if row and row[4] is not None else 0.0,
-    }
 
 
 def _summarize_linkstats_grouped_view(
@@ -624,72 +553,6 @@ def _summarize_linkstats_grouped_view(
     frame["row_count"] = frame["row_count"].astype(int)
     frame["distinct_links"] = frame["distinct_links"].astype(int)
     return frame
-
-
-def _summarize_linkstats_view_delta(
-    *,
-    tracker: Any,
-    current_view: str,
-    previous_view: str,
-) -> Dict[str, Any]:
-    """
-    Compare two linkstats hybrid views on (link, hour) aggregates.
-    """
-    current_quoted = _quote_ident(current_view)
-    previous_quoted = _quote_ident(previous_view)
-    with Session(tracker.engine) as session:
-        row = session.exec(
-            text(
-                f"""
-            WITH current_agg AS (
-                SELECT
-                    link,
-                    hour,
-                    SUM(volume) AS volume,
-                    AVG(traveltime) AS traveltime
-                FROM {current_quoted}
-                GROUP BY 1, 2
-            ),
-            previous_agg AS (
-                SELECT
-                    link,
-                    hour,
-                    SUM(volume) AS volume,
-                    AVG(traveltime) AS traveltime
-                FROM {previous_quoted}
-                GROUP BY 1, 2
-            ),
-            joined AS (
-                SELECT
-                    COALESCE(c.link, p.link) AS link,
-                    COALESCE(c.hour, p.hour) AS hour,
-                    COALESCE(c.volume, 0.0) AS volume_current,
-                    COALESCE(p.volume, 0.0) AS volume_previous,
-                    COALESCE(c.traveltime, 0.0) AS traveltime_current,
-                    COALESCE(p.traveltime, 0.0) AS traveltime_previous
-                FROM current_agg c
-                FULL OUTER JOIN previous_agg p
-                    ON c.link = p.link AND c.hour = p.hour
-            )
-            SELECT
-                COUNT(*) AS group_count,
-                AVG(volume_current - volume_previous) AS volume_delta_mean,
-                AVG(ABS(volume_current - volume_previous)) AS volume_delta_abs_mean,
-                AVG(traveltime_current - traveltime_previous) AS traveltime_delta_mean,
-                AVG(ABS(traveltime_current - traveltime_previous)) AS traveltime_delta_abs_mean
-            FROM joined
-                """
-            )
-        ).first()
-    row = row or (0, 0.0, 0.0, 0.0, 0.0)
-
-    return {
-        "group_count": int(row[0]) if row and row[0] is not None else 0,
-        "volume_delta_mean": float(row[1]) if row and row[1] is not None else 0.0,
-        "volume_delta_abs_mean": float(row[2]) if row and row[2] is not None else 0.0,
-        "traveltime_delta_mean": float(row[3]) if row and row[3] is not None else 0.0,
-        "traveltime_delta_abs_mean": float(row[4]) if row and row[4] is not None else 0.0,
-    }
 
 
 def _summarize_linkstats_grouped_view_delta(
@@ -776,54 +639,34 @@ def summarize_linkstats_artifacts(
     """
     if artifacts_df.empty:
         return artifacts_df.copy()
-    if "key" not in artifacts_df.columns:
-        raise ValueError("artifacts_df must contain a 'key' column")
+    if "artifact_id" not in artifacts_df.columns:
+        raise ValueError("artifacts_df must contain an 'artifact_id' column")
 
-    if "artifact_id" in artifacts_df.columns and hasattr(tracker, "create_grouped_view"):
-        grouped_view = _create_linkstats_grouped_view(
-            tracker=tracker,
-            artifacts_df=artifacts_df,
-            namespace=namespace,
-            drivers=grouped_drivers,
-            mode=grouped_mode,
-            missing_files=grouped_missing_files,
-            view_name=grouped_view_name,
-            schema_id=grouped_schema_id,
-        )
+    grouped_view = _create_linkstats_grouped_view(
+        tracker=tracker,
+        artifacts_df=artifacts_df,
+        namespace=namespace,
+        drivers=grouped_drivers,
+        mode=grouped_mode,
+        missing_files=grouped_missing_files,
+        view_name=grouped_view_name,
+        schema_id=grouped_schema_id,
+    )
 
-        stats_df = _summarize_linkstats_grouped_view(
-            tracker=tracker,
-            view_name=grouped_view,
-        )
-        if stats_df.empty:
-            return pd.DataFrame()
+    stats_df = _summarize_linkstats_grouped_view(
+        tracker=tracker,
+        view_name=grouped_view,
+    )
+    if stats_df.empty:
+        return pd.DataFrame()
 
-        metadata_df = artifacts_df.copy()
-        metadata_df["artifact_id"] = metadata_df["artifact_id"].astype(str)
-        metadata_df = metadata_df.drop_duplicates(subset=["artifact_id"], keep="first")
+    metadata_df = artifacts_df.copy()
+    metadata_df["artifact_id"] = metadata_df["artifact_id"].astype(str)
+    metadata_df = metadata_df.drop_duplicates(subset=["artifact_id"], keep="first")
 
-        summary_df = metadata_df.merge(stats_df, on="artifact_id", how="inner")
-        summary_df["view_name"] = grouped_view
-        return summary_df
-
-    summary_rows = []
-    for row in artifacts_df.itertuples(index=False):
-        artifact_key = str(getattr(row, "key", "") or "")
-        if not artifact_key:
-            continue
-        view_name = _create_linkstats_view(
-            tracker=tracker,
-            artifact_key=artifact_key,
-        )
-        summary = _summarize_linkstats_view(
-            tracker=tracker,
-            view_name=view_name,
-        )
-        payload = dict(row._asdict())
-        payload["view_name"] = view_name
-        payload.update(summary)
-        summary_rows.append(payload)
-    return pd.DataFrame(summary_rows)
+    summary_df = metadata_df.merge(stats_df, on="artifact_id", how="inner")
+    summary_df["view_name"] = grouped_view
+    return summary_df
 
 
 def summarize_linkstats_deltas(
@@ -837,16 +680,15 @@ def summarize_linkstats_deltas(
     if summary_df.empty:
         return pd.DataFrame()
 
-    required_cols = {"year", "iteration", "phys_sim_iteration"}
+    required_cols = {"year", "iteration", "phys_sim_iteration", "artifact_id", "view_name"}
     missing = sorted(required_cols - set(summary_df.columns))
     if missing:
         raise ValueError(f"summary_df missing required columns: {missing}")
 
-    grouped_view_name = None
-    if {"artifact_id", "view_name"}.issubset(summary_df.columns):
-        non_null_views = summary_df["view_name"].dropna().astype(str).unique().tolist()
-        if len(non_null_views) == 1:
-            grouped_view_name = non_null_views[0]
+    non_null_views = summary_df["view_name"].dropna().astype(str).unique().tolist()
+    if len(non_null_views) != 1:
+        raise ValueError("summary_df must reference exactly one grouped view in 'view_name'")
+    grouped_view_name = non_null_views[0]
 
     rows = []
     group_cols = ["year", "iteration", "beam_sub_iteration"]
@@ -860,23 +702,14 @@ def summarize_linkstats_deltas(
         ):
             prev_artifact_id = getattr(prev_row, "artifact_id", None)
             curr_artifact_id = getattr(curr_row, "artifact_id", None)
-            if (
-                grouped_view_name
-                and prev_artifact_id is not None
-                and curr_artifact_id is not None
-            ):
-                delta = _summarize_linkstats_grouped_view_delta(
-                    tracker=tracker,
-                    view_name=grouped_view_name,
-                    current_artifact_id=str(curr_artifact_id),
-                    previous_artifact_id=str(prev_artifact_id),
-                )
-            else:
-                delta = _summarize_linkstats_view_delta(
-                    tracker=tracker,
-                    current_view=str(getattr(curr_row, "view_name")),
-                    previous_view=str(getattr(prev_row, "view_name")),
-                )
+            if prev_artifact_id is None or curr_artifact_id is None:
+                continue
+            delta = _summarize_linkstats_grouped_view_delta(
+                tracker=tracker,
+                view_name=grouped_view_name,
+                current_artifact_id=str(curr_artifact_id),
+                previous_artifact_id=str(prev_artifact_id),
+            )
             rows.append(
                 {
                     "year": getattr(curr_row, "year"),
