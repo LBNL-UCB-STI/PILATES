@@ -272,11 +272,14 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    required_path_fields: ClassVar[Tuple[str, ...]] = ("asim_output_dir",)
-    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
+    required_path_fields: ClassVar[Tuple[str, ...]] = ()
+    optional_path_fields: ClassVar[Tuple[str, ...]] = (
+        "usim_datastore_h5",
+        "asim_output_dir",
+    )
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Optional[Path]
-    asim_output_dir: Path
+    asim_output_dir: Optional[Path] = None
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
     processed_output_hashes: Dict[str, str] = field(default_factory=dict)
 

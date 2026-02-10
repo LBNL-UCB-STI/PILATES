@@ -74,7 +74,7 @@ def test_urbansim_expected_inputs_resolve_existing_input(tmp_path):
 
 
 def test_beam_expected_inputs_resolve_optional_zarr(tmp_path):
-    settings = SimpleNamespace()
+    settings = SimpleNamespace(activitysim=SimpleNamespace())
     state = _StubState()
     workspace = _StubWorkspace(str(tmp_path))
     os.makedirs(os.path.join(workspace.get_asim_output_dir(), "cache"), exist_ok=True)
