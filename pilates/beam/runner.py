@@ -325,9 +325,10 @@ class BeamRunner(GenericRunner):
                     "year": self.state.forecast_year,
                     "iteration": self.state.iteration,
                     "phys_sim_iteration": phys_sim_iter,
+                    # Keep sub-iteration facet on promoted final artifacts too.
+                    # This preserves existing key semantics while improving facet-only analysis.
+                    "beam_sub_iteration": it,
                 }
-                if it != last_iter:
-                    facet["beam_sub_iteration"] = it
                 if it == last_iter:
                     dataset_name = (
                         "linkstats_unmodified_parquet__"
