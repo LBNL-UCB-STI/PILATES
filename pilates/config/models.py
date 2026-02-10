@@ -355,6 +355,45 @@ class ActivitySimConfig(BaseModel):
         }
 
 
+class FullSkimsCreatorConfig(BaseModel):
+    """Configuration for BEAM FullSkimsCreatorApp (full-skim mode)."""
+
+    run_schedule: Literal[
+        "standalone",
+        "after_each_iteration",
+        "after_final_iteration",
+        "disabled",
+    ] = Field(
+        "standalone",
+        description=(
+            "When to run full-skim. "
+            "'standalone' replaces normal BEAM runs, "
+            "'after_each_iteration' runs after each BEAM iteration, "
+            "'after_final_iteration' runs after the final BEAM iteration, "
+            "'disabled' never runs."
+        ),
+    )
+    router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
+    skims_geo_type: str = Field("taz", description="Geography: taz or h3")
+    skims_kind: str = Field("od", description="Skim type: od")
+    peak_hours: List[float] = Field(
+        default_factory=lambda: [8.5], description="Peak hours (8.5 = 8:30 AM)"
+    )
+    modes_to_build: Dict[str, bool] = Field(
+        default_factory=lambda: {"drive": True, "walk": False, "transit": False},
+        description="Modes to generate skims for",
+    )
+    parallelism_thread_ratio: Optional[float] = Field(
+        None,
+        description=(
+            "Ratio of CPU cores to use (0.0-1.0). "
+            "Default behavior is auto-compute when unset."
+        ),
+        ge=0.0,
+        le=1.0,
+    )
+
+
 class BeamConfig(BaseModel):
     """BEAM transportation network simulation configuration."""
 
@@ -399,6 +438,10 @@ class BeamConfig(BaseModel):
         ),
         ge=0.0,
         le=1.0,
+    )
+    full_skim: Optional[FullSkimsCreatorConfig] = Field(
+        None,
+        description="Optional full-skim mode configuration.",
     )
 
 

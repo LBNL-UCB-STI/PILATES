@@ -47,6 +47,7 @@ class ArtifactKeys:
     # Cross-model skims
     ZARR_SKIMS = "zarr_skims"
     FINAL_SKIMS_OMX = "final_skims_omx"
+    BEAM_FULL_SKIMS = "beam_full_skims"
 
     @classmethod
     def as_dict(cls) -> Dict[str, str]:

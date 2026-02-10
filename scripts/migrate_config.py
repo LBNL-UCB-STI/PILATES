@@ -310,7 +310,7 @@ class ConfigMigrator:
         """Migrate BEAM configuration."""
         logger.info("Migrating BEAM configuration...")
 
-        return {
+        beam_config = {
             "config": self.legacy.get("beam_config", "beam.conf"),
             "sample": self.legacy.get("beam_sample", 1.0),
             "replanning_portion": self.legacy.get("beam_replanning_portion", 0.4),
@@ -347,6 +347,60 @@ class ConfigMigrator:
             ),
             "ridehail_path_map": self.legacy.get("ridehail_path_map", {}),
         }
+        if self.legacy.get("beam_full_skim_run_schedule") is not None:
+            logger.info("Migrating BEAM full_skim configuration...")
+
+            modes_to_build: Dict[str, bool] = {}
+            if self.legacy.get("beam_full_skim_modes_drive") is not None:
+                modes_to_build["drive"] = self.legacy.get(
+                    "beam_full_skim_modes_drive"
+                )
+            if self.legacy.get("beam_full_skim_modes_walk") is not None:
+                modes_to_build["walk"] = self.legacy.get("beam_full_skim_modes_walk")
+            if self.legacy.get("beam_full_skim_modes_transit") is not None:
+                modes_to_build["transit"] = self.legacy.get(
+                    "beam_full_skim_modes_transit"
+                )
+            if not modes_to_build:
+                modes_to_build = {"drive": True, "walk": False, "transit": False}
+
+            skim_key_prefix = "beam_full_skim"
+            full_skim_config: Dict[str, Any] = {
+                "run_schedule": self.legacy.get(
+                    f"{skim_key_prefix}_run_schedule", "standalone"
+                ),
+                "router_type": self.legacy.get(f"{skim_key_prefix}_router_type", "r5+gh"),
+                "skims_geo_type": self.legacy.get(
+                    f"{skim_key_prefix}_skims_geo_type", "taz"
+                ),
+                "skims_kind": self.legacy.get(f"{skim_key_prefix}_skims_kind", "od"),
+                "peak_hours": self.legacy.get(f"{skim_key_prefix}_peak_hours", [8.5]),
+                "modes_to_build": modes_to_build,
+            }
+
+            parallelism_value = None
+            if "beam_full_skim_parallelism_thread_ratio" in self.legacy:
+                parallelism_value = self.legacy.get(
+                    "beam_full_skim_parallelism_thread_ratio"
+                )
+            elif "beam_full_skim_parallelism_thread_pct" in self.legacy:
+                parallelism_value = self.legacy.get(
+                    "beam_full_skim_parallelism_thread_pct"
+                )
+            elif "beam_full_skim_parallelism" in self.legacy:
+                parallelism_value = self.legacy.get("beam_full_skim_parallelism")
+
+            if parallelism_value is not None:
+                if parallelism_value <= 1.0:
+                    full_skim_config["parallelism_thread_ratio"] = parallelism_value
+                else:
+                    full_skim_config["parallelism_thread_ratio"] = (
+                        parallelism_value / 100.0
+                    )
+
+            beam_config["full_skim"] = full_skim_config
+
+        return beam_config
 
     def _migrate_postprocessing_config(self) -> Dict[str, Any]:
         """Migrate postprocessing configuration."""
