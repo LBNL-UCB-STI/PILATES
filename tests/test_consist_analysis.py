@@ -356,8 +356,8 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
 def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
     calls = []
 
-    def _fake_delta(*, tracker, view_name, pairs_df):
-        calls.append((view_name, len(pairs_df)))
+    def _fake_delta(*, tracker, view_name, summary_df):
+        calls.append((view_name, len(summary_df)))
         import pandas as pd
 
         return pd.DataFrame(
@@ -382,7 +382,7 @@ def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "pilates.utils.consist_analysis._summarize_linkstats_grouped_view_deltas_bulk",
+        "pilates.utils.consist_analysis._summarize_linkstats_grouped_view_deltas_from_summary",
         _fake_delta,
     )
 
@@ -416,4 +416,4 @@ def test_summarize_linkstats_deltas_uses_grouped_view_delta_helper(monkeypatch):
     assert delta_df.iloc[0]["key_prev"] == "k1"
     assert delta_df.iloc[0]["key_curr"] == "k2"
     assert delta_df.iloc[0]["volume_delta_mean"] == 1.5
-    assert calls == [("v1", 1)]
+    assert calls == [("v1", 2)]
