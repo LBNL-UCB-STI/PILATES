@@ -3583,12 +3583,18 @@ class BeamPostprocessor(GenericPostprocessor):
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
         beam_output_dir = workspace.get_beam_output_dir()
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        zarr_path = None
+        if getattr(settings, "activitysim", None) is not None:
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+            if os.path.exists(candidate):
+                zarr_path = candidate
         return {
             "beam_output_dir": (
                 beam_output_dir if os.path.exists(beam_output_dir) else None
             ),
-            "zarr_skims": (zarr_path if os.path.exists(zarr_path) else None),
+            "zarr_skims": zarr_path,
         }
 
     @staticmethod
@@ -3620,8 +3626,12 @@ class BeamPostprocessor(GenericPostprocessor):
             )
             return {"final_skims_omx": final_omx_path}
 
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
-        return {"zarr_skims": zarr_path}
+        if getattr(settings, "activitysim", None) is not None:
+            zarr_path = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+            return {"zarr_skims": zarr_path}
+        return {}
 
     def __init__(
         self,
@@ -3700,9 +3710,11 @@ class BeamPostprocessor(GenericPostprocessor):
                     "Failed to split events parquet for %s", events_path, exc_info=True
                 )
 
-        all_skims_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        all_skims_path = None
+        if getattr(settings, "activitysim", None) is not None:
+            all_skims_path = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
 
         zarr_skim_name = (
             f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
@@ -3742,7 +3754,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
             )
 
-        elif not os.path.exists(all_skims_path):
+        elif all_skims_path is None or not os.path.exists(all_skims_path):
             logger.warning(
                 f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
             )
@@ -3803,9 +3815,7 @@ class BeamPostprocessor(GenericPostprocessor):
             logger.info(
                 "Writing skims to OMX file for UrbanSim or other downstream models..."
             )
-            if not os.path.exists(
-                all_skims_path
-            ):  # Check if the main Zarr skims file exists
+            if all_skims_path is None or not os.path.exists(all_skims_path):
                 logger.error(
                     "Main Zarr skims file not available. Cannot write skims to OMX."
                 )

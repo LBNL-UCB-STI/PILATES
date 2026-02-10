@@ -97,10 +97,16 @@ class BeamRunner(GenericRunner):
         """
         Declare the input paths/artifacts this runner expects from the workflow.
         """
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        zarr_path = None
+        if getattr(settings, "activitysim", None) is not None:
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+            if os.path.exists(candidate):
+                zarr_path = candidate
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
+            "zarr_skims": zarr_path,
         }
 
     @staticmethod
@@ -290,16 +296,17 @@ class BeamRunner(GenericRunner):
             workspace.get_beam_mutable_data_dir(), region
         )
         beam_local_output_folder = os.path.join(workspace.get_beam_output_dir(), region)
-        asim_local_output_folder = workspace.get_asim_output_dir()
-
-        return {
+        vols = {
             beam_local_input_folder: {"bind": "/app/input", "mode": "rw"},
             beam_local_output_folder: {"bind": "/app/output", "mode": "rw"},
-            asim_local_output_folder: {
+        }
+        if getattr(settings, "activitysim", None) is not None:
+            asim_local_output_folder = workspace.get_asim_output_dir()
+            vols[asim_local_output_folder] = {
                 "bind": "/app/activitysim-output",
                 "mode": "rw",
-            },
-        }
+            }
+        return vols
 
     def _run(
         self,

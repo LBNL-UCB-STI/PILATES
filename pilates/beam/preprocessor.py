@@ -311,7 +311,10 @@ class BeamPreprocessor(GenericPreprocessor):
             base_path=workspace.full_path,
         )
         # Prepare the zone shapefile to ensure consistent zone ordering
-        self.prepare_beam_zone_shapefile(workspace)
+        if self.settings.shared.geography.zones is not None:
+            self.prepare_beam_zone_shapefile(workspace)
+        else:
+            logger.info("No zones configured; skipping zone shapefile preparation.")
 
         store = RecordStore()
 
@@ -329,7 +332,8 @@ class BeamPreprocessor(GenericPreprocessor):
                 store.add_record(beam_output_record)
 
         # Copy and merge plans from ActivitySim
-        store += self._copy_plans_from_asim(input_records, workspace)
+        if self.settings.activitysim is not None:
+            store += self._copy_plans_from_asim(input_records, workspace)
 
         # Add FileRecord outputs here for any additional BEAM inputs you want
         # tracked as explicit coupler keys (e.g., network files from the
@@ -514,6 +518,9 @@ class BeamPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
+        if self.state.full_settings.activitysim is None:
+            return RecordStore()
+
         logger.info("Attempting to copy final ASIM plans from input records.")
         file_format = self.settings.activitysim.file_format
 

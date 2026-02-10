@@ -260,54 +260,73 @@ class Initialization(Model):
                     workspace_model_key="beam",
                 )
 
-            if (
-                settings.run.models.travel == "beam"
-                and settings.run.models.activity_demand is None
-            ):
-                asim_input_dir = workspace.get_asim_mutable_data_dir()
-                os.makedirs(asim_input_dir, exist_ok=True)
-                project_root = find_project_root(start_path=os.path.dirname(__file__))
-                if not project_root:
-                    project_root = os.path.realpath(os.getcwd())
-                    logger.warning(
-                        "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                        "falling back to cwd='%s'.",
-                        project_root,
-                    )
-                zone_source_path = settings.shared.geography.zones.source_file
-                if not os.path.isabs(zone_source_path):
-                    zone_source_path = os.path.join(project_root, zone_source_path)
-                if os.path.exists(zone_source_path):
-                    zone_fname = os.path.basename(zone_source_path)
-                    asim_zones_path = os.path.join(asim_input_dir, zone_fname)
+            if settings.run.models.travel == "beam":
+                zones_config = settings.shared.geography.zones
+                if (
+                    zones_config is not None
+                    and settings.run.models.activity_demand is not None
+                ):
+                    project_root = find_project_root(start_path=os.path.dirname(__file__))
+                    if not project_root:
+                        project_root = os.path.realpath(os.getcwd())
+                        logger.warning(
+                            "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                            "falling back to cwd='%s'.",
+                            project_root,
+                        )
+                    zone_source_path = zones_config.source_file
+                    if not os.path.isabs(zone_source_path):
+                        zone_source_path = os.path.join(project_root, zone_source_path)
+
+                    asim_input_dir = workspace.get_asim_mutable_data_dir()
+                    os.makedirs(asim_input_dir, exist_ok=True)
+                    if os.path.exists(zone_source_path):
+                        zone_fname = os.path.basename(zone_source_path)
+                        dest_path = os.path.join(asim_input_dir, zone_fname)
+                        if os.path.abspath(zone_source_path) != os.path.abspath(
+                            dest_path
+                        ):
+                            logger.info(
+                                "Copying canonical zones from %s to %s",
+                                zone_source_path,
+                                dest_path,
+                            )
+                            shutil.copy(zone_source_path, dest_path)
+                        else:
+                            logger.info(
+                                "Canonical zones already at destination: %s",
+                                dest_path,
+                            )
+                        rec_in = RecordStore(
+                            recordList=[
+                                FileRecord(
+                                    file_path=zone_source_path,
+                                    short_name="canonical_zones_source",
+                                )
+                            ]
+                        )
+                        rec_out = RecordStore(
+                            recordList=[
+                                FileRecord(
+                                    file_path=dest_path,
+                                    short_name="canonical_zones",
+                                )
+                            ]
+                        )
+                        initialization_records_in += rec_in
+                        initialization_records_out += rec_out
+                    else:
+                        logger.warning(
+                            "Canonical zone source file not found at %s, skipping copy.",
+                            zone_source_path,
+                        )
+                elif zones_config is None:
                     logger.info(
-                        "Copying canonical zones from %s to %s",
-                        zone_source_path,
-                        asim_zones_path,
+                        "No zones configured in shared.geography.zones; skipping zone setup."
                     )
-                    shutil.copy(zone_source_path, asim_zones_path)
-                    rec_in = RecordStore(
-                        recordList=[
-                            FileRecord(
-                                file_path=zone_source_path,
-                                short_name="canonical_zones_source",
-                            )
-                        ]
-                    )
-                    rec_out = RecordStore(
-                        recordList=[
-                            FileRecord(
-                                file_path=asim_zones_path,
-                                short_name="canonical_zones",
-                            )
-                        ]
-                    )
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
                 else:
-                    logger.warning(
-                        "Canonical zone source file not found at %s, skipping copy.",
-                        zone_source_path,
+                    logger.info(
+                        "ActivitySim not enabled; skipping activitysim directory setup."
                     )
 
             # Other models

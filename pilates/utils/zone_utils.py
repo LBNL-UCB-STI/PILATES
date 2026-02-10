@@ -16,6 +16,7 @@ import xarray as xr
 import shutil
 
 from pilates.config import PilatesConfig
+from pilates.utils.path_utils import find_project_root
 
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
@@ -42,15 +43,27 @@ def load_canonical_zones(
     logger.info("--- Loading Canonical Zone Geometries ---")
     zone_config = settings.shared.geography.zones
 
-    source_file_basename = os.path.basename(zone_config.source_file)
-    source_file = os.path.join(
-        workspace.get_asim_mutable_data_dir(), source_file_basename
-    )
     id_col = zone_config.canonical_id_col
+    source_file = None
+
+    if settings.activitysim is not None:
+        source_file_basename = os.path.basename(zone_config.source_file)
+        candidate = os.path.join(
+            workspace.get_asim_mutable_data_dir(), source_file_basename
+        )
+        if os.path.exists(candidate):
+            source_file = candidate
+
+    if source_file is None:
+        source_file = zone_config.source_file
+        if not os.path.isabs(source_file):
+            project_root = find_project_root(start_path=os.path.dirname(__file__))
+            if project_root:
+                source_file = os.path.join(project_root, source_file)
 
     if not os.path.exists(source_file):
         raise FileNotFoundError(
-            f"Canonical zone source file not found: {source_file}. It should have been copied by the ActivitySim preprocessor."
+            f"Canonical zone source file not found: {source_file}"
         )
 
     logger.info(f"Reading canonical zones from '{source_file}'")
