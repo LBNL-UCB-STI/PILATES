@@ -3,7 +3,9 @@ from __future__ import annotations
 from pilates.utils.consist_analysis import (
     build_archive_mounts,
     find_linkstats_artifacts,
+    get_duckdb_health,
     parse_linkstats_facets_from_key,
+    print_duckdb_health,
     summarize_linkstats_artifacts,
     summarize_linkstats_deltas,
 )
@@ -26,6 +28,27 @@ def test_build_archive_mounts_sets_workspace_to_archive_dir(tmp_path):
     assert mounts["workspace"] == str(archive_run_dir.resolve())
     assert mounts["inputs"] == str(project_root.resolve())
     assert mounts["scratch"] == str(output_root.resolve())
+
+
+def test_get_duckdb_health_reports_missing_file(tmp_path):
+    missing = tmp_path / "missing.duckdb"
+    info = get_duckdb_health(db_path=missing, probe_open=False)
+    assert info["db_path"] == str(missing.resolve())
+    assert info["db_exists"] is False
+    assert info["wal_exists"] is False
+    assert info["duckdb_open_seconds"] is None
+    assert info["duckdb_open_error"] is None
+
+
+def test_print_duckdb_health_without_open_probe(tmp_path, capsys):
+    db_file = tmp_path / "test.duckdb"
+    db_file.write_bytes(b"")
+    info = print_duckdb_health(db_path=db_file, probe_open=False)
+    output = capsys.readouterr().out
+    assert "DuckDB health:" in output
+    assert "DB exists: True" in output
+    assert info["db_exists"] is True
+    assert info["duckdb_open_seconds"] is None
 
 
 def test_parse_linkstats_facets_parses_phys_sim_and_sub_iteration():

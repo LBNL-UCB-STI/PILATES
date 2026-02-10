@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -130,6 +131,93 @@ def create_analysis_tracker(
         access_mode=access_mode,
         hashing_strategy=hashing_strategy,
     )
+
+
+def get_duckdb_health(
+    *,
+    db_path: str | Path,
+    probe_open: bool = True,
+) -> Dict[str, Any]:
+    """
+    Collect lightweight health diagnostics for a DuckDB file.
+    """
+    db_path_obj = Path(db_path).expanduser().resolve()
+    wal_path = Path(f"{db_path_obj}.wal")
+
+    info: Dict[str, Any] = {
+        "db_path": str(db_path_obj),
+        "db_exists": db_path_obj.exists(),
+        "db_size_bytes": None,
+        "db_size_gb": None,
+        "wal_exists": wal_path.exists(),
+        "wal_size_bytes": None,
+        "wal_size_gb": None,
+        "duckdb_open_seconds": None,
+        "duckdb_open_error": None,
+    }
+
+    if info["db_exists"]:
+        db_size_bytes = db_path_obj.stat().st_size
+        info["db_size_bytes"] = int(db_size_bytes)
+        info["db_size_gb"] = float(db_size_bytes) / (1024**3)
+    if info["wal_exists"]:
+        wal_size_bytes = wal_path.stat().st_size
+        info["wal_size_bytes"] = int(wal_size_bytes)
+        info["wal_size_gb"] = float(wal_size_bytes) / (1024**3)
+
+    if not probe_open or not info["db_exists"]:
+        return info
+
+    try:
+        import duckdb
+
+        start = time.perf_counter()
+        conn = duckdb.connect(str(db_path_obj), read_only=True)
+        try:
+            conn.execute("SELECT 1").fetchone()
+        finally:
+            conn.close()
+        info["duckdb_open_seconds"] = float(time.perf_counter() - start)
+    except Exception as exc:
+        info["duckdb_open_error"] = f"{type(exc).__name__}: {exc}"
+
+    return info
+
+
+def print_duckdb_health(
+    *,
+    db_path: str | Path,
+    probe_open: bool = True,
+) -> Dict[str, Any]:
+    """
+    Print DuckDB health diagnostics and return the raw metric dictionary.
+    """
+    info = get_duckdb_health(db_path=db_path, probe_open=probe_open)
+    print("DuckDB health:")
+    print(f"  DB path: {info['db_path']}")
+    print(f"  DB exists: {info['db_exists']}")
+    if info["db_size_bytes"] is not None:
+        print(
+            "  DB size: "
+            f"{int(info['db_size_bytes']):,} bytes "
+            f"({float(info['db_size_gb']):.3f} GiB)"
+        )
+    print(f"  WAL exists: {info['wal_exists']}")
+    if info["wal_size_bytes"] is not None:
+        print(
+            "  WAL size: "
+            f"{int(info['wal_size_bytes']):,} bytes "
+            f"({float(info['wal_size_gb']):.3f} GiB)"
+        )
+    if probe_open:
+        if info["duckdb_open_error"]:
+            print(f"  Open probe error: {info['duckdb_open_error']}")
+        else:
+            print(
+                "  Open probe: "
+                f"{float(info['duckdb_open_seconds'] or 0.0):.3f} seconds"
+            )
+    return info
 
 
 def parse_linkstats_facets_from_key(key: str) -> Dict[str, Any]:
