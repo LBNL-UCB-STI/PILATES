@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pilates.utils.consist_analysis import (
+    _prepare_linkstats_pca_artifact_index,
+    _resolve_link_filter_reference_artifact_ids,
     assign_effective_beam_sub_iteration,
     build_archive_mounts,
+    build_linkstats_hourly_pca_matrix,
     find_linkstats_artifacts,
     get_duckdb_health,
     parse_linkstats_facets_from_key,
@@ -97,6 +100,77 @@ def test_assign_effective_beam_sub_iteration_promotes_null_to_max_plus_one():
 
     ps2 = normalized[normalized["phys_sim_iteration"] == 2]
     assert ps2["beam_sub_iteration_effective"].isna().all()
+
+
+def test_prepare_linkstats_pca_artifact_index_orders_rows():
+    import pandas as pd
+
+    summary_df = pd.DataFrame(
+        [
+            {
+                "artifact_id": "a3",
+                "year": 2018,
+                "iteration": 1,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration": 2,
+                "key": "k3",
+            },
+            {
+                "artifact_id": "a1",
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 0,
+                "phys_sim_iteration": 1,
+                "key": "k1",
+            },
+            {
+                "artifact_id": "a2",
+                "year": 2018,
+                "iteration": 0,
+                "beam_sub_iteration": 1,
+                "phys_sim_iteration": 1,
+                "key": "k2",
+            },
+        ]
+    )
+
+    index_df = _prepare_linkstats_pca_artifact_index(summary_df)
+    assert index_df["artifact_id"].tolist() == ["a1", "a2", "a3"]
+    assert index_df["observation_index"].tolist() == [0, 1, 2]
+
+
+def test_resolve_link_filter_reference_artifact_ids():
+    import pandas as pd
+
+    artifact_index_df = pd.DataFrame(
+        {"artifact_id": ["a1", "a2", "a3"]}
+    )
+
+    assert _resolve_link_filter_reference_artifact_ids(
+        artifact_index_df,
+        strategy="first",
+    ) == ["a1"]
+    assert _resolve_link_filter_reference_artifact_ids(
+        artifact_index_df,
+        strategy="last",
+    ) == ["a3"]
+    assert _resolve_link_filter_reference_artifact_ids(
+        artifact_index_df,
+        strategy="all",
+    ) == ["a1", "a2", "a3"]
+
+
+def test_build_linkstats_hourly_pca_matrix_validates_coverage():
+    import pandas as pd
+    import pytest
+
+    summary_df = pd.DataFrame([{"artifact_id": "a1", "view_name": "v1"}])
+    with pytest.raises(ValueError, match="volume_coverage"):
+        _ = build_linkstats_hourly_pca_matrix(
+            summary_df,
+            tracker=object(),
+            volume_coverage=1.5,
+        )
 
 
 def test_parse_linkstats_facets_parses_phys_sim_and_sub_iteration():

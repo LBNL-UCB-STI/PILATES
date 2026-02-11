@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 from sqlmodel import Session, col, select, text
 
@@ -32,6 +33,7 @@ _DEFAULT_LINKSTATS_SCHEMA_ID = (
 )
 _METERS_PER_MILE = 1609.344
 _SECONDS_PER_HOUR = 3600.0
+_MPS_TO_MPH = 2.2369362920544
 
 
 def _quote_ident(identifier: str) -> str:
@@ -1468,3 +1470,421 @@ def summarize_linkstats_deltas(
         merged["group_count"] = merged["group_count"].fillna(merged["group_count_volume"])
         merged = merged.drop(columns=["group_count_volume"])
     return merged
+
+
+def _prepare_linkstats_pca_artifact_index(summary_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a stable artifact ordering for matrix rows.
+    """
+    required_cols = {"artifact_id"}
+    missing = sorted(required_cols - set(summary_df.columns))
+    if missing:
+        raise ValueError(f"summary_df missing required columns: {missing}")
+
+    frame = summary_df.copy()
+    frame["artifact_id"] = frame["artifact_id"].astype(str).str.strip()
+    frame = frame[frame["artifact_id"] != ""]
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "observation_index",
+                "artifact_id",
+                "year",
+                "iteration",
+                "beam_sub_iteration",
+                "phys_sim_iteration",
+                "key",
+            ]
+        )
+
+    for column in ("year", "iteration", "beam_sub_iteration", "phys_sim_iteration"):
+        if column not in frame.columns:
+            frame[column] = pd.Series(dtype="float64")
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "key" not in frame.columns:
+        frame["key"] = pd.Series(dtype="object")
+
+    frame = frame.drop_duplicates(subset=["artifact_id"], keep="first")
+    frame = frame.sort_values(
+        ["year", "iteration", "beam_sub_iteration", "phys_sim_iteration", "artifact_id"],
+        na_position="last",
+    ).reset_index(drop=True)
+    frame["observation_index"] = np.arange(len(frame), dtype=int)
+    return frame[
+        [
+            "observation_index",
+            "artifact_id",
+            "year",
+            "iteration",
+            "beam_sub_iteration",
+            "phys_sim_iteration",
+            "key",
+        ]
+    ]
+
+
+def _resolve_link_filter_reference_artifact_ids(
+    artifact_index_df: pd.DataFrame,
+    *,
+    strategy: Literal["first", "last", "all"],
+) -> list[str]:
+    """
+    Resolve reference artifacts used to compute link-volume coverage.
+    """
+    artifact_ids = artifact_index_df.get("artifact_id", pd.Series(dtype=str)).astype(str).tolist()
+    artifact_ids = [artifact_id.strip() for artifact_id in artifact_ids if artifact_id.strip()]
+    if not artifact_ids:
+        return []
+    if strategy == "first":
+        return [artifact_ids[0]]
+    if strategy == "last":
+        return [artifact_ids[-1]]
+    if strategy == "all":
+        return artifact_ids
+    raise ValueError(f"Unsupported link_filter_strategy: {strategy}")
+
+
+def _linkstats_metric_row_expr(metric: Literal["speed_mph", "traveltime_sec", "delay_ratio"]) -> str:
+    if metric == "speed_mph":
+        return (
+            "CASE "
+            "WHEN CAST(src.traveltime AS DOUBLE) > 0 "
+            f"THEN (CAST(src.length AS DOUBLE) / CAST(src.traveltime AS DOUBLE)) * {_MPS_TO_MPH} "
+            "ELSE NULL END"
+        )
+    if metric == "traveltime_sec":
+        return "CAST(src.traveltime AS DOUBLE)"
+    if metric == "delay_ratio":
+        return (
+            "CASE "
+            "WHEN CAST(src.freespeed AS DOUBLE) > 0 AND CAST(src.length AS DOUBLE) > 0 "
+            "THEN CAST(src.traveltime AS DOUBLE) / "
+            "(CAST(src.length AS DOUBLE) / CAST(src.freespeed AS DOUBLE)) "
+            "ELSE NULL END"
+        )
+    raise ValueError(f"Unsupported metric: {metric}")
+
+
+def build_linkstats_hourly_pca_matrix(
+    summary_df: pd.DataFrame,
+    *,
+    tracker: Any,
+    link_filter_strategy: Literal["first", "last", "all"] = "all",
+    volume_coverage: float = 0.98,
+    hour_group_size: int = 1,
+    hours_per_day: int = 24,
+    metric: Literal["speed_mph", "traveltime_sec", "delay_ratio"] = "speed_mph",
+    fill_value: float = 0.0,
+    dtype: str = "float32",
+) -> Dict[str, Any]:
+    """
+    Build a PCA-ready matrix with rows=artifacts and columns=(selected links x hour bins).
+
+    Link selection is by cumulative daily volume coverage using one of:
+      - ``first``: first artifact in the ordered summary
+      - ``last``: last artifact in the ordered summary
+      - ``all``: summed volume across all artifacts in the ordered summary
+    """
+    if not (0.0 < float(volume_coverage) <= 1.0):
+        raise ValueError("volume_coverage must be in (0, 1].")
+    if hour_group_size <= 0:
+        raise ValueError("hour_group_size must be >= 1.")
+    if hours_per_day <= 0:
+        raise ValueError("hours_per_day must be >= 1.")
+
+    hour_bins = int((hours_per_day + hour_group_size - 1) // hour_group_size)
+    artifact_index_df = _prepare_linkstats_pca_artifact_index(summary_df)
+    if artifact_index_df.empty:
+        empty = np.zeros((0, 0), dtype=np.dtype(dtype))
+        return {
+            "matrix": empty,
+            "artifact_index": artifact_index_df,
+            "feature_index": pd.DataFrame(
+                columns=[
+                    "feature_index",
+                    "link",
+                    "hour_bin",
+                    "hour_start",
+                    "hour_end_exclusive",
+                    "link_index",
+                    "daily_volume",
+                    "cumulative_share",
+                ]
+            ),
+            "link_index": pd.DataFrame(
+                columns=["link_index", "link", "daily_volume", "cumulative_share"]
+            ),
+            "column_weights": np.array([], dtype="float64"),
+            "column_weights_normalized": np.array([], dtype="float64"),
+            "metric": metric,
+            "hour_bins": hour_bins,
+            "hour_group_size": hour_group_size,
+            "link_filter_strategy": link_filter_strategy,
+            "volume_coverage": float(volume_coverage),
+        }
+
+    view_name = _resolve_delta_grouped_view_name(summary_df)
+    quoted_view = _quote_ident(view_name)
+    metric_row_expr = _linkstats_metric_row_expr(metric)
+    metric_agg_expr = (
+        "CASE "
+        "WHEN SUM(CAST(src.volume AS DOUBLE)) > 0 "
+        f"THEN SUM(CAST(src.volume AS DOUBLE) * ({metric_row_expr})) "
+        "/ SUM(CAST(src.volume AS DOUBLE)) "
+        f"ELSE AVG({metric_row_expr}) END"
+    )
+
+    artifact_values_sql = ", ".join(
+        f"({_sql_literal(row.artifact_id)}, {int(row.observation_index)})"
+        for row in artifact_index_df.itertuples(index=False)
+    )
+    reference_artifact_ids = _resolve_link_filter_reference_artifact_ids(
+        artifact_index_df,
+        strategy=link_filter_strategy,
+    )
+    reference_values_sql = ", ".join(
+        f"({_sql_literal(artifact_id)})" for artifact_id in reference_artifact_ids
+    )
+
+    common_cte = f"""
+        WITH target_artifacts(artifact_id, observation_index) AS (
+            VALUES {artifact_values_sql}
+        ),
+        reference_artifacts(artifact_id) AS (
+            VALUES {reference_values_sql}
+        ),
+        link_daily_volume AS (
+            SELECT
+                src.link AS link,
+                SUM(CAST(src.volume AS DOUBLE)) AS daily_volume
+            FROM {quoted_view} src
+            JOIN reference_artifacts ref
+              ON src.consist_artifact_id = ref.artifact_id
+            GROUP BY 1
+        ),
+        ranked_links AS (
+            SELECT
+                link,
+                daily_volume,
+                SUM(daily_volume) OVER () AS total_volume,
+                SUM(daily_volume) OVER (
+                    ORDER BY daily_volume DESC, link
+                ) AS cumulative_volume
+            FROM link_daily_volume
+        ),
+        coverage_cutoff AS (
+            SELECT
+                MIN(cumulative_volume) AS cutoff_volume
+            FROM ranked_links
+            WHERE cumulative_volume >= :volume_coverage * total_volume
+        ),
+        selected_links AS (
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY rl.daily_volume DESC, rl.link) - 1 AS link_index,
+                rl.link,
+                rl.daily_volume,
+                CASE
+                    WHEN rl.total_volume > 0 THEN rl.cumulative_volume / rl.total_volume
+                    ELSE 0.0
+                END AS cumulative_share
+            FROM ranked_links rl
+            CROSS JOIN coverage_cutoff cc
+            WHERE rl.total_volume <= 0
+               OR cc.cutoff_volume IS NULL
+               OR rl.cumulative_volume <= cc.cutoff_volume
+        )
+    """
+
+    params = {"volume_coverage": float(volume_coverage)}
+    with Session(tracker.engine) as session:
+        link_rows = session.exec(
+            text(
+                common_cte
+                + """
+                SELECT
+                    link_index,
+                    link,
+                    daily_volume,
+                    cumulative_share
+                FROM selected_links
+                ORDER BY link_index
+                """
+            ),
+            params=params,
+        ).all()
+
+    link_index_df = pd.DataFrame(
+        link_rows,
+        columns=["link_index", "link", "daily_volume", "cumulative_share"],
+    )
+    if link_index_df.empty:
+        empty_matrix = np.full(
+            (len(artifact_index_df), 0),
+            float(fill_value),
+            dtype=np.dtype(dtype),
+        )
+        return {
+            "matrix": empty_matrix,
+            "artifact_index": artifact_index_df,
+            "feature_index": pd.DataFrame(
+                columns=[
+                    "feature_index",
+                    "link",
+                    "hour_bin",
+                    "hour_start",
+                    "hour_end_exclusive",
+                    "link_index",
+                    "daily_volume",
+                    "cumulative_share",
+                ]
+            ),
+            "link_index": link_index_df,
+            "column_weights": np.array([], dtype="float64"),
+            "column_weights_normalized": np.array([], dtype="float64"),
+            "metric": metric,
+            "hour_bins": hour_bins,
+            "hour_group_size": hour_group_size,
+            "link_filter_strategy": link_filter_strategy,
+            "volume_coverage": float(volume_coverage),
+            "view_name": view_name,
+        }
+
+    hour_bin_expr = f"CAST(FLOOR(CAST(src.hour AS DOUBLE) / {int(hour_group_size)}) AS BIGINT)"
+    matrix_query = text(
+        common_cte
+        + f"""
+        , hourly_values AS (
+            SELECT
+                ta.observation_index,
+                sl.link_index,
+                {hour_bin_expr} AS hour_bin,
+                {metric_agg_expr} AS metric_value
+            FROM {quoted_view} src
+            JOIN target_artifacts ta
+              ON src.consist_artifact_id = ta.artifact_id
+            JOIN selected_links sl
+              ON src.link = sl.link
+            WHERE src.hour IS NOT NULL
+              AND {hour_bin_expr} >= 0
+              AND {hour_bin_expr} < {hour_bins}
+            GROUP BY 1, 2, 3
+        )
+        SELECT
+            observation_index,
+            link_index,
+            hour_bin,
+            metric_value
+        FROM hourly_values
+        ORDER BY observation_index, link_index, hour_bin
+        """
+    )
+    with Session(tracker.engine) as session:
+        matrix_rows = session.exec(matrix_query, params=params).all()
+
+    matrix_long_df = pd.DataFrame(
+        matrix_rows,
+        columns=["observation_index", "link_index", "hour_bin", "metric_value"],
+    )
+    n_observations = int(len(artifact_index_df))
+    n_links = int(len(link_index_df))
+    n_features = int(n_links * hour_bins)
+    matrix = np.full(
+        (n_observations, n_features),
+        float(fill_value),
+        dtype=np.dtype(dtype),
+    )
+    if not matrix_long_df.empty:
+        obs_idx = pd.to_numeric(
+            matrix_long_df["observation_index"],
+            errors="coerce",
+        ).fillna(-1).astype(int).to_numpy()
+        link_idx = pd.to_numeric(
+            matrix_long_df["link_index"],
+            errors="coerce",
+        ).fillna(-1).astype(int).to_numpy()
+        hour_idx = pd.to_numeric(
+            matrix_long_df["hour_bin"],
+            errors="coerce",
+        ).fillna(-1).astype(int).to_numpy()
+        feature_idx = link_idx * hour_bins + hour_idx
+        values = pd.to_numeric(
+            matrix_long_df["metric_value"],
+            errors="coerce",
+        ).fillna(float(fill_value)).to_numpy(dtype=np.dtype(dtype))
+
+        valid = (
+            (obs_idx >= 0)
+            & (obs_idx < n_observations)
+            & (feature_idx >= 0)
+            & (feature_idx < n_features)
+        )
+        matrix[obs_idx[valid], feature_idx[valid]] = values[valid]
+
+    link_index_df["link_index"] = pd.to_numeric(
+        link_index_df["link_index"],
+        errors="coerce",
+    ).fillna(-1).astype(int)
+    link_index_df["daily_volume"] = pd.to_numeric(
+        link_index_df["daily_volume"],
+        errors="coerce",
+    ).fillna(0.0)
+    link_index_df["cumulative_share"] = pd.to_numeric(
+        link_index_df["cumulative_share"],
+        errors="coerce",
+    ).fillna(0.0)
+
+    feature_index_df = link_index_df.loc[
+        link_index_df.index.repeat(hour_bins),
+        ["link_index", "link", "daily_volume", "cumulative_share"],
+    ].reset_index(drop=True)
+    feature_index_df["hour_bin"] = np.tile(np.arange(hour_bins, dtype=int), n_links)
+    feature_index_df["hour_start"] = feature_index_df["hour_bin"] * int(hour_group_size)
+    feature_index_df["hour_end_exclusive"] = (
+        feature_index_df["hour_start"] + int(hour_group_size)
+    ).clip(upper=int(hours_per_day))
+    feature_index_df["feature_index"] = (
+        feature_index_df["link_index"] * hour_bins + feature_index_df["hour_bin"]
+    ).astype(int)
+    feature_index_df = feature_index_df[
+        [
+            "feature_index",
+            "link",
+            "hour_bin",
+            "hour_start",
+            "hour_end_exclusive",
+            "link_index",
+            "daily_volume",
+            "cumulative_share",
+        ]
+    ]
+
+    column_weights = np.repeat(
+        link_index_df["daily_volume"].to_numpy(dtype="float64"),
+        hour_bins,
+    )
+    weight_sum = float(column_weights.sum())
+    if weight_sum > 0:
+        column_weights_normalized = column_weights / weight_sum
+    elif len(column_weights) > 0:
+        column_weights_normalized = np.full(
+            shape=len(column_weights),
+            fill_value=1.0 / len(column_weights),
+            dtype="float64",
+        )
+    else:
+        column_weights_normalized = np.array([], dtype="float64")
+
+    return {
+        "matrix": matrix,
+        "artifact_index": artifact_index_df,
+        "feature_index": feature_index_df,
+        "link_index": link_index_df,
+        "column_weights": column_weights,
+        "column_weights_normalized": column_weights_normalized,
+        "metric": metric,
+        "hour_bins": hour_bins,
+        "hour_group_size": int(hour_group_size),
+        "link_filter_strategy": link_filter_strategy,
+        "volume_coverage": float(volume_coverage),
+        "view_name": view_name,
+    }
