@@ -54,6 +54,30 @@ def _sql_literal(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _apply_duckdb_runtime_settings(
+    session: Session,
+    *,
+    duckdb_threads: Optional[int] = None,
+    duckdb_memory_limit: Optional[str] = None,
+    duckdb_temp_directory: Optional[str | Path] = None,
+    duckdb_preserve_insertion_order: Optional[bool] = None,
+) -> None:
+    """
+    Apply per-connection DuckDB runtime settings for heavy analysis queries.
+    """
+    if duckdb_threads is not None:
+        threads = max(1, int(duckdb_threads))
+        session.exec(text(f"SET threads = {threads}"))
+    if duckdb_memory_limit:
+        session.exec(text(f"SET memory_limit = {_sql_literal(str(duckdb_memory_limit))}"))
+    if duckdb_temp_directory:
+        temp_dir = str(Path(duckdb_temp_directory).expanduser().resolve())
+        session.exec(text(f"SET temp_directory = {_sql_literal(temp_dir)}"))
+    if duckdb_preserve_insertion_order is not None:
+        value = "true" if duckdb_preserve_insertion_order else "false"
+        session.exec(text(f"SET preserve_insertion_order = {value}"))
+
+
 def _stable_linkstats_grouped_view_name(
     *,
     namespace: str,
@@ -1574,8 +1598,13 @@ def build_linkstats_hourly_pca_matrix(
     hour_group_size: int = 1,
     hours_per_day: int = 24,
     metric: Literal["speed_mph", "traveltime_sec", "delay_ratio"] = "speed_mph",
+    exclude_zero_volume: bool = True,
     fill_value: float = 0.0,
     dtype: str = "float32",
+    duckdb_threads: Optional[int] = None,
+    duckdb_memory_limit: Optional[str] = None,
+    duckdb_temp_directory: Optional[str | Path] = None,
+    duckdb_preserve_insertion_order: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Build a PCA-ready matrix with rows=artifacts and columns=(selected links x hour bins).
@@ -1584,6 +1613,9 @@ def build_linkstats_hourly_pca_matrix(
       - ``first``: first artifact in the ordered summary
       - ``last``: last artifact in the ordered summary
       - ``all``: summed volume across all artifacts in the ordered summary
+
+    Set ``exclude_zero_volume=True`` to skip zero-volume rows during both
+    link-selection and hourly aggregation scans (often a major speedup).
     """
     if not (0.0 < float(volume_coverage) <= 1.0):
         raise ValueError("volume_coverage must be in (0, 1].")
@@ -1633,6 +1665,7 @@ def build_linkstats_hourly_pca_matrix(
         "/ SUM(CAST(src.volume AS DOUBLE)) "
         f"ELSE AVG({metric_row_expr}) END"
     )
+    volume_filter_sql = "AND CAST(src.volume AS DOUBLE) > 0" if exclude_zero_volume else ""
 
     artifact_values_sql = ", ".join(
         f"({_sql_literal(row.artifact_id)}, {int(row.observation_index)})"
@@ -1660,6 +1693,8 @@ def build_linkstats_hourly_pca_matrix(
             FROM {quoted_view} src
             JOIN reference_artifacts ref
               ON src.consist_artifact_id = ref.artifact_id
+            WHERE 1=1
+              {volume_filter_sql}
             GROUP BY 1
         ),
         ranked_links AS (
@@ -1697,6 +1732,13 @@ def build_linkstats_hourly_pca_matrix(
 
     params = {"volume_coverage": float(volume_coverage)}
     with Session(tracker.engine) as session:
+        _apply_duckdb_runtime_settings(
+            session,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
+        )
         link_rows = session.exec(
             text(
                 common_cte
@@ -1765,6 +1807,7 @@ def build_linkstats_hourly_pca_matrix(
             JOIN selected_links sl
               ON src.link = sl.link
             WHERE src.hour IS NOT NULL
+              {volume_filter_sql}
               AND {hour_bin_expr} >= 0
               AND {hour_bin_expr} < {hour_bins}
             GROUP BY 1, 2, 3
@@ -1775,10 +1818,16 @@ def build_linkstats_hourly_pca_matrix(
             hour_bin,
             metric_value
         FROM hourly_values
-        ORDER BY observation_index, link_index, hour_bin
         """
     )
     with Session(tracker.engine) as session:
+        _apply_duckdb_runtime_settings(
+            session,
+            duckdb_threads=duckdb_threads,
+            duckdb_memory_limit=duckdb_memory_limit,
+            duckdb_temp_directory=duckdb_temp_directory,
+            duckdb_preserve_insertion_order=duckdb_preserve_insertion_order,
+        )
         matrix_rows = session.exec(matrix_query, params=params).all()
 
     matrix_long_df = pd.DataFrame(
