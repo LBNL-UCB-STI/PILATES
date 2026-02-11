@@ -31,6 +31,7 @@ _DEFAULT_LINKSTATS_SCHEMA_ID = (
     "a0490d6beb290b489cf08c7fd6b93177095d4a9d7d6d4782d613dcbc94e4199b"
 )
 _METERS_PER_MILE = 1609.344
+_SECONDS_PER_HOUR = 3600.0
 
 
 def _quote_ident(identifier: str) -> str:
@@ -685,12 +686,47 @@ def _summarize_linkstats_grouped_view(
     artifact_ids: Optional[list[str]] = None,
     traveltime_weighting: Literal["unweighted", "volume_weighted"] = "unweighted",
 ) -> pd.DataFrame:
+    volume_sum_expr = "SUM(CAST(src.volume AS DOUBLE))"
+    vmt_miles_expr = (
+        f"SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE}"
+    )
+    freeflow_time_expr = (
+        "CASE "
+        "WHEN CAST(src.freespeed AS DOUBLE) > 0 "
+        "THEN CAST(src.length AS DOUBLE) / CAST(src.freespeed AS DOUBLE) "
+        "ELSE NULL END"
+    )
+    delay_seconds_per_vehicle_expr = (
+        "GREATEST(CAST(src.traveltime AS DOUBLE) - COALESCE("
+        + freeflow_time_expr
+        + ", CAST(src.traveltime AS DOUBLE)), 0.0)"
+    )
+    total_delay_hours_expr = (
+        "SUM(CAST(src.volume AS DOUBLE) * "
+        + delay_seconds_per_vehicle_expr
+        + f") / {_SECONDS_PER_HOUR}"
+    )
+    vht_hours_expr = (
+        "SUM(CAST(src.volume AS DOUBLE) * CAST(src.traveltime AS DOUBLE)) "
+        f"/ {_SECONDS_PER_HOUR}"
+    )
+    vmt_per_vht_expr = (
+        "CASE "
+        f"WHEN ({vht_hours_expr}) > 0 THEN ({vmt_miles_expr}) / ({vht_hours_expr}) "
+        "ELSE NULL END"
+    )
+    vht_per_vmt_expr = (
+        "CASE "
+        f"WHEN ({vmt_miles_expr}) > 0 THEN ({vht_hours_expr}) / ({vmt_miles_expr}) "
+        "ELSE NULL END"
+    )
+
     if traveltime_weighting == "volume_weighted":
         traveltime_mean_expr = (
             "CASE "
-            "WHEN SUM(CAST(src.volume AS DOUBLE)) > 0 "
+            f"WHEN {volume_sum_expr} > 0 "
             "THEN SUM(CAST(src.volume AS DOUBLE) * CAST(src.traveltime AS DOUBLE)) "
-            "/ SUM(CAST(src.volume AS DOUBLE)) "
+            f"/ {volume_sum_expr} "
             "ELSE NULL END"
         )
     else:
@@ -702,8 +738,12 @@ def _summarize_linkstats_grouped_view(
             src.consist_artifact_id AS artifact_id,
             COUNT(*) AS row_count,
             COUNT(DISTINCT src.link) AS distinct_links,
-            SUM(src.volume) AS volume_sum,
-            SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE} AS vmt_miles,
+            {volume_sum_expr} AS volume_sum,
+            {vmt_miles_expr} AS vmt_miles,
+            {vht_hours_expr} AS vht_hours,
+            {total_delay_hours_expr} AS total_delay_hours,
+            {vmt_per_vht_expr} AS vmt_per_vht_mph,
+            {vht_per_vmt_expr} AS vht_per_vmt_hours_per_mile,
             {traveltime_mean_expr} AS traveltime_mean,
             quantile_cont(src.traveltime, 0.95) AS traveltime_p95
         FROM {quoted_view} src
@@ -720,8 +760,12 @@ def _summarize_linkstats_grouped_view(
                     src.consist_artifact_id AS artifact_id,
                     COUNT(*) AS row_count,
                     COUNT(DISTINCT src.link) AS distinct_links,
-                    SUM(src.volume) AS volume_sum,
-                    SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE} AS vmt_miles,
+                    {volume_sum_expr} AS volume_sum,
+                    {vmt_miles_expr} AS vmt_miles,
+                    {vht_hours_expr} AS vht_hours,
+                    {total_delay_hours_expr} AS total_delay_hours,
+                    {vmt_per_vht_expr} AS vmt_per_vht_mph,
+                    {vht_per_vmt_expr} AS vht_per_vmt_hours_per_mile,
                     {traveltime_mean_expr} AS traveltime_mean,
                     quantile_cont(src.traveltime, 0.95) AS traveltime_p95
                 FROM {quoted_view} src
@@ -741,6 +785,10 @@ def _summarize_linkstats_grouped_view(
             "distinct_links",
             "volume_sum",
             "vmt_miles",
+            "vht_hours",
+            "total_delay_hours",
+            "vmt_per_vht_mph",
+            "vht_per_vmt_hours_per_mile",
             "traveltime_mean",
             "traveltime_p95",
         ],
@@ -753,6 +801,10 @@ def _summarize_linkstats_grouped_view(
         "distinct_links",
         "volume_sum",
         "vmt_miles",
+        "vht_hours",
+        "total_delay_hours",
+        "vmt_per_vht_mph",
+        "vht_per_vmt_hours_per_mile",
         "traveltime_mean",
         "traveltime_p95",
     ):
