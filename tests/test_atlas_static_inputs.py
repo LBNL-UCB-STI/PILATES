@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from pilates.atlas.inputs import (
     atlas_run_years,
     atlas_static_input_keys,
+    atlas_static_input_keys_for_interval,
     atlas_static_input_relpaths,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
@@ -36,6 +37,25 @@ def test_atlas_static_input_keys_match_adopt_relpaths():
     keys = set(atlas_static_input_keys(_settings()))
     assert "adopt/baseline/new_vehicles_biannual_values_2021" in keys
     assert "adopt/baseline/new_vehicles_biannual_values_2023" in keys
+
+
+def test_atlas_static_input_keys_for_interval_filters_adopt_year_suffixes_only():
+    keys = set(
+        atlas_static_input_keys_for_interval(
+            _settings(start=2017, end=2023),
+            interval_start_year=2017,
+            interval_end_year=2019,
+        )
+    )
+
+    assert "adopt/baseline/new_vehicles_biannual_values_2017" in keys
+    assert "adopt/baseline/new_vehicles_biannual_values_2019" in keys
+    assert "adopt/baseline/new_vehicles_biannual_values_2021" not in keys
+    assert "adopt/baseline/used_vehicles_2017" in keys
+    assert "adopt/baseline/used_vehicles_2019" in keys
+    assert "adopt/baseline/used_vehicles_2021" not in keys
+    # Non-ADOPT year-suffixed key is intentionally preserved.
+    assert "accessbility2017" in keys
 
 
 def test_build_coupler_schema_uses_atlas_static_keys():

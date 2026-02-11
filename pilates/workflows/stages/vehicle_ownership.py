@@ -8,7 +8,10 @@ from typing import Callable, Dict, Mapping, Union, Any, Optional
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.atlas.inputs import build_atlas_inputs, atlas_static_input_keys
+from pilates.atlas.inputs import (
+    build_atlas_inputs,
+    atlas_static_input_keys_for_interval,
+)
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.atlas_state import AtlasSubState
@@ -252,7 +255,20 @@ def run_vehicle_ownership_stage(
         else:
             atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
 
-        atlas_static_keys = atlas_static_input_keys(settings)
+        atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
+        atlas_interval_end_year = atlas_year
+        atlas_static_keys = atlas_static_input_keys_for_interval(
+            settings,
+            interval_start_year=atlas_interval_start_year,
+            interval_end_year=atlas_interval_end_year,
+        )
+        logger.debug(
+            "[ATLAS] Year %s static-key interval [%s, %s] count=%s",
+            atlas_year,
+            atlas_interval_start_year,
+            atlas_interval_end_year,
+            len(atlas_static_keys),
+        )
         atlas_run_fallbacks = dict(atlas_run_inputs)
         atlas_run_fallbacks.setdefault(
             USIM_DATASTORE_CURRENT_H5,

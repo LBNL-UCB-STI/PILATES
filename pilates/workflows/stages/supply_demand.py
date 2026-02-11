@@ -405,6 +405,7 @@ def _run_activity_demand_phase(
             ),
             input_keys=preprocess_resolution.stepref_input_keys(),
             inputs=preprocess_resolution.stepref_inputs(),
+            year=state.forecast_year,
         )
     ]
     _run_supply_demand_manifested_steps(
@@ -469,7 +470,7 @@ def _run_activity_demand_phase(
                     load_inputs=False,
                     phase="compile",
                     model="activitysim_compile",
-                    year=inputs.year,
+                    year=state.forecast_year,
                     iteration=-1,
                 )
             ],
@@ -553,6 +554,7 @@ def _run_activity_demand_phase(
                 outputs_holder=outputs_holder,
             ),
             input_keys=asim_run_input_keys or None,
+            year=state.forecast_year,
         ),
     ]
     _run_supply_demand_manifested_steps(
@@ -587,6 +589,7 @@ def _run_activity_demand_phase(
             ),
             input_keys=postprocess_input_keys,
             inputs=activitysim_postprocess_inputs or None,
+            year=state.forecast_year,
         )
     ]
     _run_supply_demand_manifested_steps(
@@ -832,6 +835,7 @@ def _run_beam_preprocess_step(
                     keys=beam_preprocess_inputs.keys(),
                     explicit_inputs=beam_preprocess_inputs,
                 ).stepref_inputs(),
+                year=state.forecast_year,
             )
         ],
         scenario=scenario,
@@ -887,6 +891,7 @@ def _run_beam_steps(
                     outputs_holder=outputs_holder,
                 ),
                 input_keys=beam_run_input_keys,
+                year=state.forecast_year,
             )
         ],
         scenario=scenario,
@@ -922,6 +927,7 @@ def _run_beam_steps(
                     outputs_holder=outputs_holder,
                 ),
                 input_keys=beam_postprocess_input_keys,
+                year=state.forecast_year,
             )
         ],
         scenario=scenario,
@@ -975,6 +981,7 @@ def _run_beam_full_skim_step(
                     outputs_holder=outputs_holder,
                 ),
                 input_keys=None,
+                year=state.forecast_year,
             )
         ],
         scenario=scenario,
