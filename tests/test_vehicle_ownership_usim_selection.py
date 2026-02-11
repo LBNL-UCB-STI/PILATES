@@ -102,3 +102,23 @@ def test_select_atlas_usim_input_path_returns_forecast_path_when_missing(tmp_pat
     )
 
     assert selected == str(workspace_usim_dir / "model_data_2023.h5")
+
+
+def test_select_atlas_usim_input_path_can_prefer_current_over_forecast(tmp_path):
+    workspace_usim_dir = tmp_path / "workspace" / "urbansim" / "data"
+    workspace_usim_dir.mkdir(parents=True)
+    current = workspace_usim_dir / "custom_current.h5"
+    current.write_text("")
+    forecast = workspace_usim_dir / "model_data_2023.h5"
+    forecast.write_text("")
+
+    selected = select_atlas_usim_input_path(
+        settings=_settings(),
+        state=_state(),
+        workspace=_WorkspaceStub(workspace_usim_dir),
+        fallback_current_path=current,
+        fallback_default_path=None,
+        prefer_forecast_output=False,
+    )
+
+    assert selected == str(current)
