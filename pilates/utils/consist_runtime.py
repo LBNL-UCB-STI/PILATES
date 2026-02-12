@@ -483,7 +483,11 @@ class _NoopScenario:
     ) -> RunResultLike:
         if fn is None:
             return _NoopRunResult()
-        runtime_kwargs = kwargs.get("runtime_kwargs") or {}
+        execution_options = kwargs.get("execution_options")
+        runtime_kwargs = kwargs.get("runtime_kwargs")
+        if runtime_kwargs is None and execution_options is not None:
+            runtime_kwargs = getattr(execution_options, "runtime_kwargs", None)
+        runtime_kwargs = dict(runtime_kwargs or {})
         required = getattr(fn, "__consist_runtime_required__", None)
         if required:
             missing = [name for name in required if name not in runtime_kwargs]

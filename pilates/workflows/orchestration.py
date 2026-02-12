@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
+from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
+
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
@@ -88,10 +90,7 @@ def _build_step_run_kwargs(
             f"Step '{step.name}' must be decorated with @define_step metadata."
         )
 
-    run_kwargs: Dict[str, Any] = {
-        "fn": step.step_func,
-        "runtime_kwargs": runtime_kwargs,
-    }
+    run_kwargs: Dict[str, Any] = {"fn": step.step_func}
     step_meta = getattr(step.step_func, "__consist_step__", None)
     resolved_year = step.year
     if resolved_year is None:
@@ -118,12 +117,16 @@ def _build_step_run_kwargs(
         run_kwargs["input_keys"] = step.input_keys
     if step.output_paths is not None:
         run_kwargs["output_paths"] = step.output_paths
-    if step.cache_hydration is not None:
-        run_kwargs["cache_hydration"] = step.cache_hydration
-    if step.cache_mode is not None:
-        run_kwargs["cache_mode"] = step.cache_mode
-    if step.load_inputs is not None:
-        run_kwargs["load_inputs"] = step.load_inputs
+    run_kwargs["execution_options"] = ExecutionOptions(
+        runtime_kwargs=runtime_kwargs,
+        load_inputs=step.load_inputs,
+    )
+
+    if step.cache_hydration is not None or step.cache_mode is not None:
+        run_kwargs["cache_options"] = CacheOptions(
+            cache_hydration=step.cache_hydration,
+            cache_mode=step.cache_mode,
+        )
     resolved_required_outputs: Optional[Sequence[str]] = step.required_outputs
     if resolved_required_outputs is None and step_meta is not None:
         meta_outputs = getattr(step_meta, "outputs", None)
@@ -143,15 +146,17 @@ def _build_step_run_kwargs(
         run_kwargs["outputs"] = list(resolved_required_outputs)
 
     # Apply strict defaults for declared-output steps unless explicitly overridden.
-    if step.output_missing is not None:
-        run_kwargs["output_missing"] = step.output_missing
-    elif resolved_required_outputs:
-        run_kwargs["output_missing"] = "error"
-
-    if step.output_mismatch is not None:
-        run_kwargs["output_mismatch"] = step.output_mismatch
-    elif resolved_required_outputs:
-        run_kwargs["output_mismatch"] = "error"
+    output_missing = step.output_missing
+    output_mismatch = step.output_mismatch
+    if output_missing is None and resolved_required_outputs:
+        output_missing = "error"
+    if output_mismatch is None and resolved_required_outputs:
+        output_mismatch = "error"
+    if output_missing is not None or output_mismatch is not None:
+        run_kwargs["output_policy"] = OutputPolicyOptions(
+            output_missing=output_missing,
+            output_mismatch=output_mismatch,
+        )
 
     if step.model is not None:
         run_kwargs["model"] = step.model

@@ -1,6 +1,7 @@
 import types
 
 import pytest
+from consist.types import CacheOptions, ExecutionOptions
 
 from pilates.generic.model import Model, provenance_logging
 from pilates.generic.records import FileRecord, RecordStore
@@ -201,7 +202,7 @@ def test_decorator_logs_artifacts_with_consist(monkeypatch, tmp_path):
                 model="dummy",
                 year=2017,
                 iteration=0,
-                load_inputs=False,
+                execution_options=ExecutionOptions(load_inputs=False),
             )
 
     assert calls
@@ -281,7 +282,7 @@ def test_scenario_run_hash_includes_coupler_input_keys(tmp_path):
             name="seed_plans",
             model="seed_plans",
             output_paths={"plans_beam_in": str(plans_path)},
-            cache_mode="off",
+            cache_options=CacheOptions(cache_mode="off"),
         )
 
         first = scenario.run(
@@ -311,7 +312,7 @@ def test_scenario_run_hash_includes_coupler_input_keys(tmp_path):
             name="seed_plans_refresh",
             model="seed_plans",
             output_paths={"plans_beam_in": str(plans_path)},
-            cache_mode="off",
+            cache_options=CacheOptions(cache_mode="off"),
         )
         third = scenario.run(
             fn=_consume,
