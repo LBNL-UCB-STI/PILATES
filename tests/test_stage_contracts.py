@@ -116,7 +116,11 @@ class FakeScenario:
         for key in input_keys:
             self.coupler.require(key)
 
-        runtime_kwargs = kwargs.get("runtime_kwargs") or {}
+        execution_options = kwargs.get("execution_options")
+        runtime_kwargs = kwargs.get("runtime_kwargs") or getattr(
+            execution_options, "runtime_kwargs", None
+        )
+        runtime_kwargs = dict(runtime_kwargs or {})
         fn_kwargs = dict(runtime_kwargs)
         sig = inspect.signature(fn)
         accepts_kwargs = any(

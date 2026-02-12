@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
+from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
+
 from pilates.utils.consist_types import RunResultLike, ScenarioLike
 
 
@@ -32,17 +34,17 @@ class StepConfig:
     required_outputs : list of str, optional
         Deprecated alias for ``outputs`` (kept for compatibility).
     output_missing : str, optional
-        Consist behavior when required outputs are missing.
+        Output policy value mapped into ``OutputPolicyOptions``.
     output_mismatch : str, optional
-        Consist behavior when observed outputs mismatch declared outputs.
+        Output policy value mapped into ``OutputPolicyOptions``.
     runtime_kwargs : dict, optional
-        Runtime kwargs passed into `fn`.
+        Runtime kwargs mapped into ``ExecutionOptions``.
     cache_mode : str, optional
-        Consist cache mode.
+        Cache policy value mapped into ``CacheOptions``.
     cache_hydration : str, optional
-        Consist cache hydration mode.
+        Cache policy value mapped into ``CacheOptions``.
     load_inputs : bool, optional
-        Whether Consist should load inputs automatically.
+        Execution policy value mapped into ``ExecutionOptions``.
     consist_kwargs : dict, optional
         Additional kwargs forwarded to `scenario.run`.
     """
@@ -94,18 +96,30 @@ class StepConfig:
             kwargs["outputs"] = list(resolved_outputs)
         if self.output_paths is not None:
             kwargs["output_paths"] = self.output_paths
-        if self.output_missing is not None:
-            kwargs["output_missing"] = self.output_missing
-        if self.output_mismatch is not None:
-            kwargs["output_mismatch"] = self.output_mismatch
-        if self.runtime_kwargs is not None:
-            kwargs["runtime_kwargs"] = self.runtime_kwargs
-        if self.cache_mode is not None:
-            kwargs["cache_mode"] = self.cache_mode
-        if self.cache_hydration is not None:
-            kwargs["cache_hydration"] = self.cache_hydration
-        if self.load_inputs is not None:
-            kwargs["load_inputs"] = self.load_inputs
+        if (
+            "output_policy" not in self.consist_kwargs
+            and (self.output_missing is not None or self.output_mismatch is not None)
+        ):
+            kwargs["output_policy"] = OutputPolicyOptions(
+                output_missing=self.output_missing,
+                output_mismatch=self.output_mismatch,
+            )
+        if (
+            "execution_options" not in self.consist_kwargs
+            and (self.runtime_kwargs is not None or self.load_inputs is not None)
+        ):
+            kwargs["execution_options"] = ExecutionOptions(
+                runtime_kwargs=self.runtime_kwargs,
+                load_inputs=self.load_inputs,
+            )
+        if (
+            "cache_options" not in self.consist_kwargs
+            and (self.cache_mode is not None or self.cache_hydration is not None)
+        ):
+            kwargs["cache_options"] = CacheOptions(
+                cache_mode=self.cache_mode,
+                cache_hydration=self.cache_hydration,
+            )
         kwargs.update(self.consist_kwargs)
         return kwargs
 
@@ -212,17 +226,17 @@ def build_step_config(
     required_outputs : list of str, optional
         Deprecated alias for ``outputs``.
     output_missing : str, optional
-        Consist behavior when required outputs are missing.
+        Output policy value mapped into ``OutputPolicyOptions``.
     output_mismatch : str, optional
-        Consist behavior when observed outputs mismatch declared outputs.
+        Output policy value mapped into ``OutputPolicyOptions``.
     runtime_kwargs : dict, optional
-        Runtime kwargs passed into `fn`.
+        Runtime kwargs mapped into ``ExecutionOptions``.
     cache_mode : str, optional
-        Consist cache mode.
+        Cache policy value mapped into ``CacheOptions``.
     cache_hydration : str, optional
-        Consist cache hydration mode.
+        Cache policy value mapped into ``CacheOptions``.
     load_inputs : bool, optional
-        Whether Consist should load inputs automatically.
+        Execution policy value mapped into ``ExecutionOptions``.
     consist_kwargs : dict, optional
         Additional kwargs forwarded to `scenario.run`.
 
