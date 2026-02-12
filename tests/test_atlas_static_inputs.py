@@ -64,6 +64,15 @@ def test_build_coupler_schema_uses_atlas_static_keys():
     assert "adopt/baseline/new_vehicles_biannual_values_2023" in schema
 
 
+def test_build_coupler_schema_without_extras_is_empty_for_no_steps():
+    schema = build_coupler_schema(
+        [],
+        settings=_settings(),
+        include_extras=False,
+    )
+    assert schema == {}
+
+
 def test_atlas_run_years_are_biannual_independent_of_vehicle_ownership_freq():
     years = atlas_run_years(_settings(start=2017, end=2023, freq=6))
     assert years == {2017, 2019, 2021, 2023}

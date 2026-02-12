@@ -118,6 +118,7 @@ def _atlas_static_key_map(settings: Optional[Any]) -> Dict[str, str]:
 def build_coupler_schema(
     steps: Iterable[Callable[..., Any]],
     settings: Optional[Any] = None,
+    include_extras: bool = True,
 ) -> Dict[str, str]:
     """
     Build the workflow coupler schema from step metadata plus static extras.
@@ -128,23 +129,34 @@ def build_coupler_schema(
         Canonical workflow step functions decorated with ``@define_step``.
     settings : Any, optional
         Settings object used to resolve callable schema metadata.
+    include_extras : bool, default True
+        Whether to include static non-step keys (for example,
+        ``PILATES_COUPLER_SCHEMA`` entries, namespaced aliases, and ATLAS
+        static input keys) alongside step-declared outputs.
 
     Returns
     -------
     dict
-        Coupler key -> description mapping.
+        Coupler key -> description mapping. When ``include_extras=False``,
+        only keys declared by the provided steps are returned.
     """
-    extras = dict(PILATES_COUPLER_SCHEMA)
-    for key, description in list(PILATES_COUPLER_SCHEMA.items()):
-        namespaced_key = namespaced_alias_for_key(key)
-        if not namespaced_key:
-            continue
-        extras.setdefault(
-            namespaced_key,
-            f"{description} (namespaced alias)",
-        )
-    extras.update(_atlas_static_key_map(settings))
+    extras: Dict[str, str] = {}
+    if include_extras:
+        extras = dict(PILATES_COUPLER_SCHEMA)
+        for key, description in list(PILATES_COUPLER_SCHEMA.items()):
+            namespaced_key = namespaced_alias_for_key(key)
+            if not namespaced_key:
+                continue
+            extras.setdefault(
+                namespaced_key,
+                f"{description} (namespaced alias)",
+            )
+        extras.update(_atlas_static_key_map(settings))
     try:
-        return collect_step_schema(steps, settings=settings, extra_keys=extras)
+        return collect_step_schema(
+            steps,
+            settings=settings,
+            extra_keys=extras or None,
+        )
     except Exception:
         return extras
