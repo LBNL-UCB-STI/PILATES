@@ -386,6 +386,49 @@ def _facet_map_from_artifact_kv(
     return facet_map
 
 
+def _parent_run_map(
+    tracker: Any,
+    run_ids: Iterable[Any],
+) -> Dict[str, Optional[str]]:
+    """
+    Resolve run_id -> parent_run_id from Consist run table when available.
+    """
+    db = getattr(tracker, "db", None)
+    if db is None or not hasattr(db, "session_scope"):
+        return {}
+    try:
+        from consist.models.run import Run
+    except Exception:
+        return {}
+
+    unique_ids: list[str] = []
+    seen: set[str] = set()
+    for run_id in run_ids:
+        if run_id is None:
+            continue
+        normalized = str(run_id).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_ids.append(normalized)
+    if not unique_ids:
+        return {}
+
+    mapping: Dict[str, Optional[str]] = {}
+    for chunk in _chunked(unique_ids, 1000):
+        with db.session_scope() as session:
+            statement = select(Run).where(col(Run.id).in_(chunk))
+            rows = session.exec(statement).all()
+        for row in rows:
+            row_id = str(getattr(row, "id", "") or "").strip()
+            if not row_id:
+                continue
+            parent = getattr(row, "parent_run_id", None)
+            parent_normalized = str(parent).strip() if parent is not None else None
+            mapping[row_id] = parent_normalized or None
+    return mapping
+
+
 def _filter_linkstats_facet(facet: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         key: facet.get(key)
@@ -465,6 +508,8 @@ def find_linkstats_artifacts(
                 "key",
                 "artifact_id",
                 "run_id",
+                "parent_run_id",
+                "header_run_id",
                 "container_uri",
                 "facet_source",
                 "artifact_family",
@@ -476,11 +521,13 @@ def find_linkstats_artifacts(
         )
 
     artifact_ids = [getattr(artifact, "id", None) for artifact in artifacts]
+    run_ids = [getattr(artifact, "run_id", None) for artifact in artifacts]
     facet_map_from_kv = _facet_map_from_artifact_kv(
         tracker,
         artifact_ids,
         namespace=namespace,
     )
+    parent_map = _parent_run_map(tracker, run_ids)
 
     output_rows = []
     for artifact in artifacts:
@@ -529,6 +576,8 @@ def find_linkstats_artifacts(
                 "key": key,
                 "artifact_id": str(artifact_id or ""),
                 "run_id": getattr(artifact, "run_id", None),
+                "parent_run_id": parent_map.get(str(getattr(artifact, "run_id", "") or "").strip()),
+                "header_run_id": parent_map.get(str(getattr(artifact, "run_id", "") or "").strip()),
                 "container_uri": getattr(artifact, "container_uri", None),
                 "facet_source": facet_source,
                 "artifact_family": facet.get("artifact_family"),
@@ -1513,6 +1562,9 @@ def _prepare_linkstats_pca_artifact_index(summary_df: pd.DataFrame) -> pd.DataFr
             columns=[
                 "observation_index",
                 "artifact_id",
+                "run_id",
+                "parent_run_id",
+                "header_run_id",
                 "year",
                 "iteration",
                 "beam_sub_iteration",
@@ -1527,10 +1579,21 @@ def _prepare_linkstats_pca_artifact_index(summary_df: pd.DataFrame) -> pd.DataFr
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     if "key" not in frame.columns:
         frame["key"] = pd.Series(dtype="object")
+    for column in ("run_id", "parent_run_id", "header_run_id"):
+        if column not in frame.columns:
+            frame[column] = pd.Series(dtype="object")
 
     frame = frame.drop_duplicates(subset=["artifact_id"], keep="first")
     frame = frame.sort_values(
-        ["year", "iteration", "beam_sub_iteration", "phys_sim_iteration", "artifact_id"],
+        [
+            "parent_run_id",
+            "run_id",
+            "year",
+            "iteration",
+            "beam_sub_iteration",
+            "phys_sim_iteration",
+            "artifact_id",
+        ],
         na_position="last",
     ).reset_index(drop=True)
     frame["observation_index"] = np.arange(len(frame), dtype=int)
@@ -1538,6 +1601,9 @@ def _prepare_linkstats_pca_artifact_index(summary_df: pd.DataFrame) -> pd.DataFr
         [
             "observation_index",
             "artifact_id",
+            "run_id",
+            "parent_run_id",
+            "header_run_id",
             "year",
             "iteration",
             "beam_sub_iteration",

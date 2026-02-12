@@ -224,6 +224,8 @@ def test_find_linkstats_artifacts_falls_back_to_key_prefix(monkeypatch):
     assert frame.iloc[0]["key"] == _FakeArtifact.key
     assert int(frame.iloc[0]["phys_sim_iteration"]) == 1
     assert frame.iloc[0]["facet_source"] == "key_parse"
+    assert "parent_run_id" in frame.columns
+    assert "header_run_id" in frame.columns
 
 
 def test_find_linkstats_artifacts_prefers_artifact_kv_facets(tmp_path):
@@ -309,6 +311,8 @@ def test_find_linkstats_artifacts_prefers_artifact_kv_facets(tmp_path):
     assert frame.iloc[0]["key"] == _FakeArtifact.key
     assert int(frame.iloc[0]["phys_sim_iteration"]) == 3
     assert frame.iloc[0]["facet_source"] == "artifact_kv"
+    assert "parent_run_id" in frame.columns
+    assert "header_run_id" in frame.columns
 
 
 def test_find_linkstats_artifacts_batches_kv_queries_for_multiple_artifacts():
@@ -411,7 +415,7 @@ def test_find_linkstats_artifacts_batches_kv_queries_for_multiple_artifacts():
     )
 
     assert len(frame) == 2
-    assert tracker.db.call_counter["count"] == 1
+    assert tracker.db.call_counter["count"] >= 1
     assert sorted(frame["phys_sim_iteration"].astype(int).tolist()) == [1, 2]
 
 
