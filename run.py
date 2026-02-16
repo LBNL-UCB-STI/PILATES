@@ -408,7 +408,11 @@ def main():
         schemas=_get_consist_schemas(),
     )
     if tracker is None:
-        raise RuntimeError("Consist tracker could not be created.")
+        raise RuntimeError(
+            "Consist tracker initialization failed (received noop/invalid tracker). "
+            "Check earlier Consist logs for tracker creation errors, often caused by "
+            "a PILATES/Consist API mismatch."
+        )
 
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(

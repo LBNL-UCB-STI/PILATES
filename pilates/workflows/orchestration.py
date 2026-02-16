@@ -18,6 +18,7 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -279,7 +280,29 @@ def run_manifested_steps(
                 workspace=workspace,
                 coupler=coupler,
                 step_inputs=spec.inputs,
+                cached_outputs=getattr(result, "outputs", None),
             )
+        if outputs is None and getattr(result, "cache_hit", False):
+            logger.warning(
+                "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
+                stage_name,
+                spec.name,
+            )
+            rerun_kwargs = dict(run_kwargs)
+            rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
+            result = scenario.run(**rerun_kwargs)
+            outputs = outputs_holder.get_attribute(spec.name)
+            if outputs is None and getattr(result, "cache_hit", False):
+                outputs = _recover_cached_outputs(
+                    step_name=spec.name,
+                    outputs_holder=outputs_holder,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    step_inputs=spec.inputs,
+                    cached_outputs=getattr(result, "outputs", None),
+                )
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
         manifest[spec.name] = {
@@ -376,7 +399,34 @@ def run_workflow(
                 workspace=workspace,
                 coupler=coupler,
                 step_inputs=spec.inputs,
+                cached_outputs=getattr(result, "outputs", None),
             )
+        if (
+            outputs_holder.get_attribute(spec.name) is None
+            and getattr(result, "cache_hit", False)
+        ):
+            logger.warning(
+                "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
+                stage_name,
+                spec.name,
+            )
+            rerun_kwargs = dict(run_kwargs)
+            rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
+            result = scenario.run(**rerun_kwargs)
+            if (
+                outputs_holder.get_attribute(spec.name) is None
+                and getattr(result, "cache_hit", False)
+            ):
+                _recover_cached_outputs(
+                    step_name=spec.name,
+                    outputs_holder=outputs_holder,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    step_inputs=spec.inputs,
+                    cached_outputs=getattr(result, "outputs", None),
+                )
 
         if coupler_keys is not None:
             try:
@@ -433,10 +483,23 @@ def _recover_cached_outputs(
     workspace: Any,
     coupler: CouplerProtocol,
     step_inputs: Optional[Mapping[str, Any]] = None,
+    cached_outputs: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Any]:
     """
     Best-effort output recovery for cache hits that skip step execution.
     """
+    def _resolve_cached_value(key: str) -> Any:
+        if cached_outputs:
+            for raw_key, value in cached_outputs.items():
+                if value is None:
+                    continue
+                raw_key_str = str(raw_key)
+                local_key = raw_key_str.split("/", 1)[-1]
+                if resolve_artifact_key(local_key) == key:
+                    return value
+        resolved, _ = resolve_coupler_value(coupler, key)
+        return resolved
+
     if step_name == "activitysim_preprocess":
         asim_dir = Path(workspace.get_asim_mutable_data_dir())
         candidates = {
@@ -447,6 +510,10 @@ def _recover_cached_outputs(
         }
         record_store = RecordStore()
         for key, path in candidates.items():
+            cached_value = _resolve_cached_value(key)
+            cached_path = artifact_to_path(cached_value, workspace)
+            if cached_path and os.path.exists(cached_path):
+                path = Path(cached_path)
             if path.exists():
                 record_store.add_record(
                     FileRecord(
