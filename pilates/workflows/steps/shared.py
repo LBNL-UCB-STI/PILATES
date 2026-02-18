@@ -1290,6 +1290,52 @@ def _execute_preprocess(
     return run_preprocessor(preprocessor, workspace)
 
 
+def _build_required_input_store(
+    *,
+    outputs_holder: StepOutputsHolder,
+    upstream_attr: str,
+    missing_message: str,
+    context: str,
+    coupler: Optional[CouplerProtocol] = None,
+    extra_inputs: Optional[RecordStore] = None,
+    warn_missing_coupler_inputs: bool = True,
+) -> RecordStore:
+    """
+    Build a RecordStore from required upstream step outputs.
+
+    Parameters
+    ----------
+    outputs_holder : StepOutputsHolder
+        Holder containing typed step outputs.
+    upstream_attr : str
+        Attribute name on ``outputs_holder`` to resolve.
+    missing_message : str
+        RuntimeError message when upstream outputs are missing.
+    context : str
+        Context label for warning logs.
+    coupler : CouplerProtocol, optional
+        Coupler used for missing-input key warning checks.
+    extra_inputs : RecordStore, optional
+        Additional records merged into the upstream input store.
+    warn_missing_coupler_inputs : bool, default True
+        Whether to emit warnings for RecordStore keys not present in coupler.
+
+    Returns
+    -------
+    RecordStore
+        Input store for runner/postprocessor execution.
+    """
+    upstream = getattr(outputs_holder, upstream_attr, None)
+    if upstream is None:
+        raise RuntimeError(missing_message)
+    input_store = upstream.to_record_store()
+    if extra_inputs is not None:
+        input_store += extra_inputs
+    if warn_missing_coupler_inputs:
+        _warn_missing_coupler_inputs(coupler, input_store, context)
+    return input_store
+
+
 def _execute_run(
     runner: Runner,
     workspace: "Workspace",
@@ -1322,13 +1368,14 @@ def _execute_run(
     RecordStore
         Runner outputs.
     """
-    upstream = outputs_holder.activitysim_preprocess
-    if upstream is None:
-        raise RuntimeError("ActivitySim preprocess must complete first")
-    input_store = upstream.to_record_store()
-    if extra_inputs is not None:
-        input_store += extra_inputs
-    _warn_missing_coupler_inputs(coupler, input_store, context)
+    input_store = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="activitysim_preprocess",
+        missing_message="ActivitySim preprocess must complete first",
+        context=context,
+        coupler=coupler,
+        extra_inputs=extra_inputs,
+    )
     return run_runner(runner, input_store, workspace)
 
 
@@ -1358,10 +1405,14 @@ def _execute_postprocess(
     RecordStore
         Postprocessor outputs.
     """
-    upstream = outputs_holder.activitysim_run
-    if upstream is None:
-        raise RuntimeError("ActivitySim run must complete first")
-    raw_outputs = upstream.to_record_store()
+    raw_outputs = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="activitysim_run",
+        missing_message="ActivitySim run must complete first",
+        context="activitysim_postprocess",
+        coupler=None,
+        warn_missing_coupler_inputs=False,
+    )
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -1465,13 +1516,14 @@ def _execute_beam_run(
     RecordStore
         Runner outputs.
     """
-    upstream = outputs_holder.beam_preprocess
-    if upstream is None:
-        raise RuntimeError("BEAM preprocess must complete first")
-    input_store = upstream.to_record_store()
-    if extra_inputs is not None:
-        input_store += extra_inputs
-    _warn_missing_coupler_inputs(coupler, input_store, context)
+    input_store = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="beam_preprocess",
+        missing_message="BEAM preprocess must complete first",
+        context=context,
+        coupler=coupler,
+        extra_inputs=extra_inputs,
+    )
     return run_runner(runner, input_store, workspace)
 
 
@@ -1501,10 +1553,14 @@ def _execute_beam_postprocess(
     RecordStore
         Postprocessor outputs.
     """
-    upstream = outputs_holder.beam_run
-    if upstream is None:
-        raise RuntimeError("BEAM run must complete first")
-    raw_outputs = upstream.to_record_store()
+    raw_outputs = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="beam_run",
+        missing_message="BEAM run must complete first",
+        context="beam_postprocess",
+        coupler=None,
+        warn_missing_coupler_inputs=False,
+    )
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -1524,13 +1580,14 @@ def _execute_beam_full_skim(
     The full-skim runner consumes canonical BEAM inputs plus optional
     previous BEAM outputs (for linkstats warm-start selection).
     """
-    upstream = outputs_holder.beam_preprocess
-    if upstream is None:
-        raise RuntimeError("BEAM preprocess must complete first")
-    input_store = upstream.to_record_store()
-    if previous_beam_outputs is not None:
-        input_store += previous_beam_outputs
-    _warn_missing_coupler_inputs(coupler, input_store, context)
+    input_store = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="beam_preprocess",
+        missing_message="BEAM preprocess must complete first",
+        context=context,
+        coupler=coupler,
+        extra_inputs=previous_beam_outputs,
+    )
     return run_runner(runner, input_store, workspace)
 
 
@@ -1563,11 +1620,13 @@ def _execute_urbansim_run(
     RecordStore
         Runner outputs.
     """
-    upstream = outputs_holder.urbansim_preprocess
-    if upstream is None:
-        raise RuntimeError("UrbanSim preprocess must complete first")
-    input_store = upstream.to_record_store()
-    _warn_missing_coupler_inputs(coupler, input_store, context)
+    input_store = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="urbansim_preprocess",
+        missing_message="UrbanSim preprocess must complete first",
+        context=context,
+        coupler=coupler,
+    )
     return run_runner(runner, input_store, workspace)
 
 
@@ -1600,11 +1659,13 @@ def _execute_urbansim_postprocess(
     RecordStore
         Postprocessor outputs.
     """
-    upstream = outputs_holder.urbansim_run
-    if upstream is None:
-        raise RuntimeError("UrbanSim run must complete first")
-    raw_outputs = upstream.to_record_store()
-    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
+    raw_outputs = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="urbansim_run",
+        missing_message="UrbanSim run must complete first",
+        context=context,
+        coupler=coupler,
+    )
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 
@@ -1637,11 +1698,13 @@ def _execute_atlas_run(
     RecordStore
         Runner outputs.
     """
-    upstream = outputs_holder.atlas_preprocess
-    if upstream is None:
-        raise RuntimeError("ATLAS preprocess must complete first")
-    input_store = upstream.to_record_store()
-    _warn_missing_coupler_inputs(coupler, input_store, context)
+    input_store = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="atlas_preprocess",
+        missing_message="ATLAS preprocess must complete first",
+        context=context,
+        coupler=coupler,
+    )
     return run_runner(runner, input_store, workspace)
 
 
@@ -1674,9 +1737,11 @@ def _execute_atlas_postprocess(
     RecordStore
         Postprocessor outputs.
     """
-    upstream = outputs_holder.atlas_run
-    if upstream is None:
-        raise RuntimeError("ATLAS run must complete first")
-    raw_outputs = upstream.to_record_store()
-    _warn_missing_coupler_inputs(coupler, raw_outputs, context)
+    raw_outputs = _build_required_input_store(
+        outputs_holder=outputs_holder,
+        upstream_attr="atlas_run",
+        missing_message="ATLAS run must complete first",
+        context=context,
+        coupler=coupler,
+    )
     return run_postprocessor(postprocessor, raw_outputs, workspace)

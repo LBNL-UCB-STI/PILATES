@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from typing import Callable
+
+from pilates.config.models import PilatesConfig
+from pilates.workspace import Workspace
+
 # Model-specific postprocessing step factory.
 # Shared helpers/infrastructure are imported from shared.py.
-from .shared import *  # noqa: F401,F403
-from .shared import _decorate_step_with_consist  # noqa: F401
+from .shared import (
+    WorkflowState,
+    _decorate_step_with_consist,
+    require_common_runtime,
+)
 
 def make_postprocessing_step() -> Callable[..., None]:
     """
