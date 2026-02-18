@@ -11,8 +11,10 @@ from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,
     record_store_to_outputs,
+    resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
@@ -500,6 +502,22 @@ def _recover_cached_outputs(
         resolved, _ = resolve_coupler_value(coupler, key)
         return resolved
 
+    def _existing_path(value: Any) -> Optional[str]:
+        return artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+
+    def _existing_path_str(path: Any) -> Optional[str]:
+        if path is None:
+            return None
+        return resolve_existing_path(
+            str(path),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+
     if step_name == "activitysim_preprocess":
         asim_dir = Path(workspace.get_asim_mutable_data_dir())
         candidates = {
@@ -511,10 +529,12 @@ def _recover_cached_outputs(
         record_store = RecordStore()
         for key, path in candidates.items():
             cached_value = _resolve_cached_value(key)
-            cached_path = artifact_to_path(cached_value, workspace)
-            if cached_path and os.path.exists(cached_path):
+            cached_path = _existing_path(cached_value)
+            if cached_path:
                 path = Path(cached_path)
-            if path.exists():
+            resolved_candidate = _existing_path_str(path)
+            if resolved_candidate:
+                path = Path(resolved_candidate)
                 record_store.add_record(
                     FileRecord(
                         file_path=str(path),
@@ -527,7 +547,10 @@ def _recover_cached_outputs(
     elif step_name == "activitysim_run":
         record_store = RecordStore()
         asim_output_dir = Path(workspace.get_asim_output_dir())
-        final_pipeline = asim_output_dir / "final_pipeline"
+        final_pipeline = Path(
+            _existing_path_str(asim_output_dir / "final_pipeline")
+            or (asim_output_dir / "final_pipeline")
+        )
         allow_final_pipeline = has_asim_run_marker(
             asim_output_dir, state.year, state.iteration
         )
@@ -550,7 +573,12 @@ def _recover_cached_outputs(
                 state.iteration,
             )
         if not record_store.all_records():
-            iter_dir = asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
+            iter_dir = Path(
+                _existing_path_str(
+                    asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
+                )
+                or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
+            )
             if iter_dir.exists():
                 for fpath in iter_dir.glob("*.parquet"):
                     record_store.add_record(
@@ -565,7 +593,12 @@ def _recover_cached_outputs(
     elif step_name == "activitysim_postprocess":
         record_store = RecordStore()
         asim_output_dir = Path(workspace.get_asim_output_dir())
-        iter_dir = asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
+        iter_dir = Path(
+            _existing_path_str(
+                asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
+            )
+            or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
+        )
         if iter_dir.exists():
             required_outputs = {
                 "persons_asim_out",
@@ -590,8 +623,11 @@ def _recover_cached_outputs(
         else:
             return None
 
-        inputs_dir = (
-            asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}"
+        inputs_dir = Path(
+            _existing_path_str(
+                asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}"
+            )
+            or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
         )
         if inputs_dir.exists():
             archived_inputs = {
@@ -622,11 +658,11 @@ def _recover_cached_outputs(
 
         usim_path = None
         if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
-            usim_path = artifact_to_path(
+            usim_path = artifact_to_existing_path(
                 step_inputs[USIM_DATASTORE_BASE_H5], workspace
             )
         if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
-            usim_path = artifact_to_path(
+            usim_path = artifact_to_existing_path(
                 step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
             )
         if not usim_path:
@@ -641,10 +677,11 @@ def _recover_cached_outputs(
                     workspace.get_usim_mutable_data_dir(),
                     settings.urbansim.input_file_template.format(region_id=region_id),
                 )
-        if usim_path and os.path.exists(usim_path):
+        usim_existing = _existing_path_str(usim_path)
+        if usim_existing:
             record_store.add_record(
                 FileRecord(
-                    file_path=str(usim_path),
+                    file_path=str(usim_existing),
                     short_name=f"usim_input_{state.forecast_year}",
                     description="New UrbanSim input data for next iteration",
                 )
@@ -664,8 +701,8 @@ def _recover_cached_outputs(
             for key, value in step_inputs.items():
                 if key not in allowed_keys:
                     continue
-                path = artifact_to_path(value, workspace)
-                if path and os.path.exists(path):
+                path = _existing_path(value)
+                if path:
                     if key == LINKSTATS_WARMSTART:
                         has_warmstart = True
                     record_store.add_record(
@@ -694,8 +731,8 @@ def _recover_cached_outputs(
                 key for key in sorted(step_inputs) if key.startswith("linkstats")
             )
             for key in candidate_keys:
-                path = artifact_to_path(step_inputs.get(key), workspace)
-                if path and os.path.exists(path):
+                path = _existing_path(step_inputs.get(key))
+                if path:
                     record_store.add_record(
                         FileRecord(
                             file_path=str(path),

@@ -41,6 +41,7 @@ import yaml
 from pilates.config import load_config
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workspace import Workspace
 from pilates.activitysim.outputs import normalize_asim_output_key
@@ -67,6 +68,61 @@ from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from workflow_state import WorkflowState
+
+
+EXPECTED_STAGE_MODELS = (
+    "initialization",
+    "urbansim_preprocess",
+    "urbansim_run",
+    "urbansim_postprocess",
+    "atlas_preprocess",
+    "atlas_run",
+    "atlas_postprocess",
+    "activitysim_preprocess",
+    "activitysim_compile",
+    "activitysim_run",
+    "activitysim_postprocess",
+    "beam_preprocess",
+    "beam_run",
+    "beam_postprocess",
+)
+
+EXPECTED_MANIFEST_STEPS = {
+    "activitysim_preprocess",
+    "activitysim_run",
+    "activitysim_postprocess",
+}
+
+EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
+    "households_asim_out_temp",
+    "persons_asim_out_temp",
+    "tours_asim_out_temp",
+    "trips_asim_out_temp",
+    "beam_plans_asim_out_temp",
+}
+
+EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS = {
+    normalize_asim_output_key("households"),
+    normalize_asim_output_key("persons"),
+    normalize_asim_output_key("tours"),
+    normalize_asim_output_key("trips"),
+    normalize_asim_output_key("beam_plans"),
+}
+
+
+def _artifact_map(raw_artifacts):
+    """Normalize Consist artifact collections to a ``{key: artifact}`` mapping."""
+    if isinstance(raw_artifacts, dict):
+        return raw_artifacts
+    artifact_map = {}
+    for idx, artifact in enumerate(raw_artifacts or []):
+        key = getattr(artifact, "key", None) or f"artifact_{idx}"
+        artifact_map[key] = artifact
+    return artifact_map
+
+
+def _artifact_keys(raw_artifacts):
+    return set(_artifact_map(raw_artifacts).keys())
 
 
 class DummyPreprocessor:
@@ -500,6 +556,14 @@ def golden_stub_env(tmp_path, monkeypatch):
     _write_file(promoted_plans)
 
     def record_builder(model_name, phase, state=None, workspace=None, raw_outputs=None):
+        """
+        Build deterministic RecordStore responses for each model/phase pair.
+
+        Contract intent:
+        - ``preprocess`` emits explicit upstream dependencies for the next step.
+        - ``run`` emits realistic model outputs with production short-names.
+        - ``postprocess`` emits finalized artifacts consumed by downstream stages.
+        """
         if phase == "preprocess":
             if model_name == "activitysim":
                 return RecordStore(
@@ -691,6 +755,10 @@ def golden_stub_env(tmp_path, monkeypatch):
                     "coupler": scenario.coupler,
                     "tracker": tracker,
                     "usim_input_path": str(usim_input_path),
+                    "usim_merged_path": str(usim_merged_path),
+                    "zarr_path": str(zarr_path),
+                    "promoted_linkstats": str(promoted_linkstats),
+                    "promoted_plans": str(promoted_plans),
                 }
     finally:
         cr.set_enabled(None)
@@ -712,6 +780,28 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     scenario = golden_stub_env["scenario"]
     coupler = golden_stub_env["coupler"]
     tracker = golden_stub_env["tracker"]
+    usim_input_path = Path(golden_stub_env["usim_input_path"])
+    usim_merged_path = Path(golden_stub_env["usim_merged_path"])
+    zarr_path = Path(golden_stub_env["zarr_path"])
+    promoted_linkstats = Path(golden_stub_env["promoted_linkstats"])
+    promoted_plans = Path(golden_stub_env["promoted_plans"])
+
+    # Phase 0: initialization contract represented explicitly in this golden test.
+    assert state.data_initialized is False
+    init_marker = Path(workspace.full_path) / ".golden_init_marker.txt"
+    with scenario.trace(
+        "initialization",
+        model="initialization",
+        year=state.current_year,
+        iteration=0,
+        tags=["init"],
+    ):
+        cr.log_input(usim_input_path, key="golden_init_source")
+        _write_file(init_marker, "initialized")
+        cr.log_output(init_marker, key="golden_init_marker")
+        state.set_data_initialized(True)
+    assert state.data_initialized is True
+    assert init_marker.exists()
 
     # Phase 1: land-use stage publishes UrbanSim datastore handles.
     outputs_holder_year = StepOutputsHolder()
@@ -730,8 +820,12 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert usim_inputs[USIM_DATASTORE_CURRENT_H5].endswith(
         f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     )
-    assert coupler.get(USIM_DATASTORE_BASE_H5) is not None
-    assert coupler.get(USIM_DATASTORE_H5) is not None
+    coupler_base_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_BASE_H5), workspace)
+    coupler_current_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
+    assert coupler_base_h5 is not None
+    assert coupler_current_h5 is not None
+    assert Path(coupler_base_h5).resolve() == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+    assert Path(coupler_current_h5).resolve() == usim_merged_path.resolve()
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
     # produces Atlas outputs plus ActivitySim-ready tables.
@@ -747,13 +841,32 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert (Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv").exists()
     assert (Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv").exists()
     assert not (Path(workspace.get_atlas_output_dir()) / "vehicles2_2019.csv").exists()
+    vehicles2 = pd.read_csv(Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv")
+    assert {
+        "household_id",
+        "vehicle_id",
+        "bodytype",
+        "pred_power",
+        "modelyear",
+        "vehicleTypeId",
+    } <= set(vehicles2.columns)
+    assert vehicles2["vehicleTypeId"].tolist() == [
+        "sedan_gasoline_2018",
+        "suv_electricity_2020",
+    ]
     asim_mutable_dir = Path(workspace.get_asim_mutable_data_dir())
-    land_use_cols = set(pd.read_csv(asim_mutable_dir / "land_use.csv").columns)
-    households_cols = set(pd.read_csv(asim_mutable_dir / "households.csv").columns)
-    persons_cols = set(pd.read_csv(asim_mutable_dir / "persons.csv").columns)
+    land_use = pd.read_csv(asim_mutable_dir / "land_use.csv")
+    households = pd.read_csv(asim_mutable_dir / "households.csv")
+    persons = pd.read_csv(asim_mutable_dir / "persons.csv")
+    land_use_cols = set(land_use.columns)
+    households_cols = set(households.columns)
+    persons_cols = set(persons.columns)
     assert {"TAZ", "TOTPOP", "TOTHH", "TOTEMP"} <= land_use_cols
     assert {"household_id", "block_id", "income", "persons", "TAZ"} <= households_cols
     assert {"person_id", "household_id", "age", "TAZ", "ptype", "pemploy", "pstudent"} <= persons_cols
+    assert int(land_use["TOTPOP"].sum()) == 200
+    assert int(households["persons"].sum()) == 3
+    assert int((persons["worker"] == 1).sum()) == 2
 
     # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs,
     # manifest state, and year/iteration archives.
@@ -780,38 +893,62 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         build_manifest_path=_build_manifest_path,
     )
 
-    assert coupler.get(ZARR_SKIMS) is not None
-    assert coupler.get(LINKSTATS) is not None
-    assert coupler.get(BEAM_PLANS_OUT) is not None
-    assert (manifest_dir / f"manifest_{state.forecast_year}_0.yaml").exists()
+    zarr_from_coupler = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)
+    linkstats_from_coupler = artifact_to_path(coupler.get(LINKSTATS), workspace)
+    plans_from_coupler = artifact_to_path(coupler.get(BEAM_PLANS_OUT), workspace)
+    assert zarr_from_coupler is not None
+    assert linkstats_from_coupler is not None
+    assert plans_from_coupler is not None
+    assert Path(zarr_from_coupler).resolve() == zarr_path.resolve()
+    assert Path(linkstats_from_coupler).resolve() == promoted_linkstats.resolve()
+    assert Path(plans_from_coupler).resolve() == promoted_plans.resolve()
+
+    manifest_path = manifest_dir / f"manifest_{state.forecast_year}_0.yaml"
+    assert manifest_path.exists()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert set(manifest) == EXPECTED_MANIFEST_STEPS
+    for step_name in EXPECTED_MANIFEST_STEPS:
+        step_manifest = manifest[step_name]
+        assert isinstance(step_manifest.get("cache_hit"), bool)
+        assert step_manifest.get("outputs")
+    assert (
+        set(manifest["activitysim_run"]["outputs"]["raw_outputs"])
+        == EXPECTED_ASIM_TEMP_OUTPUT_KEYS
+    )
+    assert (
+        set(manifest["activitysim_postprocess"]["outputs"]["processed_outputs"])
+        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS
+    )
+
     asim_output_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
-    households_out_cols = set(
-        pd.read_parquet(asim_output_dir / "households" / "final.parquet").columns
-    )
-    persons_out_cols = set(
-        pd.read_parquet(asim_output_dir / "persons" / "final.parquet").columns
-    )
-    tours_out_cols = set(
-        pd.read_parquet(asim_output_dir / "tours" / "final.parquet").columns
-    )
-    trips_out_cols = set(
-        pd.read_parquet(asim_output_dir / "trips" / "final.parquet").columns
-    )
-    beam_plans_out_cols = set(
-        pd.read_parquet(asim_output_dir / "beam_plans" / "final.parquet").columns
-    )
+    households_out = pd.read_parquet(asim_output_dir / "households" / "final.parquet")
+    persons_out = pd.read_parquet(asim_output_dir / "persons" / "final.parquet")
+    tours_out = pd.read_parquet(asim_output_dir / "tours" / "final.parquet")
+    trips_out = pd.read_parquet(asim_output_dir / "trips" / "final.parquet")
+    beam_plans_out = pd.read_parquet(asim_output_dir / "beam_plans" / "final.parquet")
+    households_out_cols = set(households_out.columns)
+    persons_out_cols = set(persons_out.columns)
+    tours_out_cols = set(tours_out.columns)
+    trips_out_cols = set(trips_out.columns)
+    beam_plans_out_cols = set(beam_plans_out.columns)
     assert {"household_id", "home_zone_id", "hhsize", "auto_ownership"} <= households_out_cols
     assert {"person_id", "household_id", "PNUM", "home_zone_id", "is_worker"} <= persons_out_cols
     assert {"tour_id", "person_id", "household_id", "tour_type", "tour_mode"} <= tours_out_cols
     assert {"trip_id", "tour_id", "person_id", "household_id", "trip_mode"} <= trips_out_cols
     assert {"tour_id", "trip_id", "person_id", "PlanElementIndex", "ActivityElement", "ActivityType"} <= beam_plans_out_cols
+    assert households_out["auto_ownership"].tolist() == [1, 2]
+    assert int(persons_out["is_worker"].sum()) == 2
+    assert set(tours_out["tour_mode"]) == {"DRIVEALONE", "WALK"}
+    assert len(trips_out) == 3
+    assert set(beam_plans_out["ActivityType"]) == {"home", "work", "school"}
+
     asim_archive_dir = (
         Path(workspace.get_asim_output_dir())
         / f"year-{asim_archive_year}-iteration-{asim_archive_iteration}"
     )
-    assert (asim_archive_dir / "households.parquet").exists()
-    assert (asim_archive_dir / "persons.parquet").exists()
-    assert (asim_archive_dir / "beam_plans.parquet").exists()
+    for key in EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS:
+        archive_name = key.replace("_asim_out", "")
+        assert (asim_archive_dir / f"{archive_name}.parquet").exists()
 
     # Phase 4: provenance sanity checks against real Consist tracker output.
     runs = tracker.find_runs(tags=["golden_stub_workflow"])
@@ -819,11 +956,65 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     scenario_run = runs[0]
     assert scenario_run.status in {"running", "completed"}
     assert "steps" in scenario_run.meta
-    assert scenario_run.meta["steps"]
+    assert "mounts" in scenario_run.meta
+    steps = scenario_run.meta["steps"]
+    assert steps
+    assert [step.get("model") for step in steps] == list(EXPECTED_STAGE_MODELS)
+
+    for step in steps:
+        step_artifacts = tracker.get_artifacts_for_run(step["id"])
+        step_input_keys = set((step.get("inputs") or {}).values())
+        step_output_keys = set((step.get("outputs") or {}).values())
+        assert step_output_keys, f"Expected outputs recorded for step {step['id']}"
+        assert step_output_keys <= _artifact_keys(step_artifacts.outputs)
+        assert step_input_keys <= _artifact_keys(step_artifacts.inputs)
+        step_run = tracker.get_run(step["id"])
+        assert step_run is not None
+        assert "cache_epoch" in (step_run.meta or {})
 
     scenario_artifacts = tracker.get_artifacts_for_run(scenario_run.id)
-    assert len(scenario_artifacts.inputs) > 0
-    assert len(scenario_artifacts.outputs) > 0
+    scenario_inputs = _artifact_map(scenario_artifacts.inputs)
+    scenario_outputs = _artifact_map(scenario_artifacts.outputs)
+    assert scenario_inputs
+    assert scenario_outputs
+
+    expected_scenario_output_keys = {
+        USIM_DATASTORE_BASE_H5,
+        USIM_DATASTORE_H5,
+        ZARR_SKIMS,
+        LINKSTATS,
+        BEAM_PLANS_OUT,
+        "atlas_vehicles2_output",
+    } | EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS
+    assert expected_scenario_output_keys <= set(scenario_outputs)
+
+    step_output_keys = {
+        key
+        for step in steps
+        for key in (step.get("outputs") or {}).values()
+    }
+    assert step_output_keys <= set(scenario_outputs)
+
+    for key in expected_scenario_output_keys:
+        artifact = scenario_outputs[key]
+        artifact_path = getattr(artifact, "path", None)
+        assert artifact_path is not None, f"Artifact {key} did not expose a concrete path"
+        assert Path(artifact_path).exists(), f"Artifact path for {key} does not exist"
+
+    zarr_meta = scenario_outputs[ZARR_SKIMS].meta or {}
+    assert zarr_meta.get("year") == state.forecast_year
+    assert zarr_meta.get("iteration") == -1
+
+    linkstats_meta = scenario_outputs[LINKSTATS].meta or {}
+    assert linkstats_meta.get("year") == state.forecast_year
+    assert linkstats_meta.get("iteration") == 0
+
+    for key in EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS:
+        meta = scenario_outputs[key].meta or {}
+        assert meta.get("year") == state.forecast_year
+        assert meta.get("iteration") == 0
+        description = str(meta.get("description", ""))
+        assert description.startswith("ActivitySim output file:")
 
     report = write_provenance_report(
         tracker=tracker,

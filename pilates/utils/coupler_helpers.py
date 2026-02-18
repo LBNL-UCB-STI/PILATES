@@ -71,6 +71,57 @@ def _resolve_archive_path(path: str, local_root: str, archive_root: str) -> Opti
     return os.path.join(archive_root, rel_path)
 
 
+def _resolve_local_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
+    abs_path = os.path.abspath(path)
+    if _path_under_root(abs_path, local_root):
+        return abs_path
+    if not _path_under_root(abs_path, archive_root):
+        return None
+    rel_path = os.path.relpath(abs_path, archive_root)
+    return os.path.join(local_root, rel_path)
+
+
+def _resolve_workspace_uri_path(
+    path: str,
+    workspace: Optional["Workspace"] = None,
+) -> Optional[str]:
+    if not isinstance(path, str):
+        return None
+    prefix = "workspace://"
+    if not path.startswith(prefix):
+        return path
+    rel_path = path[len(prefix) :].lstrip("/")
+    if workspace is not None and getattr(workspace, "full_path", None):
+        return os.path.join(str(workspace.full_path), rel_path)
+    roots = _archive_roots()
+    if roots is None:
+        return None
+    local_root, _archive_root = roots
+    return os.path.join(local_root, rel_path)
+
+
+def _copy_archive_to_local(
+    *,
+    local_path: str,
+    archive_path: str,
+) -> Optional[str]:
+    try:
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        if os.path.isdir(archive_path):
+            shutil.copytree(archive_path, local_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(archive_path, local_path)
+        return local_path
+    except Exception as exc:
+        logger.warning(
+            "[Archive] Failed to materialize %s from archive %s: %s",
+            local_path,
+            archive_path,
+            exc,
+        )
+        return None
+
+
 def _archive_dir_allowed(key: str) -> bool:
     return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
 
@@ -225,6 +276,92 @@ def artifact_to_path(
         if "://" not in path:
             return os.path.join(workspace.full_path, path)
     return path
+
+
+def resolve_existing_path(
+    path: Optional[str],
+    *,
+    workspace: Optional["Workspace"] = None,
+    materialize_from_archive: bool = False,
+) -> Optional[str]:
+    """
+    Resolve a path to one that currently exists, optionally using archive fallback.
+    """
+    if not path:
+        return None
+    resolved = _resolve_workspace_uri_path(path, workspace=workspace)
+    if not resolved:
+        return None
+    if "://" in resolved:
+        return None
+    abs_path = os.path.abspath(resolved)
+    if os.path.exists(abs_path):
+        logger.debug("[Archive] Using local path: %s", abs_path)
+        return abs_path
+
+    roots = _archive_roots()
+    if roots is None:
+        logger.debug(
+            "[Archive] No archive roots configured while resolving missing path: %s",
+            abs_path,
+        )
+        return None
+    local_root, archive_root = roots
+
+    archive_path = _resolve_archive_path(abs_path, local_root, archive_root)
+    if archive_path and os.path.exists(archive_path):
+        if materialize_from_archive:
+            local_path = _resolve_local_path(archive_path, local_root, archive_root)
+            if local_path:
+                logger.info(
+                    "[Archive] Local path missing; materializing from archive %s -> %s",
+                    archive_path,
+                    local_path,
+                )
+                materialized = _copy_archive_to_local(
+                    local_path=local_path, archive_path=archive_path
+                )
+                if materialized and os.path.exists(materialized):
+                    logger.info(
+                        "[Archive] Materialized local path from archive: %s",
+                        materialized,
+                    )
+                    return materialized
+                logger.warning(
+                    "[Archive] Materialization attempt did not produce local path: %s",
+                    local_path,
+                )
+        logger.info(
+            "[Archive] Local path missing; using archive path directly: %s",
+            archive_path,
+        )
+        return archive_path
+
+    local_path = _resolve_local_path(abs_path, local_root, archive_root)
+    if local_path and os.path.exists(local_path):
+        logger.debug("[Archive] Resolved path already available locally: %s", local_path)
+        return local_path
+    logger.debug("[Archive] Unable to resolve existing path for: %s", abs_path)
+    return None
+
+
+def artifact_to_existing_path(
+    value: Any,
+    workspace: Optional["Workspace"] = None,
+    *,
+    materialize_from_archive: bool = False,
+) -> Optional[str]:
+    """
+    Resolve an artifact-like value to an existing path with optional archive fallback.
+    """
+    path = artifact_to_path(value, workspace=workspace)
+    if path is None and isinstance(value, str):
+        path = value
+    return resolve_existing_path(
+        path,
+        workspace=workspace,
+        materialize_from_archive=materialize_from_archive,
+    )
 
 
 def resolve_artifact_from_value(
