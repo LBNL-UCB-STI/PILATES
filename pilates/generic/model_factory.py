@@ -4,7 +4,7 @@ from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.runner import ActivitysimRunner, ActivitysimCompileRunner
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.beam.preprocessor import BeamPreprocessor
-from pilates.beam.runner import BeamRunner
+from pilates.beam.runner import BeamRunner, BeamFullSkimRunner
 from pilates.beam.postprocessor import BeamPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
@@ -29,6 +29,11 @@ class ModelFactory:
         "beam": {
             "preprocessor": BeamPreprocessor,
             "runner": BeamRunner,
+            "postprocessor": BeamPostprocessor,
+        },
+        "beam_full_skim": {
+            "preprocessor": BeamPreprocessor,
+            "runner": BeamFullSkimRunner,
             "postprocessor": BeamPostprocessor,
         },
         "atlas": {

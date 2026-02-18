@@ -12,11 +12,96 @@ from pilates.beam.postprocessor import (
     find_beam_iterations,
     find_iteration_file,
 )
+from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
+
+
+def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
+    """
+    Calculate a conservative thread count for FullSkimsCreatorApp.
+    """
+    cpu_count = os.cpu_count() or 1
+    cpu_based = max(1, int(cpu_count * cpu_ratio))
+
+    memory_based = cpu_based
+    try:
+        import psutil  # type: ignore
+
+        memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+        memory_based = max(1, int(memory_gb / 2))
+    except Exception:
+        pass
+
+    optimal = min(cpu_based, memory_based, 128)
+    optimal = max(1, min(optimal, cpu_count))
+    logger.info(
+        "Calculated full-skim parallelism=%s from cpu_ratio=%.2f", optimal, cpu_ratio
+    )
+    return optimal
+
+
+def _map_host_path_to_container(
+    host_path: str, abs_beam_input: str, abs_beam_output: str
+) -> str:
+    """
+    Map host paths into the BEAM container namespace.
+    """
+    if host_path.startswith(abs_beam_output):
+        rel = os.path.relpath(host_path, abs_beam_output)
+        return os.path.join("/app/output", rel)
+    if host_path.startswith(abs_beam_input):
+        rel = os.path.relpath(host_path, abs_beam_input)
+        return os.path.join("/app/input", rel)
+    return host_path
+
+
+def _select_latest_linkstats_path(
+    records: RecordStore,
+    abs_beam_input: str,
+    abs_beam_output: str,
+) -> Optional[str]:
+    """
+    Select the newest linkstats artifact and map it to a container path.
+    """
+    if records is None:
+        return None
+
+    best_record: Optional[FileRecord] = None
+    best_year = -1
+    best_iter = -1
+    for record in records.all_records():
+        short_name = getattr(record, "short_name", "") or ""
+        if "_sub" in short_name or not short_name.startswith("linkstats_"):
+            continue
+        parts = short_name.split("_")
+        if len(parts) != 3:
+            continue
+        try:
+            year = int(parts[1])
+            it = int(parts[2])
+        except ValueError:
+            continue
+        if (year, it) >= (best_year, best_iter):
+            best_year, best_iter = year, it
+            best_record = record
+
+    if best_record is None:
+        for record in records.all_records():
+            if getattr(record, "short_name", "") == "linkstats":
+                best_record = record
+                break
+
+    if best_record is None:
+        return None
+
+    path = best_record.file_path
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+    return _map_host_path_to_container(path, abs_beam_input, abs_beam_output)
 
 
 def find_not_taken_dir_name(dir_name):
@@ -240,9 +325,10 @@ class BeamRunner(GenericRunner):
                     "year": self.state.forecast_year,
                     "iteration": self.state.iteration,
                     "phys_sim_iteration": phys_sim_iter,
+                    # Keep sub-iteration facet on promoted final artifacts too.
+                    # This preserves existing key semantics while improving facet-only analysis.
+                    "beam_sub_iteration": it,
                 }
-                if it != last_iter:
-                    facet["beam_sub_iteration"] = it
                 if it == last_iter:
                     dataset_name = (
                         "linkstats_unmodified_parquet__"
@@ -437,3 +523,171 @@ class BeamRunner(GenericRunner):
         )
 
         return output_store
+
+
+class BeamFullSkimRunner(GenericRunner):
+    """
+    Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        state: "WorkflowState",
+        major_stage: Optional["WorkflowState.Stage"] = None,
+    ):
+        super().__init__(model_name, state, major_stage)
+
+    def _run(
+        self,
+        store: RecordStore,
+        workspace: Workspace,
+    ) -> RecordStore:
+        settings = self.state.full_settings
+        region = settings.run.region
+        beam_memory = settings.beam.memory
+
+        beam_cfg = getattr(settings, "beam", None)
+        skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+        if skim_cfg is None:
+            raise RuntimeError("BEAM full skim requested but beam.full_skim is not set.")
+        if getattr(skim_cfg, "run_schedule", "disabled") == "disabled":
+            raise RuntimeError(
+                "BEAM full skim requested but beam.full_skim.run_schedule is disabled."
+            )
+
+        abs_beam_input = workspace.get_beam_mutable_data_dir()
+        abs_beam_output = workspace.get_beam_output_dir()
+
+        output_dir = os.path.join(
+            abs_beam_output,
+            region,
+            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
+
+        _, travel_model_image = self.get_model_and_image(settings, "travel_model")
+        beam_config = settings.beam.config
+        path_to_beam_config = f"/app/input/{region}/{beam_config}"
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        java_opts = (
+            f"-Xms{beam_memory} "
+            f"-Xmx{beam_memory} "
+            "-XX:+UseG1GC "
+            "-XX:G1HeapRegionSize=32M "
+            "-XX:ParallelGCThreads=36 "
+            "-XX:ConcGCThreads=9 "
+            "-XX:+UseNUMA "
+            "-XX:+AlwaysPreTouch "
+            "-XX:+UnlockExperimentalVMOptions "
+            "-XX:G1NewSizePercent=40 "
+            "-XX:G1MaxNewSizePercent=60 "
+            "-XX:MaxTenuringThreshold=6 "
+            "-XX:SurvivorRatio=6 "
+            "-XX:MaxGCPauseMillis=5000 "
+            "-XX:G1MixedGCCountTarget=12 "
+            "-XX:G1MixedGCLiveThresholdPercent=65 "
+            "-XX:InitiatingHeapOccupancyPercent=30 "
+            "-XX:G1ReservePercent=15 "
+            "-XX:G1OldCSetRegionThresholdPercent=10 "
+            f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
+            f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
+            "-Djava.io.tmpdir=/app/output/tmp "
+            "-Djna.tmpdir=/app/output/tmp"
+        )
+
+        cpu_ratio = (
+            skim_cfg.parallelism_thread_ratio
+            if skim_cfg.parallelism_thread_ratio is not None
+            else 0.8
+        )
+        parallelism = _calculate_optimal_parallelism(cpu_ratio)
+
+        host_output_file = os.path.join(output_dir, "skimsODFull.csv.gz")
+        container_output_file = _map_host_path_to_container(
+            host_output_file, abs_beam_input, abs_beam_output
+        )
+
+        cmd_parts = [
+            f"--configPath={path_to_beam_config}",
+            f"--output={container_output_file}",
+            f"--parallelism={parallelism}",
+            f"--routerType={skim_cfg.router_type}",
+            f"--skimsGeoType={skim_cfg.skims_geo_type}",
+            f"--skimsKind={skim_cfg.skims_kind}",
+            f"--peakHours={','.join(str(hour) for hour in skim_cfg.peak_hours)}",
+        ]
+
+        enabled_modes = [
+            mode for mode, enabled in skim_cfg.modes_to_build.items() if enabled
+        ]
+        if enabled_modes:
+            cmd_parts.append(f"--modesToBuild={','.join(enabled_modes)}")
+
+        linkstats_path = _select_latest_linkstats_path(
+            store, abs_beam_input, abs_beam_output
+        )
+        if linkstats_path is None:
+            router_dir = getattr(settings.beam, "router_directory", None)
+            if router_dir:
+                init_parquet = os.path.join(
+                    abs_beam_input, region, router_dir, "init.linkstats.parquet"
+                )
+                init_csv = os.path.join(
+                    abs_beam_input, region, router_dir, "init.linkstats.csv.gz"
+                )
+                if os.path.exists(init_parquet):
+                    linkstats_path = _map_host_path_to_container(
+                        init_parquet, abs_beam_input, abs_beam_output
+                    )
+                elif os.path.exists(init_csv):
+                    linkstats_path = _map_host_path_to_container(
+                        init_csv, abs_beam_input, abs_beam_output
+                    )
+        if linkstats_path is not None:
+            cmd_parts.append(f"--linkstatsPath={linkstats_path}")
+
+        input_paths = [
+            record.file_path
+            for record in store.all_records()
+            if isinstance(record, FileRecord)
+        ]
+
+        success = self.run_container(
+            client=None,
+            settings=settings,
+            image=travel_model_image,
+            volumes={
+                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
+                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
+            },
+            command=" ".join(cmd_parts),
+            model_name=self.model_name,
+            working_dir="/app",
+            environment={
+                "JAVA_OPTS": java_opts,
+                "BEAM_MAIN_CLASS": "scripts.FullSkimsCreatorApp",
+            },
+            input_artifacts=input_paths,
+            output_paths=[abs_beam_output],
+            lineage_mode="none",
+        )
+        if not success:
+            raise RuntimeError("BEAM full skim run failed after container execution.")
+        if not os.path.exists(host_output_file):
+            raise RuntimeError(
+                f"BEAM full skim completed but output was not found: {host_output_file}"
+            )
+
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=host_output_file,
+                    year=self.state.forecast_year,
+                    short_name=BEAM_FULL_SKIMS,
+                    description="BEAM full-skim background skims output",
+                )
+            ]
+        )

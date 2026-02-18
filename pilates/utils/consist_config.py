@@ -99,6 +99,7 @@ class BeamConfigBuilder:
             "beam_preprocess": "beam_preprocess_v1",
             "beam_run": "beam_run_v1",
             "beam_postprocess": "beam_postprocess_v1",
+            "beam_full_skim": "beam_full_skim_v1",
         }.get(model, "beam_v1")
 
 

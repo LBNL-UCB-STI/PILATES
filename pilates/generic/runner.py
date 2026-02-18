@@ -181,6 +181,16 @@ class GenericRunner(ABC, Model):
                 "A Consist tracker must be active for container execution. "
                 "Ensure the call occurs within a Consist scenario/run context."
             )
+        tracker_supports_container_integration = hasattr(tracker, "mounts") and hasattr(
+            tracker, "start_run"
+        )
+        if not tracker_supports_container_integration:
+            logger.warning(
+                "[%s] Current tracker type %s is not container-lineage capable; "
+                "skipping Consist container delegation and using direct execution.",
+                model_name,
+                type(tracker).__name__,
+            )
 
         strict_mounts = True
         local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
@@ -207,43 +217,44 @@ class GenericRunner(ABC, Model):
                         strict_mounts = False
                         break
 
-        try:
-            from consist.integrations.containers import (
-                run_container as consist_run_container,
-            )
-        except ImportError as exc:
-            logger.error(
-                "Consist container integration unavailable: %s. "
-                "Falling back to direct execution.",
-                exc,
-            )
-        else:
-            logger.info(
-                "[%s] Delegating container execution to Consist", model_name
-            )
+        if tracker_supports_container_integration:
             try:
-                return consist_run_container(
-                    tracker=tracker,
-                    run_id=f"{model_name}_container",
-                    image=image,
-                    command=full_command_list,
-                    volumes=consist_volumes,
-                    inputs=input_artifacts or [],
-                    outputs=output_paths or [],
-                    environment=environment or {},
-                    working_dir=working_dir,
-                    backend_type=backend_type,
-                    pull_latest=pull_latest,
-                    lineage_mode=lineage_mode,
-                    strict_mounts=strict_mounts,
+                from consist.integrations.containers import (
+                    run_container as consist_run_container,
                 )
-            except Exception as exc:
+            except ImportError as exc:
                 logger.error(
-                    "Consist container execution failed: %s. "
+                    "Consist container integration unavailable: %s. "
                     "Falling back to direct execution.",
                     exc,
-                    exc_info=True,
                 )
+            else:
+                logger.info(
+                    "[%s] Delegating container execution to Consist", model_name
+                )
+                try:
+                    return consist_run_container(
+                        tracker=tracker,
+                        run_id=f"{model_name}_container",
+                        image=image,
+                        command=full_command_list,
+                        volumes=consist_volumes,
+                        inputs=input_artifacts or [],
+                        outputs=output_paths or [],
+                        environment=environment or {},
+                        working_dir=working_dir,
+                        backend_type=backend_type,
+                        pull_latest=pull_latest,
+                        lineage_mode=lineage_mode,
+                        strict_mounts=strict_mounts,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Consist container execution failed: %s. "
+                        "Falling back to direct execution.",
+                        exc,
+                        exc_info=True,
+                    )
 
         docker_stdout = get_setting(
             settings, "infrastructure.docker_config.stdout", None

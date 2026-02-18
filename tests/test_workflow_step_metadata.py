@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from consist import define_step
+from consist.types import OutputPolicyOptions
 
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.artifact_keys import ASIM_LAND_USE_IN, ASIM_PERSONS_IN
@@ -138,8 +139,10 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_outputs_metad
 
     call = scenario.calls[0]
     assert call["outputs"] == ["artifact_a", "artifact_b"]
-    assert call["output_missing"] == "error"
-    assert call["output_mismatch"] == "error"
+    assert call["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        output_mismatch="error",
+    )
 
 
 def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class():
@@ -169,8 +172,10 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
 
     call = scenario.calls[0]
     assert call["outputs"] == [USIM_DATASTORE_H5]
-    assert call["output_missing"] == "error"
-    assert call["output_mismatch"] == "error"
+    assert call["output_policy"] == OutputPolicyOptions(
+        output_missing="error",
+        output_mismatch="error",
+    )
 
 
 def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
@@ -205,8 +210,10 @@ def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
 
     call = scenario.calls[0]
     assert call["outputs"] == ["artifact_override"]
-    assert call["output_missing"] == "warn"
-    assert call["output_mismatch"] == "warn"
+    assert call["output_policy"] == OutputPolicyOptions(
+        output_missing="warn",
+        output_mismatch="warn",
+    )
 
 
 def test_workflow_stage_requires_decorated_steps():

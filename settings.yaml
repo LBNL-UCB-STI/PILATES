@@ -126,6 +126,16 @@ beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
 beam_memory: "200g"
+# Full skim (FullSkimsCreatorApp) optional settings
+# beam_full_skim_run_schedule: after_final_iteration  # after_each_iteration, standalone, disabled
+# beam_full_skim_router_type: "r5+gh"
+# beam_full_skim_skims_geo_type: "taz"
+# beam_full_skim_skims_kind: "od"
+# beam_full_skim_peak_hours: [8.5, 17.5]
+# beam_full_skim_modes_drive: true
+# beam_full_skim_modes_walk: false
+# beam_full_skim_modes_transit: false
+# beam_full_skim_parallelism_thread_ratio: 0.8
 skim_zone_source_id_col: objectid
 replan_iters: 2
 supply_demand_iters: 5 # Added setting for supply-demand iterations
@@ -476,4 +486,3 @@ validation_metrics:
         levels:
           - 15
           - 45
-

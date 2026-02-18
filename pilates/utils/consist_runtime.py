@@ -60,10 +60,30 @@ def create_tracker(
     if tracker_factory is None:
         tracker_factory = lambda: consist.Tracker(**tracker_kwargs)
 
-    return consist.create_tracker(
+    tracker = consist.create_tracker(
         enabled=resolved_enabled,
         tracker_factory=tracker_factory,
     )
+    if resolved_enabled and _is_noop_tracker(tracker):
+        repaired = _repair_tracker_db_schema_compatibility(tracker_kwargs)
+        if repaired:
+            logger.warning(
+                "Applied compatibility migration for Consist artifact URI columns; "
+                "retrying tracker initialization."
+            )
+            tracker = consist.create_tracker(
+                enabled=resolved_enabled,
+                tracker_factory=tracker_factory,
+            )
+    if resolved_enabled and _is_noop_tracker(tracker):
+        logger.error(
+            "Consist tracker initialization returned %s while enabled=True. "
+            "PILATES requires an active tracker; check preceding Consist tracker "
+            "initialization errors for API/version mismatches.",
+            type(tracker).__name__,
+        )
+        return None
+    return tracker
 
 
 @contextmanager
@@ -266,6 +286,69 @@ def current_tracker() -> Optional[TrackerLike]:
         return consist.current_tracker()
     except Exception:
         return None
+
+
+def _is_noop_tracker(tracker: Optional[Any]) -> bool:
+    if tracker is None:
+        return False
+    tracker_type = type(tracker)
+    name = getattr(tracker_type, "__name__", "").lower()
+    module = getattr(tracker_type, "__module__", "").lower()
+    return "nooptracker" in name or ".noop" in module
+
+
+def _repair_tracker_db_schema_compatibility(tracker_kwargs: Mapping[str, Any]) -> bool:
+    db_path = tracker_kwargs.get("db_path")
+    if not db_path:
+        return False
+    try:
+        db_path_str = os.fspath(db_path)
+    except TypeError:
+        return False
+    if not db_path_str:
+        return False
+    if not os.path.exists(db_path_str):
+        return False
+
+    try:
+        import duckdb
+    except Exception:
+        logger.exception(
+            "DuckDB not available to apply Consist schema compatibility migration."
+        )
+        return False
+
+    conn = None
+    try:
+        conn = duckdb.connect(db_path_str)
+        columns = conn.execute("PRAGMA table_info('artifact')").fetchall()
+        if not columns:
+            return False
+        names = {str(row[1]) for row in columns if len(row) > 1}
+        migrated = False
+        if "uri" in names and "container_uri" not in names:
+            conn.execute("ALTER TABLE artifact ADD COLUMN container_uri VARCHAR")
+            conn.execute(
+                "UPDATE artifact SET container_uri = uri WHERE container_uri IS NULL"
+            )
+            migrated = True
+        if "container_uri" in names and "uri" not in names:
+            conn.execute("ALTER TABLE artifact ADD COLUMN uri VARCHAR")
+            conn.execute("UPDATE artifact SET uri = container_uri WHERE uri IS NULL")
+            migrated = True
+        return migrated
+    except Exception:
+        logger.exception(
+            "Failed applying Consist artifact URI schema compatibility migration for %s.",
+            db_path_str,
+        )
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def require_runtime_kwargs(
@@ -483,7 +566,11 @@ class _NoopScenario:
     ) -> RunResultLike:
         if fn is None:
             return _NoopRunResult()
-        runtime_kwargs = kwargs.get("runtime_kwargs") or {}
+        execution_options = kwargs.get("execution_options")
+        runtime_kwargs = kwargs.get("runtime_kwargs")
+        if runtime_kwargs is None and execution_options is not None:
+            runtime_kwargs = getattr(execution_options, "runtime_kwargs", None)
+        runtime_kwargs = dict(runtime_kwargs or {})
         required = getattr(fn, "__consist_runtime_required__", None)
         if required:
             missing = [name for name in required if name not in runtime_kwargs]

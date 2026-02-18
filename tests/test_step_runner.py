@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
+
 from pilates.workflows.step_runner import (
     StepConfig,
     build_step_config,
@@ -85,11 +87,17 @@ def test_run_step_unpacks_config() -> None:
         "inputs": {"input": "path"},
         "outputs": ["out"],
         "output_paths": {"out": "path"},
-        "output_missing": "error",
-        "output_mismatch": "error",
-        "runtime_kwargs": {"settings": "settings"},
-        "cache_mode": "overwrite",
-        "cache_hydration": "none",
-        "load_inputs": True,
+        "output_policy": OutputPolicyOptions(
+            output_missing="error",
+            output_mismatch="error",
+        ),
+        "execution_options": ExecutionOptions(
+            runtime_kwargs={"settings": "settings"},
+            load_inputs=True,
+        ),
+        "cache_options": CacheOptions(
+            cache_mode="overwrite",
+            cache_hydration="none",
+        ),
         "enabled": True,
     }

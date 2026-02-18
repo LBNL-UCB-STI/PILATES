@@ -6,7 +6,11 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX, ZARR_SKIMS
+from pilates.workflows.artifact_keys import (
+    BEAM_FULL_SKIMS,
+    FINAL_SKIMS_OMX,
+    ZARR_SKIMS,
+)
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -212,3 +216,37 @@ class BeamPostprocessOutputs(StepOutputsBase):
         values["split_events"] = split_events
         values["split_event_links"] = split_event_links
         return cls(**values)
+
+
+@dataclass
+class BeamFullSkimOutputs(StepOutputsBase):
+    """
+    Outputs from the BEAM full-skim step.
+
+    Attributes
+    ----------
+    full_skims : Path
+        Full-skim output file produced by FullSkimsCreatorApp.
+    """
+
+    primary_output_attr: ClassVar[str] = "full_skims"
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("full_skims",)
+
+    full_skims: Path
+
+    def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
+        yield (
+            BEAM_FULL_SKIMS,
+            self.full_skims,
+            "BEAM full-skim background skims output",
+        )
+
+    @classmethod
+    def from_record_store(
+        cls, record_store: RecordStore, workspace: "Workspace"
+    ) -> "BeamFullSkimOutputs":
+        mapping = record_store.to_mapping() if record_store is not None else {}
+        path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
+        if path is None:
+            raise ValueError("Missing beam_full_skims in record store.")
+        return cls(full_skims=Path(path))

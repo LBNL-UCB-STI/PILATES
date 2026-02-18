@@ -18,6 +18,7 @@ from typing import Tuple
 import h5py
 import pandas as pd
 import pytest
+from consist.types import CacheOptions, ExecutionOptions
 
 from pilates.generic.model import provenance_logging
 from pilates.generic.postprocessor import GenericPostprocessor
@@ -500,13 +501,15 @@ def test_dummy_workflow_end_to_end(setup_workflow):
                 fn=_run_model_a_step,
                 name="run_a",
                 model="modela",
-                runtime_kwargs={
-                    "store": recs,
-                    "workspace": workspace,
-                    "runner": model_a_run,
-                    "output_holder": run_a_holder,
-                },
-                cache_mode="overwrite",
+                execution_options=ExecutionOptions(
+                    runtime_kwargs={
+                        "store": recs,
+                        "workspace": workspace,
+                        "runner": model_a_run,
+                        "output_holder": run_a_holder,
+                    }
+                ),
+                cache_options=CacheOptions(cache_mode="overwrite"),
             )
             recs = run_a_holder["outputs"]
 

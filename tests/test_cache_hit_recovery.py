@@ -91,6 +91,45 @@ def test_recover_activitysim_preprocess_outputs(tmp_path):
     holder.activitysim_preprocess.validate()
 
 
+def test_recover_activitysim_preprocess_outputs_from_archive_only(tmp_path, monkeypatch):
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    workspace = DummyWorkspace(local_root)
+    local_asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    archive_asim_dir = archive_root / local_asim_dir.relative_to(local_root)
+
+    _write_file(archive_asim_dir / "households.csv")
+    _write_file(archive_asim_dir / "persons.csv")
+    _write_file(archive_asim_dir / "land_use.csv")
+    _write_file(archive_asim_dir / "skims.omx")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="activitysim_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_preprocess is not None
+    assert (local_asim_dir / "households.csv").exists()
+    assert (local_asim_dir / "persons.csv").exists()
+    assert (local_asim_dir / "land_use.csv").exists()
+    assert (local_asim_dir / "skims.omx").exists()
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
+    assert coupler.get(ASIM_PERSONS_IN) is not None
+    assert coupler.get(ASIM_LAND_USE_IN) is not None
+    holder.activitysim_preprocess.validate()
+
+
 def test_recover_beam_preprocess_outputs(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     beam_dir = Path(workspace.get_beam_mutable_data_dir())

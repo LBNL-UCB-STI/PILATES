@@ -229,3 +229,33 @@ def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
         key = sanitize_artifact_key(candidate) or candidate
         keys.append(key)
     return tuple(keys)
+
+
+def atlas_static_input_keys_for_interval(
+    settings: PilatesConfig,
+    *,
+    interval_start_year: int,
+    interval_end_year: int,
+) -> Tuple[str, ...]:
+    """
+    Return ATLAS static input keys with ADOPT year-stamped keys filtered to an interval.
+
+    Notes
+    -----
+    - Filtering is applied only to keys under ``adopt/`` with a trailing
+      ``_<year>`` suffix.
+    - Non-ADOPT keys (for example ``accessbility2017``) are preserved so shared
+      static resources remain available for all ATLAS runs.
+    """
+    lower = min(int(interval_start_year), int(interval_end_year))
+    upper = max(int(interval_start_year), int(interval_end_year))
+
+    filtered = []
+    for key in atlas_static_input_keys(settings):
+        normalized_key = key.replace("\\", "/")
+        if normalized_key.startswith("adopt/"):
+            match = _YEAR_SUFFIX.search(normalized_key)
+            if match and not (lower <= int(match.group(1)) <= upper):
+                continue
+        filtered.append(key)
+    return tuple(filtered)

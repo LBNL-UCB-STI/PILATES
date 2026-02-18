@@ -35,3 +35,12 @@ def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
         in short_names
     )
     assert "linkstats_unmodified_parquet__y2030__i2__phys_sim_iter2" in short_names
+
+    by_key = {record.short_name: record for record in outputs}
+    promoted = by_key["linkstats_unmodified_parquet__y2030__i2__phys_sim_iter2"]
+    facet = (promoted.metadata or {}).get("facet", {})
+    assert facet.get("artifact_family") == "linkstats_unmodified_phys_sim_iter_parquet"
+    assert facet.get("year") == 2030
+    assert facet.get("iteration") == 2
+    assert facet.get("phys_sim_iteration") == 2
+    assert facet.get("beam_sub_iteration") == 1

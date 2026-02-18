@@ -52,6 +52,7 @@ from pilates.workflows.steps import (
     make_atlas_preprocess_step,
     make_atlas_run_step,
     make_beam_postprocess_step,
+    make_beam_full_skim_step,
     make_beam_preprocess_step,
     make_beam_run_step,
     make_urbansim_postprocess_step,
@@ -119,7 +120,73 @@ def _build_schema_steps() -> List[Callable[..., Any]]:
         make_beam_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
         make_beam_run_step(coupler=coupler, outputs_holder=outputs_holder),
         make_beam_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
+        make_beam_full_skim_step(coupler=coupler, outputs_holder=outputs_holder),
     ]
+
+
+def _is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
+    """
+    Resolve whether a workflow model is enabled.
+
+    Prefers precomputed flags from ``parse_args_and_settings`` and falls back to
+    ``settings.run.models`` when flags are not present.
+    """
+    explicit_flag = getattr(settings, flag_attr, None)
+    if explicit_flag is not None:
+        return bool(explicit_flag)
+    run_cfg = getattr(settings, "run", None)
+    model_cfg = getattr(run_cfg, "models", None) if run_cfg is not None else None
+    return bool(getattr(model_cfg, model_attr, None))
+
+
+def _filter_schema_steps_for_enabled_models(
+    steps: List[Callable[..., Any]],
+    settings: Any,
+    *,
+    include_optional: bool = True,
+) -> List[Callable[..., Any]]:
+    """
+    Keep only step definitions for models enabled in the active run settings.
+
+    Parameters
+    ----------
+    steps : list of callables
+        Step functions decorated with ``@define_step`` metadata.
+    settings : Any
+        Runtime settings object used to resolve enabled model flags.
+    include_optional : bool, default True
+        Whether optional steps (currently ``beam_full_skim``) should be included.
+    """
+    enabled_prefixes = set()
+    if _is_model_enabled(settings, flag_attr="land_use_enabled", model_attr="land_use"):
+        enabled_prefixes.add("urbansim")
+    if _is_model_enabled(
+        settings,
+        flag_attr="vehicle_ownership_model_enabled",
+        model_attr="vehicle_ownership",
+    ):
+        enabled_prefixes.add("atlas")
+    if _is_model_enabled(
+        settings, flag_attr="activity_demand_enabled", model_attr="activity_demand"
+    ):
+        enabled_prefixes.add("activitysim")
+    if _is_model_enabled(
+        settings, flag_attr="traffic_assignment_enabled", model_attr="travel"
+    ):
+        enabled_prefixes.add("beam")
+
+    filtered: List[Callable[..., Any]] = []
+    for step_func in steps:
+        meta = getattr(step_func, "__consist_step__", None)
+        model_name = getattr(meta, "model", "") if meta is not None else ""
+        model_prefix = model_name.split("_", 1)[0]
+        if model_prefix not in enabled_prefixes:
+            continue
+        # Full-skim is optional by schedule and should not be globally required.
+        if not include_optional and model_name == "beam_full_skim":
+            continue
+        filtered.append(step_func)
+    return filtered
 
 
 def _get_consist_schemas() -> Optional[list[type]]:
@@ -341,7 +408,11 @@ def main():
         schemas=_get_consist_schemas(),
     )
     if tracker is None:
-        raise RuntimeError("Consist tracker could not be created.")
+        raise RuntimeError(
+            "Consist tracker initialization failed (received noop/invalid tracker). "
+            "Check earlier Consist logs for tracker creation errors, often caused by "
+            "a PILATES/Consist API mismatch."
+        )
 
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
@@ -364,10 +435,36 @@ def main():
     scenario_kwargs = build_scenario_consist_kwargs(settings)
     scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
     scenario_kwargs.setdefault("cache_epoch", cache_epoch)
-    schema_steps = _build_schema_steps()
-    validate_workflow_step_contracts(declared_steps=schema_steps)
-    coupler_schema = build_coupler_schema(schema_steps, settings=settings)
-    scenario_kwargs["require_outputs"] = list(coupler_schema.keys())
+    schema_steps_all = _build_schema_steps()
+    validate_workflow_step_contracts(declared_steps=schema_steps_all)
+    schema_steps_enabled = _filter_schema_steps_for_enabled_models(
+        schema_steps_all,
+        settings,
+        include_optional=True,
+    )
+    coupler_schema = build_coupler_schema(schema_steps_enabled, settings=settings)
+    required_schema = build_coupler_schema(
+        _filter_schema_steps_for_enabled_models(
+            schema_steps_all,
+            settings,
+            include_optional=False,
+        ),
+        settings=settings,
+        include_extras=False,
+    )
+    required_output_keys = list(required_schema.keys())
+    scenario_kwargs["require_outputs"] = required_output_keys
+
+    preview_count = 25
+    logger.info(
+        "Scenario output contract: declared_keys=%d require_outputs=%d "
+        "(enabled_steps=%d/%d). Preview: %s",
+        len(coupler_schema),
+        len(required_output_keys),
+        len(schema_steps_enabled),
+        len(schema_steps_all),
+        required_output_keys[:preview_count],
+    )
     try:
         with cr.scenario(
             run_name,

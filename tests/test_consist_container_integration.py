@@ -156,6 +156,36 @@ class TestRunContainerConsistDelegation:
         assert result is False
         assert mock_run_container_direct.called
 
+    @patch("pilates.generic.runner.GenericRunner._run_container_direct")
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    def test_non_capable_tracker_skips_consist_delegation(
+        self,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_run_container_direct,
+    ):
+        """Trackers without mount/start_run support should bypass Consist container API."""
+        mock_run_container_direct.return_value = True
+
+        class NoopLikeTracker:
+            pass
+
+        mock_current_tracker.return_value = NoopLikeTracker()
+
+        result = GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={},
+            command="cmd",
+            model_name="model",
+        )
+
+        assert result is True
+        assert not mock_consist_run_container.called
+        assert mock_run_container_direct.called
+
     @patch("pilates.generic.runner.get_setting")
     @patch("consist.integrations.containers.run_container")
     @patch("pilates.generic.runner.cr.current_tracker")
