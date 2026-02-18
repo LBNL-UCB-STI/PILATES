@@ -1,71 +1,112 @@
 # Adding a Model to PILATES
 
-This guide explains how model integration works in the current codebase and how
-to add a new model without breaking workflow contracts.
+This guide is the canonical workflow for integrating a model into the current
+PILATES architecture.
 
-If this doc and code disagree, code wins. Update this file in the same PR as
-workflow integration changes.
+If this guide and code disagree, code wins. Update this file in the same PR as
+integration changes.
 
-## 0) Start Here: Mental Model
+## Quick Start
 
-Before touching files, keep this flow in mind:
+If you want the shortest safe path:
 
-1. A **stage** assembles one or more **steps**.
-2. Each step runs a model **phase** (`preprocess`, `run`, `postprocess`).
-3. Step outputs are logged, written to the **coupler**, and stored in typed
-   in-memory objects.
-4. Downstream steps resolve inputs in a standard order and continue.
-
-If you keep stage assembly + step contracts + coupler keys aligned, integration
-is straightforward.
-
-## 0.05) Ownership Rules (Hard Boundaries)
-
-PILATES uses three distinct ownership layers:
-
-1. `StepOutputsHolder` owns typed in-process handoff between steps.
-2. Coupler owns published cross-step artifact references and provenance-facing
-   keys.
-3. Manifest/checkpoint state owns restart durability.
-
-Code boundaries:
-
-1. Direct coupler reads/writes belong in gateway modules:
-   `pilates/workflows/input_resolution.py`,
-   `pilates/utils/coupler_helpers.py`,
-   with limited diagnostics in `pilates/workflows/orchestration.py`.
-2. Stage modules should assemble `StepRef`s and call input-resolution helpers,
-   not call coupler methods directly.
-3. Step modules should use shared logging/publish helpers, not direct coupler
-   mutation.
-
-These boundaries are enforced by
-`tests/test_coupler_ownership_contracts.py`.
-
-## 0.1) Jargon Quick Reference
-
-- **Stage**: A major block in the yearly simulation loop (for example land use,
-  supply/demand).
-- **Step**: A single callable unit inside a stage (usually one model phase).
-- **StepRef**: The execution spec for a step (`name`, callable, `inputs`,
-  `input_keys`, cache config).
-- **Coupler**: Shared cross-step key/value artifact map managed through Consist.
-- **RecordStore**: Collection of file artifacts emitted by model components.
-- **StepOutputsHolder**: In-memory typed outputs used for intra-workflow handoff
-  without re-reading from disk/database.
-- **Manifest**: Serialized checkpoint of step progress/outputs for restart.
-- **Facet**: Structured metadata on artifacts used for query/filter.
-- **Cache identity**: Hash/materialized metadata used to decide cache hits.
-
-## 0.2) Scaffold First (Recommended)
-
-Use the scaffold generator before hand-editing integration files:
+1. Generate scaffolding:
 
 ```bash
-python scripts/new_model_scaffold.py <model_name> --major-stage <stage>
+python scripts/new_model_scaffold.py <model_slug> --major-stage <stage>
 ```
 
-Example:
+2. Complete the generated checklist:
+
+`docs/checklists/add_model_<model_slug>.md`
+
+3. Wire the new step factories into an existing stage (or new stage), then add
+   those factories to `run.py::_build_schema_steps()`.
+4. Add/adjust coupler keys, schema descriptions, and Consist config builders.
+5. Run focused tests (examples in [Testing and Validation](#testing-and-validation)).
+
+You can safely preview scaffolding first:
+
+```bash
+python scripts/new_model_scaffold.py <model_slug> --major-stage <stage> --dry-run
+```
+
+Supported scaffold stage choices are:
+
+- `land_use`
+- `vehicle_ownership_model`
+- `supply_demand_loop`
+- `postprocessing`
+
+## Mental Model
+
+Model integration is straightforward when these three layers stay aligned:
+
+1. Stage assembly (`pilates/workflows/stages/*.py`) builds ordered `StepRef`s.
+2. Step factories (`pilates/workflows/steps/*.py`) run model phases and publish
+   outputs.
+3. Shared contracts (`StepOutputsHolder`, coupler keys/schema, Consist metadata)
+   define what downstream steps can rely on.
+
+Per simulation year, `run.py` currently executes:
+
+1. `run_land_use_stage`
+2. `run_vehicle_ownership_stage`
+3. `run_supply_demand_stage`
+4. `run_postprocessing_stage`
+
+Consist lifecycle ownership is in `run.py` (`tracker.scenario(...)`,
+`scenario.run(...)`, `scenario.trace(...)`). Model components must not start
+nested runs.
+
+## Hard Boundaries
+
+PILATES intentionally separates ownership:
+
+1. `StepOutputsHolder`: typed in-memory handoff between steps.
+2. Coupler: published cross-step artifacts and keys.
+3. Manifest state: restart durability for manifested workflows.
+
+Coupler ownership contract:
+
+1. Coupler read/write logic belongs in:
+   `pilates/workflows/input_resolution.py`,
+   `pilates/utils/coupler_helpers.py`,
+   and limited orchestration diagnostics in
+   `pilates/workflows/orchestration.py`.
+2. Stage modules should assemble `StepRef`s, not call coupler mutation APIs.
+3. Step modules should publish via shared helpers, not direct ad hoc coupler writes.
+
+This is enforced by `tests/test_coupler_ownership_contracts.py`.
+
+## Files You Will Touch
+
+Most integrations touch all of these:
+
+1. `pilates/<model>/`:
+   `preprocessor.py`, `runner.py`, `postprocessor.py`, `outputs.py`
+2. `pilates/generic/model_factory.py`
+3. `pilates/workflows/steps/<module>.py` and `pilates/workflows/steps/__init__.py`
+4. `pilates/workflows/steps/shared.py` (tracked outputs/dependencies)
+5. `pilates/workflows/stages/<stage>.py`
+6. `run.py` (`_build_schema_steps()` and, if needed, stage loop/filtering)
+7. `pilates/workflows/artifact_keys.py`
+8. `pilates/workflows/coupler_schema.py`
+9. `pilates/utils/consist_config.py`
+10. Tests under `tests/`
+11. Docs, including this guide
+
+If creating a new top-level stage, also update:
+
+1. `workflow_state.py` (`WorkflowState.Stage`, enabled-stage logic, ordering)
+2. `pilates/workflows/stages/__init__.py`
+3. `run.py` yearly stage loop
+
+## Step-By-Step Integration
+
+### 1) Scaffold (recommended)
+
+Command:
 
 ```bash
 python scripts/new_model_scaffold.py freight --major-stage supply_demand_loop
@@ -73,361 +114,267 @@ python scripts/new_model_scaffold.py freight --major-stage supply_demand_loop
 
 Useful flags:
 
-- `--dry-run`: preview all file changes without writing
-- `--force`: overwrite generated scaffold files if rerunning
+- `--dry-run`: preview writes only
+- `--force`: overwrite scaffold targets
 - `--class-prefix Freight`: override generated class names
-- `--step-module freight_steps`: place step factories in a custom step module
+- `--step-module freight_steps`: custom step module filename
 
-What the scaffold writes automatically:
+The scaffold auto-creates:
 
 1. model package boilerplate in `pilates/<model>/`
-2. step stub module in `pilates/workflows/steps/<step_module>.py`
-3. registry updates in:
+2. step factory module in `pilates/workflows/steps/<step_module>.py`
+3. updates in:
    `pilates/generic/model_factory.py`,
    `pilates/workflows/steps/__init__.py`,
    `pilates/workflows/steps/shared.py`
-4. a model-specific TODO list in
-   `docs/checklists/add_model_<model>.md`
+4. checklist in `docs/checklists/add_model_<model>.md`
 
-What still requires manual wiring:
+Still manual:
 
-1. stage-level `StepRef` assembly in `pilates/workflows/stages/*.py`
-2. schema-step declaration updates in `run.py::_build_schema_steps()`
-3. artifact keys, coupler schema, and Consist facet/hash policy updates
-4. model-specific tests and docs
+1. stage-level `StepRef` assembly
+2. schema-step registration in `run.py::_build_schema_steps()`
+3. coupler keys/schema and Consist config/hash/facet wiring
+4. tests and docs
 
-## 1) Current Workflow Structure
+### 2) Implement model components
 
-PILATES is orchestrated as stage functions that assemble ordered steps under a
-Consist scenario context.
+Use the standard component pattern:
 
-Primary entrypoints:
+- `GenericPreprocessor._preprocess(...) -> RecordStore`
+- `GenericRunner._run(...) -> RecordStore`
+- `GenericPostprocessor._postprocess(...) -> RecordStore`
 
-- `run.py` (workflow orchestration + scenario lifecycle)
-- `pilates/workflows/stages/` (stage assembly)
-- `pilates/workflows/steps/` (step factory implementations)
-- `pilates/workflows/orchestration.py` (`StepRef`, `run_workflow`, manifest flow)
+Rules:
 
-Current stage order per simulation year in `run.py`:
+1. Return `RecordStore` artifacts; do not mutate orchestration state directly.
+2. Use `Workspace` path getters; do not rely on `cwd`.
+3. Keep run lifecycle/provenance orchestration outside components.
+4. Add `expected_inputs(...)` / `expected_outputs(...)` where possible.
+   Stage wiring merges these via `pilates/workflows/step_io.py`.
 
-1. Land use (`run_land_use_stage`)
-2. Vehicle ownership (`run_vehicle_ownership_stage`)
-3. Supply/demand loop (`run_supply_demand_stage`)
-4. Postprocessing (`run_postprocessing_stage`)
+### 3) Define typed outputs (`outputs.py`)
 
-The scenario/coupler lifecycle is owned by `run.py` through Consist
-(`tracker.scenario(...)`, `scenario.run(...)`, `scenario.step(...)`). Model code
-must not create nested run contexts.
+Each step phase should have a `StepOutputsBase` dataclass. Prefer explicit
+`declared_outputs` when output keys are stable.
 
-## 2) Where Model Integration Lives
+```python
+@dataclass
+class FreightRunOutputs(StepOutputsBase):
+    primary_output_attr: ClassVar[str] = "output_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = ("freight_events",)
+    record_keys: ClassVar[Dict[str, str]] = {"events_path": "freight_events"}
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("events_path",)
 
-A complete integration usually touches all of these layers:
+    output_dir: Path
+    events_path: Optional[Path] = None
+```
 
-1. `pilates/<model>/` (preprocessor, runner, postprocessor, outputs)
-2. `pilates/generic/model_factory.py` (model registry)
-3. `pilates/workflows/steps/` (step factory wiring)
-4. `pilates/workflows/stages/<stage>.py` (stage-level step assembly)
-5. `pilates/workflows/artifact_keys.py` and `pilates/workflows/coupler_schema.py`
-6. `pilates/utils/consist_config.py` (step identity/facets/hash inputs)
-7. tests under `tests/`
-8. docs (this file plus model-specific docs)
+Output contract precedence at runtime:
 
-If you are adding a new top-level stage, also update:
+1. Step metadata outputs (`__consist_step__.outputs`)
+2. `StepOutputs` declared outputs
+3. `StepRef.required_outputs` override
 
-- `pilates/workflows/stages/__init__.py`
-- `run.py` yearly execution loop
+When required outputs are present, orchestration defaults to strict policy:
+`output_missing="error"` and `output_mismatch="error"` unless overridden.
 
-## 3) Step Module Layout (Current)
+### 4) Build step factories
 
-Step factories are split by domain:
+Preferred path is `_make_generic_step_function(...)` in
+`pilates/workflows/steps/shared.py`. It:
 
-- `pilates/workflows/steps/urbansim_atlas.py`
-- `pilates/workflows/steps/activitysim.py`
-- `pilates/workflows/steps/beam.py`
-- `pilates/workflows/steps/postprocessing.py`
-- shared infrastructure in `pilates/workflows/steps/shared.py`
+1. executes the model component
+2. converts `RecordStore` to typed outputs
+3. validates outputs
+4. logs/publishes artifacts
+5. decorates the callable with `define_step(...)` metadata
 
-Public exports are in `pilates/workflows/steps/__init__.py`.
+Naming convention is `<model>_<phase>` and should match holder/dependency maps.
 
-Important: legacy wrapper modules were removed. Add new wiring in the step
-package above, not in historical `steps_*` wrappers.
+### 5) Keep shared step registries consistent
 
-## 4) Model Component Contract
+For tracked steps, `pilates/workflows/steps/shared.py` must stay aligned:
 
-Model components follow the preprocessor/runner/postprocessor pattern and
-exchange artifacts via `RecordStore`.
+1. `StepOutputsHolder` field
+2. `STEP_OUTPUTS_CLASSES` entry
+3. `STEP_DEPENDENCIES` entry
 
-Base classes:
+Startup validation (`validate_workflow_step_contracts`) checks consistency and
+fails fast if any map drifts.
 
-- `pilates/generic/preprocessor.py` (`GenericPreprocessor`)
-- `pilates/generic/runner.py` (`GenericRunner`)
-- `pilates/generic/postprocessor.py` (`GenericPostprocessor`)
+Note:
 
-Requirements:
+- `activitysim_compile` and `postprocessing` are currently allowlisted as
+  untracked declared steps via `DEFAULT_UNTRACKED_STEP_NAMES`.
+- If you add another declared-but-untracked step, either track it fully or
+  update the allowlist intentionally.
 
-1. `_preprocess`, `_run`, `_postprocess` should emit `RecordStore` outputs.
-2. Use `Workspace` helpers for all paths (no `cwd` assumptions).
-3. Keep orchestration/provenance lifecycle outside model internals.
-4. Provide `expected_inputs(...)` and `expected_outputs(...)` where feasible.
+### 6) Assemble stage `StepRef`s with canonical input resolution
 
-Expected input/output declarations are merged via
-`pilates/workflows/step_io.py`.
-
-## 5) Step Outputs and Dependency Contracts
-
-Typed step outputs and dependency contracts are centralized in
-`pilates/workflows/steps/shared.py`.
-
-Core structures:
-
-- `StepOutputsHolder`
-- `STEP_OUTPUTS_CLASSES`
-- `STEP_DEPENDENCIES`
-- `validate_step_ready(...)`
-- `validate_workflow_step_contracts(...)`
-- `StepOutputsBase.declared_outputs` (canonical strict-output contract source)
-
-Why this matters: restart/hydration logic assumes these registries are
-consistent. If you add a step name in one place but not the others, workflow
-validation or restoration will fail.
-
-Declared output contract rule:
-
-1. Prefer setting `declared_outputs` directly on each `StepOutputs` dataclass
-   when output keys are stable.
-2. If `declared_outputs` is omitted, shared step wiring falls back to
-   `required_path_fields` + `record_keys`.
-3. Orchestration uses step metadata first (`@define_step(outputs=[...])`), then
-   `StepOutputs` declared outputs, then `StepRef` overrides.
-
-## 6) Canonical Input Resolution (Use This)
-
-PILATES uses one canonical input-resolution path in
-`pilates/workflows/input_resolution.py`.
-
-Use these helpers when assembling `StepRef.inputs` / `StepRef.input_keys`:
-
-- `resolve_step_inputs(...)`
-- `resolve_preferred_step_input(...)`
-- `first_resolved_key(...)`
-- `resolved_value_for_key(...)`
-
-Per-key precedence is always:
+Use `resolve_step_inputs(...)` and related helpers from
+`pilates/workflows/input_resolution.py`. Per-key precedence is fixed:
 
 1. explicit input
-2. coupler key
+2. coupler
 3. fallback input
 
-Do not hand-roll custom precedence with ad hoc `if/elif` chains.
+Do not hand-roll precedence.
+
+Example:
+
+```python
+resolved = resolve_step_inputs(
+    keys=["freight_input"],
+    coupler=coupler,
+    explicit_inputs={"freight_input": explicit_path},
+    fallback_inputs={"freight_input": fallback_path},
+    required_keys=["freight_input"],
+)
+if resolved.missing_required:
+    raise RuntimeError("freight_input is required")
+
+steps = [
+    StepRef(
+        name="freight_run",
+        step_func=make_freight_run_step(
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+        ),
+        inputs=resolved.stepref_inputs(),
+        input_keys=resolved.stepref_input_keys(),
+        # Optional overrides:
+        # required_outputs=[...],
+        # output_missing="error|warn|allow",
+        # output_mismatch="error|warn|allow",
+    )
+]
+```
+
+`StepRef` output contract field is `required_outputs`. There is no `StepRef.outputs`
+field.
+
+### 7) Register schema steps in `run.py`
+
+Add your step factories to `run.py::_build_schema_steps()`.
 
 Why this matters:
 
-- prevents behavior drift between stages
-- keeps cache identity and execution behavior predictable
-- avoids coupler-vs-fallback surprises during restart
+1. startup contract validation checks declared step metadata against tracked maps
+2. coupler schema is built from enabled schema steps plus static extras
+3. scenario `require_outputs` is derived from non-optional enabled steps
 
-## 7) `StepRef` Assembly Rules
+If your step model prefix is new (not `urbansim`, `atlas`, `activitysim`,
+`beam`), update `_filter_schema_steps_for_enabled_models(...)` so it is included
+when appropriate.
 
-`StepRef` (in `pilates/workflows/orchestration.py`) is the canonical execution
-unit passed to `run_workflow(...)`.
+### 8) Add coupler keys and schema
 
-Common fields:
+When a new artifact is consumed across steps:
 
-- `name`, `step_func`
-- `inputs` (explicit key -> value mapping)
-- `input_keys` (keys expected to already exist in coupler)
-- `output_paths` (declared expected outputs)
-- optional output-contract overrides:
-  `outputs` (or `StepRef.required_outputs` alias), `output_missing`,
-  `output_mismatch`
-- cache controls: `cache_mode`, `cache_hydration`, `load_inputs`
+1. add/reuse a constant in `pilates/workflows/artifact_keys.py`
+2. add schema description in `pilates/workflows/coupler_schema.py`
+3. ensure producer logs/sets it via shared helpers
+4. ensure consumer requests it via `input_keys` or resolved explicit `inputs`
 
-Guidelines:
+Namespace behavior today:
 
-1. Use `input_resolution` helpers when producing `inputs/input_keys`.
-2. Keep required input checks explicit (`required_keys` + clear errors).
-3. Prefer `outputs_holder` in-memory outputs first; use coupler for cross-step
-   handoff rather than extra DB passes unless there is a clear benefit.
-4. Preferred output-contract pattern:
-   declare step outputs in step metadata (`@define_step(outputs=[...])` or the
-   step factory metadata path), and let orchestration infer strict defaults
-   (`output_missing="error"`, `output_mismatch="error"`).
-5. Use `StepRef.required_outputs` (alias for explicit `outputs`) /
-   `StepRef.output_*` only when overriding the default inferred behavior for a
-   specific step.
-6. For generic step factories, define canonical outputs once on the
-   `StepOutputs` class (`declared_outputs`) so decoration and runtime fallback
-   share the same contract source.
+1. publish helpers try `coupler.view("<namespace>")` when available
+2. helpers also write legacy unscoped keys for compatibility
+3. resolution prefers namespaced values and falls back to legacy keys
 
-## 8) Coupler Keys and Schema
+For key migrations/aliases, use `pilates/workflows/artifact_key_migrations.py`.
 
-Canonical artifact key constants live in
-`pilates/workflows/artifact_keys.py`.
+### 9) Configure Consist identity/facets/hash inputs
 
-Coupler schema is built in `pilates/workflows/coupler_schema.py` from:
+`pilates/utils/consist_config.py` maps step model names to per-model builders
+for:
 
-1. static schema entries (`PILATES_COUPLER_SCHEMA`)
-2. step-declared schema (`collect_step_schema`)
-3. dynamic extras (for example deterministic ATLAS static input keys)
+1. `config` (cache identity)
+2. `facet` (queryable metadata)
+3. `hash_inputs` (file/dir digests folded into identity)
+4. `facet_schema_version`
 
-When adding a cross-step artifact:
+If you add a new model family, add a builder and register it in
+`_CONFIG_BUILDERS`.
 
-1. add/reuse a key constant
-2. add a schema description
-3. ensure the producer step logs/sets it
-4. ensure the consumer step requests it via `input_keys` or explicit `inputs`
+### 10) Stage-specific and top-level wiring
 
-Namespace behavior:
+For existing stage integration:
 
-1. Coupler gateway helpers now use `coupler.view("<model>")` when available.
-2. During migration, helpers also keep writing legacy unscoped keys for
-   compatibility.
-3. Input resolution prefers namespaced keys when present and automatically
-   falls back to unscoped keys.
+1. add your `StepRef`s to the relevant stage module
+2. export/import step factories from `pilates/workflows/steps/__init__.py` if needed
+3. ensure stage receives required inputs and forwards `outputs_holder`
 
-For key migrations, use `pilates/workflows/artifact_key_migrations.py`.
+For a new top-level stage:
 
-## 9) Provenance, Facets, and Consist Config
+1. add stage function in `pilates/workflows/stages/`
+2. export it in `pilates/workflows/stages/__init__.py`
+3. update `workflow_state.py` stage enum/enablement/order logic
+4. call it from `run.py` in yearly loop
+5. register schema steps and filter behavior
 
-Step-level Consist metadata is defined through
-`pilates/utils/consist_config.py` and applied by step decorators.
+## Testing and Validation
 
-Per-model builders define:
+Use the repo-preferred Python for local tests:
 
-- `config` (cache identity)
-- `facet` (queryable metadata)
-- `hash_inputs` (files/config that should invalidate cache)
-- `facet_schema_version`
+`/Users/zaneedell/miniforge3/envs/PILATES/bin/python`
 
-Artifact-level facet guidance:
+Fast validation set:
 
-1. use scalar facet fields for indexed querying
-2. keep schema version explicit (for example `"v1"`)
-3. keep artifact keys human-readable, but avoid encoding all semantics in key
-   strings
+```bash
+/Users/zaneedell/miniforge3/envs/PILATES/bin/python -m pytest \
+  tests/test_step_contract_validator.py \
+  tests/test_stage_contracts.py \
+  tests/test_input_resolution.py \
+  tests/test_run_schema_filtering.py \
+  tests/test_coupler_ownership_contracts.py -v
+```
 
-For query-heavy families (for example BEAM linkstats variants), log facets on
-all relevant artifacts and query by params instead of parsing key names.
+Add model-specific tests near related modules. Useful existing suites:
 
-## 10) Registering a New Model in `ModelFactory`
-
-Add entries to `ModelFactory._registry` in
-`pilates/generic/model_factory.py` for:
-
-- `preprocessor`
-- `runner`
-- `postprocessor`
-
-If you add a compile variant, register it explicitly (example:
-`activitysim_compile`).
-
-## 11) Practical Integration Checklist
-
-1. Run `python scripts/new_model_scaffold.py <model_name> --major-stage <stage>`.
-2. Implement model behavior in generated components under `pilates/<model>/`.
-3. Refine typed output dataclasses in `pilates/<model>/outputs.py`.
-   Add `declared_outputs` for stable, queryable contract keys.
-4. Refine `make_<model>_<phase>_step` factories under
-   `pilates/workflows/steps/`.
-5. Wire step sequence into an existing or new stage module.
-6. Add new step callables to `run.py::_build_schema_steps()` so startup
-   contract validation includes them.
-7. Add or reuse artifact keys and coupler schema descriptions.
-8. Add/extend Consist config hashing and facet policy.
-9. Prefer output contracts declared on step metadata and rely on inferred strict
-   defaults; use `StepRef.output_*` / explicit `outputs` only for explicit
-   overrides.
-10. Add tests for contracts, wiring, and restart/cache behavior.
-11. Update docs.
-
-## 12) Testing Expectations
-
-At minimum, add or update coverage for:
-
-1. expected input/output contracts (`step_io` merge behavior)
-2. step dependency enforcement (`validate_step_ready`)
-3. `RecordStore` to typed output conversion and validation
-4. coupler output propagation for downstream consumers
-5. facet metadata for query-critical artifacts
-6. canonical input precedence behavior
-7. manifest/restart behavior for manifested steps
-
-Useful tests in this repo:
-
-- `tests/test_input_resolution.py`
-- `tests/test_stage_contracts.py`
 - `tests/test_expected_inputs_contracts.py`
+- `tests/test_step_io.py`
+- `tests/test_cache_hit_recovery.py`
 - `tests/test_activitysim_config_adapter_wiring.py`
 - `tests/test_beam_config_adapter_wiring.py`
 - `tests/test_beam_artifact_facets.py`
-- `tests/test_cache_hit_recovery.py`
 
-## 13) Common Failure Modes
+If your model adds restart-sensitive manifested steps, include restart/hydration
+coverage (see orchestration + supply-demand manifested flows).
 
-1. Model registered incompletely in `ModelFactory`.
-2. Step factory exists but is never called from stage assembly.
-3. Stage is wired but never invoked from `run.py`.
-4. `StepOutputsHolder` / dependency maps were not updated consistently.
-5. New coupler key not added to schema/constants.
-6. Input precedence implemented ad hoc instead of via canonical resolver.
-7. Key names overloaded with semantics that should live in facets.
-8. Missing hash inputs for config/files that should invalidate cache.
+## Common Failure Modes
 
-## 14) Practical Skeleton
+1. Model exists but is not registered in `ModelFactory._registry`.
+2. Step factory exists but is not wired into any stage.
+3. Step is wired in a stage but missing from `_build_schema_steps()`.
+4. `StepOutputsHolder` / `STEP_OUTPUTS_CLASSES` / `STEP_DEPENDENCIES` drift.
+5. New cross-step key added to code but not `artifact_keys` + `coupler_schema`.
+6. Ad hoc input precedence logic bypasses `input_resolution`.
+7. Step declares outputs that typed outputs can never produce.
+8. New model family misses `consist_config` builder registration.
+9. New prefix step metadata is filtered out by `_filter_schema_steps_for_enabled_models`.
 
-```python
-from pilates.workflows.input_resolution import resolve_step_inputs
-from pilates.workflows.orchestration import StepRef, run_workflow
-from pilates.workflows.steps import StepOutputsHolder, make_example_run_step
+## PR Checklist
 
+Before opening a PR:
 
-def run_example_stage(*, scenario, state, settings, workspace, coupler):
-    outputs_holder = StepOutputsHolder()
+1. Generated checklist for the model is complete.
+2. Startup contract validation passes.
+3. Coupler schema includes all new cross-step keys.
+4. Required tests (contract + wiring + model-specific) pass.
+5. `docs/adding_a_model.md` and any model-specific docs are updated.
+6. If migration work changed, update `docs/consist_migration_checklist.md`.
 
-    resolved = resolve_step_inputs(
-        keys=["example_input"],
-        coupler=coupler,
-        explicit_inputs={"example_input": "/path/override"},
-        fallback_inputs={"example_input": "/path/fallback"},
-        required_keys=["example_input"],
-    )
-    if resolved.missing_required:
-        raise RuntimeError("example_input is required")
-
-    steps = [
-        StepRef(
-            name="example_run",
-            step_func=make_example_run_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            inputs=resolved.stepref_inputs(),
-            input_keys=resolved.stepref_input_keys(),
-        )
-    ]
-
-    run_workflow(
-        stage_name="example",
-        steps=steps,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=str(state.year),
-        iteration=getattr(state, "iteration", 0),
-    )
-```
-
-## 15) Related Files
+## Related References
 
 - `run.py`
+- `workflow_state.py`
 - `pilates/workflows/stages/*.py`
 - `pilates/workflows/steps/*.py`
-- `pilates/workflows/input_resolution.py`
 - `pilates/workflows/orchestration.py`
-- `pilates/workflows/coupler_schema.py`
+- `pilates/workflows/input_resolution.py`
 - `pilates/workflows/artifact_keys.py`
+- `pilates/workflows/coupler_schema.py`
 - `pilates/utils/consist_config.py`
 - `docs/consist_migration_checklist.md`

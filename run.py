@@ -32,6 +32,7 @@ from pilates.utils.consist_config import (
 )
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.coupler_schema import build_coupler_schema
+from pilates.workflows.catalog import schema_step_names
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -102,25 +103,31 @@ def _resolve_cache_epoch(settings: Any) -> int:
 def _build_schema_steps() -> List[Callable[..., Any]]:
     coupler = _SchemaCoupler()
     outputs_holder = StepOutputsHolder()
+    step_factories: Dict[str, Callable[..., Any]] = {
+        "urbansim_preprocess": make_urbansim_preprocess_step,
+        "urbansim_run": make_urbansim_run_step,
+        "urbansim_postprocess": make_urbansim_postprocess_step,
+        "atlas_preprocess": make_atlas_preprocess_step,
+        "atlas_run": make_atlas_run_step,
+        "atlas_postprocess": make_atlas_postprocess_step,
+        "activitysim_preprocess": make_activitysim_preprocess_step,
+        "activitysim_compile": make_activitysim_compile_step,
+        "activitysim_run": make_activitysim_run_step,
+        "activitysim_postprocess": make_activitysim_postprocess_step,
+        "beam_preprocess": make_beam_preprocess_step,
+        "beam_run": make_beam_run_step,
+        "beam_postprocess": make_beam_postprocess_step,
+        "beam_full_skim": make_beam_full_skim_step,
+    }
+    ordered_steps = schema_step_names()
+    missing_factories = [name for name in ordered_steps if name not in step_factories]
+    if missing_factories:
+        raise RuntimeError(
+            "Missing schema step factories for: " + ", ".join(missing_factories)
+        )
     return [
-        make_urbansim_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_urbansim_run_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_urbansim_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_atlas_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_atlas_run_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_atlas_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_activitysim_preprocess_step(
-            coupler=coupler, outputs_holder=outputs_holder
-        ),
-        make_activitysim_compile_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_activitysim_run_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_activitysim_postprocess_step(
-            coupler=coupler, outputs_holder=outputs_holder
-        ),
-        make_beam_preprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_beam_run_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_beam_postprocess_step(coupler=coupler, outputs_holder=outputs_holder),
-        make_beam_full_skim_step(coupler=coupler, outputs_holder=outputs_holder),
+        step_factories[step_name](coupler=coupler, outputs_holder=outputs_holder)
+        for step_name in ordered_steps
     ]
 
 

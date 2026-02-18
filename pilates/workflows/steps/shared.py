@@ -276,6 +276,10 @@ from pilates.atlas.outputs import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
 )
+from pilates.workflows.catalog import (
+    step_dependencies_from_catalog,
+    step_outputs_classes_from_catalog,
+)
 from pilates.workflows.step_consist_meta import consist_step_meta
 from workflow_state import WorkflowState
 
@@ -811,77 +815,10 @@ class StepOutputsHolder:
         return getattr(self, attr, None)
 
 
-STEP_OUTPUTS_CLASSES = {
-    "activitysim_preprocess": ActivitySimPreprocessOutputs,
-    "activitysim_run": ActivitySimRunOutputs,
-    "activitysim_postprocess": ActivitySimPostprocessOutputs,
-    "beam_preprocess": BeamPreprocessOutputs,
-    "beam_run": BeamRunOutputs,
-    "beam_postprocess": BeamPostprocessOutputs,
-    "beam_full_skim": BeamFullSkimOutputs,
-    "urbansim_preprocess": UrbanSimPreprocessOutputs,
-    "urbansim_run": UrbanSimRunOutputs,
-    "urbansim_postprocess": UrbanSimPostprocessOutputs,
-    "atlas_preprocess": AtlasPreprocessOutputs,
-    "atlas_run": AtlasRunOutputs,
-    "atlas_postprocess": AtlasPostprocessOutputs,
-}
+STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
 
 
-STEP_DEPENDENCIES = {
-    "urbansim_preprocess": {
-        "depends_on": [],
-        "holder_inputs": [],
-    },
-    "urbansim_run": {
-        "depends_on": ["urbansim_preprocess"],
-        "holder_inputs": ["urbansim_preprocess"],
-    },
-    "urbansim_postprocess": {
-        "depends_on": ["urbansim_run"],
-        "holder_inputs": ["urbansim_run"],
-    },
-    "atlas_preprocess": {
-        "depends_on": [],
-        "holder_inputs": [],
-    },
-    "atlas_run": {
-        "depends_on": ["atlas_preprocess"],
-        "holder_inputs": ["atlas_preprocess"],
-    },
-    "atlas_postprocess": {
-        "depends_on": ["atlas_run"],
-        "holder_inputs": ["atlas_run"],
-    },
-    "activitysim_preprocess": {
-        "depends_on": [],
-        "holder_inputs": [],
-    },
-    "activitysim_run": {
-        "depends_on": ["activitysim_preprocess"],
-        "holder_inputs": ["activitysim_preprocess"],
-    },
-    "activitysim_postprocess": {
-        "depends_on": ["activitysim_run"],
-        "holder_inputs": ["activitysim_run"],
-    },
-    "beam_preprocess": {
-        "depends_on": ["activitysim_postprocess"],
-        "holder_inputs": ["activitysim_postprocess"],
-    },
-    "beam_run": {
-        "depends_on": ["beam_preprocess"],
-        "holder_inputs": ["beam_preprocess"],
-    },
-    "beam_postprocess": {
-        "depends_on": ["beam_run"],
-        "holder_inputs": ["beam_run"],
-    },
-    "beam_full_skim": {
-        "depends_on": ["beam_preprocess"],
-        "holder_inputs": ["beam_preprocess"],
-    },
-}
+STEP_DEPENDENCIES = step_dependencies_from_catalog()
 
 DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
 
