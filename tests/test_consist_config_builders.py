@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from pilates.utils import consist_config as consist_config_module
 from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
 from pilates.workflows import catalog
 
@@ -211,3 +212,51 @@ def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_pat
         workspace_path=str(tmp_path),
     )
     assert result["facet_schema_version"] == "activitysim_v1"
+
+
+def test_catalog_provenance_builder_keys_are_registered():
+    catalog_builder_keys = {
+        spec.provenance.builder_key
+        for spec in catalog.WORKFLOW_STEP_SPECS
+        if spec.provenance is not None
+    }
+    assert catalog_builder_keys.issubset(set(_CONFIG_BUILDERS.keys()))
+
+
+def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):
+    settings = _make_settings()
+
+    # Force a non-legacy builder selection for this model.
+    monkeypatch.setattr(
+        consist_config_module,
+        "provenance_builder_key_for_model_name",
+        lambda model_name: "atlas" if model_name == "urbansim_run" else None,
+    )
+
+    result = build_step_consist_kwargs("urbansim_run", settings)
+    assert result["facet_schema_version"] == _CONFIG_BUILDERS[
+        "atlas"
+    ].get_facet_schema_version("urbansim_run")
+
+
+def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
+    settings = _make_settings()
+
+    monkeypatch.setattr(
+        consist_config_module,
+        "provenance_builder_key_for_model_name",
+        lambda _model_name: "not_registered",
+    )
+
+    with pytest.raises(ValueError, match="Unknown provenance builder key"):
+        build_step_consist_kwargs("urbansim_run", settings)
+
+
+def test_activitysim_hash_inputs_missing_configs_dir_raises(tmp_path):
+    settings = _make_settings()
+    with pytest.raises(FileNotFoundError, match="ActivitySim mutable configs dir"):
+        build_step_consist_kwargs(
+            "activitysim_run",
+            settings,
+            workspace_path=str(tmp_path),
+        )

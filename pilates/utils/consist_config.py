@@ -235,11 +235,18 @@ def build_step_consist_kwargs(
         }
 
     builder_key = provenance_builder_key_for_model_name(model_norm)
-    if builder_key is None:
+    if builder_key is not None:
+        builder = _CONFIG_BUILDERS.get(builder_key)
+        if builder is None:
+            raise ValueError(
+                f"Unknown provenance builder key {builder_key!r} for model {model_norm!r}. "
+                "Register it in _CONFIG_BUILDERS or remove catalog provenance metadata."
+            )
+    else:
         # Fallback for non-catalog (or provenance-unspecified) step models.
         builder_key = model_norm.split("_")[0]
+        builder = _CONFIG_BUILDERS.get(builder_key)
 
-    builder = _CONFIG_BUILDERS.get(builder_key)
     if builder is not None:
         if builder.requires_workspace_path and workspace_path is None:
             raise ValueError(
