@@ -254,7 +254,10 @@ from pilates.workflows.step_exec import (
     run_runner,
     warm_start_activities,
 )
-from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
+from pilates.workflows.outputs_base import (
+    ValidationContext,
+    declared_outputs_for_step_outputs_class,
+)
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -815,6 +818,37 @@ class StepOutputsHolder:
         return getattr(self, attr, None)
 
 
+def _upstream_outputs_view(
+    outputs_holder: StepOutputsHolder,
+    *,
+    current_step_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build a non-null snapshot view of upstream step outputs.
+
+    Parameters
+    ----------
+    outputs_holder : StepOutputsHolder
+        Holder containing current in-memory step outputs.
+
+    Returns
+    -------
+    dict
+        Mapping of holder field name to output object for populated entries.
+    """
+    current_attr = (
+        current_step_name.replace("-", "_") if isinstance(current_step_name, str) else None
+    )
+    upstream: Dict[str, Any] = {}
+    for holder_field in fields(StepOutputsHolder):
+        if current_attr and holder_field.name == current_attr:
+            continue
+        value = getattr(outputs_holder, holder_field.name, None)
+        if value is not None:
+            upstream[holder_field.name] = value
+    return upstream
+
+
 STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
 
 
@@ -1199,7 +1233,16 @@ def _make_generic_step_function(
             output_class=outputs_class,
             workspace=workspace,
         )
-        step_outputs.validate()
+        validation_context = ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name=f"{model_name}_{phase}",
+            upstream_outputs=_upstream_outputs_view(
+                outputs_holder, current_step_name=f"{model_name}_{phase}"
+            ),
+        )
+        step_outputs.validate(context=validation_context)
         outputs_holder_setter(outputs_holder, step_outputs)
 
         if output_logger is not None:

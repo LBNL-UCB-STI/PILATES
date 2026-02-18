@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import (
     Any,
     ClassVar,
     Dict,
     Iterable,
+    List,
+    Literal,
     Mapping,
+    Optional,
+    Protocol,
     Tuple,
     Type,
     TypeVar,
@@ -22,6 +26,68 @@ from pilates.generic.records import FileRecord, RecordStore
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
+ValidationLevel = Literal["error", "warning"]
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """
+    Result payload emitted by a semantic output validator.
+
+    Attributes
+    ----------
+    message : str
+        Human-readable validation message.
+    metadata : mapping, optional
+        Optional structured context to aid debugging.
+    """
+
+    message: str
+    metadata: Optional[Mapping[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class ValidationContext:
+    """
+    Runtime context supplied to semantic output validators.
+
+    Attributes
+    ----------
+    settings : Any, optional
+        Runtime settings object for the step.
+    state : Any, optional
+        Workflow state object for the step.
+    workspace : Any, optional
+        Workspace object used by the step.
+    step_name : str, optional
+        Canonical step name (for example ``activitysim_preprocess``).
+    upstream_outputs : mapping
+        Snapshot view of upstream ``StepOutputsHolder`` entries.
+    """
+
+    settings: Any = None
+    state: Any = None
+    workspace: Any = None
+    step_name: Optional[str] = None
+    upstream_outputs: Mapping[str, Any] = field(default_factory=dict)
+
+
+class OutputValidator(Protocol):
+    """
+    Protocol for semantic output validators.
+    """
+
+    name: str
+    level: ValidationLevel
+
+    def validate(
+        self, outputs: Any, context: ValidationContext
+    ) -> List[ValidationResult]:
+        """
+        Validate typed outputs under a runtime context.
+        """
+
+        ...
 
 
 def _serialize_value(value: Any) -> Any:
@@ -193,6 +259,7 @@ class StepOutputsBase:
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = ()
     dict_path_fields: ClassVar[Tuple[str, ...]] = ()
+    validators: ClassVar[Tuple[OutputValidator, ...]] = ()
 
     @classmethod
     def declared_output_keys(cls) -> Tuple[str, ...]:
@@ -239,7 +306,7 @@ class StepOutputsBase:
             )
         return RecordStore(recordList=records)
 
-    def validate(self) -> None:
+    def validate(self, context: Optional[ValidationContext] = None) -> None:
         """
         Validate that expected output paths exist.
         """
@@ -278,3 +345,58 @@ class StepOutputsBase:
             for key, path in paths_dict.items():
                 if not _path_exists(path):
                     raise AssertionError(f"{field_name}[{key}] missing: {path}")
+
+        validators = getattr(self.__class__, "validators", ()) or ()
+        if not validators:
+            return
+
+        validation_context = context or ValidationContext(
+            step_name=self.__class__.__name__
+        )
+        step_label = validation_context.step_name or self.__class__.__name__
+        error_messages: list[str] = []
+
+        for validator in validators:
+            validator_name = getattr(validator, "name", validator.__class__.__name__)
+            level = getattr(validator, "level", "error")
+            if level not in ("error", "warning"):
+                logger.warning(
+                    "OUTPUT VALIDATION WARNING (%s): validator '%s' has unsupported "
+                    "level '%s'; treating as 'error'.",
+                    step_label,
+                    validator_name,
+                    level,
+                )
+                level = "error"
+
+            try:
+                results = validator.validate(self, validation_context) or []
+            except Exception as exc:
+                raise AssertionError(
+                    f"Semantic validator '{validator_name}' crashed during "
+                    f"validation for step '{step_label}': {exc}"
+                ) from exc
+
+            for result in results:
+                message = str(getattr(result, "message", "")).strip()
+                if not message:
+                    continue
+                metadata = getattr(result, "metadata", None)
+                metadata_suffix = f" metadata={metadata}" if metadata else ""
+                rendered = f"[{validator_name}] {message}{metadata_suffix}"
+                if level == "warning":
+                    logger.warning(
+                        "OUTPUT VALIDATION WARNING (%s): %s",
+                        step_label,
+                        rendered,
+                    )
+                else:
+                    error_messages.append(rendered)
+
+        if error_messages:
+            raise AssertionError(
+                f"Semantic validation failed for step '{step_label}' "
+                f"({self.__class__.__name__}). "
+                "Fix the flagged output contract issue(s): "
+                + "; ".join(error_messages)
+            )
