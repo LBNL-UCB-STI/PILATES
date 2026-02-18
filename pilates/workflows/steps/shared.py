@@ -862,6 +862,7 @@ def validate_workflow_step_contracts(
     *,
     declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
     allow_untracked_declared: Optional[Set[str]] = None,
+    step_refs: Optional[Iterable[Any]] = None,
 ) -> None:
     """
     Validate internal workflow step contracts.
@@ -874,8 +875,15 @@ def validate_workflow_step_contracts(
     - ``STEP_OUTPUTS_CLASSES`` keys align with ``STEP_DEPENDENCIES`` keys.
     - Dependency specs reference known step names.
     - Optionally, declared step models are consistent with tracked step names.
+    - For tracked declared steps, canonical outputs match step metadata outputs.
+    - Deprecated ``StepRef.required_outputs`` overrides require rationale.
     """
     errors: list[str] = []
+
+    def _normalize_output_keys(values: Any) -> list[str]:
+        if not isinstance(values, Sequence) or isinstance(values, str):
+            return []
+        return [output for output in values if isinstance(output, str)]
 
     holder_fields = {f.name for f in fields(StepOutputsHolder)}
     output_class_keys = set(STEP_OUTPUTS_CLASSES.keys())
@@ -942,6 +950,7 @@ def validate_workflow_step_contracts(
 
     if declared_steps is not None:
         declared_counts: Dict[str, int] = {}
+        declared_by_model: Dict[str, Callable[..., Any]] = {}
         undecorated_count = 0
         for step_func in declared_steps:
             step_model = _declared_step_model(step_func)
@@ -949,6 +958,7 @@ def validate_workflow_step_contracts(
                 undecorated_count += 1
                 continue
             declared_counts[step_model] = declared_counts.get(step_model, 0) + 1
+            declared_by_model[step_model] = step_func
 
         if undecorated_count:
             errors.append(
@@ -983,6 +993,35 @@ def validate_workflow_step_contracts(
                 "(add tracking or allowlist explicitly): "
                 + ", ".join(sorted(unexpected_untracked))
             )
+
+        tracked_declared_names = sorted(declared_names & output_class_keys)
+        for step_name in tracked_declared_names:
+            outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
+            step_func = declared_by_model.get(step_name)
+            if outputs_class is None or step_func is None:
+                continue
+            canonical = list(declared_outputs_for_step_outputs_class(outputs_class))
+            step_meta = getattr(step_func, "__consist_step__", None)
+            metadata_outputs = _normalize_output_keys(getattr(step_meta, "outputs", None))
+            if canonical != metadata_outputs:
+                errors.append(
+                    f"Step '{step_name}': canonical outputs {canonical} conflict with metadata outputs "
+                    f"{metadata_outputs}. Fix: remove metadata override or update declared_outputs in "
+                    f"{outputs_class.__name__}."
+                )
+
+    if step_refs is not None:
+        for step_ref in step_refs:
+            required_outputs = getattr(step_ref, "required_outputs", None)
+            if required_outputs is None:
+                continue
+            rationale = getattr(step_ref, "required_outputs_rationale", None)
+            step_name = getattr(step_ref, "name", "<unknown>")
+            if not isinstance(rationale, str) or not rationale.strip():
+                errors.append(
+                    f"Step '{step_name}': deprecated StepRef.required_outputs override requires "
+                    "StepRef.required_outputs_rationale."
+                )
 
     if errors:
         raise RuntimeError(

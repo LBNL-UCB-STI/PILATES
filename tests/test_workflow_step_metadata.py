@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from consist import define_step
 from consist.types import OutputPolicyOptions
 
@@ -194,9 +195,78 @@ def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
         name="dummy_step",
         step_func=_decorated_step,
         required_outputs=["artifact_override"],
+        required_outputs_rationale="Temporary compatibility while migrating metadata.",
         output_missing="warn",
         output_mismatch="warn",
     )
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    with pytest.warns(DeprecationWarning, match="StepRef.required_outputs is deprecated"):
+        stage.run(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix="unit",
+        )
+
+    call = scenario.calls[0]
+    assert call["outputs"] == ["artifact_override"]
+    assert call["output_policy"] == OutputPolicyOptions(
+        output_missing="warn",
+        output_mismatch="warn",
+    )
+
+
+def test_workflow_stage_required_outputs_override_requires_rationale():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(model="dummy_step", outputs=["artifact_a"])
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(
+        name="dummy_step",
+        step_func=_decorated_step,
+        required_outputs=["artifact_override"],
+    )
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+
+    with pytest.raises(
+        RuntimeError,
+        match="required_outputs_rationale",
+    ):
+        stage.run(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix="unit",
+        )
+
+
+def test_tracked_step_uses_canonical_outputs_instead_of_metadata_outputs():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.urbansim_preprocess = SimpleNamespace()
+    coupler = _DummyCoupler()
+
+    @define_step(model="urbansim_run", outputs=["metadata_override"])
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(name="urbansim_run", step_func=_decorated_step)
     stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
     stage.run(
         scenario=scenario,
@@ -209,11 +279,7 @@ def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
     )
 
     call = scenario.calls[0]
-    assert call["outputs"] == ["artifact_override"]
-    assert call["output_policy"] == OutputPolicyOptions(
-        output_missing="warn",
-        output_mismatch="warn",
-    )
+    assert call["outputs"] == [USIM_DATASTORE_H5]
 
 
 def test_workflow_stage_requires_decorated_steps():

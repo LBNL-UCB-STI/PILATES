@@ -182,9 +182,12 @@ class FreightRunOutputs(StepOutputsBase):
 
 Output contract precedence at runtime:
 
-1. Step metadata outputs (`__consist_step__.outputs`)
-2. `StepOutputs` declared outputs
-3. `StepRef.required_outputs` override
+1. Canonical tracked-step outputs from `StepOutputs` declared outputs
+2. Metadata outputs for non-tracked/metadata-only steps
+3. `StepRef.required_outputs` compatibility override (deprecated)
+
+`StepRef.required_outputs` is deprecated and requires
+`StepRef.required_outputs_rationale` when used.
 
 When required outputs are present, orchestration defaults to strict policy:
 `output_missing="error"` and `output_mismatch="error"` unless overridden.
@@ -255,7 +258,8 @@ steps = [
         inputs=resolved.stepref_inputs(),
         input_keys=resolved.stepref_input_keys(),
         # Optional overrides:
-        # required_outputs=[...],
+        # required_outputs=[...],  # Deprecated compatibility override.
+        # required_outputs_rationale="Why override is still needed",
         # output_missing="error|warn|allow",
         # output_mismatch="error|warn|allow",
     )

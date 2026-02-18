@@ -17,9 +17,11 @@ This file intentionally mutates one layer at a time to show what class of
 integration drift is caught and what the expected startup failure looks like.
 """
 
+import re
 import pytest
 from consist import define_step
 
+from pilates.workflows.orchestration import StepRef
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -126,4 +128,86 @@ def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
     step_shared.validate_workflow_step_contracts(
         declared_steps=[*_declared_schema_steps(), _extra_step],
         allow_untracked_declared={"intentional_untracked_step"},
+    )
+
+
+def test_validate_workflow_step_contracts_reports_output_contract_conflicts():
+    """Tracked-step metadata outputs must match canonical StepOutputs declarations."""
+    steps = _declared_schema_steps()
+
+    @define_step(model="urbansim_run", outputs=["metadata_override"])
+    def _conflicting_urbansim_run(*args, **kwargs):
+        return None
+
+    steps = [
+        step for step in steps if step.__consist_step__.model != "urbansim_run"
+    ] + [_conflicting_urbansim_run]
+
+    expected = (
+        "Step 'urbansim_run': canonical outputs ['usim_datastore_h5'] "
+        "conflict with metadata outputs ['metadata_override']. "
+        "Fix: remove metadata override or update declared_outputs in UrbanSimRunOutputs."
+    )
+
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        step_shared.validate_workflow_step_contracts(declared_steps=steps)
+
+
+def test_validate_workflow_step_contracts_flags_missing_canonical_outputs_when_metadata_declares_outputs():
+    """Tracked metadata outputs without canonical declared_outputs are rejected."""
+    steps = _declared_schema_steps()
+
+    @define_step(model="beam_run", outputs=["beam_linkstats"])
+    def _beam_run_with_metadata_override(*args, **kwargs):
+        return None
+
+    steps = [step for step in steps if step.__consist_step__.model != "beam_run"] + [
+        _beam_run_with_metadata_override
+    ]
+
+    expected = (
+        "Step 'beam_run': canonical outputs [] conflict with metadata outputs "
+        "['beam_linkstats']. Fix: remove metadata override or update declared_outputs "
+        "in BeamRunOutputs."
+    )
+
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        step_shared.validate_workflow_step_contracts(declared_steps=steps)
+
+
+def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():
+    """Deprecated StepRef.required_outputs override requires rationale at validation time."""
+
+    @define_step(model="dummy_step")
+    def _dummy_step(*args, **kwargs):
+        return None
+
+    with pytest.raises(RuntimeError, match="requires StepRef.required_outputs_rationale"):
+        step_shared.validate_workflow_step_contracts(
+            step_refs=[
+                StepRef(
+                    name="dummy_step",
+                    step_func=_dummy_step,
+                    required_outputs=["override_key"],
+                )
+            ]
+        )
+
+
+def test_validate_workflow_step_contracts_accepts_rationalized_required_outputs_override():
+    """Compatibility override remains allowed when rationale is provided."""
+
+    @define_step(model="dummy_step")
+    def _dummy_step(*args, **kwargs):
+        return None
+
+    step_shared.validate_workflow_step_contracts(
+        step_refs=[
+            StepRef(
+                name="dummy_step",
+                step_func=_dummy_step,
+                required_outputs=["override_key"],
+                required_outputs_rationale="Temporary bridge during migration.",
+            )
+        ]
     )

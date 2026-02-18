@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 from datetime import datetime
 from pathlib import Path
+import warnings
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
 
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
@@ -45,6 +46,7 @@ from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
     StepOutputsHolder,
     validate_step_ready,
+    validate_workflow_step_contracts,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ class StepRef:
     cache_mode: Optional[str] = None
     load_inputs: Optional[bool] = None
     required_outputs: Optional[Sequence[str]] = None
+    required_outputs_rationale: Optional[str] = None
     output_missing: Optional[str] = None
     output_mismatch: Optional[str] = None
     model: Optional[str] = None
@@ -130,21 +133,40 @@ def _build_step_run_kwargs(
             cache_hydration=step.cache_hydration,
             cache_mode=step.cache_mode,
         )
-    resolved_required_outputs: Optional[Sequence[str]] = step.required_outputs
-    if resolved_required_outputs is None and step_meta is not None:
-        meta_outputs = getattr(step_meta, "outputs", None)
-        if isinstance(meta_outputs, Sequence) and not isinstance(meta_outputs, str):
-            resolved_required_outputs = [
-                output for output in meta_outputs if isinstance(output, str)
-            ]
-    if resolved_required_outputs is None:
-        outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
-        if outputs_class is not None:
-            class_declared_outputs = list(
-                declared_outputs_for_step_outputs_class(outputs_class)
+    def _normalize_output_keys(values: Any) -> Optional[list[str]]:
+        if not isinstance(values, Sequence) or isinstance(values, str):
+            return None
+        return [output for output in values if isinstance(output, str)]
+
+    outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
+    canonical_outputs: list[str] = []
+    if outputs_class is not None:
+        canonical_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
+
+    resolved_required_outputs: Optional[Sequence[str]] = None
+    if step.required_outputs is not None:
+        rationale = (step.required_outputs_rationale or "").strip()
+        if not rationale:
+            raise ValueError(
+                f"Step '{step.name}': StepRef.required_outputs override requires "
+                "StepRef.required_outputs_rationale with a non-empty explanation."
             )
-            if class_declared_outputs:
-                resolved_required_outputs = class_declared_outputs
+        warnings.warn(
+            f"Step '{step.name}': StepRef.required_outputs is deprecated. "
+            "Use StepOutputs declared_outputs instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        resolved_required_outputs = _normalize_output_keys(step.required_outputs)
+    elif outputs_class is not None:
+        # Tracked steps use StepOutputs declarations as the canonical source.
+        resolved_required_outputs = canonical_outputs or None
+    elif step_meta is not None:
+        # Metadata-only steps remain supported for non-catalog call sites.
+        resolved_required_outputs = _normalize_output_keys(
+            getattr(step_meta, "outputs", None)
+        )
+
     if resolved_required_outputs:
         run_kwargs["outputs"] = list(resolved_required_outputs)
 
@@ -234,6 +256,8 @@ def run_manifested_steps(
     """
     Execute steps with manifest checkpointing and stale detection.
     """
+    validate_workflow_step_contracts(step_refs=steps)
+
     manifest = load_step_manifest(manifest_config.path) or {}
     stale_steps = _detect_stale_steps(manifest, outputs_holder, workspace)
     if stale_steps:
@@ -333,6 +357,8 @@ def run_workflow(
     """
     Execute a sequence of workflow steps using native step metadata.
     """
+    validate_workflow_step_contracts(step_refs=steps)
+
     if manifest_config is not None:
         run_manifested_steps(
             stage_name=stage_name,
