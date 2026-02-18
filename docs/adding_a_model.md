@@ -20,11 +20,13 @@ python scripts/new_model_scaffold.py <model_slug> --major-stage <stage>
 
 `docs/checklists/add_model_<model_slug>.md`
 
-3. Wire the new step factories into an existing stage (or new stage), then add
-   corresponding `WorkflowStepSpec` entries in `pilates/workflows/catalog.py`.
-4. Add/adjust coupler keys, schema descriptions, and (if needed) Consist
+3. Start from the generated stage-template snippet(s) and wire the new step
+   factories into an existing stage (or new stage).
+4. Review and adjust generated catalog metadata (`stage_name`, order,
+   enablement attrs, optional provenance key) if needed.
+5. Add/adjust coupler keys, schema descriptions, and (if needed) Consist
    builder wiring.
-5. Run focused tests (examples in [Testing and Validation](#testing-and-validation)).
+6. Run focused tests (examples in [Testing and Validation](#testing-and-validation)).
 
 You can safely preview scaffolding first:
 
@@ -120,31 +122,29 @@ Useful flags:
 - `--force`: overwrite scaffold targets
 - `--class-prefix Freight`: override generated class names
 - `--step-module freight_steps`: custom step module filename
+- `--catalog-stage traffic_assignment`: override generated catalog stage name
+- `--stage-pattern linear --stage-pattern iterative`: choose stage snippet patterns
+- `--provenance-builder-key freight`: add catalog provenance metadata stubs
 
 The scaffold auto-creates:
 
 1. model package boilerplate in `pilates/<model>/`
 2. step factory module in `pilates/workflows/steps/<step_module>.py`
-3. updates in:
+3. stage assembly snippet(s) in `docs/checklists/stage_templates/`
+4. updates in:
    `pilates/generic/model_factory.py`,
-   `pilates/workflows/steps/__init__.py`
-4. checklist in `docs/checklists/add_model_<model>.md`
+   `pilates/workflows/steps/__init__.py`,
+   `pilates/workflows/steps/shared.py`,
+   `pilates/workflows/catalog.py`,
+   `run.py`
+5. checklist in `docs/checklists/add_model_<model>.md`
 
 Still manual:
 
 1. stage-level `StepRef` assembly
-2. workflow metadata in `pilates/workflows/catalog.py`
-3. schema-step factory registration in `run.py::_build_schema_steps()`
-4. tracked `StepOutputsHolder` fields in `pilates/workflows/steps/shared.py`
-5. coupler keys/schema and Consist config/hash/facet wiring
-6. tests and docs
-
-Current scaffold caveat:
-
-- `scripts/new_model_scaffold.py` still targets legacy `shared.py` registry
-  literals (`STEP_OUTPUTS_CLASSES` / `STEP_DEPENDENCIES`) and may require manual
-  correction in catalog-era code. Treat the generated checklist as advisory and
-  use the integration steps below as canonical.
+2. optional adjustment of generated catalog metadata (order/stage/enablement/provenance)
+3. coupler keys/schema and Consist config/hash/facet wiring
+4. tests and docs
 
 ### 2) Implement model components
 
