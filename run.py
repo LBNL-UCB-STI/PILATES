@@ -32,7 +32,7 @@ from pilates.utils.consist_config import (
 )
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.catalog import schema_step_names
+from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -164,33 +164,17 @@ def _filter_schema_steps_for_enabled_models(
     include_optional : bool, default True
         Whether optional steps (currently ``beam_full_skim``) should be included.
     """
-    enabled_prefixes = set()
-    if _is_model_enabled(settings, flag_attr="land_use_enabled", model_attr="land_use"):
-        enabled_prefixes.add("urbansim")
-    if _is_model_enabled(
+    enabled_models = enabled_schema_step_models(
         settings,
-        flag_attr="vehicle_ownership_model_enabled",
-        model_attr="vehicle_ownership",
-    ):
-        enabled_prefixes.add("atlas")
-    if _is_model_enabled(
-        settings, flag_attr="activity_demand_enabled", model_attr="activity_demand"
-    ):
-        enabled_prefixes.add("activitysim")
-    if _is_model_enabled(
-        settings, flag_attr="traffic_assignment_enabled", model_attr="travel"
-    ):
-        enabled_prefixes.add("beam")
+        is_model_enabled=_is_model_enabled,
+        include_optional=include_optional,
+    )
 
     filtered: List[Callable[..., Any]] = []
     for step_func in steps:
         meta = getattr(step_func, "__consist_step__", None)
         model_name = getattr(meta, "model", "") if meta is not None else ""
-        model_prefix = model_name.split("_", 1)[0]
-        if model_prefix not in enabled_prefixes:
-            continue
-        # Full-skim is optional by schedule and should not be globally required.
-        if not include_optional and model_name == "beam_full_skim":
+        if model_name not in enabled_models:
             continue
         filtered.append(step_func)
     return filtered

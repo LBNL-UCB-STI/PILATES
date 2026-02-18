@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple, Type
+from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple, Type
 
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -237,6 +237,49 @@ def tracked_step_specs() -> Tuple[WorkflowStepSpec, ...]:
     return tuple(spec for spec in WORKFLOW_STEP_SPECS if spec.tracked)
 
 
+def schema_step_specs(*, include_optional: bool = True) -> Tuple[WorkflowStepSpec, ...]:
+    specs = [
+        spec
+        for spec in sorted(WORKFLOW_STEP_SPECS, key=lambda item: item.order)
+        if spec.include_in_schema and (include_optional or not spec.optional)
+    ]
+    return tuple(specs)
+
+
+def enabled_schema_step_models(
+    settings: Any,
+    *,
+    is_model_enabled: Callable[..., bool],
+    include_optional: bool = True,
+) -> Set[str]:
+    """
+    Resolve enabled schema-step model identifiers for runtime settings.
+
+    Parameters
+    ----------
+    settings : Any
+        Runtime settings object.
+    is_model_enabled : callable
+        Callback that accepts keyword arguments ``flag_attr`` and ``model_attr``.
+    include_optional : bool, default True
+        Whether optional schema steps should be included.
+    """
+    enabled_models: Set[str] = set()
+    for spec in schema_step_specs(include_optional=include_optional):
+        flag_attr = spec.enabled_flag_attr
+        model_attr = spec.enabled_model_attr
+        if flag_attr is None or model_attr is None:
+            enabled_models.add(spec.model_name)
+            continue
+        if is_model_enabled(
+            settings,
+            flag_attr=flag_attr,
+            model_attr=model_attr,
+        ):
+            enabled_models.add(spec.model_name)
+    return enabled_models
+
+
 def step_outputs_classes_from_catalog() -> Dict[str, Type[Any]]:
     outputs: Dict[str, Type[Any]] = {}
     for spec in tracked_step_specs():
@@ -256,4 +299,3 @@ def step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str]]]:
             "holder_inputs": list(spec.holder_inputs),
         }
     return dependencies
-

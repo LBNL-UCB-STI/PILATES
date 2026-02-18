@@ -1,6 +1,8 @@
 from pilates.workflows import catalog
 from pilates.workflows.steps import shared as step_shared
 from run import _build_schema_steps
+from run import _is_model_enabled
+from types import SimpleNamespace
 
 
 def test_step_outputs_classes_are_catalog_derived():
@@ -36,3 +38,22 @@ def test_tracked_catalog_steps_define_outputs_class():
 def test_catalog_step_names_are_unique():
     names = [spec.step_name for spec in catalog.WORKFLOW_STEP_SPECS]
     assert len(names) == len(set(names))
+
+
+def test_enabled_schema_step_models_honors_settings_flags():
+    settings = SimpleNamespace(
+        land_use_enabled=False,
+        vehicle_ownership_model_enabled=False,
+        activity_demand_enabled=True,
+        traffic_assignment_enabled=True,
+    )
+    enabled = catalog.enabled_schema_step_models(
+        settings,
+        is_model_enabled=_is_model_enabled,
+        include_optional=False,
+    )
+    assert all(not model.startswith("urbansim_") for model in enabled)
+    assert all(not model.startswith("atlas_") for model in enabled)
+    assert any(model.startswith("activitysim_") for model in enabled)
+    assert any(model.startswith("beam_") for model in enabled)
+    assert "beam_full_skim" not in enabled
