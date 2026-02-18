@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
+from pilates.workflows import catalog
 
 
 def _make_settings():
@@ -160,3 +161,53 @@ def test_facet_schema_version_routing(tmp_path):
 
     result = build_step_consist_kwargs("urbansim_run", settings)
     assert result["facet_schema_version"] == "urbansim_run_v1"
+
+
+def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
+    settings = _make_settings()
+
+    asim_dir = tmp_path / "activitysim" / "configs"
+    asim_dir.mkdir(parents=True)
+    beam_root = tmp_path / "beam" / "input"
+    beam_root.mkdir(parents=True)
+    (beam_root / "main.conf").write_text("x=1")
+
+    models = [
+        spec.model_name
+        for spec in catalog.WORKFLOW_STEP_SPECS
+        if catalog.provenance_builder_key_for_model_name(spec.model_name) is not None
+    ]
+    for model_name in models:
+        result = build_step_consist_kwargs(
+            model_name,
+            settings,
+            workspace_path=str(tmp_path),
+        )
+        legacy_key = model_name.split("_")[0]
+        expected_schema_version = _CONFIG_BUILDERS[legacy_key].get_facet_schema_version(
+            model_name
+        )
+        assert result["facet_schema_version"] == expected_schema_version
+
+
+def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_path):
+    settings = _make_settings()
+
+    asim_dir = tmp_path / "activitysim" / "configs"
+    asim_dir.mkdir(parents=True)
+
+    # activitysim_compile intentionally has no catalog provenance metadata.
+    result = build_step_consist_kwargs(
+        "activitysim_compile",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+    assert result["facet_schema_version"] == "activitysim_compile_v1"
+
+    # Non-catalog models still use legacy prefix fallback dispatch.
+    result = build_step_consist_kwargs(
+        "activitysim_custom_step",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+    assert result["facet_schema_version"] == "activitysim_v1"

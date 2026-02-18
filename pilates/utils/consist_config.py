@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from pilates.config.models import PilatesConfig
+from pilates.workflows.catalog import provenance_builder_key_for_model_name
 
 try:
     from consist.types import HasConsistFacet
@@ -233,11 +234,16 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
 
-    builder = _CONFIG_BUILDERS.get(model_norm.split("_")[0])
+    builder_key = provenance_builder_key_for_model_name(model_norm)
+    if builder_key is None:
+        # Fallback for non-catalog (or provenance-unspecified) step models.
+        builder_key = model_norm.split("_")[0]
+
+    builder = _CONFIG_BUILDERS.get(builder_key)
     if builder is not None:
         if builder.requires_workspace_path and workspace_path is None:
             raise ValueError(
-                f"workspace_path is required for {model_norm.split('_')[0]} hash_inputs."
+                f"workspace_path is required for {builder_key} hash_inputs."
             )
         result: Dict[str, Any] = {
             "config": builder.build_identity_config(settings),

@@ -40,6 +40,33 @@ def test_catalog_step_names_are_unique():
     assert len(names) == len(set(names))
 
 
+def test_tracked_steps_define_provenance_builder_keys():
+    for spec in catalog.tracked_step_specs():
+        assert spec.provenance is not None
+        assert spec.provenance.builder_key
+        assert (
+            catalog.provenance_builder_key_for_step_name(spec.step_name)
+            == spec.provenance.builder_key
+        )
+        assert (
+            catalog.provenance_builder_key_for_model_name(spec.model_name)
+            == spec.provenance.builder_key
+        )
+
+
+def test_provenance_metadata_is_optional_for_untracked_steps():
+    untracked_without_provenance = [
+        spec.step_name
+        for spec in catalog.WORKFLOW_STEP_SPECS
+        if not spec.tracked and spec.provenance is None
+    ]
+    assert "activitysim_compile" in untracked_without_provenance
+    assert "postprocessing" in untracked_without_provenance
+
+    assert catalog.provenance_builder_key_for_model_name("activitysim_compile") is None
+    assert catalog.provenance_builder_key_for_model_name("postprocessing") is None
+
+
 def test_enabled_schema_step_models_honors_settings_flags():
     settings = SimpleNamespace(
         land_use_enabled=False,

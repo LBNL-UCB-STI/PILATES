@@ -27,6 +27,11 @@ from pilates.urbansim.outputs import (
 
 
 @dataclass(frozen=True)
+class WorkflowStepProvenanceSpec:
+    builder_key: str
+
+
+@dataclass(frozen=True)
 class WorkflowStepSpec:
     step_name: str
     model_name: str
@@ -41,6 +46,13 @@ class WorkflowStepSpec:
     holder_inputs: Tuple[str, ...] = ()
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
+    provenance: Optional[WorkflowStepProvenanceSpec] = None
+
+
+_URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
+_ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
+_ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
+_BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
 
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
@@ -55,6 +67,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=(),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
+        provenance=_URBANSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="urbansim_run",
@@ -67,6 +80,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("urbansim_preprocess",),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
+        provenance=_URBANSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="urbansim_postprocess",
@@ -79,6 +93,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("urbansim_run",),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
+        provenance=_URBANSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="atlas_preprocess",
@@ -91,6 +106,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=(),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
+        provenance=_ATLAS_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="atlas_run",
@@ -103,6 +119,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("atlas_preprocess",),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
+        provenance=_ATLAS_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="atlas_postprocess",
@@ -115,6 +132,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("atlas_run",),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
+        provenance=_ATLAS_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="activitysim_preprocess",
@@ -127,6 +145,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=(),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
+        provenance=_ACTIVITYSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="activitysim_compile",
@@ -150,6 +169,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("activitysim_preprocess",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
+        provenance=_ACTIVITYSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="activitysim_postprocess",
@@ -162,6 +182,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("activitysim_run",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
+        provenance=_ACTIVITYSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="beam_preprocess",
@@ -174,6 +195,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("activitysim_postprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="beam_run",
@@ -186,6 +208,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="beam_postprocess",
@@ -198,6 +221,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("beam_run",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="beam_full_skim",
@@ -211,6 +235,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         holder_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
+        provenance=_BEAM_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="postprocessing",
@@ -223,6 +248,36 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         include_in_schema=False,
     ),
 )
+
+
+_STEP_SPECS_BY_STEP_NAME: Dict[str, WorkflowStepSpec] = {
+    spec.step_name: spec for spec in WORKFLOW_STEP_SPECS
+}
+_STEP_SPECS_BY_MODEL_NAME: Dict[str, WorkflowStepSpec] = {
+    spec.model_name: spec for spec in WORKFLOW_STEP_SPECS
+}
+
+
+def workflow_step_spec_for_step_name(step_name: str) -> Optional[WorkflowStepSpec]:
+    return _STEP_SPECS_BY_STEP_NAME.get(step_name)
+
+
+def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepSpec]:
+    return _STEP_SPECS_BY_MODEL_NAME.get(model_name)
+
+
+def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None or spec.provenance is None:
+        return None
+    return spec.provenance.builder_key
+
+
+def provenance_builder_key_for_model_name(model_name: str) -> Optional[str]:
+    spec = workflow_step_spec_for_model_name(model_name)
+    if spec is None or spec.provenance is None:
+        return None
+    return spec.provenance.builder_key
 
 
 def schema_step_names() -> Tuple[str, ...]:

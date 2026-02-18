@@ -21,8 +21,9 @@ python scripts/new_model_scaffold.py <model_slug> --major-stage <stage>
 `docs/checklists/add_model_<model_slug>.md`
 
 3. Wire the new step factories into an existing stage (or new stage), then add
-   those factories to `run.py::_build_schema_steps()`.
-4. Add/adjust coupler keys, schema descriptions, and Consist config builders.
+   corresponding `WorkflowStepSpec` entries in `pilates/workflows/catalog.py`.
+4. Add/adjust coupler keys, schema descriptions, and (if needed) Consist
+   builder wiring.
 5. Run focused tests (examples in [Testing and Validation](#testing-and-validation)).
 
 You can safely preview scaffolding first:
@@ -87,14 +88,15 @@ Most integrations touch all of these:
    `preprocessor.py`, `runner.py`, `postprocessor.py`, `outputs.py`
 2. `pilates/generic/model_factory.py`
 3. `pilates/workflows/steps/<module>.py` and `pilates/workflows/steps/__init__.py`
-4. `pilates/workflows/steps/shared.py` (tracked outputs/dependencies)
-5. `pilates/workflows/stages/<stage>.py`
-6. `run.py` (`_build_schema_steps()` and, if needed, stage loop/filtering)
-7. `pilates/workflows/artifact_keys.py`
-8. `pilates/workflows/coupler_schema.py`
-9. `pilates/utils/consist_config.py`
-10. Tests under `tests/`
-11. Docs, including this guide
+4. `pilates/workflows/catalog.py` (canonical workflow step metadata)
+5. `pilates/workflows/steps/shared.py` (`StepOutputsHolder` for tracked steps)
+6. `pilates/workflows/stages/<stage>.py`
+7. `run.py` (`_build_schema_steps()` step-factory map and, if needed, stage loop)
+8. `pilates/workflows/artifact_keys.py`
+9. `pilates/workflows/coupler_schema.py`
+10. `pilates/utils/consist_config.py` (only for new Consist builder families)
+11. Tests under `tests/`
+12. Docs, including this guide
 
 If creating a new top-level stage, also update:
 
@@ -125,16 +127,24 @@ The scaffold auto-creates:
 2. step factory module in `pilates/workflows/steps/<step_module>.py`
 3. updates in:
    `pilates/generic/model_factory.py`,
-   `pilates/workflows/steps/__init__.py`,
-   `pilates/workflows/steps/shared.py`
+   `pilates/workflows/steps/__init__.py`
 4. checklist in `docs/checklists/add_model_<model>.md`
 
 Still manual:
 
 1. stage-level `StepRef` assembly
-2. schema-step registration in `run.py::_build_schema_steps()`
-3. coupler keys/schema and Consist config/hash/facet wiring
-4. tests and docs
+2. workflow metadata in `pilates/workflows/catalog.py`
+3. schema-step factory registration in `run.py::_build_schema_steps()`
+4. tracked `StepOutputsHolder` fields in `pilates/workflows/steps/shared.py`
+5. coupler keys/schema and Consist config/hash/facet wiring
+6. tests and docs
+
+Current scaffold caveat:
+
+- `scripts/new_model_scaffold.py` still targets legacy `shared.py` registry
+  literals (`STEP_OUTPUTS_CLASSES` / `STEP_DEPENDENCIES`) and may require manual
+  correction in catalog-era code. Treat the generated checklist as advisory and
+  use the integration steps below as canonical.
 
 ### 2) Implement model components
 
@@ -192,16 +202,17 @@ Preferred path is `_make_generic_step_function(...)` in
 
 Naming convention is `<model>_<phase>` and should match holder/dependency maps.
 
-### 5) Keep shared step registries consistent
+### 5) Keep catalog + holder metadata consistent
 
-For tracked steps, `pilates/workflows/steps/shared.py` must stay aligned:
+For tracked steps, keep these two sources aligned:
 
-1. `StepOutputsHolder` field
-2. `STEP_OUTPUTS_CLASSES` entry
-3. `STEP_DEPENDENCIES` entry
+1. `StepOutputsHolder` field in `pilates/workflows/steps/shared.py`
+2. `WorkflowStepSpec` in `pilates/workflows/catalog.py`:
+   `outputs_class`, `depends_on`, `holder_inputs`, enablement attrs, and order
 
-Startup validation (`validate_workflow_step_contracts`) checks consistency and
-fails fast if any map drifts.
+`STEP_OUTPUTS_CLASSES` and `STEP_DEPENDENCIES` are now derived from the catalog,
+not manually maintained. Startup validation (`validate_workflow_step_contracts`)
+checks consistency and fails fast if holder/catalog metadata drifts.
 
 Note:
 
@@ -256,7 +267,8 @@ field.
 
 ### 7) Register schema steps in `run.py`
 
-Add your step factories to `run.py::_build_schema_steps()`.
+Schema step ordering is catalog-driven (`schema_step_names()`), and `run.py`
+maps those names to factory callables.
 
 Why this matters:
 
@@ -264,9 +276,8 @@ Why this matters:
 2. coupler schema is built from enabled schema steps plus static extras
 3. scenario `require_outputs` is derived from non-optional enabled steps
 
-If your step model prefix is new (not `urbansim`, `atlas`, `activitysim`,
-`beam`), update `_filter_schema_steps_for_enabled_models(...)` so it is included
-when appropriate.
+If your model should participate in schema filtering, make sure its
+`WorkflowStepSpec` defines `enabled_flag_attr` and `enabled_model_attr`.
 
 ### 8) Add coupler keys and schema
 
@@ -287,16 +298,24 @@ For key migrations/aliases, use `pilates/workflows/artifact_key_migrations.py`.
 
 ### 9) Configure Consist identity/facets/hash inputs
 
-`pilates/utils/consist_config.py` maps step model names to per-model builders
-for:
+Consist config dispatch is now catalog-driven:
 
-1. `config` (cache identity)
-2. `facet` (queryable metadata)
-3. `hash_inputs` (file/dir digests folded into identity)
-4. `facet_schema_version`
+1. each tracked `WorkflowStepSpec` can declare `provenance.builder_key` in
+   `pilates/workflows/catalog.py`
+2. `pilates/utils/consist_config.py` resolves that builder key into per-family
+   logic for:
 
-If you add a new model family, add a builder and register it in
-`_CONFIG_BUILDERS`.
+   1. `config` (cache identity)
+   2. `facet` (queryable metadata)
+   3. `hash_inputs` (file/dir digests folded into identity)
+   4. `facet_schema_version`
+
+For a new model family:
+
+1. add a builder and register it in `_CONFIG_BUILDERS`
+2. set matching `provenance.builder_key` on the model's tracked catalog steps
+
+For non-catalog/unspecified steps, legacy prefix fallback dispatch still applies.
 
 ### 10) Stage-specific and top-level wiring
 
@@ -347,13 +366,13 @@ coverage (see orchestration + supply-demand manifested flows).
 
 1. Model exists but is not registered in `ModelFactory._registry`.
 2. Step factory exists but is not wired into any stage.
-3. Step is wired in a stage but missing from `_build_schema_steps()`.
-4. `StepOutputsHolder` / `STEP_OUTPUTS_CLASSES` / `STEP_DEPENDENCIES` drift.
+3. Step is wired in a stage but missing from catalog and/or `run.py` step-factory map.
+4. `StepOutputsHolder` and catalog metadata drift for tracked steps.
 5. New cross-step key added to code but not `artifact_keys` + `coupler_schema`.
 6. Ad hoc input precedence logic bypasses `input_resolution`.
 7. Step declares outputs that typed outputs can never produce.
-8. New model family misses `consist_config` builder registration.
-9. New prefix step metadata is filtered out by `_filter_schema_steps_for_enabled_models`.
+8. New model family misses `consist_config` builder registration or catalog provenance key.
+9. Catalog step missing `enabled_flag_attr`/`enabled_model_attr` so filtering excludes it.
 
 ## PR Checklist
 
