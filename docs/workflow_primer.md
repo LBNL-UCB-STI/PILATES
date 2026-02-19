@@ -34,6 +34,25 @@ Think of it as:
 - **Steps decide _how_ work executes**
 - **Contracts decide _what each step must consume/produce_**
 
+**Why these layers exist:** In early PILATES, stages called model code directly
+(e.g., `BeamPreprocessor._preprocess(...)`). That worked until we needed:
+(a) caching -- skip expensive model runs when inputs haven't changed,
+(b) provenance -- track what ran, with what config, producing what outputs,
+(c) contract validation -- catch mismatched inputs/outputs at startup rather than
+6 hours into a run, and (d) restart/resume -- pick up where a crashed run left off.
+Each layer addresses one of these:
+
+- **Consist** (`scenario.run`) handles caching and provenance recording
+- **Step factories** (`_make_generic_step_function`) handle output typing, contract
+  validation, and coupler publication
+- **Stage modules** handle control flow, iteration loops, and restart logic
+- **The catalog** handles structural consistency checking at startup
+
+The key design boundary follows from this: the catalog defines _what steps exist_
+and _what their contracts are_; stages define _how to orchestrate them_. Do not try
+to encode stage control flow (loops, branching, convergence) in catalog metadata.
+See Section 12 for more on this.
+
 ## 2) End-To-End Runtime Flow
 
 At a high level, `run.py` does the following:
@@ -148,6 +167,72 @@ Most factories delegate to `_make_generic_step_function(...)` in
 
 This is a major reason PILATES remains maintainable as step count grows.
 
+### 4.1 End-To-End Trace: `beam_preprocess`
+
+To see how all the layers connect, here is the full call chain for one step:
+
+**1. Stage assembly** (`stages/supply_demand.py`):
+The stage resolves inputs and creates an invocation spec:
+
+```python
+StepRef(
+    name="beam_preprocess",
+    step_func=make_beam_preprocess_step(coupler=coupler, outputs_holder=holder),
+    inputs=resolved_beam_inputs,       # e.g. {plans_beam_in: ..., linkstats_warmstart: ...}
+    input_keys=resolved_input_keys,
+)
+```
+
+**2. Orchestration** (`orchestration.py:run_workflow`):
+- Calls `validate_step_ready("beam_preprocess", outputs_holder)` -- checks that
+  upstream dependency (`activitysim_postprocess`) is populated on the holder.
+- Builds Consist kwargs via `_build_step_run_kwargs(...)` -- resolves year,
+  iteration, cache options, output policy, and the canonical required outputs
+  from `BeamPreprocessOutputs.declared_outputs`.
+- Calls `scenario.run(**run_kwargs)`.
+
+**3. Consist**:
+Computes cache identity from code identity + step config + resolved inputs.
+(`hash_inputs` are folded into config as digest entries.) If cache miss, calls
+the step callable. If cache hit, returns cached result (and orchestration
+attempts output recovery -- see Section 11.1).
+
+**4. Step callable** (built by `make_beam_preprocess_step` in `steps/beam.py`):
+This is the function Consist actually invokes. It was assembled by
+`_make_generic_step_function(...)`, which runs this sequence:
+
+  a. `ModelFactory.get_preprocessor("beam", state, ...)` -- returns a
+     `BeamPreprocessor` instance.
+
+  b. Calls the execute function with `(component, workspace, outputs_holder,
+     coupler=..., context=..., **runtime_kwargs)` -- inside,
+     `BeamPreprocessor._preprocess()` runs: copies plans/households/persons
+     from ActivitySim output to the BEAM scenario directory, handles warm-start
+     linkstats, returns a `RecordStore` containing `FileRecord` entries for
+     each produced artifact.
+
+  c. Converts `RecordStore` to `BeamPreprocessOutputs` (typed dataclass) via
+     `record_store_to_outputs(...)`.
+
+  d. Calls `outputs.validate()` -- checks path existence for required fields,
+     then runs any semantic `OutputValidator`s attached to the class.
+
+  e. Publishes artifacts to the coupler via the output logger (e.g.,
+     `plans_beam_in`, `households_beam_in`, `persons_beam_in`).
+
+  f. Stores the typed result: `outputs_holder.beam_preprocess = outputs`.
+
+**5. Back in orchestration**: `run_workflow` advances to the next `StepRef`
+(`beam_run`). Missing holder outputs are handled by cache-hit recovery and
+downstream dependency checks; manifested paths also fail fast when outputs are
+still missing.
+
+The `RecordStore` is the key intermediate format: model code produces it
+(a flat list of `FileRecord`s with short name, path, and description), and the
+generic step function converts it to typed outputs and coupler entries. This is
+what lets model implementations stay unaware of `StepOutputsBase`, the coupler, or
+Consist.
+
 ## 5) StepRefs: How Stages Invoke Steps
 
 Stages invoke steps through `StepRef`, defined in
@@ -210,6 +295,11 @@ From this catalog, PILATES derives runtime maps such as:
 - enabled model sets for schema filtering
 
 This prevents drift from manually-maintained parallel registries.
+`STEP_OUTPUTS_CLASSES` and `STEP_DEPENDENCIES` are now derived from the catalog
+at import time (via `step_outputs_classes_from_catalog()` and
+`step_dependencies_from_catalog()` in `shared.py`). `StepOutputsHolder` fields
+and the factory map in `run.py::_build_schema_steps()` are still manually
+maintained but validated against the catalog at startup.
 
 Concrete example entry (shape only):
 
@@ -282,6 +372,17 @@ Result: startup failure with an actionable error before expensive runs begin.
 
 ## 7) Input and Output Handoff Channels
 
+**What the coupler is:** A key-value store scoped to a Consist scenario. Steps
+publish artifacts to it by key (e.g., `"households_asim_in"` maps to
+`/path/to/households.csv`), and downstream steps read from it by key. Think of it
+as a runtime registry that replaces hardcoded path assumptions -- instead of BEAM
+knowing that ActivitySim writes to `activitysim/output/households.csv`, BEAM asks
+the coupler for `"households_beam_in"` and gets whatever path the upstream
+postprocessor published. The coupler is accessed as `scenario.coupler` after
+entering `cr.scenario(...)` in `run.py` and lives for the duration of the
+scenario. Canonical artifact keys
+are defined in `pilates/workflows/artifact_keys.py`.
+
 PILATES uses three complementary handoff mechanisms:
 
 1. `StepOutputsHolder`:
@@ -298,16 +399,57 @@ PILATES uses three complementary handoff mechanisms:
 
 One common handoff path looks like:
 
-1. `activitysim_postprocess` publishes coupler artifacts (plans/households/persons)
-2. `beam_preprocess` resolves those artifacts as inputs
-3. `beam_run` writes traffic outputs (e.g., linkstats/plans)
-4. `beam_postprocess` updates skim artifacts used by ActivitySim next iteration
+1. `activitysim_postprocess` publishes coupler artifacts:
+   `beam_plans_asim_out`, `households_asim_out`, `persons_asim_out`
+2. `beam_preprocess` resolves those as inputs and writes:
+   `plans_beam_in`, `households_beam_in`, `persons_beam_in`
+3. `beam_run` writes traffic outputs: `linkstats_{y}_{i}`, `raw_od_skims_{y}_{i}`
+4. `beam_postprocess` produces `zarr_skims` / `final_skims_omx` consumed by
+   ActivitySim on the next iteration
 
 The same data may be represented in all three channels:
 
-- typed in `StepOutputsHolder`
-- coupler keys for cross-step resolution
-- manifest serialization for restart
+- typed in `StepOutputsHolder` (e.g., `outputs_holder.beam_preprocess.prepared_inputs`)
+- coupler keys for cross-step resolution (e.g., coupler key `"plans_beam_in"`)
+- manifest serialization for restart (serialized `BeamPreprocessOutputs` dict)
+
+### 7.2 Data Flow Diagram (One Supply/Demand Iteration)
+
+```
+UrbanSim H5 ──[usim_datastore_h5]──→ ActivitySim Preprocess
+                                          │
+                              ┌───────────┼───────────┐
+                              ↓           ↓           ↓
+                    [land_use_asim_in] [households_asim_in] [persons_asim_in]
+                              │           │           │
+                              └───────────┼───────────┘
+                                          ↓
+                                   ActivitySim Run
+                                          │
+                              [beam_plans_asim_out, households_asim_out, ...]
+                                          ↓
+                                ActivitySim Postprocess
+                                          │
+                              [plans, households, persons → normalized]
+                                          ↓
+                                   BEAM Preprocess
+                                          │
+                    [plans_beam_in, households_beam_in, persons_beam_in]
+                                          ↓
+                                      BEAM Run
+                                          │
+                           [linkstats_{y}_{i}, raw_od_skims_{y}_{i}]
+                                          ↓
+                                   BEAM Postprocess
+                                          │
+                             [zarr_skims, final_skims_omx]
+                                          │
+                              (feeds back to next iteration
+                               as skims input for ActivitySim)
+```
+
+Artifact key names in brackets correspond to keys in
+`pilates/workflows/artifact_keys.py` and coupler entries.
 
 ## 8) Input Resolution Precedence
 
@@ -403,6 +545,22 @@ PILATES uses Consist in four key ways:
    - step config/facet/hash inputs come from `build_step_consist_kwargs(...)`
 4. **Caching/skip behavior**
    - Consist cache hits can skip execution for identical signatures
+
+**What `scenario.run(fn=step_func, ...)` does under the hood:**
+
+1. Computes a cache identity from code identity + `config` + resolved inputs
+   (with `hash_inputs` included as config digests).
+2. Checks if an identical execution already exists in the Consist store.
+3. If cache hit: returns the cached result _without calling `step_func`_. The step
+   callable never runs.
+4. If cache miss: calls `step_func(**runtime_kwargs)`, records its declared outputs,
+   and stores the result for future cache hits.
+
+This is why steps must be decorated with `@define_step` -- Consist needs the
+metadata to compute identity and track outputs. It is also why cache hit recovery
+exists (Section 11.1): when a step is skipped, the in-memory `StepOutputsHolder`
+is empty because the step callable never ran, so orchestration must reconstruct
+outputs from cached payload, the coupler, or known filesystem locations.
 
 ### 10.1 Provenance Config/Facet/Hash Inputs
 
@@ -547,7 +705,20 @@ If your goal is adding a new model, move next to:
 - **Workflow catalog**: declarative registry of step contracts and metadata.
 - **StepOutputs**: typed output dataclass for a tracked step.
 - **StepOutputsHolder**: in-memory typed handoff store between steps.
-- **Coupler**: artifact key-value exchange between steps/stages.
+- **Coupler**: key-value store scoped to a Consist scenario. Steps publish
+  artifacts by key (e.g., `"households_asim_in"` to a file path) and downstream
+  steps read by key. Replaces hardcoded path assumptions between models.
+  Accessed as `scenario.coupler` after entering `cr.scenario(...)` in `run.py`.
+- **RecordStore**: flat list of `FileRecord` entries (short name, path,
+  description). The intermediate format between model execution and typed
+  outputs -- model code produces a `RecordStore`, and the generic step function
+  converts it to a `StepOutputsBase` subclass and coupler entries.
+- **ModelFactory**: component registry (`pilates/generic/model_factory.py`) that
+  maps model names to preprocessor/runner/postprocessor classes. Step factories
+  call `factory.get_preprocessor("beam", ...)` etc. to get model instances.
 - **Manifest**: restart/checkpoint record of completed manifested steps.
 - **Facet**: query metadata for provenance (not cache identity).
 - **Hash inputs**: explicit path digests folded into cache identity.
+- **Artifact keys**: canonical string constants (`pilates/workflows/artifact_keys.py`)
+  that name data artifacts exchanged via the coupler (e.g., `ASIM_HOUSEHOLDS_IN`,
+  `BEAM_PLANS_IN`, `USIM_DATASTORE_CURRENT_H5`).
