@@ -1073,6 +1073,47 @@ def _first_matching_anchor_line(
     return None
 
 
+def _first_matching_anchor_regex_line(
+    text: str,
+    patterns: Sequence[str],
+) -> Optional[str]:
+    compiled_patterns = [re.compile(pattern) for pattern in patterns]
+    for line in text.splitlines():
+        stripped = line.strip()
+        for pattern in compiled_patterns:
+            if pattern.search(stripped):
+                return stripped
+    return None
+
+
+def _extract_top_level_function_block(
+    text: str,
+    function_name: str,
+) -> Optional[str]:
+    lines = text.splitlines(keepends=True)
+    function_pattern = re.compile(rf"^\s*def {re.escape(function_name)}\s*\(")
+    start_index: Optional[int] = None
+    for index, line in enumerate(lines):
+        if function_pattern.match(line):
+            start_index = index
+            break
+    if start_index is None:
+        return None
+
+    def_indent = len(lines[start_index]) - len(lines[start_index].lstrip())
+    end_index = len(lines)
+    for index in range(start_index + 1, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped:
+            continue
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent <= def_indent and line.lstrip() == line and not stripped.startswith("#"):
+            end_index = index
+            break
+    return "".join(lines[start_index:end_index])
+
+
 def _render_stage_patch_import_block(spec: ScaffoldSpec) -> str:
     return dedent(
         f"""
@@ -1179,6 +1220,35 @@ def _anchor_candidates_for_pattern(pattern: str) -> Tuple[str, ...]:
     raise ValueError(f"Unsupported stage patch pattern: {pattern}")
 
 
+def _anchor_regexes_for_pattern(pattern: str) -> Tuple[str, ...]:
+    if pattern == STAGE_PATTERN_LINEAR:
+        return (
+            r"^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=\s*\[",
+            r"^[A-Za-z_][A-Za-z0-9_]*\.extend\(",
+            r"^run_workflow\(",
+        )
+    if pattern == STAGE_PATTERN_ITERATIVE:
+        return (
+            r"^for\s+.+\s+in\s+range\(",
+            r"^for\s+.+\s+in\s+.+:$",
+            r"^while\s+.+:$",
+            r"^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=\s*\[",
+            r"^run_workflow\(",
+        )
+    raise ValueError(f"Unsupported stage patch pattern: {pattern}")
+
+
+def _first_matching_pattern_anchor(
+    text: str,
+    *,
+    pattern: str,
+) -> Optional[str]:
+    return (
+        _first_matching_anchor_regex_line(text, _anchor_regexes_for_pattern(pattern))
+        or _first_matching_anchor_line(text, _anchor_candidates_for_pattern(pattern))
+    )
+
+
 def _render_stage_patch_plan(
     spec: ScaffoldSpec,
     *,
@@ -1194,24 +1264,37 @@ def _render_stage_patch_plan(
 
     if target_path.exists():
         target_text = _read_text(target_path)
+        function_text = _extract_top_level_function_block(
+            target_text,
+            patch_options.stage_function,
+        )
         import_anchor = (
-            _first_matching_anchor_line(
+            _first_matching_anchor_regex_line(
                 target_text,
-                ("from pilates.workflows.steps import (", "from pilates.workflows.steps import "),
+                (r"^from\s+pilates\.workflows\.steps\s+import\b",),
             )
             or import_anchor
         )
         function_anchor = (
-            _first_matching_anchor_line(target_text, (function_anchor,))
+            _first_matching_anchor_regex_line(
+                target_text,
+                (rf"^def\s+{re.escape(patch_options.stage_function)}\s*\(",),
+            )
             or function_anchor
         )
+        anchor_search_text = function_text or target_text
         for pattern in stage_patterns:
-            per_pattern_anchors[pattern] = (
-                _first_matching_anchor_line(
+            detected_anchor = _first_matching_pattern_anchor(
+                anchor_search_text,
+                pattern=pattern,
+            )
+            if detected_anchor is None and function_text is not None:
+                detected_anchor = _first_matching_pattern_anchor(
                     target_text,
-                    _anchor_candidates_for_pattern(pattern),
+                    pattern=pattern,
                 )
-                or _anchor_candidates_for_pattern(pattern)[0]
+            per_pattern_anchors[pattern] = (
+                detected_anchor or _anchor_candidates_for_pattern(pattern)[0]
             )
     else:
         for pattern in stage_patterns:
@@ -1237,6 +1320,7 @@ def _render_stage_patch_plan(
         # Stage Patch Plan: `{spec.model}`
 
         This patch plan was scaffolded by `scripts/new_model_scaffold.py`.
+        Insertion anchors are heuristic/advisory and should be adapted to the target stage module.
 
         ## Target Stage Wiring
 

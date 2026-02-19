@@ -148,6 +148,12 @@ def _seed_minimal_repo(repo_root: Path) -> None:
     )
 
 
+def _write_stage_module(repo_root: Path, relative_path: str, content: str) -> None:
+    stage_path = repo_root / relative_path
+    stage_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_path.write_text(dedent(content).strip() + "\n", encoding="utf-8")
+
+
 def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> None:
     _seed_minimal_repo(tmp_path)
     script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
@@ -348,8 +354,131 @@ def test_scaffold_generates_stage_patch_plan_artifact(tmp_path: Path) -> None:
     assert "make_freight_preprocess_step" in stage_patch_text
     assert "outputs_holder=outputs_holder_iteration" in stage_patch_text
     assert "Suggested insertion anchor in function body:" in stage_patch_text
+    assert "Suggested insertion anchor in function body: `for i in range(`" in stage_patch_text
+    assert "Insertion anchors are heuristic/advisory" in stage_patch_text
 
     checklist_text = (tmp_path / "docs/checklists/add_model_freight.md").read_text(
         encoding="utf-8"
     )
     assert "docs/checklists/stage_templates/add_model_freight.stage_patch.md" in checklist_text
+
+
+def test_stage_patch_plan_detects_multiline_import_and_custom_linear_anchor(
+    tmp_path: Path,
+) -> None:
+    _seed_minimal_repo(tmp_path)
+    _write_stage_module(
+        tmp_path,
+        "pilates/workflows/stages/custom_supply.py",
+        """
+        from pilates.workflows.input_resolution import resolve_step_inputs
+        from pilates.workflows.orchestration import StepRef, run_workflow
+        from pilates.workflows.steps import (
+            make_existing_preprocess_step,
+            validate_workflow_step_contracts,
+        )
+
+
+        def run_custom_supply_stage(coupler, scenario, state, settings, workspace, year):
+            step_inputs = resolve_step_inputs(keys=[], coupler=coupler)
+            workflow_plan = [
+                StepRef(
+                    name="existing_preprocess",
+                    step_func=make_existing_preprocess_step(
+                        coupler=coupler,
+                        outputs_holder=object(),
+                    ),
+                    inputs=step_inputs.stepref_inputs(),
+                    input_keys=step_inputs.stepref_input_keys(),
+                ),
+            ]
+            run_workflow(
+                step_refs=workflow_plan,
+                coupler=coupler,
+                scenario=scenario,
+                state=state,
+            )
+        """,
+    )
+    script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "freight",
+            "--repo-root",
+            str(tmp_path),
+            "--stage-pattern",
+            "linear",
+            "--stage-patch-plan",
+            "--stage-target-module",
+            "pilates/workflows/stages/custom_supply.py",
+            "--stage-target-function",
+            "run_custom_supply_stage",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stage_patch_path = (
+        tmp_path / "docs/checklists/stage_templates/add_model_freight.stage_patch.md"
+    )
+    stage_patch_text = stage_patch_path.read_text(encoding="utf-8")
+
+    assert "Import anchor: `from pilates.workflows.steps import (`" in stage_patch_text
+    assert "Stage function anchor: `def run_custom_supply_stage" in stage_patch_text
+    assert "Suggested insertion anchor in function body: `workflow_plan = [`" in stage_patch_text
+
+
+def test_stage_patch_plan_detects_iterative_loop_variant_anchor(tmp_path: Path) -> None:
+    _seed_minimal_repo(tmp_path)
+    _write_stage_module(
+        tmp_path,
+        "pilates/workflows/stages/custom_supply.py",
+        """
+        from pilates.workflows.orchestration import run_workflow
+
+
+        def run_custom_supply_stage(coupler, scenario, state, settings, workspace, year):
+            for iteration_index in scenario.iteration_sequence:
+                run_workflow(
+                    step_refs=[],
+                    coupler=coupler,
+                    scenario=scenario,
+                    state=state,
+                )
+        """,
+    )
+    script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "freight",
+            "--repo-root",
+            str(tmp_path),
+            "--stage-pattern",
+            "iterative",
+            "--stage-patch-plan",
+            "--stage-target-module",
+            "pilates/workflows/stages/custom_supply.py",
+            "--stage-target-function",
+            "run_custom_supply_stage",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stage_patch_path = (
+        tmp_path / "docs/checklists/stage_templates/add_model_freight.stage_patch.md"
+    )
+    stage_patch_text = stage_patch_path.read_text(encoding="utf-8")
+
+    assert (
+        "Suggested insertion anchor in function body: "
+        "`for iteration_index in scenario.iteration_sequence:`"
+    ) in stage_patch_text
