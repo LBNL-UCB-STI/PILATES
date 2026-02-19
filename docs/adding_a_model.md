@@ -12,16 +12,17 @@ If you want the shortest safe path:
 
 1. Generate scaffolding:
 
-```bash
-python scripts/new_model_scaffold.py <model_slug> --major-stage <stage>
-```
+   ```bash
+   python scripts/new_model_scaffold.py <model_slug> --major-stage <stage>
+   ```
 
 2. Complete the generated checklist:
 
-`docs/checklists/add_model_<model_slug>.md`
+   `docs/checklists/add_model_<model_slug>.md`
 
 3. Start from the generated stage-template snippet(s) and wire the new step
-   factories into an existing stage (or new stage).
+   factories into an existing stage (or new stage). For lower-friction wiring,
+   generate a guided stage patch plan with `--stage-patch-plan`.
 4. Review and adjust generated catalog metadata (`stage_name`, order,
    enablement attrs, optional provenance key) if needed.
 5. Add/adjust coupler keys, schema descriptions, and (if needed) Consist
@@ -124,6 +125,9 @@ Useful flags:
 - `--step-module freight_steps`: custom step module filename
 - `--catalog-stage traffic_assignment`: override generated catalog stage name
 - `--stage-pattern linear --stage-pattern iterative`: choose stage snippet patterns
+- `--stage-patch-plan`: generate a guided stage patch plan artifact for stage wiring
+- `--stage-target-module pilates/workflows/stages/supply_demand.py`: override patch-plan stage module target
+- `--stage-target-function run_supply_demand_stage`: override patch-plan stage function target
 - `--provenance-builder-key freight`: add catalog provenance metadata stubs
 
 The scaffold auto-creates:
@@ -131,17 +135,21 @@ The scaffold auto-creates:
 1. model package boilerplate in `pilates/<model>/`
 2. step factory module in `pilates/workflows/steps/<step_module>.py`
 3. stage assembly snippet(s) in `docs/checklists/stage_templates/`
-4. updates in:
+4. optional guided stage patch plan in
+   `docs/checklists/stage_templates/add_model_<model>.stage_patch.md`
+5. updates in:
    `pilates/generic/model_factory.py`,
    `pilates/workflows/steps/__init__.py`,
    `pilates/workflows/steps/shared.py`,
    `pilates/workflows/catalog.py`,
    `run.py`
-5. checklist in `docs/checklists/add_model_<model>.md`
+6. checklist in `docs/checklists/add_model_<model>.md`
 
 Still manual:
 
 1. stage-level `StepRef` assembly
+   (the stage patch plan reduces manual search/anchor work but you still adapt
+   variable names and input maps)
 2. optional adjustment of generated catalog metadata (order/stage/enablement/provenance)
 3. coupler keys/schema and Consist config/hash/facet wiring
 4. tests and docs

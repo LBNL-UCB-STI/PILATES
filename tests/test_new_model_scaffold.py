@@ -211,6 +211,7 @@ def test_scaffold_dry_run_reports_actions_without_writing(tmp_path: Path) -> Non
             "--repo-root",
             str(tmp_path),
             "--dry-run",
+            "--stage-patch-plan",
         ],
         check=True,
         capture_output=True,
@@ -223,4 +224,58 @@ def test_scaffold_dry_run_reports_actions_without_writing(tmp_path: Path) -> Non
     ) in result.stdout
     assert "- create:" in result.stdout
     assert "- update:" in result.stdout
+    assert "docs/checklists/stage_templates/add_model_freight.stage_patch.md" in result.stdout
     assert not (tmp_path / "docs/checklists/add_model_freight.md").exists()
+    assert not (
+        tmp_path / "docs/checklists/stage_templates/add_model_freight.stage_patch.md"
+    ).exists()
+
+
+def test_scaffold_generates_stage_patch_plan_artifact(tmp_path: Path) -> None:
+    _seed_minimal_repo(tmp_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "freight",
+            "--repo-root",
+            str(tmp_path),
+            "--stage-pattern",
+            "iterative",
+            "--stage-patch-plan",
+            "--stage-target-module",
+            "pilates/workflows/stages/custom_supply.py",
+            "--stage-target-function",
+            "run_custom_supply_stage",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stage_patch_path = (
+        tmp_path / "docs/checklists/stage_templates/add_model_freight.stage_patch.md"
+    )
+    assert stage_patch_path.exists()
+    stage_patch_text = stage_patch_path.read_text(encoding="utf-8")
+
+    assert (
+        "Stage module to edit: `pilates/workflows/stages/custom_supply.py`"
+        in stage_patch_text
+    )
+    assert "Stage function to edit: `run_custom_supply_stage`" in stage_patch_text
+    assert 'Catalog stage metadata: `stage_name="traffic_assignment"`' in stage_patch_text
+    assert "`freight_preprocess`" in stage_patch_text
+    assert "`freight_run`" in stage_patch_text
+    assert "`freight_postprocess`" in stage_patch_text
+    assert "### `iterative` `StepRef` block" in stage_patch_text
+    assert "make_freight_preprocess_step" in stage_patch_text
+    assert "outputs_holder=outputs_holder_iteration" in stage_patch_text
+    assert "Suggested insertion anchor in function body:" in stage_patch_text
+
+    checklist_text = (tmp_path / "docs/checklists/add_model_freight.md").read_text(
+        encoding="utf-8"
+    )
+    assert "docs/checklists/stage_templates/add_model_freight.stage_patch.md" in checklist_text

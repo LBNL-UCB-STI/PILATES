@@ -36,6 +36,20 @@ _MAJOR_STAGE_TO_CATALOG_STAGE: Dict[str, str] = {
     "postprocessing": "postprocessing",
 }
 
+_MAJOR_STAGE_TO_STAGE_MODULE: Dict[str, str] = {
+    "land_use": "pilates/workflows/stages/land_use.py",
+    "vehicle_ownership_model": "pilates/workflows/stages/vehicle_ownership.py",
+    "supply_demand_loop": "pilates/workflows/stages/supply_demand.py",
+    "postprocessing": "pilates/workflows/stages/postprocessing.py",
+}
+
+_MAJOR_STAGE_TO_STAGE_FUNCTION: Dict[str, str] = {
+    "land_use": "run_land_use_stage",
+    "vehicle_ownership_model": "run_vehicle_ownership_stage",
+    "supply_demand_loop": "run_supply_demand_stage",
+    "postprocessing": "run_postprocessing_stage",
+}
+
 _CATALOG_STAGE_ENABLEMENT_DEFAULTS: Dict[str, Tuple[Optional[str], Optional[str]]] = {
     "land_use": ("land_use_enabled", "land_use"),
     "vehicle_ownership_model": (
@@ -108,6 +122,12 @@ class CatalogScaffoldOptions:
     provenance_builder_key: Optional[str]
 
 
+@dataclass(frozen=True)
+class StagePatchPlanOptions:
+    target_module: Path
+    stage_function: str
+
+
 def _snake_case(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip())
     cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cleaned)
@@ -176,6 +196,34 @@ def _resolve_stage_patterns(raw_patterns: Optional[Sequence[str]]) -> Tuple[str,
         if pattern not in ordered:
             ordered.append(pattern)
     return tuple(ordered)
+
+
+def _resolve_stage_patch_plan_options(
+    *,
+    major_stage: str,
+    enabled: bool,
+    stage_target_module_arg: Optional[str],
+    stage_target_function_arg: Optional[str],
+) -> Optional[StagePatchPlanOptions]:
+    if not enabled:
+        return None
+
+    default_target_module = _MAJOR_STAGE_TO_STAGE_MODULE.get(
+        major_stage,
+        f"pilates/workflows/stages/{major_stage}.py",
+    )
+    target_module = Path(
+        _normalize_optional_arg(stage_target_module_arg) or default_target_module
+    )
+    stage_function = _normalize_optional_arg(stage_target_function_arg) or _MAJOR_STAGE_TO_STAGE_FUNCTION.get(
+        major_stage,
+        f"run_{major_stage}_stage",
+    )
+
+    return StagePatchPlanOptions(
+        target_module=target_module,
+        stage_function=stage_function,
+    )
 
 
 def _read_text(path: Path) -> str:
@@ -997,6 +1045,235 @@ def _stage_template_relative_path(spec: ScaffoldSpec, pattern: str) -> Path:
     )
 
 
+def _stage_patch_plan_relative_path(spec: ScaffoldSpec) -> Path:
+    return (
+        Path("docs")
+        / "checklists"
+        / "stage_templates"
+        / f"add_model_{spec.model}.stage_patch.md"
+    )
+
+
+def _resolve_stage_patch_target_path(
+    repo_root: Path,
+    target_module: Path,
+) -> Path:
+    return target_module if target_module.is_absolute() else repo_root / target_module
+
+
+def _first_matching_anchor_line(
+    text: str,
+    candidates: Sequence[str],
+) -> Optional[str]:
+    for line in text.splitlines():
+        stripped = line.strip()
+        for candidate in candidates:
+            if candidate in stripped:
+                return stripped
+    return None
+
+
+def _render_stage_patch_import_block(spec: ScaffoldSpec) -> str:
+    return dedent(
+        f"""
+            make_{spec.model}_postprocess_step,
+            make_{spec.model}_preprocess_step,
+            make_{spec.model}_run_step,
+        """
+    ).strip()
+
+
+def _render_stage_patch_stepref_block(
+    spec: ScaffoldSpec,
+    *,
+    pattern: str,
+) -> str:
+    if pattern == STAGE_PATTERN_LINEAR:
+        return dedent(
+            f"""
+            {spec.model}_inputs = resolve_step_inputs(
+                keys=[...],
+                coupler=coupler,
+                explicit_inputs={{...}},
+                fallback_inputs={{...}},
+                required_keys=[...],
+            )
+            {spec.model}_step_refs = [
+                StepRef(
+                    name="{spec.preprocess_step_name}",
+                    step_func=make_{spec.model}_preprocess_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_year,
+                    ),
+                    inputs={spec.model}_inputs.stepref_inputs(),
+                    input_keys={spec.model}_inputs.stepref_input_keys(),
+                ),
+                StepRef(
+                    name="{spec.run_step_name}",
+                    step_func=make_{spec.model}_run_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_year,
+                    ),
+                ),
+                StepRef(
+                    name="{spec.postprocess_step_name}",
+                    step_func=make_{spec.model}_postprocess_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_year,
+                    ),
+                ),
+            ]
+
+            # Append within your stage step assembly.
+            steps.extend({spec.model}_step_refs)
+            """
+        ).strip()
+    if pattern == STAGE_PATTERN_ITERATIVE:
+        return dedent(
+            f"""
+            {spec.model}_iteration_inputs = resolve_step_inputs(
+                keys=[...],
+                coupler=coupler,
+                explicit_inputs={{...}},
+                fallback_inputs={{...}},
+                required_keys=[...],
+            )
+            {spec.model}_iteration_step_refs = [
+                StepRef(
+                    name="{spec.preprocess_step_name}",
+                    step_func=make_{spec.model}_preprocess_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_iteration,
+                    ),
+                    inputs={spec.model}_iteration_inputs.stepref_inputs(),
+                    input_keys={spec.model}_iteration_inputs.stepref_input_keys(),
+                ),
+                StepRef(
+                    name="{spec.run_step_name}",
+                    step_func=make_{spec.model}_run_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_iteration,
+                    ),
+                ),
+                StepRef(
+                    name="{spec.postprocess_step_name}",
+                    step_func=make_{spec.model}_postprocess_step(
+                        coupler=coupler,
+                        outputs_holder=outputs_holder_iteration,
+                    ),
+                ),
+            ]
+
+            # Include inside the iteration-local step list for run_workflow(...).
+            steps.extend({spec.model}_iteration_step_refs)
+            """
+        ).strip()
+    raise ValueError(f"Unsupported stage patch pattern: {pattern}")
+
+
+def _anchor_candidates_for_pattern(pattern: str) -> Tuple[str, ...]:
+    if pattern == STAGE_PATTERN_LINEAR:
+        return ("steps = [", "run_workflow(")
+    if pattern == STAGE_PATTERN_ITERATIVE:
+        return ("for i in range(", "for iteration in range(", "run_workflow(")
+    raise ValueError(f"Unsupported stage patch pattern: {pattern}")
+
+
+def _render_stage_patch_plan(
+    spec: ScaffoldSpec,
+    *,
+    catalog_stage: str,
+    repo_root: Path,
+    patch_options: StagePatchPlanOptions,
+    stage_patterns: Sequence[str],
+) -> str:
+    target_path = _resolve_stage_patch_target_path(repo_root, patch_options.target_module)
+    import_anchor = "from pilates.workflows.steps import ("
+    function_anchor = f"def {patch_options.stage_function}("
+    per_pattern_anchors: Dict[str, str] = {}
+
+    if target_path.exists():
+        target_text = _read_text(target_path)
+        import_anchor = (
+            _first_matching_anchor_line(
+                target_text,
+                ("from pilates.workflows.steps import (", "from pilates.workflows.steps import "),
+            )
+            or import_anchor
+        )
+        function_anchor = (
+            _first_matching_anchor_line(target_text, (function_anchor,))
+            or function_anchor
+        )
+        for pattern in stage_patterns:
+            per_pattern_anchors[pattern] = (
+                _first_matching_anchor_line(
+                    target_text,
+                    _anchor_candidates_for_pattern(pattern),
+                )
+                or _anchor_candidates_for_pattern(pattern)[0]
+            )
+    else:
+        for pattern in stage_patterns:
+            per_pattern_anchors[pattern] = _anchor_candidates_for_pattern(pattern)[0]
+
+    pattern_sections = "\n\n".join(
+        dedent(
+            f"""
+            ### `{pattern}` `StepRef` block
+
+            Suggested insertion anchor in function body: `{per_pattern_anchors[pattern]}`
+
+            ```python
+            {_render_stage_patch_stepref_block(spec, pattern=pattern)}
+            ```
+            """
+        ).strip()
+        for pattern in stage_patterns
+    )
+
+    return dedent(
+        f"""
+        # Stage Patch Plan: `{spec.model}`
+
+        This patch plan was scaffolded by `scripts/new_model_scaffold.py`.
+
+        ## Target Stage Wiring
+
+        - Stage module to edit: `{patch_options.target_module.as_posix()}`
+        - Stage function to edit: `{patch_options.stage_function}`
+        - Catalog stage metadata: `stage_name="{catalog_stage}"`
+        - Generated step names:
+          - `{spec.preprocess_step_name}`
+          - `{spec.run_step_name}`
+          - `{spec.postprocess_step_name}`
+
+        ## Insertion Anchors
+
+        - Import anchor: `{import_anchor}`
+        - Stage function anchor: `{function_anchor}`
+
+        ## Ready-to-Paste Snippets
+
+        ### Import block for `from pilates.workflows.steps import (...)`
+
+        ```python
+        {_render_stage_patch_import_block(spec)}
+        ```
+
+        {pattern_sections}
+
+        ## Required Variable Adaptation Checklist
+
+        - [ ] Confirm the stage function has `coupler`, `scenario`, `state`, `settings`, `workspace`, and `year`.
+        - [ ] Replace `outputs_holder_year` and/or `outputs_holder_iteration` with the target function's holder variable names.
+        - [ ] If your function uses a different step list name, replace `steps` in `steps.extend(...)`.
+        - [ ] Update `resolve_step_inputs(...)` keys/explicit/fallback mappings for the new model's true dependencies.
+        - [ ] Keep `stage_name="{catalog_stage}"` aligned between stage wiring and catalog entries.
+        """
+    ).strip() + "\n"
+
+
 def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> str:
     return dedent(
         f"""
@@ -1148,9 +1425,15 @@ def _render_checklist(
     *,
     catalog_options: CatalogScaffoldOptions,
     stage_template_paths: Sequence[Path],
+    stage_patch_plan_path: Optional[Path],
 ) -> str:
     template_lines = "\n".join(
         f"        - [ ] `{path.as_posix()}`" for path in stage_template_paths
+    )
+    stage_patch_line = (
+        f"\n        - [ ] `{stage_patch_plan_path.as_posix()}`"
+        if stage_patch_plan_path is not None
+        else ""
     )
     return dedent(
         f"""
@@ -1166,6 +1449,7 @@ def _render_checklist(
         - [ ] `pilates/{spec.model}/outputs.py`
         - [ ] `pilates/workflows/steps/{spec.step_module}.py`
 {template_lines}
+{stage_patch_line}
 
         ## Registrations Applied
 
@@ -1180,6 +1464,9 @@ def _render_checklist(
         - [ ] Start from one of the generated stage template snippets and wire
               `StepRef(...)` calls into the target stage module under
               `pilates/workflows/stages/*.py`.
+        - [ ] If generated, use the stage patch plan artifact in
+              `docs/checklists/stage_templates/` to apply import + `StepRef`
+              wiring with the recommended insertion anchors.
         - [ ] Confirm catalog stage metadata for `{spec.model}`:
               `stage_name="{catalog_options.stage_name}"`, `order={catalog_options.order_start or "auto"}`
               and enablement attrs (`enabled_flag_attr`, `enabled_model_attr`) are
@@ -1219,6 +1506,7 @@ def _create_model_files(
     *,
     catalog_options: CatalogScaffoldOptions,
     stage_patterns: Sequence[str],
+    stage_patch_plan_options: Optional[StagePatchPlanOptions],
     dry_run: bool,
     force: bool,
 ) -> List[Tuple[Path, bool]]:
@@ -1240,6 +1528,11 @@ def _create_model_files(
             spec,
             catalog_options=catalog_options,
             stage_template_paths=template_relative_paths,
+            stage_patch_plan_path=(
+                _stage_patch_plan_relative_path(spec)
+                if stage_patch_plan_options is not None
+                else None
+            ),
         ),
     }
     for pattern, relpath in zip(stage_patterns, template_relative_paths):
@@ -1247,6 +1540,15 @@ def _create_model_files(
             spec,
             catalog_stage=catalog_options.stage_name,
             pattern=pattern,
+        )
+    if stage_patch_plan_options is not None:
+        stage_patch_plan_relpath = _stage_patch_plan_relative_path(spec)
+        files[repo_root / stage_patch_plan_relpath] = _render_stage_patch_plan(
+            spec,
+            catalog_stage=catalog_options.stage_name,
+            repo_root=repo_root,
+            patch_options=stage_patch_plan_options,
+            stage_patterns=stage_patterns,
         )
 
     results: List[Tuple[Path, bool]] = []
@@ -1330,6 +1632,29 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--stage-patch-plan",
+        action="store_true",
+        help=(
+            "Generate a guided stage patch artifact under "
+            "docs/checklists/stage_templates/ with insertion anchors and "
+            "ready-to-paste snippets."
+        ),
+    )
+    parser.add_argument(
+        "--stage-target-module",
+        help=(
+            "Target stage module path for the stage patch plan "
+            "(default: inferred from --major-stage)"
+        ),
+    )
+    parser.add_argument(
+        "--stage-target-function",
+        help=(
+            "Target stage function identifier for the stage patch plan "
+            "(default: inferred from --major-stage)"
+        ),
+    )
+    parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parents[1],
@@ -1369,6 +1694,12 @@ def main() -> int:
         order_start_arg=args.catalog_order_start,
     )
     stage_patterns = _resolve_stage_patterns(args.stage_patterns)
+    stage_patch_plan_options = _resolve_stage_patch_plan_options(
+        major_stage=args.major_stage,
+        enabled=args.stage_patch_plan,
+        stage_target_module_arg=args.stage_target_module,
+        stage_target_function_arg=args.stage_target_function,
+    )
 
     repo_root = args.repo_root.resolve()
 
@@ -1379,6 +1710,7 @@ def main() -> int:
             spec,
             catalog_options=catalog_options,
             stage_patterns=stage_patterns,
+            stage_patch_plan_options=stage_patch_plan_options,
             dry_run=args.dry_run,
             force=args.force,
         ):
