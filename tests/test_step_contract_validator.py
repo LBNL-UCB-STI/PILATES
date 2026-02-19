@@ -21,7 +21,16 @@ import re
 import pytest
 from consist import define_step
 
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_FULL_SKIMS,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS,
+)
 from pilates.workflows.orchestration import StepRef
+from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -166,13 +175,36 @@ def test_validate_workflow_step_contracts_flags_missing_canonical_outputs_when_m
     ]
 
     expected = (
-        "Step 'beam_run': canonical outputs [] conflict with metadata outputs "
+        "Step 'beam_run': canonical outputs ['linkstats', 'beam_plans_out'] conflict with metadata outputs "
         "['beam_linkstats']. Fix: remove metadata override or update declared_outputs "
         "in BeamRunOutputs."
     )
 
     with pytest.raises(RuntimeError, match=re.escape(expected)):
         step_shared.validate_workflow_step_contracts(declared_steps=steps)
+
+
+def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
+    """
+    Tracked BEAM steps must keep explicit canonical output contracts.
+
+    Compatibility exceptions should remain rare; keep this allowlist empty
+    unless a BEAM step truly cannot expose stable canonical keys.
+    """
+    allowed_empty = frozenset()
+    expected = {
+        "beam_preprocess": (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
+        "beam_run": (LINKSTATS, BEAM_PLANS_OUT),
+        "beam_postprocess": (LINKSTATS, BEAM_PLANS_OUT),
+        "beam_full_skim": (BEAM_FULL_SKIMS,),
+    }
+
+    for step_name, expected_outputs in expected.items():
+        outputs_class = step_shared.STEP_OUTPUTS_CLASSES[step_name]
+        canonical = declared_outputs_for_step_outputs_class(outputs_class)
+        if not canonical and step_name in allowed_empty:
+            continue
+        assert canonical == expected_outputs
 
 
 def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():

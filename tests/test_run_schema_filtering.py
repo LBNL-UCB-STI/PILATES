@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from run import _build_schema_steps, _filter_schema_steps_for_enabled_models
 from run import _is_model_enabled
 from pilates.workflows.catalog import enabled_schema_step_models
@@ -89,3 +91,40 @@ def test_filter_schema_steps_optional_toggle_controls_beam_full_skim():
     without_models = {step.__consist_step__.model for step in without_optional}
     assert "beam_full_skim" in with_models
     assert "beam_full_skim" not in without_models
+
+
+@pytest.mark.parametrize(
+    ("enabled_model_attr", "expected_prefix"),
+    [
+        ("land_use", "urbansim_"),
+        ("vehicle_ownership", "atlas_"),
+        ("activity_demand", "activitysim_"),
+        ("travel", "beam_"),
+    ],
+)
+def test_filter_schema_steps_run_models_fallback_uses_catalog_enablement_mapping(
+    enabled_model_attr: str,
+    expected_prefix: str,
+):
+    models_cfg = {
+        "land_use": False,
+        "vehicle_ownership": False,
+        "activity_demand": False,
+        "travel": False,
+    }
+    models_cfg[enabled_model_attr] = True
+
+    settings = SimpleNamespace(run=SimpleNamespace(models=SimpleNamespace(**models_cfg)))
+    all_steps = _build_schema_steps()
+    required_steps = _filter_schema_steps_for_enabled_models(
+        all_steps,
+        settings,
+        include_optional=False,
+    )
+    models = {step.__consist_step__.model for step in required_steps}
+
+    assert any(model.startswith(expected_prefix) for model in models)
+    for other_prefix in ("urbansim_", "atlas_", "activitysim_", "beam_"):
+        if other_prefix == expected_prefix:
+            continue
+        assert all(not model.startswith(other_prefix) for model in models)

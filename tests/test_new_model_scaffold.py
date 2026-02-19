@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
+
 
 def _seed_minimal_repo(repo_root: Path) -> None:
     (repo_root / "pilates/generic").mkdir(parents=True, exist_ok=True)
@@ -197,6 +199,78 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     run_text = (tmp_path / "run.py").read_text(encoding="utf-8")
     assert "make_freight_preprocess_step" in run_text
     assert '"freight_preprocess": make_freight_preprocess_step' in run_text
+
+
+@pytest.mark.parametrize(
+    ("model", "major_stage", "extra_args", "expected_stage", "expected_flag", "expected_model"),
+    [
+        (
+            "housing_supply",
+            "land_use",
+            [],
+            "land_use",
+            "land_use_enabled",
+            "land_use",
+        ),
+        (
+            "auto_ownership",
+            "vehicle_ownership_model",
+            [],
+            "vehicle_ownership_model",
+            "vehicle_ownership_model_enabled",
+            "vehicle_ownership",
+        ),
+        (
+            "network_ops",
+            "supply_demand_loop",
+            [],
+            "traffic_assignment",
+            "traffic_assignment_enabled",
+            "travel",
+        ),
+        (
+            "demand_tuning",
+            "supply_demand_loop",
+            ["--catalog-stage", "activity_demand"],
+            "activity_demand",
+            "activity_demand_enabled",
+            "activity_demand",
+        ),
+    ],
+)
+def test_scaffold_catalog_defaults_apply_enablement_mapping(
+    tmp_path: Path,
+    model: str,
+    major_stage: str,
+    extra_args: list[str],
+    expected_stage: str,
+    expected_flag: str,
+    expected_model: str,
+) -> None:
+    _seed_minimal_repo(tmp_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            model,
+            "--repo-root",
+            str(tmp_path),
+            "--major-stage",
+            major_stage,
+            *extra_args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    catalog_text = (tmp_path / "pilates/workflows/catalog.py").read_text(encoding="utf-8")
+    assert f'step_name="{model}_preprocess"' in catalog_text
+    assert f'stage_name="{expected_stage}"' in catalog_text
+    assert f'enabled_flag_attr="{expected_flag}"' in catalog_text
+    assert f'enabled_model_attr="{expected_model}"' in catalog_text
 
 
 def test_scaffold_dry_run_reports_actions_without_writing(tmp_path: Path) -> None:
