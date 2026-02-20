@@ -67,8 +67,9 @@ def test_make_step_factories_attach_consist_metadata():
     ]
     assert compile_meta.outputs == ["zarr_skims"]
     assert preprocess_meta.name_template == "{func_name}__y{year}__i{iteration}__phase_{phase}"
+    assert callable(preprocess_meta.adapter)
     assert callable(preprocess_meta.config)
-    assert callable(preprocess_meta.config_plan)
+    assert callable(preprocess_meta.identity_inputs)
     assert callable(preprocess_meta.facet)
 
 
@@ -111,8 +112,8 @@ def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs():
     call = scenario.calls[0]
     assert "config" not in call
     assert "facet" not in call
-    assert "hash_inputs" not in call
-
+    assert "identity_inputs" not in call
+    assert "adapter" not in call
 
 def test_workflow_stage_infers_strict_output_enforcement_from_step_outputs_metadata():
     scenario = _FakeScenario()

@@ -68,24 +68,13 @@ def _make_state() -> SimpleNamespace:
     return SimpleNamespace(year=2020, iteration=0)
 
 
-def _wire_common(monkeypatch, tracker, run_id) -> None:
-    from pilates.utils import consist_runtime as cr
-
-    monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        cr,
-        "current_run",
-        lambda: SimpleNamespace(id=run_id) if run_id is not None else None,
-    )
+def _wire_common(monkeypatch) -> None:
     monkeypatch.setattr(
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
-        lambda model, settings, workspace_path=None: {"config": {"model": model}},
-    )
-    tracker.prepare_config_resolver.return_value = (
-        lambda ctx: SimpleNamespace(
-            identity_hash="beam-plan-hash",
-            adapter_version="beam-adapter-v1",
-        )
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [("shim", Path("/tmp/identity"))],
+        },
     )
 
 
@@ -121,13 +110,12 @@ def _setup_config(tmp_path: Path):
     return workspace, settings
 
 
-def test_beam_run_metadata_prepares_config_plan_with_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from consist.integrations.beam import BeamConfigAdapter
 
     workspace, settings = _setup_config(tmp_path)
-    tracker = MagicMock()
-    _wire_common(monkeypatch, tracker, run_id="run-456")
+    _wire_common(monkeypatch)
 
     step_fn = make_beam_run_step(
         coupler=DummyCoupler(),
@@ -142,30 +130,30 @@ def test_beam_run_metadata_prepares_config_plan_with_run_id(monkeypatch, tmp_pat
     )
 
     resolved_config = meta.config(ctx)
-    resolved_plan = meta.config_plan(ctx)
-    resolved_hash_inputs = meta.hash_inputs(ctx)
-    assert tracker.prepare_config_resolver.call_count == 1
-    _, kwargs = tracker.prepare_config_resolver.call_args
-    adapter = kwargs["adapter"]
-    config_dirs = kwargs["config_dirs"]
+    resolved_adapter = meta.adapter(ctx)
+    resolved_identity_inputs = meta.identity_inputs(ctx)
+    assert meta.config_plan is None
+    assert meta.hash_inputs is None
+    adapter = resolved_adapter
     assert isinstance(adapter, BeamConfigAdapter)
-    assert Path(config_dirs[0]) == (
+    assert adapter.root_dirs == [
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    ]
+    assert adapter.primary_config == (
+        Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config
     )
     assert resolved_config["model"] == "beam_run"
-    assert resolved_plan.identity_hash == "beam-plan-hash"
-    assert resolved_plan.adapter_version == "beam-adapter-v1"
-    assert resolved_hash_inputs is None
-    assert tracker.prepare_config.call_count == 0
-    assert tracker.canonicalize_config.call_count == 0
+    assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 
 
-def test_beam_run_metadata_prepares_config_plan_without_run_id(monkeypatch, tmp_path):
+def test_beam_run_metadata_adapter_is_none_when_primary_config_missing(
+    monkeypatch, tmp_path
+):
     pytest.importorskip("consist")
 
     workspace, settings = _setup_config(tmp_path)
-    tracker = MagicMock()
-    _wire_common(monkeypatch, tracker, run_id=None)
+    _wire_common(monkeypatch)
+    (Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config).unlink()
 
     step_fn = make_beam_run_step(
         coupler=DummyCoupler(),
@@ -179,13 +167,7 @@ def test_beam_run_metadata_prepares_config_plan_without_run_id(monkeypatch, tmp_
         workspace=workspace,
     )
 
-    resolved_plan = meta.config_plan(ctx)
-    resolved_hash_inputs = meta.hash_inputs(ctx)
-    assert tracker.prepare_config_resolver.call_count == 1
-    assert resolved_plan.identity_hash == "beam-plan-hash"
-    assert resolved_hash_inputs is None
-    assert tracker.prepare_config.call_count == 0
-    assert tracker.canonicalize_config.call_count == 0
+    assert meta.adapter(ctx) is None
 
 
 def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):

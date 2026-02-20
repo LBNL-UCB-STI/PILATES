@@ -4,7 +4,7 @@ pilates/utils/consist_config.py
 Helpers for Consist's config channels:
 - identity config (hashed, drives cache identity)
 - facet (stored + queryable, does not affect cache identity)
-- hash_inputs (hash-only file/dir digests folded into identity)
+- identity_inputs (file/dir digests folded into identity)
 
 These helpers centralize how PILATES maps its Pydantic settings to Consist so
 `run.py` stays readable and the mapping is testable.
@@ -24,20 +24,20 @@ except Exception:  # pragma: no cover
     HasConsistFacet = None  # type: ignore[misc,assignment]
 
 
-HashInput = Tuple[str, Path]
+IdentityInput = Tuple[str, Path]
 
 
 class ConsistConfigBuilder(Protocol):
     """
-    Protocol for building Consist step config/facet/hash inputs per model.
+    Protocol for building Consist step config/facet/identity inputs per model.
 
     Each builder owns the identity config (hashed), facet (queryable), and any
-    hash-only inputs that should be folded into the step signature.
+    identity inputs that should be folded into the step signature.
     """
 
     @property
     def requires_workspace_path(self) -> bool:
-        """Whether hash input construction requires a workspace path."""
+        """Whether identity input construction requires a workspace path."""
 
     def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
         """Config dict that drives cache identity."""
@@ -45,9 +45,9 @@ class ConsistConfigBuilder(Protocol):
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         """Facet dict stored for querying."""
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
+    ) -> List[IdentityInput]:
         """File/dir digests folded into identity."""
 
     def get_facet_schema_version(self, model: str) -> str:
@@ -65,10 +65,10 @@ class ActivitySimConfigBuilder:
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         return build_activitysim_facet(settings)
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
-        return build_activitysim_hash_inputs(settings, workspace_path)
+    ) -> List[IdentityInput]:
+        return build_activitysim_identity_inputs(settings, workspace_path)
 
     def get_facet_schema_version(self, model: str) -> str:
         return {
@@ -90,10 +90,10 @@ class BeamConfigBuilder:
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         return build_beam_facet(settings)
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
-        return build_beam_hash_inputs(settings, workspace_path)
+    ) -> List[IdentityInput]:
+        return build_beam_identity_inputs(settings, workspace_path)
 
     def get_facet_schema_version(self, model: str) -> str:
         return {
@@ -115,9 +115,9 @@ class UrbanSimConfigBuilder:
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         return build_urbansim_facet(settings)
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
+    ) -> List[IdentityInput]:
         return []
 
     def get_facet_schema_version(self, model: str) -> str:
@@ -139,9 +139,9 @@ class AtlasConfigBuilder:
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         return build_atlas_facet(settings)
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
+    ) -> List[IdentityInput]:
         return []
 
     def get_facet_schema_version(self, model: str) -> str:
@@ -163,9 +163,9 @@ class PostprocessingConfigBuilder:
     def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
         return build_postprocessing_facet(settings)
 
-    def build_hash_inputs(
+    def build_identity_inputs(
         self, settings: PilatesConfig, workspace_path: str
-    ) -> List[HashInput]:
+    ) -> List[IdentityInput]:
         return []
 
     def get_facet_schema_version(self, model: str) -> str:
@@ -222,7 +222,7 @@ def build_step_consist_kwargs(
     Build kwargs for `scenario.step(..., **kwargs)`.
 
     `workspace_path` should be the current run directory (Workspace.full_path).
-    It is required for steps that use `hash_inputs` (ActivitySim/BEAM).
+    It is required for steps that use `identity_inputs` (ActivitySim/BEAM).
     """
     model_norm = (model or "").lower()
 
@@ -250,7 +250,7 @@ def build_step_consist_kwargs(
     if builder is not None:
         if builder.requires_workspace_path and workspace_path is None:
             raise ValueError(
-                f"workspace_path is required for {builder_key} hash_inputs."
+                f"workspace_path is required for {builder_key} identity_inputs."
             )
         result: Dict[str, Any] = {
             "config": builder.build_identity_config(settings),
@@ -259,9 +259,9 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
         if workspace_path is not None:
-            hash_inputs = builder.build_hash_inputs(settings, workspace_path)
-            if hash_inputs:
-                result["hash_inputs"] = hash_inputs
+            identity_inputs = builder.build_identity_inputs(settings, workspace_path)
+            if identity_inputs:
+                result["identity_inputs"] = identity_inputs
         return result
 
     # Default: no special config mapping yet.
@@ -313,9 +313,9 @@ def build_activitysim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_activitysim_identity_config(settings)
 
 
-def build_activitysim_hash_inputs(
+def build_activitysim_identity_inputs(
     settings: PilatesConfig, workspace_path: str
-) -> List[HashInput]:
+) -> List[IdentityInput]:
     cfg = settings.activitysim
     if cfg is None:
         return []
@@ -356,9 +356,9 @@ def build_beam_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_beam_identity_config(settings)
 
 
-def build_beam_hash_inputs(
+def build_beam_identity_inputs(
     settings: PilatesConfig, workspace_path: str
-) -> List[HashInput]:
+) -> List[IdentityInput]:
     cfg = settings.beam
     if cfg is None:
         return []
@@ -378,11 +378,11 @@ def build_beam_hash_inputs(
         # Fallback: hash the root itself so identity still captures "something".
         return [("beam_conf_dir", root)]
 
-    hash_inputs: List[HashInput] = []
+    identity_inputs: List[IdentityInput] = []
     for path in conf_files:
         rel = path.relative_to(root).as_posix()
-        hash_inputs.append((f"beam_conf/{rel}", path))
-    return hash_inputs
+        identity_inputs.append((f"beam_conf/{rel}", path))
+    return identity_inputs
 
 
 def build_urbansim_identity_config(settings: PilatesConfig) -> Dict[str, Any]:

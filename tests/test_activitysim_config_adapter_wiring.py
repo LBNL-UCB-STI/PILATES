@@ -93,24 +93,13 @@ def _make_state() -> SimpleNamespace:
     return SimpleNamespace(year=2020, iteration=0)
 
 
-def _wire_common(monkeypatch, tracker, run_id) -> None:
-    from pilates.utils import consist_runtime as cr
-
-    monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        cr,
-        "current_run",
-        lambda: SimpleNamespace(id=run_id) if run_id is not None else None,
-    )
+def _wire_common(monkeypatch) -> None:
     monkeypatch.setattr(
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
-        lambda model, settings, workspace_path=None: {"config": {"model": model}},
-    )
-    tracker.prepare_config_resolver.return_value = (
-        lambda ctx: SimpleNamespace(
-            identity_hash="asim-plan-hash",
-            adapter_version="asim-adapter-v1",
-        )
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [("shim", Path("/tmp/identity"))],
+        },
     )
 
 
@@ -148,7 +137,7 @@ def _make_step_context(
     return StepContext(**kwargs)
 
 
-def test_activitysim_run_metadata_prepares_config_plan_with_run_id(
+def test_activitysim_run_metadata_emits_adapter_and_identity_inputs(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("consist")
@@ -157,9 +146,7 @@ def test_activitysim_run_metadata_prepares_config_plan_with_run_id(
     fixture_root = _fixture_root()
     workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
     settings = _make_settings()
-    tracker = MagicMock()
-
-    _wire_common(monkeypatch, tracker, run_id="run-123")
+    _wire_common(monkeypatch)
 
     step_fn = make_activitysim_run_step(
         coupler=DummyCoupler(),
@@ -174,33 +161,25 @@ def test_activitysim_run_metadata_prepares_config_plan_with_run_id(
     )
 
     resolved_config = meta.config(ctx)
-    resolved_plan = meta.config_plan(ctx)
-    resolved_hash_inputs = meta.hash_inputs(ctx)
-    assert tracker.prepare_config_resolver.call_count == 1
-    _, kwargs = tracker.prepare_config_resolver.call_args
-    adapter = kwargs["adapter"]
-    config_dirs = kwargs["config_dirs"]
+    resolved_adapter = meta.adapter(ctx)
+    resolved_identity_inputs = meta.identity_inputs(ctx)
+    assert meta.config_plan is None
+    assert meta.hash_inputs is None
+    adapter = resolved_adapter
     assert isinstance(adapter, ActivitySimConfigAdapter)
-    assert Path(config_dirs[0]) == fixture_root / "base"
+    assert adapter.root_dirs == [fixture_root / "base"]
     assert resolved_config["model"] == "activitysim_run"
-    assert resolved_plan.identity_hash == "asim-plan-hash"
-    assert resolved_plan.adapter_version == "asim-adapter-v1"
-    assert resolved_hash_inputs is None
-    assert tracker.prepare_config.call_count == 0
-    assert tracker.canonicalize_config.call_count == 0
+    assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 
 
-def test_activitysim_run_metadata_prepares_config_plan_without_run_id(
+def test_activitysim_run_metadata_adapter_is_none_when_config_root_missing(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("consist")
 
-    fixture_root = _fixture_root()
-    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
     settings = _make_settings()
-    tracker = MagicMock()
-
-    _wire_common(monkeypatch, tracker, run_id=None)
+    _wire_common(monkeypatch)
 
     step_fn = make_activitysim_run_step(
         coupler=DummyCoupler(),
@@ -214,13 +193,7 @@ def test_activitysim_run_metadata_prepares_config_plan_without_run_id(
         runtime_workspace=workspace,
     )
 
-    resolved_plan = meta.config_plan(ctx)
-    resolved_hash_inputs = meta.hash_inputs(ctx)
-    assert tracker.prepare_config_resolver.call_count == 1
-    assert resolved_plan.identity_hash == "asim-plan-hash"
-    assert resolved_hash_inputs is None
-    assert tracker.prepare_config.call_count == 0
-    assert tracker.canonicalize_config.call_count == 0
+    assert meta.adapter(ctx) is None
 
 
 def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
@@ -271,8 +244,7 @@ def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
 
     fixture_root = _fixture_root()
     workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
-    tracker = MagicMock()
-    _wire_common(monkeypatch, tracker, run_id="run-789")
+    _wire_common(monkeypatch)
 
     step_fn = make_activitysim_run_step(
         coupler=DummyCoupler(),
@@ -287,13 +259,7 @@ def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
         runtime_settings_override=_make_settings(),
     )
 
-    resolved_plan = meta.config_plan(ctx)
-    resolved_hash_inputs = meta.hash_inputs(ctx)
-    assert tracker.prepare_config_resolver.call_count == 1
-    _, kwargs = tracker.prepare_config_resolver.call_args
-    config_dirs = kwargs["config_dirs"]
-    assert Path(config_dirs[0]) == fixture_root / "base"
-    assert resolved_plan.identity_hash == "asim-plan-hash"
-    assert resolved_hash_inputs is None
-    assert tracker.prepare_config.call_count == 0
-    assert tracker.canonicalize_config.call_count == 0
+    resolved_adapter = meta.adapter(ctx)
+    resolved_identity_inputs = meta.identity_inputs(ctx)
+    assert resolved_adapter is not None
+    assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]

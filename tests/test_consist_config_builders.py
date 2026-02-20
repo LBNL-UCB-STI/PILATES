@@ -74,7 +74,7 @@ def test_builders_expose_required_methods():
     required = {
         "build_identity_config",
         "build_facet",
-        "build_hash_inputs",
+        "build_identity_inputs",
         "get_facet_schema_version",
         "requires_workspace_path",
     }
@@ -110,7 +110,7 @@ def test_urbansim_no_workspace_path_needed():
     assert "facet" in result
 
 
-def test_hash_inputs_included_for_activitysim(tmp_path):
+def test_identity_inputs_included_for_activitysim(tmp_path):
     settings = _make_settings()
     asim_dir = tmp_path / "activitysim" / "configs"
     asim_dir.mkdir(parents=True)
@@ -120,14 +120,14 @@ def test_hash_inputs_included_for_activitysim(tmp_path):
         settings,
         workspace_path=str(tmp_path),
     )
-    assert "hash_inputs" in result
-    assert len(result["hash_inputs"]) > 0
+    assert "identity_inputs" in result
+    assert len(result["identity_inputs"]) > 0
 
 
-def test_no_hash_inputs_for_urbansim():
+def test_no_identity_inputs_for_urbansim():
     settings = _make_settings()
     result = build_step_consist_kwargs("urbansim_run", settings)
-    assert "hash_inputs" not in result
+    assert "identity_inputs" not in result
 
 
 def test_initialization_model_special_case():
@@ -252,7 +252,7 @@ def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
         build_step_consist_kwargs("urbansim_run", settings)
 
 
-def test_activitysim_hash_inputs_missing_configs_dir_raises(tmp_path):
+def test_activitysim_identity_inputs_missing_configs_dir_raises(tmp_path):
     settings = _make_settings()
     with pytest.raises(FileNotFoundError, match="ActivitySim mutable configs dir"):
         build_step_consist_kwargs(
