@@ -17,60 +17,32 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
     time.
     """
 
-    cache: Dict[int, Dict[str, Any]] = {}
+    cache_attr = "_pilates_step_meta_cache"
+
+    def _runtime_value(ctx: StepContext, name: str) -> Any:
+        return ctx.get_runtime(name, default=None)
 
     def _settings(ctx: StepContext) -> Any:
-        runtime_settings = getattr(ctx, "runtime_settings", None)
-        if runtime_settings is not None:
-            return runtime_settings
+        return _runtime_value(ctx, "settings")
 
-        runtime_kwargs = ctx.runtime_kwargs or {}
-        runtime_settings_kwarg = runtime_kwargs.get("settings")
-        if runtime_settings_kwarg is not None:
-            return runtime_settings_kwarg
+    def _workspace_path_from_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
 
-        legacy_settings = getattr(ctx, "settings", None)
-        if legacy_settings is not None:
-            return legacy_settings
-        return getattr(ctx, "consist_settings", None)
+        full_path = getattr(value, "full_path", None)
+        if isinstance(full_path, (Path, str)):
+            return str(full_path)
 
-    def _workspace_path(ctx: StepContext) -> Optional[str]:
-        runtime_workspace = getattr(ctx, "runtime_workspace", None)
-        if runtime_workspace is not None:
-            full_path = getattr(runtime_workspace, "full_path", None)
-            if isinstance(full_path, str):
-                return full_path
-            if isinstance(runtime_workspace, (Path, str)):
-                return str(runtime_workspace)
+        if isinstance(value, (Path, str)):
+            return str(value)
 
-        runtime_kwargs = ctx.runtime_kwargs or {}
-        ws_runtime = runtime_kwargs.get("workspace")
-        if ws_runtime is not None:
-            full_path = getattr(ws_runtime, "full_path", None)
-            if isinstance(full_path, str):
-                return full_path
-            if isinstance(ws_runtime, (Path, str)):
-                return str(ws_runtime)
-
-        ws = getattr(ctx, "workspace", None)
-        if ws is None:
-            ws = getattr(ctx, "consist_workspace", None)
-        if ws is not None:
-            if isinstance(ws, Path):
-                return str(ws)
-            if isinstance(ws, str):
-                return ws
-            full_path = getattr(ws, "full_path", None)
-            if isinstance(full_path, str):
-                return full_path
         return None
 
-    def _runtime_workspace(ctx: StepContext) -> Any:
-        runtime_workspace = getattr(ctx, "runtime_workspace", None)
-        if runtime_workspace is not None:
-            return runtime_workspace
-        runtime_kwargs = ctx.runtime_kwargs or {}
-        return runtime_kwargs.get("workspace")
+    def _workspace(ctx: StepContext) -> Any:
+        return _runtime_value(ctx, "workspace")
+
+    def _workspace_path(ctx: StepContext) -> Optional[str]:
+        return _workspace_path_from_value(_workspace(ctx))
 
     def _activitysim_adapter(ctx: StepContext) -> Any:
         settings = _settings(ctx)
@@ -85,7 +57,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         except Exception:
             return None
 
-        workspace_obj = _runtime_workspace(ctx)
+        workspace_obj = _workspace(ctx)
         config_root: Optional[Path] = None
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_asim_mutable_configs_dir"
@@ -121,7 +93,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         except Exception:
             return None
 
-        workspace_obj = _runtime_workspace(ctx)
+        workspace_obj = _workspace(ctx)
         config_root: Optional[Path] = None
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_beam_mutable_data_dir"
@@ -168,12 +140,20 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         return None
 
     def _resolve(ctx: StepContext) -> Dict[str, Any]:
-        cache_key = id(ctx)
-        if cache_key in cache:
-            return cache[cache_key]
+        cache: Optional[Dict[str, Dict[str, Any]]] = getattr(ctx, cache_attr, None)
+        if not isinstance(cache, dict):
+            cache = {}
+            try:
+                setattr(ctx, cache_attr, cache)
+            except Exception:
+                cache = None
+
+        if cache is not None and model in cache:
+            return cache[model]
         settings = _settings(ctx)
         if settings is None:
-            cache[cache_key] = {}
+            if cache is not None:
+                cache[model] = {}
             return {}
         workspace_path = _workspace_path(ctx)
         resolved = build_step_consist_kwargs(
@@ -184,7 +164,8 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         adapter = _adapter(ctx)
         if adapter is not None:
             resolved["adapter"] = adapter
-        cache[cache_key] = resolved
+        if cache is not None:
+            cache[model] = resolved
         return resolved
 
     return {

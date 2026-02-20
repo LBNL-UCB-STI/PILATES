@@ -114,6 +114,47 @@ def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs():
     assert "facet" not in call
     assert "identity_inputs" not in call
     assert "adapter" not in call
+    assert call["execution_options"].runtime_kwargs == {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    assert call["execution_options"].load_inputs is None
+
+
+def test_workflow_stage_uses_top_level_runtime_kwargs_with_load_inputs_option():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(model="dummy_step")
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(name="dummy_step", step_func=_decorated_step, load_inputs=True)
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"].runtime_kwargs == {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    assert call["execution_options"].load_inputs is True
+
 
 def test_workflow_stage_infers_strict_output_enforcement_from_step_outputs_metadata():
     scenario = _FakeScenario()

@@ -35,7 +35,11 @@ class DummyWorkspace:
 class ExecutingScenario:
     def run(self, **kwargs):
         fn = kwargs["fn"]
-        runtime_kwargs = kwargs["execution_options"].runtime_kwargs or {}
+        execution_options = kwargs.get("execution_options")
+        runtime_kwargs = kwargs.get("runtime_kwargs") or getattr(
+            execution_options, "runtime_kwargs", None
+        )
+        runtime_kwargs = dict(runtime_kwargs or {})
         fn(**runtime_kwargs)
         return SimpleNamespace(cache_hit=False)
 
