@@ -326,3 +326,50 @@ def test_build_coupler_schema_collects_step_metadata_and_extras():
 
     assert ASIM_HOUSEHOLDS_IN in schema
     assert "urbansim/usim_datastore_h5" in schema
+
+
+def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(
+    tmp_path,
+):
+    pytest.importorskip("consist")
+    from consist import Tracker
+    from consist.integrations.activitysim import ActivitySimConfigAdapter
+
+    from pilates.utils import consist_runtime as cr
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist_runs",
+        db_path=str(tmp_path / "consist_test.duckdb"),
+        mounts={"workspace": str(tmp_path)},
+    )
+
+    config_root = tmp_path / "activitysim" / "configs"
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "settings.yaml").write_text("models: []\n")
+
+    identity_marker = tmp_path / "identity_marker.txt"
+    identity_marker.write_text("v1")
+    output_path = tmp_path / "result.txt"
+    calls = {"count": 0}
+
+    @define_step(
+        model="activitysim_identity_metadata_step",
+        adapter=lambda ctx: ActivitySimConfigAdapter(root_dirs=[config_root]),
+        identity_inputs=lambda ctx: [("identity_marker", identity_marker)],
+        output_paths={"result": str(output_path)},
+    )
+    def _step():
+        calls["count"] += 1
+        output_path.write_text(f"run-{calls['count']}")
+
+    with cr.scenario("identity-metadata-step", tracker=tracker) as scenario:
+        first = scenario.run(fn=_step, year=2018, iteration=0, phase="run")
+        second = scenario.run(fn=_step, year=2018, iteration=0, phase="run")
+
+        identity_marker.write_text("v2")
+        third = scenario.run(fn=_step, year=2018, iteration=0, phase="run")
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert third.cache_hit is False
+    assert calls["count"] == 2

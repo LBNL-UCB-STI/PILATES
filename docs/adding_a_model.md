@@ -308,7 +308,7 @@ Namespace behavior today:
 
 For key migrations/aliases, use `pilates/workflows/artifact_key_migrations.py`.
 
-### 9) Configure Consist identity/facets/hash inputs
+### 9) Configure Consist identity/facets/adapter wiring
 
 Consist config dispatch is now catalog-driven:
 
@@ -319,8 +319,12 @@ Consist config dispatch is now catalog-driven:
 
    1. `config` (cache identity)
    2. `facet` (queryable metadata)
-   3. `hash_inputs` (file/dir digests folded into identity)
+   3. `identity_inputs` (file/dir digests folded into identity)
    4. `facet_schema_version`
+
+3. `pilates/workflows/step_consist_meta.py` adds adapter metadata where
+   applicable (for example ActivitySim/BEAM config adapters) so steps can use
+   Consist's adapter-first identity path.
 
 For a new model family:
 
@@ -328,6 +332,14 @@ For a new model family:
 2. set matching `provenance.builder_key` on the model's tracked catalog steps
 
 For non-catalog/unspecified steps, legacy prefix fallback dispatch still applies.
+
+Recommended Consist identity surface for all new step wiring:
+
+1. `adapter=...`
+2. `identity_inputs=[...]`
+
+Legacy `config_plan` and `hash_inputs` kwargs are compatibility-only and should
+not be introduced in new PILATES code.
 
 ### 10) Stage-specific and top-level wiring
 

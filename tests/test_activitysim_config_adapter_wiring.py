@@ -163,8 +163,8 @@ def test_activitysim_run_metadata_emits_adapter_and_identity_inputs(
     resolved_config = meta.config(ctx)
     resolved_adapter = meta.adapter(ctx)
     resolved_identity_inputs = meta.identity_inputs(ctx)
-    assert meta.config_plan is None
-    assert meta.hash_inputs is None
+    assert getattr(meta, "config_plan", None) is None
+    assert getattr(meta, "hash_inputs", None) is None
     adapter = resolved_adapter
     assert isinstance(adapter, ActivitySimConfigAdapter)
     assert adapter.root_dirs == [fixture_root / "base"]
