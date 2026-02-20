@@ -10,16 +10,13 @@ helpers (path normalization and schema hints).
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional, TypeVar, cast
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, cast
 
 from pilates.utils.consist_types import (
     ArtifactLike,
-    CouplerProtocol,
-    RunResultLike,
     ScenarioWithCoupler,
     TrackerLike,
 )
@@ -101,10 +98,12 @@ def scenario(
     **kwargs: Any,
 ) -> Iterator[ScenarioWithCoupler]:
     resolved_enabled = _is_enabled(enabled)
-    if not resolved_enabled:
-        yield _NoopScenario()
-        return
-    with consist.scenario(name, tracker=tracker, enabled=True, **kwargs) as sc:
+    with consist.scenario(
+        name,
+        tracker=tracker,
+        enabled=resolved_enabled,
+        **kwargs,
+    ) as sc:
         # Narrow for callers: PILATES requires a coupler-capable scenario.
         yield cast(ScenarioWithCoupler, sc)
 
@@ -124,12 +123,12 @@ def log_input(
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
     if not resolved_enabled:
-        return _NoopArtifact(_resolve_artifact_path(path) or path)
+        return consist.log_input(path, key=key, enabled=False, **meta)
     try:
         return consist.log_input(path, key=key, enabled=True, **meta)
     except RuntimeError:
         logger.debug("Skipping input artifact logging outside active Consist run.")
-        return _NoopArtifact(_resolve_artifact_path(path) or path)
+        return consist.log_input(path, key=key, enabled=False, **meta)
 
 
 def log_output(
@@ -150,12 +149,12 @@ def log_output(
         resolved_path = _resolve_artifact_path(path)
         if resolved_path and not os.path.exists(resolved_path):
             raise FileNotFoundError(f"Output path does not exist: {resolved_path}")
-        return _NoopArtifact(resolved_path or path)
+        return consist.log_output(path, key=key, enabled=False, **meta)
     try:
         return consist.log_output(path, key=key, enabled=True, **meta)
     except RuntimeError:
         logger.debug("Skipping output artifact logging outside active Consist run.")
-        return _NoopArtifact(_resolve_artifact_path(path) or path)
+        return consist.log_output(path, key=key, enabled=False, **meta)
 
 
 def log_h5_container(
@@ -228,21 +227,22 @@ def log_artifacts(
     resolved_enabled = _is_enabled(enabled)
     normalized = {key: _normalize_path(value) for key, value in mapping.items()}
     if not resolved_enabled:
-        return {
-            key: _NoopArtifact(_resolve_artifact_path(value) or value)
-            for key, value in normalized.items()
-        }
+        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
     try:
-        try:
-            return consist.log_artifacts(outputs=normalized, enabled=True, **meta)
-        except TypeError:
-            return consist.log_artifacts(normalized, enabled=True, **meta)
+        return _log_artifacts_with_enabled(normalized, enabled=True, **meta)
     except RuntimeError:
         logger.debug("Skipping artifact logging outside active Consist run.")
-        return {
-            key: _NoopArtifact(_resolve_artifact_path(value) or value)
-            for key, value in normalized.items()
-        }
+        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
+
+
+def _log_artifacts_with_enabled(
+    outputs: Mapping[str, Any], *, enabled: bool, **meta: Any
+) -> Optional[Dict[str, ArtifactLike]]:
+    try:
+        return consist.log_artifacts(outputs=outputs, enabled=enabled, **meta)
+    except TypeError:
+        # Legacy compatibility for older Consist call forms.
+        return consist.log_artifacts(outputs, enabled=enabled, **meta)
 
 
 def _schema_for_key(key: str) -> Optional[Any]:
@@ -357,25 +357,6 @@ def require_runtime_kwargs(
     return consist.require_runtime_kwargs(*names)
 
 
-F = TypeVar("F", bound=Callable[..., Any])
-
-
-def _noop_require_runtime_kwargs(
-    *names: str,
-) -> Callable[[F], F]:
-    if not names:
-        raise ValueError("require_runtime_kwargs requires at least one name.")
-    for name in names:
-        if not isinstance(name, str) or not name:
-            raise ValueError("require_runtime_kwargs expects non-empty string names.")
-
-    def decorator(func: F) -> F:
-        func.__consist_runtime_required__ = tuple(names)
-        return func
-
-    return decorator
-
-
 def _normalize_path(value: Any) -> Any:
     if value is None:
         return None
@@ -449,165 +430,3 @@ def _ensure_legacy_table_path_meta(
     except Exception:
         pass
     return artifact
-
-
-class _NoopArtifact:
-    def __init__(self, path: Any) -> None:
-        self._path = str(path)
-        self.meta: Dict[str, Any] = {}
-
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def container_uri(self) -> str:
-        return self._path
-
-    @property
-    def uri(self) -> str:
-        return self._path
-
-    @property
-    def table_path(self) -> Optional[str]:
-        return None
-
-    @property
-    def array_path(self) -> Optional[str]:
-        return None
-
-
-class _NoopCoupler:
-    def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
-
-    def set(self, key: str, value: Any) -> None:
-        self._store[key] = value
-
-    def get(self, key: str, default: Optional[Any] = None) -> Any:
-        return self._store.get(key, default)
-
-    def update(self, mapping: Mapping[str, Any]) -> None:
-        self._store.update(mapping)
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    def view(self, namespace: str) -> "_NoopCouplerView":
-        normalized = namespace.strip("/")
-        if not normalized:
-            raise ValueError("namespace must be non-empty")
-        return _NoopCouplerView(self, normalized)
-
-    def collect_by_keys(
-        self,
-        artifacts: Dict[str, Any],
-        *keys: str,
-        prefix: str = "",
-    ) -> Dict[str, Any]:
-        collected: Dict[str, Any] = {}
-        for key in keys:
-            if key not in artifacts:
-                raise KeyError(f"Missing artifact for key {key!r}.")
-            coupler_key = f"{prefix}{key}"
-            artifact = artifacts[key]
-            self.set(coupler_key, artifact)
-            collected[coupler_key] = artifact
-        return collected
-
-
-class _NoopCouplerView:
-    def __init__(self, coupler: _NoopCoupler, namespace: str) -> None:
-        self._coupler = coupler
-        self._namespace = namespace
-
-    def _qualify(self, key: str) -> str:
-        local = str(key).strip("/")
-        return f"{self._namespace}/{local}"
-
-    def set(self, key: str, value: Any) -> None:
-        self._coupler.set(self._qualify(key), value)
-
-    def get(self, key: str, default: Optional[Any] = None) -> Any:
-        return self._coupler.get(self._qualify(key), default)
-
-    def update(self, mapping: Mapping[str, Any]) -> None:
-        self._coupler.update({self._qualify(key): value for key, value in mapping.items()})
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    def view(self, namespace: str) -> "_NoopCouplerView":
-        normalized = namespace.strip("/")
-        if not normalized:
-            raise ValueError("namespace must be non-empty")
-        return _NoopCouplerView(self._coupler, f"{self._namespace}/{normalized}")
-
-
-class _NoopScenario:
-    def __init__(self) -> None:
-        self.coupler: CouplerProtocol = _NoopCoupler()
-
-    @contextmanager
-    def trace(self, *args: Any, **kwargs: Any) -> Iterator[None]:
-        yield None
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-    def coupler_schema(self, schema: Any) -> Any:
-        return schema(self.coupler)
-
-    def run(
-        self,
-        fn: Optional[Callable[..., Any]] = None,
-        name: Optional[str] = None,
-        **kwargs: Any,
-    ) -> RunResultLike:
-        if fn is None:
-            return _NoopRunResult()
-        execution_options = kwargs.get("execution_options")
-        runtime_kwargs = kwargs.get("runtime_kwargs")
-        if runtime_kwargs is None and execution_options is not None:
-            runtime_kwargs = getattr(execution_options, "runtime_kwargs", None)
-        runtime_kwargs = dict(runtime_kwargs or {})
-        required = getattr(fn, "__consist_runtime_required__", None)
-        if required:
-            missing = [name for name in required if name not in runtime_kwargs]
-            if missing:
-                raise ValueError(
-                    "Missing runtime_kwargs for noop scenario: " f"{', '.join(missing)}"
-                )
-        sig = inspect.signature(fn)
-        try:
-            sig.bind_partial(**runtime_kwargs)
-        except TypeError as exc:
-            raise TypeError(
-                f"Noop scenario could not bind arguments for {fn.__name__!r}: {exc}"
-            ) from exc
-        result = fn(**runtime_kwargs)
-
-        outputs: Dict[str, Any] = {}
-        output_paths = kwargs.get("output_paths")
-        if output_paths:
-            outputs = {
-                key: _NoopArtifact(value) for key, value in dict(output_paths).items()
-            }
-        elif hasattr(result, "to_mapping") and callable(result.to_mapping):
-            outputs = {
-                key: _NoopArtifact(value)
-                for key, value in dict(result.to_mapping()).items()
-            }
-
-        return _NoopRunResult(outputs=outputs)
-
-    def collect_by_keys(
-        self, artifacts: Dict[str, Any], *keys: str, prefix: str = ""
-    ) -> Dict[str, Any]:
-        return self.coupler.collect_by_keys(artifacts, *keys, prefix=prefix)
-
-
-class _NoopRunResult:
-    def __init__(self, outputs: Optional[Dict[str, Any]] = None) -> None:
-        self.outputs = outputs or {}
-        self.cache_hit = False

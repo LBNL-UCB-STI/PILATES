@@ -1,5 +1,6 @@
 import types
 
+import consist
 import pytest
 from consist.types import CacheOptions, ExecutionOptions
 
@@ -35,8 +36,11 @@ def test_noop_scenario_run_returns_outputs_mapping():
         result = scenario.run(fn=_run, output_paths={"out": "/tmp/out.txt"})
 
     output = result.outputs["out"]
-    path = getattr(output, "path", None) or getattr(output, "uri", None) or output
-    assert str(path) == "/tmp/out.txt"
+    assert isinstance(output, consist.NoopArtifact)
+    assert output.key == "out"
+    assert str(output.path) == "/tmp/out.txt"
+    assert isinstance(result, consist.NoopRunResult)
+    assert result.run is not None
     assert result.cache_hit is False
 
 

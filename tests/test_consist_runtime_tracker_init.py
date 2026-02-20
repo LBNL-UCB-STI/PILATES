@@ -1,4 +1,5 @@
 import types
+from contextlib import contextmanager
 
 import duckdb
 
@@ -67,6 +68,42 @@ def test_create_tracker_retries_after_schema_compatibility_repair(monkeypatch):
         assert calls["count"] == 2
     finally:
         cr.set_enabled(None)
+
+
+def test_scenario_disabled_delegates_to_consist_noop_context(monkeypatch):
+    calls = []
+    sentinel = object()
+
+    @contextmanager
+    def _scenario(name, tracker=None, *, enabled=True, **kwargs):
+        calls.append((name, tracker, enabled, kwargs))
+        yield sentinel
+
+    monkeypatch.setattr(cr, "consist", types.SimpleNamespace(scenario=_scenario))
+
+    with cr.scenario("noop-step", enabled=False, phase="test") as scenario:
+        assert scenario is sentinel
+
+    assert calls == [("noop-step", None, False, {"phase": "test"})]
+
+
+def test_log_input_falls_back_to_consist_disabled_mode_on_runtime_error(monkeypatch):
+    calls = []
+
+    def _log_input(path, key=None, *, enabled=True, **meta):
+        calls.append((enabled, path, key, dict(meta)))
+        if enabled:
+            raise RuntimeError("no active run")
+        return types.SimpleNamespace(path=path, key=key, meta=dict(meta))
+
+    monkeypatch.setattr(cr, "consist", types.SimpleNamespace(log_input=_log_input))
+
+    artifact = cr.log_input("/tmp/in.txt", key="input_key", enabled=True)
+
+    assert artifact is not None
+    assert artifact.key == "input_key"
+    assert calls[0][0] is True
+    assert calls[1][0] is False
 
 
 def test_repair_tracker_db_schema_adds_missing_container_uri(tmp_path):
