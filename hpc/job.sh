@@ -76,4 +76,17 @@ echo "=========================="
 # --- 6. Run Python Script ---
 # 'python' now refers to the binary inside PILATES-env
 export DLT__RUNTIME__DLTHUB_TELEMETRY=false
+
+# Cap implicit native thread pools used by NumPy/BLAS/OpenMP-backed libraries.
+# This avoids oversubscription/lock contention while still requesting full node
+# resources for containerized model runs. Override per job with PILATES_THREADS.
+THREADS="${PILATES_THREADS:-8}"
+export OMP_NUM_THREADS="$THREADS"
+export MKL_NUM_THREADS="$THREADS"
+export OPENBLAS_NUM_THREADS="$THREADS"
+export NUMEXPR_NUM_THREADS="$THREADS"
+export BLIS_NUM_THREADS="$THREADS"
+export VECLIB_MAXIMUM_THREADS="$THREADS"
+echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
+
 python run.py -c "$1" -S "$2"
