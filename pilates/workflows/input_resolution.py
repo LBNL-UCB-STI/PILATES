@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.coupler_namespace import resolve_coupler_value
+from pilates.utils.coupler_helpers import resolve_input_precedence
 
 
 @dataclass(frozen=True)
@@ -50,21 +50,12 @@ def _resolve_single_key(
     Resolve one key using canonical precedence:
     explicit input -> coupler key -> fallback input.
     """
-    if explicit_inputs is not None and key in explicit_inputs:
-        value = explicit_inputs.get(key)
-        if value is not None:
-            return "explicit", value, None
-
-    value, resolved_key = resolve_coupler_value(coupler, key)
-    if value is not None:
-        return "coupler", value, resolved_key or key
-
-    if fallback_inputs is not None and key in fallback_inputs:
-        value = fallback_inputs.get(key)
-        if value is not None:
-            return "fallback", value, None
-
-    return "missing", None, None
+    return resolve_input_precedence(
+        key=key,
+        coupler=coupler,
+        explicit_inputs=explicit_inputs,
+        fallback_inputs=fallback_inputs,
+    )
 
 
 def resolve_step_inputs(

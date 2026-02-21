@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, TYPE_CHECKING, Type, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Type, Union
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
@@ -18,6 +18,7 @@ from pilates.workflows.artifact_key_migrations import (
     resolve_artifact_key,
 )
 from pilates.workflows.coupler_namespace import namespaced_view_target
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
@@ -409,6 +410,41 @@ def resolve_artifact_from_value(
         return artifact
     except Exception:
         return value
+
+
+def resolve_input_precedence(
+    *,
+    key: str,
+    coupler: Optional[CouplerProtocol],
+    explicit_inputs: Optional[Mapping[str, Any]] = None,
+    fallback_inputs: Optional[Mapping[str, Any]] = None,
+) -> tuple[str, Any, Optional[str]]:
+    """
+    Resolve one input key using canonical precedence.
+
+    Precedence is: explicit input -> coupler value -> fallback input.
+
+    Returns
+    -------
+    tuple
+        ``(source, value, coupler_key)`` where source is one of:
+        ``explicit`` / ``coupler`` / ``fallback`` / ``missing``.
+    """
+    if explicit_inputs is not None and key in explicit_inputs:
+        value = explicit_inputs.get(key)
+        if value is not None:
+            return "explicit", value, None
+
+    value, resolved_key = resolve_coupler_value(coupler, key)
+    if value is not None:
+        return "coupler", value, resolved_key or key
+
+    if fallback_inputs is not None and key in fallback_inputs:
+        value = fallback_inputs.get(key)
+        if value is not None:
+            return "fallback", value, None
+
+    return "missing", None, None
 
 
 def log_coupler_value(
