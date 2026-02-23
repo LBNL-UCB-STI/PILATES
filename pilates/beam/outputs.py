@@ -154,6 +154,11 @@ class BeamRunOutputs(StepOutputsBase):
         Yield BEAM raw output records.
         """
         latest_linkstats = self._latest_raw_output_for_prefix(LINKSTATS)
+        if latest_linkstats is None:
+            # BEAM can emit only parquet linkstats in some configs. Promote the
+            # latest parquet artifact to canonical `linkstats` so the step output
+            # contract remains stable for downstream workflow steps.
+            latest_linkstats = self._latest_raw_output_for_prefix("linkstats_parquet")
         if latest_linkstats is not None:
             _, path = latest_linkstats
             yield (

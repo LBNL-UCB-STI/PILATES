@@ -70,30 +70,42 @@ def _select_latest_linkstats_path(
     if records is None:
         return None
 
+    def _linkstats_rank(short_name: str) -> Optional[tuple[int, int, int]]:
+        if "_sub" in short_name:
+            return None
+        if short_name == "linkstats":
+            return (0, 0, 1)
+        if short_name == "linkstats_parquet":
+            return (0, 0, 0)
+
+        for prefix, format_priority in (
+            ("linkstats_", 1),
+            ("linkstats_parquet_", 0),
+        ):
+            if not short_name.startswith(prefix):
+                continue
+            tail = short_name[len(prefix) :]
+            parts = tail.split("_")
+            if len(parts) != 2:
+                continue
+            try:
+                year = int(parts[0])
+                iteration = int(parts[1])
+            except ValueError:
+                continue
+            return (year, iteration, format_priority)
+        return None
+
     best_record: Optional[FileRecord] = None
-    best_year = -1
-    best_iter = -1
+    best_rank: Optional[tuple[int, int, int]] = None
     for record in records.all_records():
         short_name = getattr(record, "short_name", "") or ""
-        if "_sub" in short_name or not short_name.startswith("linkstats_"):
+        rank = _linkstats_rank(short_name)
+        if rank is None:
             continue
-        parts = short_name.split("_")
-        if len(parts) != 3:
-            continue
-        try:
-            year = int(parts[1])
-            it = int(parts[2])
-        except ValueError:
-            continue
-        if (year, it) >= (best_year, best_iter):
-            best_year, best_iter = year, it
+        if best_rank is None or rank >= best_rank:
+            best_rank = rank
             best_record = record
-
-    if best_record is None:
-        for record in records.all_records():
-            if getattr(record, "short_name", "") == "linkstats":
-                best_record = record
-                break
 
     if best_record is None:
         return None
