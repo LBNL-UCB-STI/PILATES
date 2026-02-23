@@ -18,6 +18,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
     ASIM_MUTABLE_DATA_DIR,
     ATLAS_OUTPUT_DIR,
     BEAM_EXPERIENCED_PLANS_XML,
@@ -56,6 +57,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ASIM_HOUSEHOLDS_IN: "ActivitySim households input table (from preprocess).",
     ASIM_PERSONS_IN: "ActivitySim persons input table (from preprocess).",
     ASIM_OMX_SKIMS: "ActivitySim compile input skims (OMX).",
+    ASIM_SHARROW_CACHE_DIR: (
+        "ActivitySim persisted compile cache directory (numba/sharrow) when enabled."
+    ),
     ZARR_SKIMS: "Zarr skims produced by ActivitySim/BEAM.",
     FINAL_SKIMS_OMX: "Final OMX skims produced by BEAM.",
     BEAM_PLANS_IN: "BEAM plans input staged for the runner.",

@@ -20,6 +20,7 @@ from pilates.workflows.artifact_key_migrations import (
 from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
     BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
     LINKSTATS,
@@ -36,6 +37,7 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "zarr_skims",
     "zarr_skims_*",
     "asim_input_skims_zarr_archived",
+    ASIM_SHARROW_CACHE_DIR,
 )
 _archive_queue: Optional["queue.Queue[Optional[tuple[str, str, str, bool]]]"] = None
 _archive_thread: Optional[threading.Thread] = None

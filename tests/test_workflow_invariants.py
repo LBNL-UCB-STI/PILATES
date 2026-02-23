@@ -104,9 +104,16 @@ def test_declared_step_outputs_are_present_in_coupler_schema():
     schema = build_coupler_schema(schema_steps, settings=SimpleNamespace())
 
     missing = []
+    runtime_settings = SimpleNamespace()
     for step_fn in schema_steps:
         meta = step_fn.__consist_step__
-        declared = set(meta.outputs or []) | set(meta.schema_outputs or [])
+        declared = set(
+            build_coupler_schema(
+                [step_fn],
+                settings=runtime_settings,
+                include_extras=False,
+            ).keys()
+        )
         for key in sorted(declared):
             if key not in schema:
                 missing.append((meta.model, key))

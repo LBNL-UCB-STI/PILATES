@@ -1,4 +1,4 @@
-from typing import Optional, Iterator, Tuple
+from typing import Optional, Iterator, Tuple, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -13,6 +13,50 @@ import logging
 import shutil
 
 logger = logging.getLogger(__name__)
+
+
+def _record_count(record_store: object) -> int:
+    if isinstance(record_store, RecordStore):
+        return len(record_store.all_records())
+    return 0
+
+
+def build_bootstrap_artifact_summary(
+    workspace: Workspace, copied_records: Optional[RecordStore] = None
+) -> Dict[str, Any]:
+    """
+    Build a compact summary of initialization artifacts staged into workspace.
+
+    This summary is intentionally lightweight for Phase 1 bootstrap reporting.
+    """
+    input_counts = {
+        model_name: _record_count(records)
+        for model_name, records in getattr(workspace, "input_data", {}).items()
+        if _record_count(records) > 0
+    }
+    output_counts = {
+        model_name: _record_count(records)
+        for model_name, records in getattr(workspace, "output_data", {}).items()
+        if _record_count(records) > 0
+    }
+
+    models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
+    input_total = sum(input_counts.values())
+    output_total = sum(output_counts.values())
+    copied_total = (
+        len(copied_records.all_records())
+        if isinstance(copied_records, RecordStore)
+        else input_total + output_total
+    )
+
+    return {
+        "models": models,
+        "input_records_by_model": input_counts,
+        "output_records_by_model": output_counts,
+        "input_records_total": input_total,
+        "output_records_total": output_total,
+        "copied_records_total": copied_total,
+    }
 
 
 def _tag_record_store(record_store: RecordStore, model_name: Optional[str]) -> None:

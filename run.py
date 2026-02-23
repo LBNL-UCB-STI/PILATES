@@ -22,7 +22,10 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List
 
 from pilates.workspace import Workspace
-from pilates.generic.initialization import Initialization
+from pilates.generic.initialization import (
+    Initialization,
+    build_bootstrap_artifact_summary,
+)
 from pilates.utils.formatting import formatted_print
 from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
@@ -61,6 +64,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
     validate_workflow_step_contracts,
 )
+from consist.types import CacheOptions
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -300,6 +304,159 @@ def _log_local_storage_info() -> None:
             _format_bytes(usage.free),
             _format_bytes(usage.total),
         )
+
+
+def _is_bootstrap_cache_enabled(settings: Any) -> bool:
+    run_cfg = getattr(settings, "run", None)
+    return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
+
+
+def _build_bootstrap_manifest_reference(
+    *,
+    probe_run_id: Optional[str] = None,
+    materialization_run_id: Optional[str] = None,
+) -> Dict[str, str]:
+    reference: Dict[str, str] = {}
+    if probe_run_id:
+        reference["probe_run_id"] = probe_run_id
+    if materialization_run_id:
+        reference["materialization_run_id"] = materialization_run_id
+    return reference
+
+
+def run_bootstrap_phase(
+    *,
+    tracker: Any,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    """
+    Execute initialization in a dedicated pre-scenario bootstrap phase.
+
+    Phase 1 behavior:
+    - probe cache via tracker.run(...) before scenario starts;
+    - if cache hit, force one overwrite run to materialize workspace safely;
+    - return cache status plus lightweight artifact summary metadata.
+    """
+    staged_artifact_summary: Dict[str, Any] = {}
+
+    def _execute_initialization() -> None:
+        nonlocal staged_artifact_summary
+        init_model = Initialization("initialization", state)
+        copied_records = init_model.run(settings, workspace)
+        staged_artifact_summary = build_bootstrap_artifact_summary(
+            workspace,
+            copied_records,
+        )
+
+    run_kwargs: Dict[str, Any] = {
+        "fn": _execute_initialization,
+        "name": "bootstrap_initialization",
+        "model": "initialization",
+        "year": state.start_year,
+        "iteration": 0,
+        "phase": "bootstrap",
+        "stage": "bootstrap",
+        "tags": ["bootstrap", "init"],
+        **build_step_consist_kwargs(
+            "initialization",
+            settings,
+            workspace_path=workspace.full_path,
+        ),
+    }
+
+    if not _is_bootstrap_cache_enabled(settings):
+        logger.info("Bootstrap cache disabled; running initialization once.")
+        run_result = tracker.run(
+            **run_kwargs,
+            cache_options=CacheOptions(cache_mode="off"),
+        )
+        if not staged_artifact_summary:
+            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+        return {
+            "bootstrap_cache_hit": False,
+            "staged_artifact_summary": staged_artifact_summary,
+            "manifest_reference": _build_bootstrap_manifest_reference(
+                probe_run_id=getattr(getattr(run_result, "run", None), "id", None)
+            ),
+        }
+
+    probe_result = tracker.run(**run_kwargs)
+    probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
+    cache_hit = bool(getattr(probe_result, "cache_hit", False))
+
+    if cache_hit:
+        logger.info(
+            "BOOTSTRAP CACHE HIT. Running Phase 1 materialization pass to keep workspace safe."
+        )
+        materialized_result = tracker.run(
+            **run_kwargs,
+            cache_options=CacheOptions(cache_mode="overwrite"),
+        )
+        if not staged_artifact_summary:
+            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+        return {
+            "bootstrap_cache_hit": True,
+            "staged_artifact_summary": staged_artifact_summary,
+            "manifest_reference": _build_bootstrap_manifest_reference(
+                probe_run_id=probe_run_id,
+                materialization_run_id=getattr(
+                    getattr(materialized_result, "run", None), "id", None
+                ),
+            ),
+        }
+
+    logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
+    if not staged_artifact_summary:
+        staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+    return {
+        "bootstrap_cache_hit": False,
+        "staged_artifact_summary": staged_artifact_summary,
+        "manifest_reference": _build_bootstrap_manifest_reference(
+            probe_run_id=probe_run_id
+        ),
+    }
+
+
+def _assert_bootstrap_output_invariant(
+    bootstrap_result: Optional[Dict[str, Any]],
+) -> None:
+    """
+    Ensure bootstrap produced a non-empty artifact summary before state mutation.
+    """
+    summary = (
+        bootstrap_result.get("staged_artifact_summary")
+        if isinstance(bootstrap_result, dict)
+        else None
+    )
+    copied_total = (
+        summary.get("copied_records_total") if isinstance(summary, dict) else None
+    )
+    if isinstance(copied_total, int) and copied_total > 0:
+        return
+
+    diagnostics = {
+        "bootstrap_result_type": type(bootstrap_result).__name__,
+        "bootstrap_cache_hit": (
+            bootstrap_result.get("bootstrap_cache_hit")
+            if isinstance(bootstrap_result, dict)
+            else None
+        ),
+        "manifest_reference": (
+            bootstrap_result.get("manifest_reference")
+            if isinstance(bootstrap_result, dict)
+            else None
+        ),
+        "staged_artifact_summary": summary,
+    }
+    raise RuntimeError(
+        "Bootstrap initialization invariant failed: expected "
+        "'staged_artifact_summary.copied_records_total' > 0 before setting "
+        f"data_initialized=True. diagnostics={diagnostics}"
+    )
+
+
 def main():
     """
     Main entrypoint for PILATES simulation orchestration using Consist Scenario API.
@@ -415,14 +572,38 @@ def main():
     if not state.run_info_path:
         state.set_run_info_path(state.file_loc)
 
-    # 5. START SCENARIO CONTEXT
+    # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
+    # Initialization runs before entering scenario step execution so bootstrap
+    # lifecycle can evolve independently from normal model steps.
+    cr.set_tracker(tracker)
+    bootstrap_result: Optional[Dict[str, Any]] = None
+    if not state.data_initialized:
+        logger.info("Running bootstrap initialization phase.")
+        bootstrap_result = run_bootstrap_phase(
+            tracker=tracker,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        _assert_bootstrap_output_invariant(bootstrap_result)
+        state.set_data_initialized(True)
+    else:
+        logger.info("Restarting from a previous state. Skipping bootstrap phase.")
+    if bootstrap_result is not None:
+        logger.info(
+            "Bootstrap phase complete: cache_hit=%s manifest_ref=%s summary=%s",
+            bootstrap_result.get("bootstrap_cache_hit"),
+            bootstrap_result.get("manifest_reference"),
+            bootstrap_result.get("staged_artifact_summary"),
+        )
+
+    # 6. START SCENARIO CONTEXT
     # The scenario context is where all model execution happens. Each step runs inside
     # scenario.run(), which handles:
     #   - Caching checks (skip if inputs identical to previous run)
     #   - Provenance logging (inputs, outputs, dependencies)
     #   - Coupler coordination (step outputs → coupler → next step inputs)
     # The coupler is a shared dict-like object for passing artifacts between steps.
-    cr.set_tracker(tracker)
     scenario_kwargs = build_scenario_consist_kwargs(settings)
     scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
     scenario_kwargs.setdefault("cache_epoch", cache_epoch)
@@ -471,41 +652,7 @@ def main():
                 description=coupler_schema,
             )
 
-            # 6. DATA INITIALIZATION STEP
-            # Copies immutable input data to the mutable workspace. This is the critical
-            # "data initialization" event in provenance: it links original sources (inputs://)
-            # to the working copies (workspace://). Only runs if state.data_initialized is
-            # False (first run) or if resuming from a checkpoint (uses previous workspace).
-            #
-            # ProvenanceNote: scenario.trace() logs this step, creating a provenance entry
-            # that later steps reference as inputs.
-            if not state.data_initialized:
-                logger.info("Running Initialization Step (Copying mutable data)")
-
-                with scenario.trace(
-                    "initialization",
-                    model="initialization",
-                    year=state.start_year,
-                    iteration=0,
-                    tags=["init"],
-                    **build_step_consist_kwargs(
-                        "initialization", settings, workspace_path=workspace.full_path
-                    ),
-                ):
-                    init_model = Initialization("initialization", state)
-
-                    # This performs the copy.
-                    # Source files -> recorded as inputs (inputs://...)
-                    # Dest files -> recorded as outputs (workspace://...)
-                    init_model.run(settings, workspace)
-
-                state.set_data_initialized(True)
-            else:
-                logger.info(
-                    "Restarting from a previous state. Skipping data initialization."
-                )
-
-            # 6. MAIN WORKFLOW LOOP
+            # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:
             # A (Land Use) → B (Vehicle Ownership) → C (Supply/Demand Loop) → D (Post-Processing)
             #

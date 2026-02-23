@@ -29,6 +29,7 @@ class ArtifactKeys:
     ASIM_HOUSEHOLDS_IN = "households_asim_in"
     ASIM_PERSONS_IN = "persons_asim_in"
     ASIM_OMX_SKIMS = "omx_skims"
+    ASIM_SHARROW_CACHE_DIR = "asim_sharrow_cache_dir"
 
     # BEAM
     BEAM_OUTPUT_DIR = "beam_output_dir"

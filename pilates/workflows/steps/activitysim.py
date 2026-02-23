@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Callable, Dict
 
+from pilates.activitysim.runner import (
+    asim_sharrow_cache_dir,
+    persist_sharrow_cache_enabled,
+)
 from pilates.config.models import PilatesConfig
+from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workspace import Workspace
 
 # Model-specific step factories for ActivitySim.
@@ -47,6 +53,26 @@ from pilates.workflows.input_resolution import (
     resolve_preferred_step_input,
     resolved_value_for_key,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _compile_step_schema_outputs(ctx: Any) -> list[str]:
+    settings = getattr(ctx, "runtime_settings", None)
+    outputs = [ZARR_SKIMS]
+    if settings is not None and persist_sharrow_cache_enabled(settings):
+        outputs.append(ASIM_SHARROW_CACHE_DIR)
+    return outputs
+
+
+def _is_non_empty_directory(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    for _root, _dirs, files in os.walk(path):
+        if files:
+            return True
+    return False
+
 
 def make_activitysim_compile_step(
     *,
@@ -135,12 +161,46 @@ def make_activitysim_compile_step(
                 ),
             )
 
+        if persist_sharrow_cache_enabled(settings):
+            cache_path = asim_sharrow_cache_dir(workspace)
+
+            if cache_path and _is_non_empty_directory(cache_path):
+                log_and_set_output(
+                    key=ASIM_SHARROW_CACHE_DIR,
+                    path=cache_path,
+                    description=(
+                        "ActivitySim persisted compile cache directory "
+                        "(numba/sharrow)"
+                    ),
+                    coupler=coupler,
+                    **_activitysim_output_facet_meta(
+                        ASIM_SHARROW_CACHE_DIR,
+                        year=state.forecast_year,
+                        iteration=state.iteration,
+                    ),
+                )
+            elif cache_path and os.path.exists(cache_path) and not os.path.isdir(cache_path):
+                logger.warning(
+                    "ActivitySim compile cache output path is not a directory: %s",
+                    cache_path,
+                )
+            elif cache_path and os.path.isdir(cache_path):
+                logger.info(
+                    "ActivitySim compile cache output is enabled but directory is empty: %s",
+                    cache_path,
+                )
+            elif cache_path:
+                logger.warning(
+                    "ActivitySim compile cache output is enabled but directory was not found: %s",
+                    cache_path,
+                )
+
     return _decorate_step_with_consist(
         step_func=_run_activitysim_compile_step,
         step_model="activitysim_compile",
         description="activitysim compile workflow step",
         outputs=[ZARR_SKIMS],
-        schema_outputs=[ZARR_SKIMS],
+        schema_outputs=_compile_step_schema_outputs,
         tags=["activitysim", "compile"],
     )
 

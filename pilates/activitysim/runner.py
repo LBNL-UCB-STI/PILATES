@@ -17,9 +17,45 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
+    """
+    Return whether ActivitySim should persist sharrow/numba compile caches.
+
+    Backward compatibility:
+    - If an explicit ``activitysim.persist_sharrow_cache`` flag is provided,
+      it controls behavior.
+    - Otherwise fall back to historical behavior where parquet mode persists
+      sharrow cache by default.
+    """
+    activitysim_cfg = getattr(settings, "activitysim", None)
+    if activitysim_cfg is None:
+        return False
+    explicit_flag = getattr(activitysim_cfg, "persist_sharrow_cache", None)
+    if explicit_flag is not None:
+        return bool(explicit_flag)
+    return getattr(activitysim_cfg, "file_format", None) == "parquet"
+
+
+def asim_sharrow_cache_dir(workspace: Workspace) -> str:
+    """
+    Canonical ActivitySim sharrow/numba cache directory for compile outputs.
+    """
+    return os.path.join(workspace.full_path, "shared_cache", "numba")
+
+
+def _dir_contains_files(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    for _root, _dirs, files in os.walk(path):
+        if files:
+            return True
+    return False
 
 
 class ActivitysimCompileRunner(GenericRunner):
@@ -68,15 +104,20 @@ class ActivitysimCompileRunner(GenericRunner):
         Output keys
             - ``zarr_skims``: Compiled skims in Zarr format written under the
               ActivitySim output cache directory.
+            - ``asim_sharrow_cache_dir``: Persisted ActivitySim numba/sharrow
+              compile cache directory when ``persist_sharrow_cache`` is enabled.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        return {
+        outputs: Dict[str, Any] = {
             "zarr_skims": os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
         }
+        if persist_sharrow_cache_enabled(settings):
+            outputs[ASIM_SHARROW_CACHE_DIR] = asim_sharrow_cache_dir(workspace)
+        return outputs
 
     def __init__(
         self,
@@ -186,6 +227,42 @@ class ActivitysimCompileRunner(GenericRunner):
         else:
             logger.warning("ASIM compilation succeeded but skims.zarr was not found.")
 
+        if persist_sharrow_cache_enabled(settings):
+            cache_dir = asim_sharrow_cache_dir(workspace)
+            if _dir_contains_files(cache_dir):
+                output_records.append(
+                    FileRecord(
+                        file_path=cache_dir,
+                        year=self.state.current_year,
+                        iteration=-1,
+                        description=(
+                            "ActivitySim persisted compile cache directory "
+                            "(numba/sharrow)."
+                        ),
+                        short_name=ASIM_SHARROW_CACHE_DIR,
+                    )
+                )
+                logger.info(
+                    "ActivitySim compile cache directory is available: %s", cache_dir
+                )
+            elif os.path.exists(cache_dir) and not os.path.isdir(cache_dir):
+                logger.warning(
+                    "ActivitySim compile cache path exists but is not a directory: %s",
+                    cache_dir,
+                )
+            elif os.path.isdir(cache_dir):
+                logger.info(
+                    "ActivitySim compile cache persistence is enabled, but cache "
+                    "directory is empty: %s",
+                    cache_dir,
+                )
+            else:
+                logger.warning(
+                    "ActivitySim compile cache persistence is enabled, but cache "
+                    "directory was not found: %s",
+                    cache_dir,
+                )
+
         self.state.compile_asim()
         return RecordStore(recordList=output_records)
 
@@ -258,7 +335,8 @@ class ActivitysimRunner(GenericRunner):
     def get_asim_additional_args(settings: PilatesConfig, asim_docker_vols, compile):
         additional_args = []
         if settings.activitysim.file_format == "parquet":
-            additional_args.append("--persist-sharrow-cache")
+            if persist_sharrow_cache_enabled(settings):
+                additional_args.append("--persist-sharrow-cache")
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
                     additional_args.append("-d")

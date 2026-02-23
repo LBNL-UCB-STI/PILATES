@@ -74,6 +74,12 @@ class RunConfig(BaseModel):
     enable_archive_copy: bool = Field(
         False, description="Copy logged outputs to archive root as they are produced"
     )
+    bootstrap_cache_enabled: bool = Field(
+        True,
+        description=(
+            "Enable cache probing for the pre-scenario bootstrap initialization phase"
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
@@ -298,6 +304,13 @@ class ActivitySimConfig(BaseModel):
     file_format: Literal["parquet", "csv"] = Field(
         "parquet", description="Output file format"
     )
+    persist_sharrow_cache: Optional[bool] = Field(
+        None,
+        description=(
+            "Persist ActivitySim sharrow/numba compile cache directory. "
+            "When unset, defaults to enabled for parquet format."
+        ),
+    )
     local_input_folder: str
     local_mutable_data_folder: str
     local_output_folder: str
@@ -346,6 +359,7 @@ class ActivitySimConfig(BaseModel):
             "chunk_size": self.chunk_size,
             "num_processes": self.num_processes,
             "file_format": self.file_format,
+            "persist_sharrow_cache": self.persist_sharrow_cache,
             "warm_start_activities": self.warm_start_activities,
             "replan_iters": self.replan_iters,
             "replan_hh_samp_size": self.replan_hh_samp_size,
