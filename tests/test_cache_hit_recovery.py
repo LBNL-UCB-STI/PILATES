@@ -7,9 +7,11 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    BEAM_PLANS_OUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS,
     LINKSTATS_WARMSTART,
 )
 from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
@@ -41,6 +43,9 @@ class DummyWorkspace:
 
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._root / "beam" / "input")
+
+    def get_beam_output_dir(self) -> str:
+        return str(self._root / "beam" / "output")
 
 
 class DummyCoupler:
@@ -211,3 +216,56 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     holder.activitysim_preprocess.validate()
     manifest = yaml.safe_load(manifest_path.read_text())
     assert manifest["activitysim_preprocess"]["cache_hit"]
+
+
+def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    beam_iter_dir = (
+        Path(workspace.get_beam_output_dir())
+        / "seattle"
+        / "year-2018-iteration-0"
+        / "ITERS"
+        / "it.0"
+    )
+    linkstats_path = beam_iter_dir / "0.linkstats.parquet"
+    plans_path = beam_iter_dir / "0.plans.csv.gz"
+    events_path = beam_iter_dir / "0.events.parquet"
+    for path in (linkstats_path, plans_path, events_path):
+        _write_file(path)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "cached-run-id"
+            return {
+                "linkstats_parquet_2018_0": str(linkstats_path),
+                "beam_plans_out_2018_0": str(plans_path),
+                "events_parquet_2018_0": str(events_path),
+            }
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="beam_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs={
+            LINKSTATS: str(linkstats_path),
+            BEAM_PLANS_OUT: str(plans_path),
+        },
+        run_id="cached-run-id",
+    )
+
+    assert outputs is not None
+    assert holder.beam_run is not None
+    assert holder.beam_run.raw_outputs["events_parquet_2018_0"] == events_path
+    assert coupler.get("events_parquet_2018_0") is not None
+    assert coupler.get("linkstats_parquet_2018_0") is not None

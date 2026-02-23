@@ -1154,16 +1154,35 @@ class BeamPreprocessor(GenericPreprocessor):
             lines = file.readlines()
 
         modified = False
-        with open(beam_config_path, "w") as file:
-            for line in lines:
-                if line.strip().startswith(config_header):
-                    if not modified:  # Write only the first occurrence
-                        file.write(f"{config_header} = {config_value}\n")
-                        modified = True
+        changed = False
+        replacement = f"{config_header} = {config_value}\n"
+        rewritten_lines: List[str] = []
+        for line in lines:
+            if line.strip().startswith(config_header):
+                if not modified:  # Keep only the first occurrence.
+                    rewritten_lines.append(replacement)
+                    modified = True
+                    if line != replacement:
+                        changed = True
                 else:
-                    file.write(line)
-            if not modified:
-                file.write(f"\n{config_header} = {config_value}\n")
+                    # Drop duplicate definitions for the same key.
+                    changed = True
+                continue
+            rewritten_lines.append(line)
+        if not modified:
+            rewritten_lines.append(f"\n{replacement}")
+            changed = True
+
+        if not changed:
+            logger.info(
+                "[BEAM Preprocessor] Config already up to date for %s in %s",
+                config_header,
+                beam_config_path,
+            )
+            return
+
+        with open(beam_config_path, "w") as file:
+            file.writelines(rewritten_lines)
 
         logger.info(
             f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"

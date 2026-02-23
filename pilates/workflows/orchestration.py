@@ -19,6 +19,7 @@ from pilates.utils.coupler_helpers import (
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
+from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
 from pilates.workflows.coupler_namespace import resolve_coupler_value
@@ -307,6 +308,7 @@ def run_manifested_steps(
                 coupler=coupler,
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
+                run_id=getattr(getattr(result, "run", None), "id", None),
             )
         if outputs is None and getattr(result, "cache_hit", False):
             logger.warning(
@@ -328,6 +330,7 @@ def run_manifested_steps(
                     coupler=coupler,
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
+                    run_id=getattr(getattr(result, "run", None), "id", None),
                 )
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
@@ -428,6 +431,7 @@ def run_workflow(
                 coupler=coupler,
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
+                run_id=getattr(getattr(result, "run", None), "id", None),
             )
         if (
             outputs_holder.get_attribute(spec.name) is None
@@ -454,6 +458,7 @@ def run_workflow(
                     coupler=coupler,
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
+                    run_id=getattr(getattr(result, "run", None), "id", None),
                 )
 
         if coupler_keys is not None:
@@ -512,10 +517,74 @@ def _recover_cached_outputs(
     coupler: CouplerProtocol,
     step_inputs: Optional[Mapping[str, Any]] = None,
     cached_outputs: Optional[Mapping[str, Any]] = None,
+    run_id: Optional[str] = None,
 ) -> Optional[Any]:
     """
     Best-effort output recovery for cache hits that skip step execution.
     """
+    _cached_run_outputs_by_key: Optional[Dict[str, Any]] = None
+
+    def _cached_run_outputs() -> Dict[str, Any]:
+        nonlocal _cached_run_outputs_by_key
+        if _cached_run_outputs_by_key is not None:
+            return _cached_run_outputs_by_key
+        _cached_run_outputs_by_key = {}
+        if not run_id:
+            return _cached_run_outputs_by_key
+        tracker = cr.current_tracker()
+        if tracker is None:
+            return _cached_run_outputs_by_key
+        get_run_outputs = getattr(tracker, "get_run_outputs", None)
+        if not callable(get_run_outputs):
+            return _cached_run_outputs_by_key
+        try:
+            run_outputs = get_run_outputs(run_id) or {}
+        except Exception:
+            logger.debug(
+                "Failed loading cached run outputs for run_id=%s", run_id, exc_info=True
+            )
+            return _cached_run_outputs_by_key
+        for raw_key, value in run_outputs.items():
+            if value is None:
+                continue
+            raw_key_str = str(raw_key)
+            local_key = raw_key_str.split("/", 1)[-1]
+            canonical_key = resolve_artifact_key(local_key)
+            _cached_run_outputs_by_key[canonical_key] = value
+        return _cached_run_outputs_by_key
+
+    def _recover_from_cached_artifacts() -> Optional[RecordStore]:
+        output_class = STEP_OUTPUTS_CLASSES.get(step_name)
+        if output_class is None:
+            return None
+        merged: Dict[str, Any] = {}
+        if cached_outputs:
+            for raw_key, value in cached_outputs.items():
+                if value is None:
+                    continue
+                raw_key_str = str(raw_key)
+                local_key = raw_key_str.split("/", 1)[-1]
+                merged[resolve_artifact_key(local_key)] = value
+        for key, value in _cached_run_outputs().items():
+            merged[key] = value
+        if not merged:
+            return None
+        record_store = RecordStore()
+        for key, value in merged.items():
+            path = _existing_path(value)
+            if path is None:
+                continue
+            record_store.add_record(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=key,
+                    description=f"Recovered cached output: {key}",
+                )
+            )
+        if not record_store.all_records():
+            return None
+        return record_store
+
     def _resolve_cached_value(key: str) -> Any:
         if cached_outputs:
             for raw_key, value in cached_outputs.items():
@@ -525,6 +594,9 @@ def _recover_cached_outputs(
                 local_key = raw_key_str.split("/", 1)[-1]
                 if resolve_artifact_key(local_key) == key:
                     return value
+        run_outputs = _cached_run_outputs()
+        if key in run_outputs:
+            return run_outputs[key]
         resolved, _ = resolve_coupler_value(coupler, key)
         return resolved
 
@@ -774,7 +846,9 @@ def _recover_cached_outputs(
         if not record_store.all_records():
             return None
     else:
-        return None
+        record_store = _recover_from_cached_artifacts()
+        if record_store is None:
+            return None
 
     output_class = STEP_OUTPUTS_CLASSES.get(step_name)
     if output_class is None:
