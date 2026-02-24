@@ -39,6 +39,14 @@ Default `lr7`:
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
 ```
 
+By default this requests `240G` on `lr7`.
+
+Use high-memory `lr7` mode (`480G`):
+
+```bash
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml --high-mem
+```
+
 Use `lr8`:
 
 ```bash
@@ -55,7 +63,8 @@ Restart from an existing stage file:
 
 `job_runner.sh` supports settings files that contain `${BEAM_MEMORY}`.
 
-- For `lr7`, default is `400g`.
+- For `lr7 --high-mem`, default is `400g`.
+- For default `lr7` (240G job memory), default is `180g`.
 - For `lr8`, default is `600g`.
 
 Override explicitly:
@@ -139,4 +148,3 @@ python3 scripts/migrate_config.py <old> <old>_migrated.yaml --no-validate
 ```
 
 and uses the migrated file if migration succeeds.
-

@@ -14,15 +14,35 @@ settings_file="settings.yaml"  # May be a template with ${BEAM_MEMORY}
 generated_settings_file="settings_${JOB_NAME}.yaml"
 stage_file="current_stage_${JOB_NAME}.yaml"
 partition_arg="lr7"
+high_mem=false
 
-while getopts :c:s:p: name
-do
-    case $name in
-    c) settings_file="$OPTARG" ;;
-    s) stage_file="$OPTARG" ;;
-    p) partition_arg="$OPTARG" ;;
-    ?) printf "Usage: %s: [-c settings file] [-s stage file] [-p partition]\n" "$0"
-       exit 2 ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -c)
+        settings_file="${2:-}"
+        shift 2
+        ;;
+    -s)
+        stage_file="${2:-}"
+        shift 2
+        ;;
+    -p)
+        partition_arg="${2:-}"
+        shift 2
+        ;;
+    --high-mem|-H)
+        high_mem=true
+        shift
+        ;;
+    -h|--help)
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [--high-mem|-H]"
+        echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        exit 0
+        ;;
+    *)
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [--high-mem|-H]\n" "$0"
+        exit 2
+        ;;
     esac
 done
 
@@ -33,13 +53,21 @@ case "$partition_arg" in
         NUM_CPUS=128
         MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-700}"
         BEAM_MEMORY="${BEAM_MEMORY:-600g}"
+        if [ "$high_mem" = true ]; then
+            echo "NOTE: --high-mem is only applied for lr7; ignoring for lr8."
+        fi
         ;;
     lr7)
         PARTITION="lr7"
         QOS="lr_normal"
         NUM_CPUS=56
-        MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-500}"
-        BEAM_MEMORY="${BEAM_MEMORY:-400g}"
+        if [ "$high_mem" = true ]; then
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-480}"
+            BEAM_MEMORY="${BEAM_MEMORY:-400g}"
+        else
+            MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-240}"
+            BEAM_MEMORY="${BEAM_MEMORY:-180g}"
+        fi
         ;;
     *)
         echo "ERROR: unsupported partition '$partition_arg' (expected lr7 or lr8)"
