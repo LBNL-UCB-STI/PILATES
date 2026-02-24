@@ -151,6 +151,16 @@ def _db_restore_on_start_strict(settings: Any) -> bool:
     return bool(getattr(run_cfg, "consist_db_restore_strict", False))
 
 
+def _db_seed_from_shared_on_start_enabled(settings: Any) -> bool:
+    run_cfg = getattr(settings, "run", None)
+    return bool(getattr(run_cfg, "consist_db_seed_from_shared_on_start", False))
+
+
+def _db_seed_from_shared_strict(settings: Any) -> bool:
+    run_cfg = getattr(settings, "run", None)
+    return bool(getattr(run_cfg, "consist_db_seed_strict", False))
+
+
 def snapshot_meta_filename(db_filename: str) -> str:
     """Return paired metadata sidecar name for a snapshot DB basename."""
     return f"{Path(db_filename).stem}.snapshot_meta.json"
@@ -229,6 +239,68 @@ def restore_local_consist_db_from_snapshot(
             f"{source_db} -> {local_db}: {exc}"
         )
         if _db_restore_on_start_strict(settings):
+            raise RuntimeError(msg) from exc
+        logger.warning(msg)
+        return False
+
+
+def seed_local_consist_db_from_shared(
+    *,
+    settings: Any,
+    local_db_path: Optional[str],
+    shared_db_path: Optional[str],
+) -> bool:
+    """
+    Seed a missing run-local Consist DB from the configured shared DB path.
+
+    This is evaluated after snapshot restore. It is disabled unless
+    ``run.consist_db_seed_from_shared_on_start`` is set.
+    """
+    if (
+        not local_db_path
+        or not shared_db_path
+        or not _db_seed_from_shared_on_start_enabled(settings)
+        or not is_local_consist_db_enabled(settings)
+    ):
+        return False
+
+    local_db = Path(local_db_path)
+    if local_db.exists():
+        return False
+
+    shared_db = Path(os.path.realpath(os.path.expandvars(str(shared_db_path))))
+    if os.path.realpath(str(local_db)) == str(shared_db):
+        logger.warning(
+            "Skipping Consist DB seed; shared and local DB paths are identical: %s",
+            shared_db,
+        )
+        return False
+    if not shared_db.exists():
+        msg = f"Shared Consist DB not found for seed: {shared_db}"
+        if _db_seed_from_shared_strict(settings):
+            raise RuntimeError(msg)
+        logger.warning(msg)
+        return False
+
+    local_wal = local_db.parent / f"{local_db.name}.wal"
+    shared_wal = shared_db.parent / f"{shared_db.name}.wal"
+    local_db.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(shared_db, local_db)
+        if shared_wal.exists():
+            shutil.copy2(shared_wal, local_wal)
+        logger.info(
+            "Seeded local Consist DB from shared DB %s -> %s",
+            shared_db,
+            local_db,
+        )
+        return True
+    except Exception as exc:
+        msg = (
+            "Failed seeding local Consist DB from shared DB "
+            f"{shared_db} -> {local_db}: {exc}"
+        )
+        if _db_seed_from_shared_strict(settings):
             raise RuntimeError(msg) from exc
         logger.warning(msg)
         return False

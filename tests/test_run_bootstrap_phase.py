@@ -304,6 +304,70 @@ def test_restore_local_consist_db_from_snapshot_hydrates_missing_local_db(tmp_pa
     ).exists()
 
 
+def test_seed_local_consist_db_from_shared_hydrates_missing_local_db(tmp_path):
+    shared_db = tmp_path / "shared" / "provenance.duckdb"
+    shared_db.parent.mkdir(parents=True, exist_ok=True)
+    shared_db.write_text("db", encoding="utf-8")
+    shared_wal = shared_db.with_suffix(".duckdb.wal")
+    shared_wal.write_text("wal", encoding="utf-8")
+
+    local_db = tmp_path / "local-run" / ".consist" / "provenance.duckdb"
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            consist_db_seed_from_shared_on_start=True,
+            consist_db_seed_strict=False,
+        )
+    )
+
+    seeded = snapshot_module.seed_local_consist_db_from_shared(
+        settings=settings,
+        local_db_path=str(local_db),
+        shared_db_path=str(shared_db),
+    )
+
+    assert seeded is True
+    assert local_db.read_text(encoding="utf-8") == "db"
+    assert local_db.with_suffix(".duckdb.wal").read_text(encoding="utf-8") == "wal"
+
+
+def test_seed_local_consist_db_from_shared_disabled_returns_false(tmp_path):
+    shared_db = tmp_path / "shared" / "provenance.duckdb"
+    shared_db.parent.mkdir(parents=True, exist_ok=True)
+    shared_db.write_text("db", encoding="utf-8")
+    local_db = tmp_path / "local-run" / ".consist" / "provenance.duckdb"
+    settings = SimpleNamespace(
+        run=SimpleNamespace(consist_db_seed_from_shared_on_start=False)
+    )
+
+    seeded = snapshot_module.seed_local_consist_db_from_shared(
+        settings=settings,
+        local_db_path=str(local_db),
+        shared_db_path=str(shared_db),
+    )
+
+    assert seeded is False
+    assert not local_db.exists()
+
+
+def test_seed_local_consist_db_from_shared_missing_source_returns_false(tmp_path):
+    local_db = tmp_path / "local-run" / ".consist" / "provenance.duckdb"
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            consist_db_seed_from_shared_on_start=True,
+            consist_db_seed_strict=False,
+        )
+    )
+
+    seeded = snapshot_module.seed_local_consist_db_from_shared(
+        settings=settings,
+        local_db_path=str(local_db),
+        shared_db_path=str(tmp_path / "shared" / "missing.duckdb"),
+    )
+
+    assert seeded is False
+    assert not local_db.exists()
+
+
 def test_snapshot_manager_triggers_outer_iteration_snapshots(tmp_path):
     tracker = DummySnapshotTracker()
     settings = SimpleNamespace(

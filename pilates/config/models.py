@@ -130,6 +130,20 @@ class RunConfig(BaseModel):
             "is enabled"
         ),
     )
+    consist_db_seed_from_shared_on_start: bool = Field(
+        False,
+        description=(
+            "When run-local DB mode is enabled and local DB is missing, seed it from "
+            "shared.database.path if no run snapshot restore is available"
+        ),
+    )
+    consist_db_seed_strict: bool = Field(
+        False,
+        description=(
+            "Fail startup if seed-from-shared is enabled but seeding the local Consist "
+            "DB from shared.database.path fails"
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")

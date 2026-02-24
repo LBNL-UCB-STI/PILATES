@@ -38,6 +38,7 @@ from pilates.utils.consist_db_snapshot import (
     mirror_consist_db_to_archive,
     resolve_consist_db_paths,
     restore_local_consist_db_from_snapshot,
+    seed_local_consist_db_from_shared,
 )
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.coupler_schema import build_coupler_schema
@@ -549,11 +550,18 @@ def main():
     )
     if local_consist_db_path:
         os.makedirs(os.path.dirname(local_consist_db_path), exist_ok=True)
-    restore_local_consist_db_from_snapshot(
+    restored_from_snapshot = restore_local_consist_db_from_snapshot(
         settings=settings,
         local_db_path=local_consist_db_path,
         archive_run_dir=archive_run_dir,
     )
+    if not restored_from_snapshot:
+        shared_db_path = getattr(getattr(settings, "shared", None), "database", None)
+        seed_local_consist_db_from_shared(
+            settings=settings,
+            local_db_path=local_consist_db_path,
+            shared_db_path=getattr(shared_db_path, "path", None),
+        )
     logger.info(
         "Initializing Consist Tracker in %s (db_path=%s)",
         archive_run_dir,
