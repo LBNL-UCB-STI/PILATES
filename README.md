@@ -103,7 +103,10 @@ For detailed setup and usage instructions, see [docs/database-setup.md](docs/dat
 
 ### HPC Execution
 
-For high-performance computing environments, specialized scripts are available in the `hpc/` directory. For detailed instructions on setting up PILATES on the Lawrencium cluster, see [lawrencium-setup.md](lawrencium-setup.md).
+For high-performance computing environments, specialized scripts are available in the `hpc/` directory.
+
+- Current job-script usage and environment behavior: [hpc/README.md](hpc/README.md)
+- Legacy Lawrencium setup notes and data bootstrap steps: [lawrencium-setup.md](lawrencium-setup.md)
 
 ```bash
 cd hpc
