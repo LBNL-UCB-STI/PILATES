@@ -33,6 +33,12 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
+from pilates.utils.consist_db_snapshot import (
+    ConsistDbSnapshotManager,
+    mirror_consist_db_to_archive,
+    resolve_consist_db_paths,
+    restore_local_consist_db_from_snapshot,
+)
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
@@ -536,16 +542,30 @@ def main():
     # Use the directory containing `run.py` as the canonical inputs root.
     project_root_abs = str(Path(__file__).resolve().parent)
 
-    logger.info("Initializing Consist Tracker in %s", archive_run_dir)
+    local_consist_db_path, archive_consist_db_path = resolve_consist_db_paths(
+        settings=settings,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+    if local_consist_db_path:
+        os.makedirs(os.path.dirname(local_consist_db_path), exist_ok=True)
+    restore_local_consist_db_from_snapshot(
+        settings=settings,
+        local_db_path=local_consist_db_path,
+        archive_run_dir=archive_run_dir,
+    )
+    logger.info(
+        "Initializing Consist Tracker in %s (db_path=%s)",
+        archive_run_dir,
+        local_consist_db_path,
+    )
 
     cache_epoch = _resolve_cache_epoch(settings)
 
     tracker = cr.create_tracker(
         settings=settings,
         run_dir=archive_run_dir,
-        db_path=(
-            settings.shared.database.path if settings.shared.database.enabled else None
-        ),
+        db_path=local_consist_db_path,
         cache_epoch=cache_epoch,
         mounts={
             "inputs": project_root_abs,  # Immutable Source
@@ -561,6 +581,12 @@ def main():
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
+    snapshot_manager = ConsistDbSnapshotManager(
+        settings=settings,
+        tracker=tracker,
+        local_db_path=local_consist_db_path,
+        archive_run_dir=archive_run_dir,
+    )
 
     # 4. INITIALIZE WORKSPACE
     workspace = Workspace(
@@ -680,6 +706,9 @@ def main():
                         outputs_holder_year=outputs_holder_year,
                     )
                     state.complete_step(WorkflowState.Stage.land_use)
+                    snapshot_manager.maybe_snapshot_interval(
+                        reason=f"after_land_use_y{year}"
+                    )
 
                 if state.should_run(WorkflowState.Stage.vehicle_ownership_model):
                     formatted_print(
@@ -695,6 +724,9 @@ def main():
                         build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
                     )
                     state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+                    snapshot_manager.maybe_snapshot_interval(
+                        reason=f"after_vehicle_ownership_y{year}"
+                    )
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
@@ -706,6 +738,15 @@ def main():
                         year=year,
                         usim_inputs=usim_inputs,
                         build_manifest_path=build_manifest_path,
+                        on_iteration_boundary=(
+                            lambda iteration, y=year: snapshot_manager.on_outer_iteration_boundary(
+                                year=y,
+                                iteration=iteration,
+                            )
+                        ),
+                    )
+                    snapshot_manager.maybe_snapshot_interval(
+                        reason=f"after_supply_demand_y{year}"
                     )
 
                 if state.should_run(WorkflowState.Stage.postprocessing):
@@ -719,12 +760,19 @@ def main():
                         year=year,
                     )
                     state.complete_step(WorkflowState.Stage.postprocessing)
+                    snapshot_manager.maybe_snapshot_interval(
+                        reason=f"after_postprocessing_y{year}"
+                    )
+                snapshot_manager.maybe_snapshot_interval(reason=f"year_boundary_y{year}")
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")
     finally:
+        snapshot_ok = snapshot_manager.final_snapshot()
         flush_archive_queue(timeout=300)
         stop_archive_worker(timeout=30)
+        if not snapshot_ok:
+            mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)
 
 
 if __name__ == "__main__":

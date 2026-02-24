@@ -1144,6 +1144,7 @@ def run_supply_demand_stage(
     year: int,
     usim_inputs: Mapping[str, Union[str, os.PathLike]],
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
+    on_iteration_boundary: Optional[Callable[[int], None]] = None,
 ) -> None:
     """
     Run the supply-demand loop (ActivitySim + BEAM) for the year.
@@ -1175,6 +1176,9 @@ def run_supply_demand_stage(
         ActivitySim preprocessing when land use was not run.
     build_manifest_path : Callable[[Workspace, int, int], os.PathLike]
         Factory for per-year/per-iteration manifest file locations.
+    on_iteration_boundary : Optional[Callable[[int], None]], optional
+        Callback invoked after each outer iteration completes. Intended for
+        orchestration-level safe-point actions such as DB snapshots.
 
     State Machine & Resume Behavior
     -------------------------------
@@ -1268,5 +1272,8 @@ def run_supply_demand_stage(
                 inputs=traffic_inputs,
                 outputs_holder=outputs_holder,
             ).previous_beam_outputs
+
+        if on_iteration_boundary is not None:
+            on_iteration_boundary(i)
 
     state.complete_step(state.Stage.supply_demand_loop)

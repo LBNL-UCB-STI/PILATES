@@ -80,6 +80,56 @@ class RunConfig(BaseModel):
             "Enable cache probing for the pre-scenario bootstrap initialization phase"
         ),
     )
+    consist_db_local_run: bool = Field(
+        True,
+        description=(
+            "Store Consist provenance DB in the node-local run directory and mirror it "
+            "to the archive run directory at shutdown"
+        ),
+    )
+    consist_db_filename: str = Field(
+        "provenance.duckdb",
+        description=(
+            "Filename to use for the run-local Consist DB when consist_db_local_run "
+            "is enabled"
+        ),
+    )
+    consist_db_snapshot_enabled: bool = Field(
+        True,
+        description="Enable periodic checkpoint snapshots of the run-local Consist DB",
+    )
+    consist_db_snapshot_interval_seconds: int = Field(
+        600,
+        description=(
+            "Minimum seconds between interval-based Consist DB snapshots at safe points"
+        ),
+        ge=0,
+    )
+    consist_db_snapshot_on_outer_iteration: bool = Field(
+        True,
+        description=(
+            "Create a Consist DB snapshot at each supply-demand outer iteration boundary"
+        ),
+    )
+    consist_db_snapshot_keep_last: int = Field(
+        3,
+        description="Number of historical Consist DB snapshots to retain per run",
+        ge=1,
+    )
+    consist_db_restore_on_start: bool = Field(
+        True,
+        description=(
+            "Restore run-local Consist DB from latest archived snapshot when local DB is "
+            "missing at startup"
+        ),
+    )
+    consist_db_restore_strict: bool = Field(
+        False,
+        description=(
+            "Fail startup if Consist DB restore from archive snapshot fails when restore "
+            "is enabled"
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
@@ -97,6 +147,16 @@ class RunConfig(BaseModel):
         if v is None:
             return v
         return os.path.expandvars(v)
+
+    @field_validator("consist_db_filename")
+    @classmethod
+    def validate_consist_db_filename(cls, v):
+        """Require a basename-only filename for local run DB placement."""
+        if not v:
+            raise ValueError("consist_db_filename must not be empty")
+        if os.path.basename(v) != v:
+            raise ValueError("consist_db_filename must be a filename, not a path")
+        return v
 
     @field_validator("end_year")
     @classmethod
