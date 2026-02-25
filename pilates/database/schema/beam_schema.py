@@ -2,8 +2,164 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, Float, ForeignKey, Integer, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+)
 from sqlmodel import Field, SQLModel
+from pilates.database.schema.activitysim_schema import (
+    HouseholdsAsimOut,
+    PersonsAsimOut,
+)
+
+
+class HouseholdsBeamIn(HouseholdsAsimOut, table=True):
+    __tablename__ = "HouseholdsBeamIn"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    household_id: Optional[int] = Field(
+        default=None,
+        description="Household identifier used to relate persons to households.",
+        sa_column=Column(
+            "household_id",
+            BigInteger,
+            ForeignKey("HouseholdsAsimOut.household_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+
+class PersonsBeamIn(PersonsAsimOut, table=True):
+    __tablename__ = "PersonsBeamIn"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    person_id: Optional[int] = Field(
+        default=None,
+        description="Person identifier unique within the input population.",
+        sa_column=Column(
+            "person_id",
+            BigInteger,
+            ForeignKey("PersonsAsimOut.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+
+class VehiclesBeamIn(SQLModel, table=True):
+    __tablename__ = "VehiclesBeamIn"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "vehicle_id", "year"],
+            [
+                "VehiclesAtlasOut.household_id",
+                "VehiclesAtlasOut.vehicle_id",
+                "VehiclesAtlasOut.year",
+            ],
+        ),
+        {"extend_existing": True},
+    )
+    __abstract__ = True
+
+    household_id: Optional[int] = Field(
+        default=None,
+        description="Household identifier associated with the vehicle.",
+        sa_column=Column(
+            "household_id",
+            BigInteger,
+            ForeignKey("HouseholdsBeamIn.household_id"),
+            primary_key=True,
+            nullable=True,
+            index=True,
+        ),
+    )
+    vehicle_id: Optional[int] = Field(
+        default=None,
+        description="Vehicle identifier within the household.",
+        sa_column=Column(
+            "vehicle_id", BigInteger, primary_key=True, nullable=True, index=True
+        ),
+    )
+    bodytype: Optional[str] = Field(
+        default=None,
+        description="Body type category for the vehicle.",
+        sa_column=Column("bodytype", String, nullable=True),
+    )
+    pred_power: Optional[str] = Field(
+        default=None,
+        description="Predicted powertrain category.",
+        sa_column=Column("pred_power", String, nullable=True),
+    )
+    ownlease: Optional[str] = Field(
+        default=None,
+        description="Ownership/lease status for the vehicle.",
+        sa_column=Column("ownlease", String, nullable=True),
+    )
+    modelyear: Optional[int] = Field(
+        default=None,
+        description="Vehicle model year.",
+        sa_column=Column("modelyear", BigInteger, nullable=True),
+    )
+    adopt_fuel: Optional[str] = Field(
+        default=None,
+        description="Adopted fuel type for the vehicle.",
+        sa_column=Column("adopt_fuel", String, nullable=True),
+    )
+    adopt_veh: Optional[str] = Field(
+        default=None,
+        description="Vehicle technology adoption category.",
+        sa_column=Column("adopt_veh", String, nullable=True),
+    )
+    acquire_year: Optional[str] = Field(
+        default=None,
+        description="Vehicle acquisition year.",
+        sa_column=Column("acquire_year", String, nullable=True),
+    )
+    vehicle_tag: Optional[str] = Field(
+        default=None,
+        description="Vehicle tag/identifier label.",
+        sa_column=Column("vehicle_tag", String, nullable=True),
+    )
+    year: Optional[int] = Field(
+        default=None,
+        description="Model year associated with the output record.",
+        sa_column=Column("year", BigInteger, primary_key=True, nullable=True, index=True),
+    )
+    newhhflag: Optional[str] = Field(
+        default=None,
+        description="Indicator for newly created household in the model year.",
+        sa_column=Column("newhhflag", String, nullable=True),
+    )
+    maindriver_id: Optional[int] = Field(
+        default=None,
+        description="Primary driver identifier for the vehicle.",
+        sa_column=Column(
+            "maindriver_id",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    vintage_category: Optional[str] = Field(
+        default=None,
+        description="Vehicle vintage/age category.",
+        sa_column=Column("vintage_category", String, nullable=True),
+    )
+    vehicletypeid: Optional[str] = Field(
+        default=None,
+        description="BEAM vehicle type identifier composed by the ATLAS postprocessor.",
+        sa_column=Column("vehicleTypeId", String, nullable=True, index=True),
+    )
 
 
 class PlansBeamIn(SQLModel, table=True):
@@ -20,7 +176,13 @@ class PlansBeamIn(SQLModel, table=True):
     trip_id: Optional[int] = Field(
         default=None,
         description="Trip identifier in ActivitySim outputs.",
-        sa_column=Column("trip_id", BigInteger, nullable=True, index=True),
+        sa_column=Column(
+            "trip_id",
+            BigInteger,
+            ForeignKey("tripsAsimOut.trip_id"),
+            nullable=True,
+            index=True,
+        ),
     )
     person_id: Optional[int] = Field(
         default=None,
@@ -28,7 +190,7 @@ class PlansBeamIn(SQLModel, table=True):
         sa_column=Column(
             "person_id",
             BigInteger,
-            ForeignKey("PersonsAsimOut.person_id"),
+            ForeignKey("PersonsBeamIn.person_id"),
             nullable=True,
             index=True,
         ),
@@ -286,4 +448,1107 @@ class BeamLinkstats(SQLModel, table=True):
         default=None,
         description="Observed or simulated travel time for the link-hour.",
         sa_column=Column("traveltime", Float, nullable=True),
+    )
+
+
+class BeamEventsLeavingParkingEvent(SQLModel, table=True):
+    __tablename__ = "BeamEventsLeavingParkingEvent"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    leavingparkingeventeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "LeavingParkingEventEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    driver: Optional[int] = Field(
+        default=None,
+        description="Optional driver person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "driver",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    chargingpointtype: Optional[str] = Field(
+        default=None,
+        description="Charging point type used at the parking location.",
+        sa_column=Column("chargingPointType", String, nullable=True),
+    )
+    vehicle: Optional[str] = Field(
+        default=None,
+        description="Vehicle identifier involved in the event.",
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    parkingtype: Optional[str] = Field(
+        default=None,
+        description="Parking type classification.",
+        sa_column=Column("parkingType", String, nullable=True),
+    )
+    cost: Optional[float] = Field(
+        default=None,
+        description="Parking cost charged for the event.",
+        sa_column=Column("cost", Float, nullable=True),
+    )
+    parkingtaz: Optional[str] = Field(
+        default=None,
+        description="Parking TAZ identifier emitted by BEAM.",
+        sa_column=Column("parkingTaz", String, nullable=True),
+    )
+    duration: Optional[float] = Field(
+        default=None,
+        description="Parking duration in seconds.",
+        sa_column=Column("duration", Float, nullable=True),
+    )
+    links: Optional[str] = Field(
+        default=None,
+        description="Serialized route links associated with the event.",
+        sa_column=Column("links", String, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    score: Optional[float] = Field(
+        default=None,
+        description="Score emitted for this parking decision.",
+        sa_column=Column("score", Float, nullable=True),
+    )
+    pricingmodel: Optional[str] = Field(
+        default=None,
+        description="Pricing model used to calculate parking cost.",
+        sa_column=Column("pricingModel", String, nullable=True),
+    )
+    parkingzoneid: Optional[str] = Field(
+        default=None,
+        description="Parking zone identifier.",
+        sa_column=Column("parkingZoneId", String, nullable=True),
+    )
+    emissions: Optional[str] = Field(
+        default=None,
+        description="Serialized emissions payload if present.",
+        sa_column=Column("emissions", String, nullable=True),
+    )
+
+
+class BeamEventsModeChoice(SQLModel, table=True):
+    __tablename__ = "BeamEventsModeChoice"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    modechoiceeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "ModeChoiceEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    tourindex: Optional[int] = Field(
+        default=None,
+        description="Tour index in the executed plan.",
+        sa_column=Column("tourIndex", Integer, nullable=True),
+    )
+    currentactivity: Optional[str] = Field(
+        default=None,
+        description="Current activity before mode choice.",
+        sa_column=Column("currentActivity", String, nullable=True),
+    )
+    tripid: Optional[int] = Field(
+        default=None,
+        description="Trip identifier carried through BEAM eventing.",
+        sa_column=Column(
+            "tripId",
+            BigInteger,
+            ForeignKey("tripsAsimOut.trip_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    personalvehicleavailable: Optional[bool] = Field(
+        default=None,
+        description="Whether a personal vehicle was available to the traveler.",
+        sa_column=Column("personalVehicleAvailable", Boolean, nullable=True),
+    )
+    currenttourmode: Optional[str] = Field(
+        default=None,
+        description="Current tour mode when the choice was made.",
+        sa_column=Column("currentTourMode", String, nullable=True),
+    )
+    nextactivity: Optional[str] = Field(
+        default=None,
+        description="Next activity after this leg.",
+        sa_column=Column("nextActivity", String, nullable=True),
+    )
+    location: Optional[int] = Field(
+        default=None,
+        description="Location identifier reported for the mode choice event.",
+        sa_column=Column("location", Integer, nullable=True, index=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    availablealternatives: Optional[str] = Field(
+        default=None,
+        description="Serialized available alternative set.",
+        sa_column=Column("availableAlternatives", String, nullable=True),
+    )
+    legmodes: Optional[str] = Field(
+        default=None,
+        description="Serialized leg mode sequence.",
+        sa_column=Column("legModes", String, nullable=True),
+    )
+    length: Optional[float] = Field(
+        default=None,
+        description="Trip length associated with the choice.",
+        sa_column=Column("length", Float, nullable=True),
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Chosen mode.",
+        sa_column=Column("mode", String, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    legvehicleids: Optional[str] = Field(
+        default=None,
+        description="Serialized leg vehicle identifiers.",
+        sa_column=Column("legVehicleIds", String, nullable=True),
+    )
+
+
+class BeamEventsParkingEvent(SQLModel, table=True):
+    __tablename__ = "BeamEventsParkingEvent"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    parkingeventeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "ParkingEventEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    driver: Optional[int] = Field(
+        default=None,
+        description="Optional driver person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "driver",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    chargingpointtype: Optional[str] = Field(
+        default=None,
+        description="Charging point type used at the parking location.",
+        sa_column=Column("chargingPointType", String, nullable=True),
+    )
+    locationy: Optional[float] = Field(
+        default=None,
+        description="Y coordinate of the parking location.",
+        sa_column=Column("locationY", Float, nullable=True),
+    )
+    vehicle: Optional[str] = Field(
+        default=None,
+        description="Vehicle identifier involved in the event.",
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    parkingtype: Optional[str] = Field(
+        default=None,
+        description="Parking type classification.",
+        sa_column=Column("parkingType", String, nullable=True),
+    )
+    cost: Optional[float] = Field(
+        default=None,
+        description="Parking cost charged for the event.",
+        sa_column=Column("cost", Float, nullable=True),
+    )
+    parkingtaz: Optional[str] = Field(
+        default=None,
+        description="Parking TAZ identifier emitted by BEAM.",
+        sa_column=Column("parkingTaz", String, nullable=True),
+    )
+    links: Optional[str] = Field(
+        default=None,
+        description="Serialized route links associated with the event.",
+        sa_column=Column("links", String, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    locationx: Optional[float] = Field(
+        default=None,
+        description="X coordinate of the parking location.",
+        sa_column=Column("locationX", Float, nullable=True),
+    )
+    pricingmodel: Optional[str] = Field(
+        default=None,
+        description="Pricing model used to calculate parking cost.",
+        sa_column=Column("pricingModel", String, nullable=True),
+    )
+    parkingzoneid: Optional[str] = Field(
+        default=None,
+        description="Parking zone identifier.",
+        sa_column=Column("parkingZoneId", String, nullable=True),
+    )
+
+
+class BeamEventsPathTraversal(SQLModel, table=True):
+    __tablename__ = "BeamEventsPathTraversal"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    pathtraversaleventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "PathTraversalEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    capacity: Optional[int] = Field(
+        default=None,
+        description="Vehicle capacity reported in the event.",
+        sa_column=Column("capacity", Integer, nullable=True),
+    )
+    weight: Optional[str] = Field(
+        default=None,
+        description="Vehicle weight class payload from BEAM.",
+        sa_column=Column("weight", String, nullable=True),
+    )
+    driver: Optional[int] = Field(
+        default=None,
+        description="Optional driver person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "driver",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    fromstopindex: Optional[str] = Field(
+        default=None,
+        description="From-stop index for transit traversals.",
+        sa_column=Column("fromStopIndex", String, nullable=True),
+    )
+    numpassengers: Optional[int] = Field(
+        default=None,
+        description="Passenger count for the traversal.",
+        sa_column=Column("numPassengers", Integer, nullable=True),
+    )
+    starty: Optional[float] = Field(
+        default=None,
+        description="Start Y coordinate.",
+        sa_column=Column("startY", Float, nullable=True),
+    )
+    vehicle: Optional[int] = Field(
+        default=None,
+        description="Optional vehicle identifier when it maps to VehiclesBeamIn.",
+        sa_column=Column(
+            "vehicle",
+            BigInteger,
+            ForeignKey("VehiclesBeamIn.vehicle_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    endx: Optional[float] = Field(
+        default=None,
+        description="End X coordinate.",
+        sa_column=Column("endX", Float, nullable=True),
+    )
+    secondaryfuellevel: Optional[float] = Field(
+        default=None,
+        description="Secondary fuel level after traversal.",
+        sa_column=Column("secondaryFuelLevel", Float, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    primaryfueltype: Optional[str] = Field(
+        default=None,
+        description="Primary fuel type for the vehicle.",
+        sa_column=Column("primaryFuelType", String, nullable=True),
+    )
+    seatingcapacity: Optional[int] = Field(
+        default=None,
+        description="Seating capacity for the vehicle.",
+        sa_column=Column("seatingCapacity", Integer, nullable=True),
+    )
+    secondaryfuel: Optional[float] = Field(
+        default=None,
+        description="Secondary fuel consumed on the traversal.",
+        sa_column=Column("secondaryFuel", Float, nullable=True),
+    )
+    departuretime: Optional[int] = Field(
+        default=None,
+        description="Departure time in simulation seconds.",
+        sa_column=Column("departureTime", Integer, nullable=True),
+    )
+    secondaryfueltype: Optional[str] = Field(
+        default=None,
+        description="Secondary fuel type for the vehicle.",
+        sa_column=Column("secondaryFuelType", String, nullable=True),
+    )
+    arrivaltime: Optional[int] = Field(
+        default=None,
+        description="Arrival time in simulation seconds.",
+        sa_column=Column("arrivalTime", Integer, nullable=True),
+    )
+    tollpaid: Optional[float] = Field(
+        default=None,
+        description="Toll paid during traversal.",
+        sa_column=Column("tollPaid", Float, nullable=True),
+    )
+    payloads: Optional[str] = Field(
+        default=None,
+        description="Serialized payload description for freight events.",
+        sa_column=Column("payloads", String, nullable=True),
+    )
+    length: Optional[float] = Field(
+        default=None,
+        description="Traversal length in meters.",
+        sa_column=Column("length", Float, nullable=True),
+    )
+    tostopindex: Optional[str] = Field(
+        default=None,
+        description="To-stop index for transit traversals.",
+        sa_column=Column("toStopIndex", String, nullable=True),
+    )
+    endy: Optional[float] = Field(
+        default=None,
+        description="End Y coordinate.",
+        sa_column=Column("endY", Float, nullable=True),
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Traversal mode.",
+        sa_column=Column("mode", String, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    startx: Optional[float] = Field(
+        default=None,
+        description="Start X coordinate.",
+        sa_column=Column("startX", Float, nullable=True),
+    )
+    primaryfuel: Optional[float] = Field(
+        default=None,
+        description="Primary fuel consumed on the traversal.",
+        sa_column=Column("primaryFuel", Float, nullable=True),
+    )
+    riders: Optional[str] = Field(
+        default=None,
+        description="Serialized rider identifiers.",
+        sa_column=Column("riders", String, nullable=True),
+    )
+    currenttripmode: Optional[str] = Field(
+        default=None,
+        description="Current trip mode at traversal time.",
+        sa_column=Column("currentTripMode", String, nullable=True),
+    )
+    vehicletype: Optional[str] = Field(
+        default=None,
+        description="Vehicle type classification.",
+        sa_column=Column("vehicleType", String, nullable=True),
+    )
+    emissions: Optional[str] = Field(
+        default=None,
+        description="Serialized emissions payload if present.",
+        sa_column=Column("emissions", String, nullable=True),
+    )
+    primaryfuellevel: Optional[float] = Field(
+        default=None,
+        description="Primary fuel level after traversal.",
+        sa_column=Column("primaryFuelLevel", Float, nullable=True),
+    )
+
+
+class BeamEventsPersonCost(SQLModel, table=True):
+    __tablename__ = "BeamEventsPersonCost"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    personcosteventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "PersonCostEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    tollcost: Optional[str] = Field(
+        default=None,
+        description="Toll cost payload from BEAM.",
+        sa_column=Column("tollCost", String, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    netcost: Optional[str] = Field(
+        default=None,
+        description="Net cost payload from BEAM.",
+        sa_column=Column("netCost", String, nullable=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Mode associated with the cost event.",
+        sa_column=Column("mode", String, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    incentive: Optional[str] = Field(
+        default=None,
+        description="Incentive amount or identifier.",
+        sa_column=Column("incentive", String, nullable=True),
+    )
+
+
+class BeamEventsPersonEntersVehicle(SQLModel, table=True):
+    __tablename__ = "BeamEventsPersonEntersVehicle"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    personentersvehicleeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "PersonEntersVehicleEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    vehicle: Optional[str] = Field(
+        default=None,
+        description="Vehicle identifier entered by the person.",
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+
+
+class BeamEventsPersonLeavesVehicle(SQLModel, table=True):
+    __tablename__ = "BeamEventsPersonLeavesVehicle"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    personleavesvehicleeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "PersonLeavesVehicleEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    vehicle: Optional[str] = Field(
+        default=None,
+        description="Vehicle identifier exited by the person.",
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+
+
+class BeamEventsReplanning(SQLModel, table=True):
+    __tablename__ = "BeamEventsReplanning"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    replanningeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "ReplanningEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    starty: Optional[float] = Field(
+        default=None,
+        description="Origin Y coordinate for replanning.",
+        sa_column=Column("startY", Float, nullable=True),
+    )
+    endx: Optional[float] = Field(
+        default=None,
+        description="Destination X coordinate for replanning.",
+        sa_column=Column("endX", Float, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Reason for triggering replanning.",
+        sa_column=Column("reason", String, nullable=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    endy: Optional[float] = Field(
+        default=None,
+        description="Destination Y coordinate for replanning.",
+        sa_column=Column("endY", Float, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    startx: Optional[float] = Field(
+        default=None,
+        description="Origin X coordinate for replanning.",
+        sa_column=Column("startX", Float, nullable=True),
+    )
+
+
+class BeamEventsReserveRideHail(SQLModel, table=True):
+    __tablename__ = "BeamEventsReserveRideHail"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    reserveridehaileventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "ReserveRideHailEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    starty: Optional[float] = Field(
+        default=None,
+        description="Origin Y coordinate for the reservation.",
+        sa_column=Column("startY", Float, nullable=True),
+    )
+    endx: Optional[float] = Field(
+        default=None,
+        description="Destination X coordinate for the reservation.",
+        sa_column=Column("endX", Float, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    departtime: Optional[int] = Field(
+        default=None,
+        description="Requested departure time.",
+        sa_column=Column("departTime", Integer, nullable=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    endy: Optional[float] = Field(
+        default=None,
+        description="Destination Y coordinate for the reservation.",
+        sa_column=Column("endY", Float, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    startx: Optional[float] = Field(
+        default=None,
+        description="Origin X coordinate for the reservation.",
+        sa_column=Column("startX", Float, nullable=True),
+    )
+    requirewheelchair: Optional[str] = Field(
+        default=None,
+        description="Wheelchair accessibility requirement indicator.",
+        sa_column=Column("requireWheelchair", String, nullable=True),
+    )
+
+
+class BeamEventsTeleportationEvent(SQLModel, table=True):
+    __tablename__ = "BeamEventsTeleportationEvent"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    teleportationeventeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "TeleportationEventEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    starty: Optional[float] = Field(
+        default=None,
+        description="Origin Y coordinate for teleportation.",
+        sa_column=Column("startY", Float, nullable=True),
+    )
+    endx: Optional[float] = Field(
+        default=None,
+        description="Destination X coordinate for teleportation.",
+        sa_column=Column("endX", Float, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    departuretime: Optional[int] = Field(
+        default=None,
+        description="Departure time in simulation seconds.",
+        sa_column=Column("departureTime", Integer, nullable=True),
+    )
+    arrivaltime: Optional[int] = Field(
+        default=None,
+        description="Arrival time in simulation seconds.",
+        sa_column=Column("arrivalTime", Integer, nullable=True),
+    )
+    endy: Optional[float] = Field(
+        default=None,
+        description="Destination Y coordinate for teleportation.",
+        sa_column=Column("endY", Float, nullable=True),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    startx: Optional[float] = Field(
+        default=None,
+        description="Origin X coordinate for teleportation.",
+        sa_column=Column("startX", Float, nullable=True),
+    )
+    currenttripmode: Optional[str] = Field(
+        default=None,
+        description="Current trip mode associated with teleportation.",
+        sa_column=Column("currentTripMode", String, nullable=True),
+    )
+
+
+class BeamEventsActEnd(SQLModel, table=True):
+    __tablename__ = "BeamEventsActEnd"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    actendeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "actendEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    acttype: Optional[str] = Field(
+        default=None,
+        description="Activity type that ended.",
+        sa_column=Column("actType", String, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    link: Optional[int] = Field(
+        default=None,
+        description="Network link where the activity ended.",
+        sa_column=Column(
+            "link",
+            Integer,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+
+
+class BeamEventsActStart(SQLModel, table=True):
+    __tablename__ = "BeamEventsActStart"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    actstarteventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "actstartEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    acttype: Optional[str] = Field(
+        default=None,
+        description="Activity type that started.",
+        sa_column=Column("actType", String, nullable=True),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    link: Optional[int] = Field(
+        default=None,
+        description="Network link where the activity started.",
+        sa_column=Column(
+            "link",
+            Integer,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+
+
+class BeamEventsArrival(SQLModel, table=True):
+    __tablename__ = "BeamEventsArrival"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    arrivaleventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "arrivalEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    link: Optional[int] = Field(
+        default=None,
+        description="Network link where the arrival occurred.",
+        sa_column=Column(
+            "link",
+            Integer,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    legmode: Optional[str] = Field(
+        default=None,
+        description="Leg mode associated with the arrival.",
+        sa_column=Column("legMode", String, nullable=True),
+    )
+
+
+class BeamEventsDeparture(SQLModel, table=True):
+    __tablename__ = "BeamEventsDeparture"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    departureeventid: Optional[int] = Field(
+        default=None,
+        description="Synthetic event identifier assigned during events split.",
+        sa_column=Column(
+            "departureEventId",
+            BigInteger,
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    time: Optional[float] = Field(
+        default=None,
+        description="Event time in simulation seconds.",
+        sa_column=Column("time", Float, nullable=True, index=True),
+    )
+    link: Optional[int] = Field(
+        default=None,
+        description="Network link where the departure occurred.",
+        sa_column=Column(
+            "link",
+            Integer,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    payloadids: Optional[str] = Field(
+        default=None,
+        description="Serialized payload identifiers for freight departures.",
+        sa_column=Column("PayloadIds", String, nullable=True),
+    )
+    person: Optional[int] = Field(
+        default=None,
+        description="Optional person identifier when it maps to PersonsBeamIn.",
+        sa_column=Column(
+            "person",
+            BigInteger,
+            ForeignKey("PersonsBeamIn.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    trip_id: Optional[int] = Field(
+        default=None,
+        description="Trip identifier associated with the departure.",
+        sa_column=Column(
+            "trip_id",
+            BigInteger,
+            ForeignKey("tripsAsimOut.trip_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    type: Optional[str] = Field(
+        default=None,
+        description="BEAM event type label.",
+        sa_column=Column("type", String, nullable=True),
+    )
+    payloadweightinkg: Optional[str] = Field(
+        default=None,
+        description="Serialized payload weight(s) in kilograms.",
+        sa_column=Column("PayloadWeightInKg", String, nullable=True),
+    )
+    legmode: Optional[str] = Field(
+        default=None,
+        description="Leg mode associated with the departure.",
+        sa_column=Column("legMode", String, nullable=True),
+    )
+
+
+class BeamPathTraversalLinks(SQLModel, table=True):
+    __tablename__ = "BeamPathTraversalLinks"
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    pathtraversaleventid: Optional[int] = Field(
+        default=None,
+        description="Reference to the parent PathTraversal split event row.",
+        sa_column=Column(
+            "PathTraversalEventId",
+            BigInteger,
+            ForeignKey("BeamEventsPathTraversal.PathTraversalEventId"),
+            primary_key=True,
+            nullable=False,
+            index=True,
+        ),
+    )
+    link_index: Optional[int] = Field(
+        default=None,
+        description="Ordinal position of the link within the traversal sequence.",
+        sa_column=Column("link_index", BigInteger, primary_key=True, nullable=False),
+    )
+    linkid: Optional[int] = Field(
+        default=None,
+        description="Network link identifier traversed for this segment.",
+        sa_column=Column(
+            "linkId",
+            BigInteger,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    traveltimeseconds: Optional[float] = Field(
+        default=None,
+        description="Travel time for this link segment in seconds.",
+        sa_column=Column("travelTimeSeconds", Float, nullable=True),
     )

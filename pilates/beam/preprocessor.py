@@ -21,7 +21,6 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
-    ATLAS_VEHICLES2_INPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
@@ -376,11 +375,7 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            atlas_input_record, beam_output_record = self._copy_vehicles_from_atlas(
-                workspace
-            )
-            if atlas_input_record is not None:
-                store.add_record(atlas_input_record)
+            beam_output_record = self._copy_vehicles_from_atlas(workspace)
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
 
@@ -500,14 +495,14 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def _copy_vehicles_from_atlas(
         self, workspace: "Workspace"
-    ) -> Tuple[Optional[FileRecord], Optional[FileRecord]]:
+    ) -> Optional[FileRecord]:
         """
         Copies the vehicles file from the ATLAS output to the BEAM input scenario.
 
         Returns
         -------
-        tuple of FileRecord or None
-            (input_record, output_record) for lineage tracking.
+        FileRecord or None
+            Output record for BEAM `vehicles_beam_in`.
         """
         beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
         os.makedirs(beam_scenario_folder, exist_ok=True)
@@ -538,7 +533,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 "ATLAS vehicles2 file not found for BEAM input: %s",
                 atlas_vehicle_file_loc,
             )
-            return None, None
+            return None
 
         logger.info(
             f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
@@ -546,13 +541,6 @@ class BeamPreprocessor(GenericPreprocessor):
 
         df = pd.read_csv(atlas_vehicle_file_loc)
         df.to_csv(beam_vehicles_path, compression="gzip", index=False)
-        input_record = FileRecord(
-            file_path=atlas_vehicle_file_loc,
-            description="ATLAS vehicles2 input for BEAM",
-            short_name=ATLAS_VEHICLES2_INPUT,
-            year=getattr(self.state, "forecast_year", None),
-            iteration=getattr(self.state, "current_inner_iter", None),
-        )
         output_record = FileRecord(
             file_path=beam_vehicles_path,
             description="BEAM vehicles input derived from ATLAS vehicles2",
@@ -560,7 +548,7 @@ class BeamPreprocessor(GenericPreprocessor):
             year=getattr(self.state, "forecast_year", None),
             iteration=getattr(self.state, "current_inner_iter", None),
         )
-        return input_record, output_record
+        return output_record
 
     def _copy_plans_from_asim(
         self,

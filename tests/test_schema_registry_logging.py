@@ -93,3 +93,255 @@ def test_log_output_phys_sim_linkstats_key_attaches_beam_linkstats_schema(monkey
     _, resolved_key, meta = calls[0]
     assert resolved_key == key
     assert meta["schema"].__name__ == "BeamLinkstats"
+
+
+def test_log_output_split_events_key_attaches_curated_split_event_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "events_parquet_2018_0_type_PathTraversal"
+    cr.log_output("/tmp/events.PathTraversal.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamEventsPathTraversal"
+
+
+def test_log_output_path_traversal_links_key_attaches_links_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "path_traversal_links_2018_0"
+    cr.log_output("/tmp/events.PathTraversal.links.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamPathTraversalLinks"
+
+
+def test_log_output_split_events_lowercase_type_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "events_parquet_2018_0_type_actstart"
+    cr.log_output("/tmp/events.actstart.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamEventsActStart"
+
+
+def test_log_output_atlas_householdv_year_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "householdv_2023"
+    cr.log_output("/tmp/householdv_2023.csv", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "HouseholdVAtlasOut"
+
+
+def test_log_output_atlas_vehicles_year_csv_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "vehicles_2023.csv"
+    cr.log_output("/tmp/vehicles_2023.csv", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "VehiclesAtlasOut"
+
+
+def test_log_output_vehicles_beam_in_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "vehicles_beam_in"
+    cr.log_output("/tmp/vehicles.csv.gz", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "VehiclesBeamIn"
+
+
+def test_log_output_households_beam_in_key_attaches_beam_input_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "households_beam_in"
+    cr.log_output("/tmp/households.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "HouseholdsBeamIn"
+
+
+def test_log_output_persons_beam_in_key_attaches_beam_input_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "persons_beam_in"
+    cr.log_output("/tmp/persons.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "PersonsBeamIn"
+
+
+def test_log_output_households_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "households_asim_out"
+    cr.log_output("/tmp/households.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "HouseholdsAsimOut"
+
+
+def test_log_output_persons_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "persons_asim_out"
+    cr.log_output("/tmp/persons.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "PersonsAsimOut"
+
+
+def test_log_output_beam_plans_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "beam_plans_asim_out"
+    cr.log_output("/tmp/beam_plans.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamPlansAsimOut"
+
+
+def test_log_output_trips_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "trips_asim_out"
+    cr.log_output("/tmp/trips.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "TripsAsimOut"
+
+
+def test_log_output_warns_on_schema_column_mismatch_without_failing(
+    monkeypatch, tmp_path, caplog
+):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    csv_path = tmp_path / "householdv_2023.csv"
+    csv_path.write_text("household_id,unexpected_column\n1,foo\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        cr.log_output(str(csv_path), key="householdv_2023", enabled=True)
+
+    assert calls
+    _, _, meta = calls[0]
+    assert meta["schema"].__name__ == "HouseholdVAtlasOut"
+    assert "[SCHEMA WARNING]" in caplog.text
+    assert "missing_columns" in caplog.text
+
+
+def test_log_output_retries_without_schema_when_schema_logging_fails(
+    monkeypatch, caplog
+):
+    calls = []
+
+    def _log_output(path, key=None, enabled=None, **meta):
+        calls.append((enabled, key, dict(meta)))
+        if enabled and "schema" in meta:
+            raise ValueError("schema registration failed")
+        return {"path": path, "key": key}
+
+    monkeypatch.setattr(cr, "consist", types.SimpleNamespace(log_output=_log_output))
+
+    with caplog.at_level("WARNING"):
+        result = cr.log_output("/tmp/households.parquet", key="households_asim_out")
+
+    assert result is not None
+    assert len(calls) == 2
+    assert calls[0][0] is True
+    assert "schema" in calls[0][2]
+    assert calls[1][0] is True
+    assert "schema" not in calls[1][2]
+    assert "retrying without schema metadata" in caplog.text
+
+
+def test_log_output_raises_schema_logging_failure_when_warn_only_disabled(monkeypatch):
+    calls = []
+
+    def _log_output(path, key=None, enabled=None, **meta):
+        calls.append((enabled, key, dict(meta)))
+        if enabled:
+            raise ValueError("schema registration failed")
+        return {"path": path, "key": key}
+
+    monkeypatch.setattr(cr, "consist", types.SimpleNamespace(log_output=_log_output))
+    monkeypatch.setenv("PILATES_SCHEMA_WARN_ONLY", "0")
+
+    try:
+        cr.log_output("/tmp/households.parquet", key="households_asim_out")
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+    assert len(calls) == 1
+
+
+def test_log_output_warns_when_schema_fk_target_not_registered(monkeypatch, caplog):
+    from sqlalchemy import BigInteger, Column, ForeignKey
+    from sqlmodel import Field, SQLModel
+
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    class _BadFkSchema(SQLModel, table=True):
+        __tablename__ = "BadFkSchema"
+        __table_args__ = {"extend_existing": True}
+        __abstract__ = True
+
+        bad_ref: int | None = Field(
+            default=None,
+            sa_column=Column(
+                "bad_ref",
+                BigInteger,
+                ForeignKey("MissingTable.missing_id"),
+                nullable=True,
+            ),
+        )
+
+    monkeypatch.setattr(cr, "_schema_for_key", lambda _key: _BadFkSchema)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/does_not_matter.parquet", key="bad_fk_key", enabled=True)
+
+    assert calls
+    assert "target table is not registered in schema registry" in caplog.text

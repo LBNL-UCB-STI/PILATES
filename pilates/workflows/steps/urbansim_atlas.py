@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict
 
 from pilates.config.models import PilatesConfig
@@ -10,6 +11,7 @@ from pilates.workspace import Workspace
 from .shared import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
+    USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
     AtlasPostprocessOutputs,
     AtlasPreprocessOutputs,
@@ -430,6 +432,34 @@ def make_atlas_postprocess_step(
     callable
         Step function for ATLAS postprocess.
     """
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        usim_output_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(),
+            settings.urbansim.output_file_template.format(
+                year=state.forecast_year
+            ),
+        )
+        if os.path.exists(usim_output_path):
+            log_input_only(
+                key=USIM_DATASTORE_H5,
+                path=usim_output_path,
+                description=(
+                    "UrbanSim datastore consumed by ATLAS postprocess "
+                    f"for year {state.forecast_year}"
+                ),
+                profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                ),
+            )
+        return {}
 
     def _log_outputs(
         outputs: AtlasPostprocessOutputs,
@@ -439,7 +469,11 @@ def make_atlas_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         _log_step_records(
-            record_items=outputs._iter_record_items(),
+            record_items=(
+                (short_name, path, description)
+                for short_name, path, description in outputs._iter_record_items()
+                if short_name != USIM_H5_UPDATED
+            ),
             log_fn=log_output_only,
             profile_schema_suffixes=(".csv", ".parquet"),
         )
@@ -473,5 +507,6 @@ def make_atlas_postprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_postprocess", outputs
         ),
+        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )

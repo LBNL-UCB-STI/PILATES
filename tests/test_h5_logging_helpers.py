@@ -53,3 +53,23 @@ def test_log_input_only_falls_back_without_h5_flag(monkeypatch):
 
     assert calls
     assert calls[0][0] == "input"
+
+
+def test_h5_container_filter_excludes_flattened_pandas_internal_names(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    ch.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/data.h5",
+        description="test",
+        h5_container=True,
+    )
+
+    assert calls
+    assert calls[0][0] == "h5_container"
+    table_filter = calls[0][3]["table_filter"]
+    assert callable(table_filter)
+    assert table_filter("/2023/households") is True
+    assert table_filter("/axis1") is False
+    assert table_filter("/2023/travel_data_axis1_level0") is False

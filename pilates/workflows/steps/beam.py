@@ -112,6 +112,7 @@ def make_beam_preprocess_step(
                 "households_beam_in",
                 "persons_beam_in",
                 "plans_beam_in",
+                "vehicles_beam_in",
             },
         )
 

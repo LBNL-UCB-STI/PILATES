@@ -76,8 +76,7 @@ from __future__ import annotations
 #   - adopt_<scenario>_used_vehicles_<year>
 #
 # atlas_postprocess               atlas_run raw outputs (all keys above)                       Processed outputs:
-#                                                                                              - usim_h5_updated
-#                                                                                              - atlas_vehicles2_output
+#                               + usim_datastore_h5 (forecast datastore read directly)        - atlas_vehicles2_output
 #
 #                                                                                              Additionally logs:
 #                                                                                              - usim_datastore_h5 (if updated H5 exists)
@@ -125,7 +124,6 @@ from __future__ import annotations
 #                                                                                              - BEAM_HOUSEHOLDS_IN
 #                                                                                              - BEAM_PERSONS_IN
 #                                                                                              - LINKSTATS_WARMSTART
-#                                                                                              - ATLAS_VEHICLES2_INPUT (if present)
 #                                                                                              - vehicles_beam_in (derived from ATLAS vehicles2)
 #                                                                                              - plus any {file_stem}_beam_in created by
 #                                                                                                preprocessor for other copied files

@@ -8,6 +8,7 @@ from pilates.activitysim.runner import (
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
+from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workspace import Workspace
@@ -22,6 +23,7 @@ from .shared import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     ZARR_SKIMS,
     ActivitySimPostprocessOutputs,
@@ -44,6 +46,7 @@ from .shared import (
     cr,
     log_and_set_input,
     log_and_set_output,
+    log_input_only,
     log_output_only,
     require_common_runtime,
     resolve_artifact_from_value,
@@ -525,6 +528,83 @@ def make_activitysim_postprocess_step(
         Step function for ActivitySim postprocess.
     """
 
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        asim_input_dir = workspace.get_asim_mutable_data_dir()
+        asim_output_dir = workspace.get_asim_output_dir()
+        asim_input_sources = [
+            (
+                ASIM_HOUSEHOLDS_IN,
+                os.path.join(asim_input_dir, "households.csv"),
+                "ActivitySim postprocess source input households.csv",
+            ),
+            (
+                ASIM_PERSONS_IN,
+                os.path.join(asim_input_dir, "persons.csv"),
+                "ActivitySim postprocess source input persons.csv",
+            ),
+            (
+                ASIM_LAND_USE_IN,
+                os.path.join(asim_input_dir, "land_use.csv"),
+                "ActivitySim postprocess source input land_use.csv",
+            ),
+            (
+                ASIM_OMX_SKIMS,
+                os.path.join(asim_input_dir, "skims.omx"),
+                "ActivitySim postprocess source input skims.omx",
+            ),
+            (
+                ZARR_SKIMS,
+                os.path.join(asim_output_dir, "cache", "skims.zarr"),
+                "ActivitySim postprocess source input skims.zarr",
+            ),
+        ]
+        for key, path, description in asim_input_sources:
+            if os.path.exists(path):
+                log_input_only(
+                    key=key,
+                    path=path,
+                    description=description,
+                    profile_file_schema="if_changed",
+                )
+
+        if state.is_enabled(WorkflowState.Stage.land_use):
+            usim_data_dir = workspace.get_usim_mutable_data_dir()
+            current_store_path = os.path.join(
+                usim_data_dir,
+                get_usim_datastore_fname(settings, io="input"),
+            )
+            if os.path.exists(current_store_path):
+                log_input_only(
+                    key=USIM_DATASTORE_CURRENT_H5,
+                    path=current_store_path,
+                    description=(
+                        "ActivitySim postprocess source UrbanSim current datastore"
+                    ),
+                    profile_file_schema="if_changed",
+                )
+
+            forecast_store_path = os.path.join(
+                usim_data_dir,
+                get_usim_datastore_fname(
+                    settings, io="output", year=state.forecast_year
+                ),
+            )
+            if os.path.exists(forecast_store_path):
+                log_input_only(
+                    key=USIM_FORECAST_OUTPUT,
+                    path=forecast_store_path,
+                    description=(
+                        "ActivitySim postprocess source UrbanSim forecast datastore"
+                    ),
+                    profile_file_schema="if_changed",
+                )
+        return {}
+
     def _log_outputs(
         outputs: ActivitySimPostprocessOutputs,
         settings: PilatesConfig,
@@ -581,5 +661,6 @@ def make_activitysim_postprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_postprocess", outputs
         ),
+        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )

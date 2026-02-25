@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 import atexit
 import fnmatch
 import re
@@ -994,15 +995,15 @@ def _log_with_optional_h5_container(
     """
     def _is_internal_h5_table(table_name: str) -> bool:
         leaf = table_name.rsplit("/", 1)[-1]
-        if re.match(r"^axis\d+$", leaf):
+        normalized_leaf = leaf.lower()
+        # Pandas HDF internals can appear either as leaf names (e.g. axis1,
+        # block0_items, level0) or flattened into larger table names
+        # (e.g. travel_data_axis1_level0).
+        if re.fullmatch(r"(axis|block|level|label)\d+(?:_.*)?", normalized_leaf):
             return True
-        if re.match(r"^block\d+_(items|values)$", leaf):
-            return True
-        if re.match(r"^level\d+$", leaf):
-            return True
-        if re.match(r".*label\d*$", leaf):
-            return True
-        return False
+        return bool(
+            re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf)
+        )
 
     def _table_filter_to_callable(
         table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]

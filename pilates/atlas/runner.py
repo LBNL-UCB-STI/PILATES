@@ -246,8 +246,12 @@ class AtlasRunner(GenericRunner):
                     working_dir="/",
                     # PASS INPUTS HERE
                     input_artifacts=input_paths,
-                    # PASS OUTPUTS HERE
-                    output_paths=expected_output_paths,
+                    # Canonical ATLAS outputs are logged by workflow step records
+                    # using short names without file extensions. Avoid container-
+                    # level output logging to prevent duplicate artifacts like
+                    # householdv_2023 and householdv_2023.csv.
+                    output_paths=None,
+                    lineage_mode="none",
                 )
 
                 if not success:
