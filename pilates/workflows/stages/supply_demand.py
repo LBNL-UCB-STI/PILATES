@@ -916,6 +916,13 @@ def _run_beam_steps(
         iteration=iteration,
         include_zarr_skims=include_zarr_skims,
     )
+    beam_postprocess_resolution = None
+    if beam_postprocess_input_keys:
+        beam_postprocess_resolution = resolve_step_inputs(
+            keys=beam_postprocess_input_keys,
+            coupler=coupler,
+            explicit_inputs=upstream_run.to_record_store().to_mapping(),
+        )
 
     _run_supply_demand_workflow(
         stage_name="beam",
@@ -926,7 +933,16 @@ def _run_beam_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=beam_postprocess_input_keys,
+                input_keys=(
+                    beam_postprocess_resolution.stepref_input_keys()
+                    if beam_postprocess_resolution is not None
+                    else None
+                ),
+                inputs=(
+                    beam_postprocess_resolution.stepref_inputs()
+                    if beam_postprocess_resolution is not None
+                    else None
+                ),
                 year=state.forecast_year,
             )
         ],

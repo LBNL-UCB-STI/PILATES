@@ -774,6 +774,122 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
 
 
+def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
+    stage_env, monkeypatch, tmp_path
+):
+    """
+    Regression: BEAM postprocess must consume sub-iteration run artifacts via
+    explicit inputs, not coupler-required input_keys.
+    """
+    from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+    from pilates.generic.model_factory import ModelFactory
+    from pilates.workflows.steps import StepOutputsHolder
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    coupler.set(ZARR_SKIMS, str(zarr_path))
+
+    class _BeamPreprocessorNoWarmstart:
+        def preprocess(self, workspace, previous_records=RecordStore()):
+            beam_dir = Path(workspace.get_beam_mutable_data_dir())
+            plans = beam_dir / "plans.csv"
+            households = beam_dir / "households.csv"
+            persons = beam_dir / "persons.csv"
+            for path in (plans, households, persons):
+                _write_file(path)
+            return RecordStore(
+                recordList=[
+                    FileRecord(file_path=str(plans), short_name=BEAM_PLANS_IN),
+                    FileRecord(file_path=str(households), short_name=BEAM_HOUSEHOLDS_IN),
+                    FileRecord(file_path=str(persons), short_name=BEAM_PERSONS_IN),
+                ]
+            )
+
+    class _BeamRunnerWithSubIterationOutputs:
+        def run(self, input_store, workspace):
+            beam_out = Path(workspace.get_beam_output_dir())
+            skim_sub0 = beam_out / "0.skimsActivitySimOD_current.zarr"
+            events_sub0 = beam_out / "0.events.parquet"
+            _write_file(skim_sub0)
+            _write_file(events_sub0)
+            return RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path=str(skim_sub0),
+                        short_name=f"raw_od_skims_zarr_{state.forecast_year}_0_sub0",
+                    ),
+                    FileRecord(
+                        file_path=str(events_sub0),
+                        short_name=f"events_parquet_{state.forecast_year}_0_sub0",
+                    ),
+                ]
+            )
+
+    original_get_preprocessor = ModelFactory.get_preprocessor
+    original_get_runner = ModelFactory.get_runner
+
+    def _patched_get_preprocessor(self, model_name, state=None, major_stage=None):
+        if model_name == "beam":
+            return _BeamPreprocessorNoWarmstart()
+        return original_get_preprocessor(self, model_name, state, major_stage)
+
+    def _patched_get_runner(self, model_name, state=None, major_stage=None):
+        if model_name == "beam":
+            return _BeamRunnerWithSubIterationOutputs()
+        return original_get_runner(self, model_name, state, major_stage)
+
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
+    monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
+
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path(workspace.get_asim_output_dir()),
+    )
+
+    _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            activity_demand_outputs=RecordStore(),
+            previous_beam_outputs=None,
+        ),
+        outputs_holder=outputs_holder,
+    )
+
+    beam_postprocess_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_postprocess"
+    ]
+    assert beam_postprocess_calls, "Expected BEAM postprocess step to execute."
+    postprocess_call = beam_postprocess_calls[0]
+    assert f"events_parquet_{state.forecast_year}_0_sub0" in postprocess_call["inputs"]
+    assert (
+        f"raw_od_skims_zarr_{state.forecast_year}_0_sub0"
+        in postprocess_call["inputs"]
+    )
+    assert f"events_parquet_{state.forecast_year}_0_sub0" not in (
+        postprocess_call["input_keys"] or []
+    )
+    assert f"raw_od_skims_zarr_{state.forecast_year}_0_sub0" not in (
+        postprocess_call["input_keys"] or []
+    )
+
+
 def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
     """Postprocess key builder should include only artifacts consumed downstream."""
     keys = [
