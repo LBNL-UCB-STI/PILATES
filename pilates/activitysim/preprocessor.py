@@ -3424,13 +3424,47 @@ def create_asim_data_from_h5(
     #     model_run_id=model_run_hash,
     # )
 
-    # Read tables from UrbanSim H5
-    store, prefix = read_datastore(
-        settings,
-        state.start_year,
-        mutable_data_dir=workspace.get_usim_mutable_data_dir(),
-        mode="r",
-    )
+    # Read tables from UrbanSim H5.
+    # Prefer the rolling UrbanSim input datastore path directly to avoid
+    # accidentally selecting a stale year-specific snapshot (e.g., *_2017.h5)
+    # when it exists alongside the current in-place updated input datastore.
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    usim_input_fname = settings.urbansim.input_file_template.format(region_id=region_id)
+    usim_input_path = os.path.join(workspace.get_usim_mutable_data_dir(), usim_input_fname)
+
+    if os.path.exists(usim_input_path):
+        logger.info(
+            "ActivitySim preprocess using UrbanSim rolling input datastore: %s",
+            usim_input_path,
+        )
+        store = pd.HDFStore(usim_input_path, mode="r")
+        prefix = ""
+        if "households" not in store:
+            start_year_prefix = str(state.start_year)
+            if f"{start_year_prefix}/households" in store:
+                prefix = start_year_prefix
+            else:
+                raise KeyError(
+                    "No households table found in rolling UrbanSim input datastore "
+                    f"{usim_input_path}. Tables: {store.keys()}"
+                )
+        logger.info(
+            "ActivitySim preprocess UrbanSim table prefix: %s",
+            prefix if prefix else "<root>",
+        )
+    else:
+        logger.warning(
+            "Rolling UrbanSim input datastore not found at %s; "
+            "falling back to legacy read_datastore(year=start_year) resolution.",
+            usim_input_path,
+        )
+        store, prefix = read_datastore(
+            settings,
+            state.start_year,
+            mutable_data_dir=workspace.get_usim_mutable_data_dir(),
+            mode="r",
+        )
     try:
         households = store[prefix + "/households"]
         persons = store[prefix + "/persons"]

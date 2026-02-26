@@ -26,6 +26,8 @@ def test_log_input_attaches_schema_for_known_key(monkeypatch):
     _, key, meta = calls[0]
     assert key == "households_asim_in"
     assert meta["schema"].__name__ == "HouseholdsAsimIn"
+    assert meta["declared_schema_class"] == "HouseholdsAsimIn"
+    assert meta["declared_schema_table"] == "HouseholdsAsimIn"
 
 
 def test_log_output_does_not_override_explicit_schema(monkeypatch):
@@ -290,8 +292,10 @@ def test_log_output_retries_without_schema_when_schema_logging_fails(
     assert len(calls) == 2
     assert calls[0][0] is True
     assert "schema" in calls[0][2]
+    assert calls[0][2]["declared_schema_class"] == "HouseholdsAsimOut"
     assert calls[1][0] is True
     assert "schema" not in calls[1][2]
+    assert "declared_schema_class" not in calls[1][2]
     assert "retrying without schema metadata" in caplog.text
 
 

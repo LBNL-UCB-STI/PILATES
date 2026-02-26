@@ -121,6 +121,7 @@ def log_input(
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
+    meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
     _warn_schema_compatibility(path, key=key, meta=meta, direction="input")
@@ -154,6 +155,7 @@ def log_output(
         schema = _schema_for_key(key)
         if schema is not None:
             meta = {**meta, "schema": schema}
+    meta = _with_declared_schema_meta(meta)
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
     _warn_schema_compatibility(path, key=key, meta=meta, direction="output")
@@ -287,7 +289,11 @@ def _retry_without_schema_meta(
         raise exc
     schema = meta.get("schema")
     schema_name = getattr(schema, "__name__", str(schema))
-    reduced_meta = {k: v for k, v in meta.items() if k != "schema"}
+    reduced_meta = {
+        k: v
+        for k, v in meta.items()
+        if k not in {"schema", "declared_schema_class", "declared_schema_table"}
+    }
     signature = ("schema_log_retry", direction, key, schema_name, type(exc).__name__)
     _warn_once(
         signature,
@@ -485,6 +491,16 @@ def _warn_once(signature: tuple[Any, ...], msg: str, *args: Any) -> None:
         return
     _schema_warning_signatures.add(signature)
     logger.warning(msg, *args)
+
+
+def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
+    schema = meta.get("schema")
+    if schema is None:
+        return dict(meta)
+    updated = dict(meta)
+    updated.setdefault("declared_schema_class", getattr(schema, "__name__", str(schema)))
+    updated.setdefault("declared_schema_table", getattr(schema, "__tablename__", None))
+    return updated
 
 
 def _schema_warn_only_enabled() -> bool:
