@@ -87,6 +87,7 @@ def _infer_phase(step_name: str) -> Optional[str]:
 def _build_step_run_kwargs(
     *,
     step: StepRef,
+    settings: Any,
     state: Any,
     runtime_kwargs: Mapping[str, Any],
     stage_name: str,
@@ -129,10 +130,17 @@ def _build_step_run_kwargs(
         load_inputs=step.load_inputs,
     )
 
-    if step.cache_hydration is not None or step.cache_mode is not None:
+    run_cfg = getattr(settings, "run", None)
+    code_identity = getattr(run_cfg, "consist_code_identity", None)
+    if (
+        step.cache_hydration is not None
+        or step.cache_mode is not None
+        or code_identity is not None
+    ):
         run_kwargs["cache_options"] = CacheOptions(
             cache_hydration=step.cache_hydration,
             cache_mode=step.cache_mode,
+            code_identity=code_identity,
         )
     def _normalize_output_keys(values: Any) -> Optional[list[str]]:
         if not isinstance(values, Sequence) or isinstance(values, str):
@@ -291,6 +299,7 @@ def run_manifested_steps(
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
+            settings=settings,
             state=state,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
@@ -390,6 +399,7 @@ def run_workflow(
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
+            settings=settings,
             state=state,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,

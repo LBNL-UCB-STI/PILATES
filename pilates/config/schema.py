@@ -79,6 +79,10 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "metadata",
         "description": "Copy logged outputs to archive root as they are produced",
     },
+    "run.consist_code_identity": {
+        "hash_scope": "metadata",
+        "description": "Consist cache code-identity mode override for step runs",
+    },
     # -------------------------------------------------------------------------
     # SHARED CONFIGURATION
     # -------------------------------------------------------------------------

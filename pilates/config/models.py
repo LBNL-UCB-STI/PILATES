@@ -144,6 +144,15 @@ class RunConfig(BaseModel):
             "DB from shared.database.path fails"
         ),
     )
+    consist_code_identity: Optional[
+        Literal["repo_git", "callable_module", "callable_source"]
+    ] = Field(
+        None,
+        description=(
+            "Optional Consist cache code-identity mode override for step runs. "
+            "When omitted, Consist defaults to repo_git."
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
