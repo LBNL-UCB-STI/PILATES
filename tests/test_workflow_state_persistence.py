@@ -123,6 +123,23 @@ def test_state_resume_after_interruption(tmp_path):
     assert resumed.sub_stage_progress == "preprocess"
 
 
+def test_state_write_mirrors_to_secondary_path(tmp_path):
+    settings = _make_settings(tmp_path)
+    state = WorkflowState.from_settings(settings)
+    state.current_year = 2020
+    state.current_major_stage = WorkflowState.Stage.land_use
+    mirror_path = tmp_path / "mirror" / "run_state.yaml"
+    state.mirror_file_loc = str(mirror_path)
+
+    state.write_state()
+
+    assert os.path.exists(state.file_loc)
+    assert mirror_path.exists()
+    with open(state.file_loc, encoding="utf-8") as primary:
+        with open(mirror_path, encoding="utf-8") as mirror:
+            assert yaml.safe_load(primary) == yaml.safe_load(mirror)
+
+
 def test_state_corruption_detection(tmp_path):
     settings = _make_settings(tmp_path)
     state_path = settings.state_file_loc

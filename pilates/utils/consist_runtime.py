@@ -27,6 +27,7 @@ import consist
 
 _enabled_override: Optional[bool] = None
 _schema_warning_signatures: set[tuple[Any, ...]] = set()
+_tracker_hashing_strategy: str = "fast"
 
 
 def _is_enabled(enabled: Optional[bool] = None) -> bool:
@@ -49,11 +50,17 @@ def create_tracker(
     tracker_factory: Optional[Callable[[], TrackerLike]] = None,
     **tracker_kwargs: Any,
 ) -> Optional[TrackerLike]:
+    global _tracker_hashing_strategy
     resolved_enabled = _is_enabled(enabled)
     set_enabled(resolved_enabled)
     if "hashing_strategy" not in tracker_kwargs:
-        # Avoid expensive full-directory hashing by default.
-        tracker_kwargs["hashing_strategy"] = "fast"
+        run_cfg = getattr(settings, "run", None)
+        configured_strategy = getattr(run_cfg, "consist_hashing_strategy", "fast")
+        if configured_strategy not in {"fast", "full"}:
+            configured_strategy = "fast"
+        tracker_kwargs["hashing_strategy"] = configured_strategy
+    strategy = str(tracker_kwargs.get("hashing_strategy", "fast")).lower()
+    _tracker_hashing_strategy = strategy if strategy in {"fast", "full"} else "fast"
 
     if tracker_factory is None:
         tracker_factory = lambda: consist.Tracker(**tracker_kwargs)
@@ -761,6 +768,8 @@ def _normalize_path(value: Any) -> Any:
 
 def _maybe_fast_hash_h5(path: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
     if "hashing_strategy" in meta:
+        return meta
+    if _tracker_hashing_strategy != "fast":
         return meta
     resolved = _resolve_artifact_path(path)
     if not resolved:

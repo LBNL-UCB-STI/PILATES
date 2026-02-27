@@ -153,6 +153,13 @@ class RunConfig(BaseModel):
             "When omitted, Consist defaults to repo_git."
         ),
     )
+    consist_hashing_strategy: Literal["fast", "full"] = Field(
+        "fast",
+        description=(
+            "Consist artifact hashing mode for cache identity: "
+            "'fast' uses file metadata (mtime/size), 'full' hashes file content."
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")

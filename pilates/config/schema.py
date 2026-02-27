@@ -83,6 +83,10 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "metadata",
         "description": "Consist cache code-identity mode override for step runs",
     },
+    "run.consist_hashing_strategy": {
+        "hash_scope": "metadata",
+        "description": "Consist artifact hashing mode override for cache identity",
+    },
     # -------------------------------------------------------------------------
     # SHARED CONFIGURATION
     # -------------------------------------------------------------------------

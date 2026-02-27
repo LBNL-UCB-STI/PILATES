@@ -63,6 +63,7 @@ class WorkflowState:
 
         self.forecast_year = None
         self.file_loc = file_loc
+        self.mirror_file_loc: Optional[str] = None
 
         self.__asim_compiled = asim_compiled
         self.initial_step = 7 if self.current_year == 2010 else None
@@ -200,6 +201,9 @@ class WorkflowState:
             "run_info_path": run_info_path,
             "data_initialized": data_initialized,
         }
+        directory = os.path.dirname(file_loc)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -343,16 +347,23 @@ class WorkflowState:
 
     def write_state(self):
         """Save the current state to file"""
-        WorkflowState.write_stage(
-            self.current_year,
-            self.current_sub_stage or self.current_major_stage,
-            self.file_loc,
-            self.current_inner_iter,
-            self.__asim_compiled,
-            self.sub_stage_progress,
-            self.run_info_path,
-            self.data_initialized,
-        )
+        targets = []
+        if self.file_loc:
+            targets.append(self.file_loc)
+        mirror = getattr(self, "mirror_file_loc", None)
+        if mirror and mirror not in targets:
+            targets.append(mirror)
+        for target in targets:
+            WorkflowState.write_stage(
+                self.current_year,
+                self.current_sub_stage or self.current_major_stage,
+                target,
+                self.current_inner_iter,
+                self.__asim_compiled,
+                self.sub_stage_progress,
+                self.run_info_path,
+                self.data_initialized,
+            )
 
     def is_enabled(self, stage: Stage) -> bool:
         """Checks if a stage is enabled in settings."""
@@ -437,9 +448,16 @@ class WorkflowState:
             and self.current_major_stage is None
         ):
             # Clean up state file if finished
-            if os.path.exists(self.file_loc):
-                logger.info(f"Workflow finished. Removing state file: {self.file_loc}")
-                os.remove(self.file_loc)
+            cleanup_paths = []
+            if self.file_loc:
+                cleanup_paths.append(self.file_loc)
+            mirror = getattr(self, "mirror_file_loc", None)
+            if mirror and mirror not in cleanup_paths:
+                cleanup_paths.append(mirror)
+            for path in cleanup_paths:
+                if os.path.exists(path):
+                    logger.info(f"Workflow finished. Removing state file: {path}")
+                    os.remove(path)
             raise StopIteration
 
         # If current_year is None, it means read_current_stage returned None for year,

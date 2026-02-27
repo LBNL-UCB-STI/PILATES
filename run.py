@@ -602,9 +602,12 @@ def main():
         local_root,
         folder_name=run_name,
     )
-    state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
-    if not state.run_info_path:
-        state.set_run_info_path(state.file_loc)
+    archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
+    local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
+    state.file_loc = archive_state_path
+    state.mirror_file_loc = local_state_path
+    if state.run_info_path != archive_state_path:
+        state.set_run_info_path(archive_state_path)
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap

@@ -1,5 +1,6 @@
 import types
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import duckdb
 
@@ -40,6 +41,36 @@ def test_create_tracker_returns_tracker_when_consist_succeeds(monkeypatch):
         assert isinstance(tracker, _FakeTracker)
     finally:
         cr.set_enabled(None)
+
+
+def test_create_tracker_uses_configured_hashing_strategy(monkeypatch):
+    captured: dict = {}
+
+    def _tracker_factory(**kwargs):
+        captured.update(kwargs)
+        return _FakeTracker()
+
+    fake_consist = types.SimpleNamespace(
+        Tracker=_tracker_factory,
+        create_tracker=lambda *, enabled, tracker_factory: tracker_factory(),
+    )
+    monkeypatch.setattr(cr, "consist", fake_consist)
+
+    settings = SimpleNamespace(run=SimpleNamespace(consist_hashing_strategy="full"))
+    try:
+        tracker = cr.create_tracker(settings=settings, run_dir="/tmp/consist-runs")
+        assert isinstance(tracker, _FakeTracker)
+        assert captured.get("hashing_strategy") == "full"
+    finally:
+        cr.set_enabled(None)
+
+
+def test_h5_fast_hash_override_disabled_when_tracker_hashing_is_full(tmp_path, monkeypatch):
+    file_path = tmp_path / "sample.h5"
+    file_path.write_text("test", encoding="utf-8")
+    monkeypatch.setattr(cr, "_tracker_hashing_strategy", "full")
+
+    assert cr._maybe_fast_hash_h5(str(file_path), {}) == {}
 
 
 def test_create_tracker_retries_after_schema_compatibility_repair(monkeypatch):
