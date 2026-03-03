@@ -19,7 +19,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List
+from typing import Optional, Dict, Any, Callable, List, Tuple
 
 from pilates.workspace import Workspace
 from pilates.generic.initialization import (
@@ -39,8 +39,10 @@ from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
+    snapshot_latest_dir,
 )
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
+from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
@@ -464,6 +466,400 @@ def _assert_bootstrap_output_invariant(
     )
 
 
+def _restart_required_local_artifacts(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> List[Dict[str, str]]:
+    """
+    Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
+
+    These checks intentionally focus on common restart failures on ephemeral local
+    storage (UrbanSim base datastore and ActivitySim mutable inputs).
+    """
+    required: List[Dict[str, str]] = []
+
+    usim_base_fname = get_usim_datastore_fname(settings, io="input")
+    required.append(
+        {
+            "key": "usim_datastore_base_h5",
+            "path": os.path.join(workspace.get_usim_mutable_data_dir(), usim_base_fname),
+            "reason": "UrbanSim base datastore required for downstream restart inputs",
+        }
+    )
+
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "activity_demand", None) == "activitysim":
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
+        for filename in ("households.csv", "persons.csv", "land_use.csv"):
+            required.append(
+                {
+                    "key": f"activitysim_input_{filename}",
+                    "path": os.path.join(asim_data_dir, filename),
+                    "reason": "ActivitySim mutable input required on restart",
+                }
+            )
+        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
+        main_configs_dir = (
+            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
+            or "configs"
+        )
+        required.append(
+            {
+                "key": "activitysim_settings_yaml",
+                "path": os.path.join(asim_configs_dir, main_configs_dir, "settings.yaml"),
+                "reason": "ActivitySim mutable config required on restart",
+            }
+        )
+
+    return required
+
+
+def _find_missing_restart_local_artifacts(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> List[Dict[str, str]]:
+    missing: List[Dict[str, str]] = []
+    for artifact in _restart_required_local_artifacts(
+        settings=settings, state=state, workspace=workspace
+    ):
+        path = os.path.realpath(artifact["path"])
+        if not os.path.exists(path):
+            missing.append(
+                {
+                    "key": artifact["key"],
+                    "path": path,
+                    "reason": artifact["reason"],
+                }
+            )
+    return missing
+
+
+def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
+    if not artifacts:
+        return "none"
+    return ", ".join(
+        f"{item.get('key')}:{item.get('path')}" for item in artifacts
+    )
+
+
+def _map_local_path_to_archive(
+    *,
+    local_path: str,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Optional[str]:
+    local_abs = os.path.realpath(local_path)
+    local_root = os.path.realpath(local_run_dir)
+    archive_root = os.path.realpath(archive_run_dir)
+    try:
+        if os.path.commonpath([local_abs, local_root]) != local_root:
+            return None
+    except ValueError:
+        return None
+    rel = os.path.relpath(local_abs, local_root)
+    return os.path.join(archive_root, rel)
+
+
+def _copy_archive_entry_preserve_existing(
+    *,
+    archive_path: str,
+    local_path: str,
+) -> Tuple[int, int]:
+    """
+    Copy an archive entry to local without overwriting existing files.
+
+    Returns
+    -------
+    tuple(int, int)
+        Number of copied files and number of skipped existing files.
+    """
+    copied = 0
+    skipped_existing = 0
+
+    if os.path.isdir(archive_path):
+        for root, _, files in os.walk(archive_path):
+            rel_root = os.path.relpath(root, archive_path)
+            dest_root = local_path if rel_root == "." else os.path.join(local_path, rel_root)
+            os.makedirs(dest_root, exist_ok=True)
+            for filename in files:
+                src = os.path.join(root, filename)
+                dest = os.path.join(dest_root, filename)
+                if os.path.exists(dest):
+                    skipped_existing += 1
+                    continue
+                shutil.copy2(src, dest)
+                copied += 1
+        return copied, skipped_existing
+
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    if os.path.exists(local_path):
+        return 0, 1
+    shutil.copy2(archive_path, local_path)
+    return 1, 0
+
+
+def _rehydrate_missing_local_artifacts_from_archive(
+    *,
+    missing_artifacts: List[Dict[str, str]],
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    """
+    Rehydrate missing restart artifacts from archive into node-local workspace.
+
+    This is idempotent: existing local files are preserved and never overwritten.
+    """
+    summary = {
+        "copied": 0,
+        "skipped_existing": 0,
+        "skipped_missing_archive": 0,
+        "skipped_unmapped": 0,
+        "copy_errors": 0,
+    }
+    for artifact in missing_artifacts:
+        local_path = os.path.realpath(artifact["path"])
+        key = artifact.get("key", "unknown")
+
+        if os.path.exists(local_path):
+            summary["skipped_existing"] += 1
+            logger.info(
+                "[RestartRehydrate] Skip existing local artifact key=%s path=%s",
+                key,
+                local_path,
+            )
+            continue
+
+        archive_path = _map_local_path_to_archive(
+            local_path=local_path,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
+        if archive_path is None:
+            summary["skipped_unmapped"] += 1
+            logger.warning(
+                "[RestartRehydrate] Cannot map local path to archive key=%s path=%s",
+                key,
+                local_path,
+            )
+            continue
+        archive_path = os.path.realpath(archive_path)
+        if not os.path.exists(archive_path):
+            summary["skipped_missing_archive"] += 1
+            logger.warning(
+                "[RestartRehydrate] Archive source missing key=%s archive_path=%s",
+                key,
+                archive_path,
+            )
+            continue
+
+        try:
+            copied, skipped_existing = _copy_archive_entry_preserve_existing(
+                archive_path=archive_path,
+                local_path=local_path,
+            )
+            summary["copied"] += copied
+            summary["skipped_existing"] += skipped_existing
+            logger.info(
+                "[RestartRehydrate] key=%s copied=%s skipped_existing=%s source=%s dest=%s",
+                key,
+                copied,
+                skipped_existing,
+                archive_path,
+                local_path,
+            )
+        except Exception as exc:
+            summary["copy_errors"] += 1
+            logger.warning(
+                "[RestartRehydrate] Failed copy key=%s source=%s dest=%s error=%s",
+                key,
+                archive_path,
+                local_path,
+                exc,
+            )
+
+    logger.info(
+        "[RestartRehydrate] Summary copied=%s skipped_existing=%s "
+        "skipped_missing_archive=%s skipped_unmapped=%s copy_errors=%s",
+        summary["copied"],
+        summary["skipped_existing"],
+        summary["skipped_missing_archive"],
+        summary["skipped_unmapped"],
+        summary["copy_errors"],
+    )
+    return summary
+
+
+def _log_resume_doctor_check(
+    *,
+    check: str,
+    ok: bool,
+    detail: str,
+) -> None:
+    status = "ok" if ok else "missing"
+    log_fn = logger.info if ok else logger.warning
+    log_fn(
+        "[ResumeDoctor] check=%s status=%s %s",
+        check,
+        status,
+        detail,
+    )
+
+
+def _run_resume_doctor_diagnostics(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+    local_run_dir: str,
+    archive_run_dir: str,
+    archive_state_path: str,
+    local_state_path: str,
+    local_consist_db_path: Optional[str],
+    restart_missing_artifacts_initial: List[Dict[str, str]],
+    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
+) -> None:
+    """
+    Emit startup restart diagnostics for restart readiness.
+
+    This function is logging-only and intentionally does not mutate behavior.
+    """
+    degraded_checks: List[str] = []
+
+    def record(check: str, ok: bool, detail: str, *, required: bool = True) -> None:
+        _log_resume_doctor_check(check=check, ok=ok, detail=detail)
+        if required and not ok:
+            degraded_checks.append(check)
+
+    logger.info(
+        "[ResumeDoctor] start year=%s iteration=%s local_run_dir=%s archive_run_dir=%s",
+        state.current_year,
+        state.current_inner_iter,
+        local_run_dir,
+        archive_run_dir,
+    )
+
+    archive_state_real = os.path.realpath(archive_state_path)
+    local_state_real = os.path.realpath(local_state_path)
+    record(
+        "archive_run_state",
+        os.path.exists(archive_state_real),
+        f"path={archive_state_real}",
+    )
+    record(
+        "local_run_state_mirror",
+        os.path.exists(local_state_real),
+        f"path={local_state_real}",
+    )
+
+    if local_consist_db_path:
+        local_consist_db_real = os.path.realpath(local_consist_db_path)
+        record(
+            "local_consist_db",
+            os.path.exists(local_consist_db_real),
+            f"path={local_consist_db_real}",
+        )
+        latest_snapshot_db = (
+            snapshot_latest_dir(archive_run_dir) / Path(local_consist_db_real).name
+        )
+        latest_snapshot_real = os.path.realpath(str(latest_snapshot_db))
+        record(
+            "archive_latest_consist_db_snapshot",
+            os.path.exists(latest_snapshot_real),
+            f"path={latest_snapshot_real}",
+        )
+    else:
+        record(
+            "local_consist_db",
+            True,
+            "path=none reason=disabled_or_unconfigured",
+            required=False,
+        )
+        record(
+            "archive_latest_consist_db_snapshot",
+            True,
+            "path=none reason=disabled_or_unconfigured",
+            required=False,
+        )
+
+    if state.data_initialized:
+        missing_summary = _format_missing_artifact_summary(
+            restart_missing_artifacts_after_rehydrate
+        )
+        record(
+            "required_restart_local_artifacts",
+            not restart_missing_artifacts_after_rehydrate,
+            "data_initialized=true "
+            f"initial_missing={len(restart_missing_artifacts_initial)} "
+            f"remaining_missing={len(restart_missing_artifacts_after_rehydrate)} "
+            f"missing={missing_summary}",
+        )
+    else:
+        record(
+            "required_restart_local_artifacts",
+            True,
+            "data_initialized=false reason=bootstrap_required",
+            required=False,
+        )
+
+    year = state.current_year
+    iteration = state.current_inner_iter
+    local_manifest_path: Optional[Path] = None
+    try:
+        local_manifest_path = build_manifest_path(
+            workspace=workspace,
+            year=int(year),
+            iteration=int(iteration),
+        )
+    except Exception as exc:
+        record(
+            "supply_demand_manifest_local",
+            False,
+            f"year={year} iteration={iteration} error={exc}",
+        )
+        record(
+            "supply_demand_manifest_archive_mapped",
+            False,
+            f"year={year} iteration={iteration} error=local_manifest_path_unavailable",
+        )
+
+    if local_manifest_path is not None:
+        local_manifest_real = os.path.realpath(str(local_manifest_path))
+        record(
+            "supply_demand_manifest_local",
+            os.path.exists(local_manifest_real),
+            f"year={year} iteration={iteration} path={local_manifest_real}",
+        )
+        archive_manifest_path = _map_local_path_to_archive(
+            local_path=local_manifest_real,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
+        if archive_manifest_path is None:
+            record(
+                "supply_demand_manifest_archive_mapped",
+                False,
+                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path=unmapped",
+            )
+        else:
+            archive_manifest_real = os.path.realpath(archive_manifest_path)
+            record(
+                "supply_demand_manifest_archive_mapped",
+                os.path.exists(archive_manifest_real),
+                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path={archive_manifest_real}",
+            )
+
+    if degraded_checks:
+        logger.warning(
+            "[ResumeDoctor] summary status=degraded reason=missing_checks:%s",
+            ",".join(degraded_checks),
+        )
+    else:
+        logger.info("[ResumeDoctor] summary status=ready reason=all_checks_ok")
+
+
 def main():
     """
     Main entrypoint for PILATES simulation orchestration using Consist Scenario API.
@@ -510,7 +906,8 @@ def main():
     # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
     # - local_run_dir (node-local) holds mutable workspace during execution
 
-    if state.run_info_path:
+    is_restart_run = bool(state.run_info_path)
+    if is_restart_run:
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
@@ -609,13 +1006,80 @@ def main():
     if state.run_info_path != archive_state_path:
         state.set_run_info_path(archive_state_path)
 
+    restart_missing_artifacts_initial: List[Dict[str, str]] = []
+    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]] = []
+    if state.data_initialized:
+        restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        if restart_missing_artifacts_initial:
+            logger.warning(
+                "Restart preflight found missing local workspace inputs while "
+                "data_initialized=True: %s",
+                _format_missing_artifact_summary(restart_missing_artifacts_initial),
+            )
+            _rehydrate_missing_local_artifacts_from_archive(
+                missing_artifacts=restart_missing_artifacts_initial,
+                local_run_dir=local_run_dir,
+                archive_run_dir=archive_run_dir,
+            )
+            restart_missing_artifacts_after_rehydrate = (
+                _find_missing_restart_local_artifacts(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                )
+            )
+            if restart_missing_artifacts_after_rehydrate:
+                logger.warning(
+                    "Restart preflight still missing required local workspace inputs "
+                    "after archive rehydration: %s",
+                    _format_missing_artifact_summary(
+                        restart_missing_artifacts_after_rehydrate
+                    ),
+                )
+    if is_restart_run:
+        _run_resume_doctor_diagnostics(
+            state=state,
+            workspace=workspace,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            archive_state_path=archive_state_path,
+            local_state_path=local_state_path,
+            local_consist_db_path=local_consist_db_path,
+            restart_missing_artifacts_initial=restart_missing_artifacts_initial,
+            restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+        )
+
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap
     # lifecycle can evolve independently from normal model steps.
     cr.set_tracker(tracker)
     bootstrap_result: Optional[Dict[str, Any]] = None
-    if not state.data_initialized:
-        logger.info("Running bootstrap initialization phase.")
+    force_restart_bootstrap = bool(restart_missing_artifacts_after_rehydrate)
+    if (
+        restart_missing_artifacts_initial
+        and not restart_missing_artifacts_after_rehydrate
+    ):
+        logger.info(
+            "Restart preflight recovered missing local inputs from archive; "
+            "continuing without forced bootstrap."
+        )
+    if not state.data_initialized or force_restart_bootstrap:
+        if force_restart_bootstrap:
+            logger.warning(
+                "Forcing bootstrap initialization on restart because required local "
+                "inputs were missing during preflight. initial_missing=%s "
+                "remaining_after_rehydrate=%s",
+                _format_missing_artifact_summary(restart_missing_artifacts_initial),
+                _format_missing_artifact_summary(
+                    restart_missing_artifacts_after_rehydrate
+                ),
+            )
+        else:
+            logger.info("Running bootstrap initialization phase.")
         bootstrap_result = run_bootstrap_phase(
             tracker=tracker,
             settings=settings,
@@ -623,7 +1087,8 @@ def main():
             workspace=workspace,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
-        state.set_data_initialized(True)
+        if not state.data_initialized:
+            state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     if bootstrap_result is not None:
