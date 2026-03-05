@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from functools import cached_property
 import hashlib
 import inspect
+import json
+import os
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import pandas as pd
@@ -31,13 +34,137 @@ ARTIFACT_FAMILIES: dict[str, dict[str, dict[str, str]]] = {
         "jobs": {"artifact_family": "jobs", "concept_key": "jobs"},
     },
 }
+ARTIFACT_FAMILIES_ENV_VAR = "PILATES_ANALYSIS_ARTIFACT_FAMILIES_JSON"
+
+
+def load_artifact_families_from_json(path: str | Path) -> dict[str, dict[str, dict[str, str]]]:
+    json_path = Path(path).expanduser()
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Artifact families JSON file not found: {json_path}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Could not read artifact families JSON file: {json_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid artifact families JSON in {json_path}: {exc.msg} (line {exc.lineno})"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"Artifact families JSON must contain an object: {json_path}")
+    return _normalize_artifact_families_mapping(
+        payload,
+        source=f"artifact families JSON '{json_path}'",
+    )
+
+
+def resolve_artifact_families(
+    *,
+    artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+    artifact_families_json_path: Optional[str | Path] = None,
+    env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
+) -> dict[str, dict[str, dict[str, str]]]:
+    resolved = _normalize_artifact_families_mapping(
+        ARTIFACT_FAMILIES,
+        source="ARTIFACT_FAMILIES",
+    )
+
+    override_path = artifact_families_json_path
+    if override_path is None:
+        env_value = str(os.environ.get(env_var, "") or "").strip()
+        if env_value:
+            override_path = env_value
+    if override_path is not None:
+        resolved = _merge_artifact_families(
+            resolved,
+            load_artifact_families_from_json(override_path),
+        )
+
+    if artifact_families is not None:
+        resolved = _merge_artifact_families(
+            resolved,
+            _normalize_artifact_families_mapping(
+                artifact_families,
+                source="artifact_families override",
+            ),
+        )
+
+    return resolved
+
+
+def _normalize_artifact_families_mapping(
+    mapping: Mapping[str, Any],
+    *,
+    source: str,
+) -> dict[str, dict[str, dict[str, str]]]:
+    normalized: dict[str, dict[str, dict[str, str]]] = {}
+    for raw_model, raw_logicals in mapping.items():
+        model_key = str(raw_model).strip().lower()
+        if not model_key:
+            raise RuntimeError(f"Invalid empty model key in {source}.")
+        if not isinstance(raw_logicals, Mapping):
+            raise RuntimeError(
+                f"Artifact families for model '{model_key}' in {source} must be an object."
+            )
+        model_entry: dict[str, dict[str, str]] = {}
+        for raw_logical, raw_spec in raw_logicals.items():
+            logical_key = str(raw_logical).strip().lower()
+            if not logical_key:
+                raise RuntimeError(f"Invalid empty logical name for model '{model_key}' in {source}.")
+            if not isinstance(raw_spec, Mapping):
+                raise RuntimeError(
+                    f"Artifact family spec for '{model_key}.{logical_key}' in {source} must be an object."
+                )
+            spec_entry: dict[str, str] = {}
+            for raw_field, raw_value in raw_spec.items():
+                field = str(raw_field).strip()
+                if not field:
+                    raise RuntimeError(
+                        f"Artifact family spec for '{model_key}.{logical_key}' in {source} "
+                        "contains an empty field name."
+                    )
+                spec_entry[field] = str(raw_value).strip()
+            model_entry[logical_key] = spec_entry
+        normalized[model_key] = model_entry
+    return normalized
+
+
+def _merge_artifact_families(
+    base: Mapping[str, Mapping[str, Mapping[str, str]]],
+    override: Mapping[str, Mapping[str, Mapping[str, str]]],
+) -> dict[str, dict[str, dict[str, str]]]:
+    merged: dict[str, dict[str, dict[str, str]]] = {
+        model: {logical: dict(spec) for logical, spec in logicals.items()}
+        for model, logicals in base.items()
+    }
+    for model, logicals in override.items():
+        target_model = merged.setdefault(model, {})
+        for logical_name, spec in logicals.items():
+            target_spec = dict(target_model.get(logical_name, {}))
+            target_spec.update(spec)
+            target_model[logical_name] = target_spec
+    return merged
 
 
 @dataclass
 class EpochViews:
     epoch: SimulationEpoch
     tracker: Any
+    artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None
+    artifact_families_json_path: Optional[str | Path] = None
+    artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _resolved_artifact_families: dict[str, dict[str, dict[str, str]]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        self._resolved_artifact_families = resolve_artifact_families(
+            artifact_families=self.artifact_families,
+            artifact_families_json_path=self.artifact_families_json_path,
+            env_var=self.artifact_families_env_var,
+        )
 
     @cached_property
     def trips(self) -> str:
@@ -155,7 +282,11 @@ class EpochViews:
                 f"scenario_id={self.epoch.scenario_id}). Available models: {available}."
             )
 
-        family_spec = _family_spec(model_key, logical_key)
+        family_spec = _family_spec(
+            model_key,
+            logical_key,
+            artifact_families=self._resolved_artifact_families,
+        )
         artifact_family = family_spec["artifact_family"]
 
         run_id = str(getattr(run, "id", "") or "").strip()
@@ -362,7 +493,7 @@ class EpochViews:
         concept_keys: list[str] = []
 
         configured = (
-            ARTIFACT_FAMILIES.get("activitysim", {})
+            self._resolved_artifact_families.get("activitysim", {})
             .get("skims", {})
             .get("concept_key")
         )
@@ -399,16 +530,34 @@ class EpochViews:
         return output
 
 
-def epoch_views(epoch: SimulationEpoch, tracker: Any) -> EpochViews:
-    return EpochViews(epoch=epoch, tracker=tracker)
+def epoch_views(
+    epoch: SimulationEpoch,
+    tracker: Any,
+    *,
+    artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+    artifact_families_json_path: Optional[str | Path] = None,
+    artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
+) -> EpochViews:
+    return EpochViews(
+        epoch=epoch,
+        tracker=tracker,
+        artifact_families=artifact_families,
+        artifact_families_json_path=artifact_families_json_path,
+        artifact_families_env_var=artifact_families_env_var,
+    )
 
 
-def _family_spec(model: str, logical_name: str) -> Mapping[str, str]:
-    by_model = ARTIFACT_FAMILIES.get(model)
+def _family_spec(
+    model: str,
+    logical_name: str,
+    *,
+    artifact_families: Mapping[str, Mapping[str, Mapping[str, str]]],
+) -> Mapping[str, str]:
+    by_model = artifact_families.get(model)
     if by_model is None:
-        available = ", ".join(sorted(ARTIFACT_FAMILIES.keys())) or "<none>"
+        available = ", ".join(sorted(artifact_families.keys())) or "<none>"
         raise AttributeError(
-            f"Model '{model}' is not configured in ARTIFACT_FAMILIES. "
+            f"Model '{model}' is not configured in artifact families mapping. "
             f"Configured models: {available}."
         )
     spec = by_model.get(logical_name)
@@ -417,6 +566,12 @@ def _family_spec(model: str, logical_name: str) -> Mapping[str, str]:
         raise AttributeError(
             f"Logical artifact '{logical_name}' is not configured for model '{model}'. "
             f"Configured logical names: {available}."
+        )
+    artifact_family = str(spec.get("artifact_family", "") or "").strip()
+    if not artifact_family:
+        raise RuntimeError(
+            f"Artifact family spec for '{model}.{logical_name}' is missing required "
+            "'artifact_family'."
         )
     return spec
 
@@ -561,4 +716,11 @@ def _call_with_supported_kwargs(func: Any, kwargs: Mapping[str, Any]) -> Any:
     return func(**filtered)
 
 
-__all__ = ["ARTIFACT_FAMILIES", "EpochViews", "epoch_views"]
+__all__ = [
+    "ARTIFACT_FAMILIES",
+    "ARTIFACT_FAMILIES_ENV_VAR",
+    "EpochViews",
+    "epoch_views",
+    "load_artifact_families_from_json",
+    "resolve_artifact_families",
+]

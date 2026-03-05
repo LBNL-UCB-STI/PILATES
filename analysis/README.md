@@ -246,6 +246,49 @@ pilates-consist-analysis build-skim-dataset \
   --output-dir /tmp/skim_dataset
 ```
 
+## Artifact Family Mapping Overrides
+
+`EpochViews` uses `ARTIFACT_FAMILIES` by default, but you can override/extend it at runtime.
+
+Merge behavior:
+- overrides are merged by `model -> logical_name`,
+- for an existing logical entry, override fields replace defaults (`artifact_family`, `concept_key`, etc.),
+- new models/logical names are added.
+
+Direct dict override:
+
+```python
+from pilates_consist_analysis import open_run
+
+session = open_run(
+    "/path/to/archive/run",
+    project_root="/Users/zaneedell/git/PILATES",
+    artifact_families={
+        "beam": {
+            "linkstats": {
+                "artifact_family": "linkstats_custom_family",
+            }
+        }
+    },
+)
+```
+
+JSON file override:
+
+```python
+session = open_run(
+    "/path/to/archive/run",
+    project_root="/Users/zaneedell/git/PILATES",
+    artifact_families_json_path="/tmp/artifact_families_override.json",
+)
+```
+
+Environment fallback (used when `artifact_families_json_path` is not provided):
+
+```bash
+export PILATES_ANALYSIS_ARTIFACT_FAMILIES_JSON=/tmp/artifact_families_override.json
+```
+
 Example DB health gate:
 
 ```bash

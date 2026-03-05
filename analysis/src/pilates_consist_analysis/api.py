@@ -19,7 +19,12 @@ from .scenario_compare import (
     runset_from_run_ids,
 )
 from .skim_analysis import SkimConvergenceDataset, build_skim_convergence_dataset
-from .epoch_views import EpochViews, epoch_views as build_epoch_views
+from .epoch_views import (
+    ARTIFACT_FAMILIES_ENV_VAR,
+    EpochViews,
+    epoch_views as build_epoch_views,
+    resolve_artifact_families,
+)
 from .runset import RunSet, runset_from_query, runset_from_runs, runset_label, runs_to_frame
 from .runtime import (
     create_analysis_tracker,
@@ -44,10 +49,18 @@ class AnalysisSession:
         access_mode: str = "analysis",
         hashing_strategy: str = "fast",
         tracker: Optional[Any] = None,
+        artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+        artifact_families_json_path: Optional[str | Path] = None,
+        artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
     ) -> None:
         self.archive_run_dir = resolve_archive_run_dir(archive_run_dir)
         self.project_root = Path(project_root).expanduser().resolve()
         self.db_path = resolve_db_path(self.archive_run_dir, db_path=db_path)
+        self.artifact_families = resolve_artifact_families(
+            artifact_families=artifact_families,
+            artifact_families_json_path=artifact_families_json_path,
+            env_var=artifact_families_env_var,
+        )
         self.tracker = tracker or create_analysis_tracker(
             archive_run_dir=self.archive_run_dir,
             project_root=self.project_root,
@@ -73,6 +86,9 @@ class AnalysisSession:
         extra_mounts: Optional[Mapping[str, str | Path]] = None,
         access_mode: str = "analysis",
         hashing_strategy: str = "fast",
+        artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+        artifact_families_json_path: Optional[str | Path] = None,
+        artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
     ) -> "AnalysisSession":
         resolved_archive = resolve_archive_run_dir(archive_run_dir)
         if project_root is None:
@@ -85,6 +101,9 @@ class AnalysisSession:
             extra_mounts=extra_mounts,
             access_mode=access_mode,
             hashing_strategy=hashing_strategy,
+            artifact_families=artifact_families,
+            artifact_families_json_path=artifact_families_json_path,
+            artifact_families_env_var=artifact_families_env_var,
         )
 
     def open_run(self, run_id: str) -> pd.DataFrame:
@@ -151,7 +170,11 @@ class AnalysisSession:
         )
 
     def views(self, epoch: SimulationEpoch) -> EpochViews:
-        return build_epoch_views(epoch=epoch, tracker=self.tracker)
+        return build_epoch_views(
+            epoch=epoch,
+            tracker=self.tracker,
+            artifact_families=self.artifact_families,
+        )
 
     def trips(
         self,
@@ -356,6 +379,9 @@ def open_run(
     extra_mounts: Optional[Mapping[str, str | Path]] = None,
     access_mode: str = "analysis",
     hashing_strategy: str = "fast",
+    artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+    artifact_families_json_path: Optional[str | Path] = None,
+    artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
 ) -> AnalysisSession:
     return AnalysisSession.open(
         archive_run_dir=archive_run_dir,
@@ -365,4 +391,7 @@ def open_run(
         extra_mounts=extra_mounts,
         access_mode=access_mode,
         hashing_strategy=hashing_strategy,
+        artifact_families=artifact_families,
+        artifact_families_json_path=artifact_families_json_path,
+        artifact_families_env_var=artifact_families_env_var,
     )

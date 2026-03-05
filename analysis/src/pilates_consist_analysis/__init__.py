@@ -9,7 +9,14 @@ from .epochs import (
     build_epoch_panel,
     converged_epoch,
 )
-from .epoch_views import ARTIFACT_FAMILIES, EpochViews, epoch_views
+from .epoch_views import (
+    ARTIFACT_FAMILIES,
+    ARTIFACT_FAMILIES_ENV_VAR,
+    EpochViews,
+    epoch_views,
+    load_artifact_families_from_json,
+    resolve_artifact_families,
+)
 from .scenario_compare import ScenarioComparison, compare_scenarios
 
 __all__ = [
@@ -24,8 +31,11 @@ __all__ = [
     "build_epoch_panel",
     "converged_epoch",
     "ARTIFACT_FAMILIES",
+    "ARTIFACT_FAMILIES_ENV_VAR",
     "EpochViews",
     "epoch_views",
+    "load_artifact_families_from_json",
+    "resolve_artifact_families",
     "ScenarioComparison",
     "compare_scenarios",
     "open_run",
