@@ -7,13 +7,13 @@ from pilates.config import load_config
 from workflow_state import WorkflowState
 
 
-def _make_settings(tmp_path, start_year=2020, end_year=2021):
+def _make_settings(tmp_path, start_year=2020, end_year=2021, travel_model_freq=1):
     state_path = tmp_path / "state.yaml"
     config = {
         "run": {
             "start_year": start_year,
             "end_year": end_year,
-            "travel_model_freq": 1,
+            "travel_model_freq": travel_model_freq,
             "supply_demand_iters": 1,
             "scenario": "test",
             "region": "test",
@@ -163,4 +163,88 @@ def test_state_consistency_across_years(tmp_path):
 
     state.complete_step(WorkflowState.Stage.land_use)
     assert state.current_year == 2022
+    assert state.current_major_stage is None
+
+
+def test_interval_only_progression_uses_forecast_boundaries(tmp_path):
+    settings = _make_settings(
+        tmp_path, start_year=2017, end_year=2030, travel_model_freq=6
+    )
+    state = WorkflowState.from_settings(settings)
+
+    assert state.current_year == 2017
+    assert state.forecast_year == 2023
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2023
+    assert state.forecast_year == 2029
+    assert state.current_major_stage == WorkflowState.Stage.land_use
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2029
+    assert state.forecast_year == 2030
+    assert state.current_major_stage == WorkflowState.Stage.land_use
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2030
+    assert state.forecast_year == 2030
+    assert state.current_major_stage == WorkflowState.Stage.land_use
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2031
+    assert state.current_major_stage is None
+
+
+def test_land_use_disabled_forecast_year_matches_current_year(tmp_path):
+    settings = _make_settings(tmp_path, start_year=2020, end_year=2030)
+    settings.land_use_enabled = False
+    settings.vehicle_ownership_model_enabled = True
+
+    state = WorkflowState.from_settings(settings)
+
+    assert state.current_year == 2020
+    assert state.forecast_year == 2020
+    assert state.current_major_stage == WorkflowState.Stage.vehicle_ownership_model
+
+
+def test_land_use_disabled_exits_after_single_outer_cycle(tmp_path):
+    settings = _make_settings(tmp_path, start_year=2020, end_year=2030)
+    settings.land_use_enabled = False
+    settings.vehicle_ownership_model_enabled = True
+
+    state = WorkflowState.from_settings(settings)
+    state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+
+    assert state.current_year == settings.run.end_year + 1
+    assert state.current_major_stage is None
+    assert state.current_year != settings.run.start_year + 1
+    with pytest.raises(StopIteration):
+        next(state)
+
+
+def test_2010_special_case_progression_has_no_backward_jumps(tmp_path):
+    settings = _make_settings(
+        tmp_path, start_year=2010, end_year=2025, travel_model_freq=6
+    )
+    state = WorkflowState.from_settings(settings)
+
+    assert state.current_year == 2010
+    assert state.forecast_year == 2017
+
+    observed_years = [state.current_year]
+    observed_forecasts = [state.forecast_year]
+
+    for _ in range(3):
+        state.complete_step(WorkflowState.Stage.land_use)
+        observed_years.append(state.current_year)
+        observed_forecasts.append(state.forecast_year)
+
+    assert observed_years == [2010, 2017, 2023, 2025]
+    assert observed_forecasts == [2017, 2023, 2025, 2025]
+    assert all(
+        later > earlier for earlier, later in zip(observed_years, observed_years[1:])
+    )
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2026
     assert state.current_major_stage is None

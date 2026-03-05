@@ -66,7 +66,6 @@ class WorkflowState:
         self.mirror_file_loc: Optional[str] = None
 
         self.__asim_compiled = asim_compiled
-        self.initial_step = 7 if self.current_year == 2010 else None
 
         # Store settings for access by methods that need them
         self._settings = {
@@ -307,16 +306,7 @@ class WorkflowState:
             out.current_inner_iter = 0
 
         if year:
-            # Calculate forecast_year based on current_year and frequency
-            # Ensure forecast_year does not exceed end_year
-            next_year_candidate = out.current_year + (
-                out.initial_step if out.current_year == 2010 else out.travel_model_freq
-            )
-            out.forecast_year = (
-                min(next_year_candidate, out.end_year)
-                if land_use_enabled
-                else out.start_year
-            )
+            out.forecast_year = out._compute_forecast_year()
 
         # Initialize state if starting fresh (current_major_stage is None)
         if out.current_major_stage is None:
@@ -344,6 +334,33 @@ class WorkflowState:
         if self.current_major_stage is None:
             logger.info("No enabled stages found. Workflow is complete.")
             self._advance_to_next_year()  # This will set current_major_stage to None and handle state file removal
+
+    def _interval_step_for_year(self, year: int) -> int:
+        # Keep 2010 as a one-time bridge into regular interval boundaries.
+        return 7 if year == 2010 else self.travel_model_freq
+
+    def _compute_forecast_year(self) -> int:
+        if not self._settings.get("land_use_enabled"):
+            return self.current_year
+        next_year_candidate = self.current_year + self._interval_step_for_year(
+            self.current_year
+        )
+        return min(next_year_candidate, self.end_year)
+
+    def _next_current_year(self) -> int:
+        if not self._settings.get("land_use_enabled"):
+            return self.end_year + 1
+
+        next_year = (
+            self.forecast_year
+            if self.forecast_year is not None
+            else self._compute_forecast_year()
+        )
+        # Guard against stale or capped forecast years that would cause
+        # backward moves or no-op loops.
+        if next_year <= self.current_year:
+            return self.end_year + 1
+        return next_year
 
     def write_state(self):
         """Save the current state to file"""
@@ -596,24 +613,14 @@ class WorkflowState:
             self._advance_to_next_year()
 
     def _advance_to_next_year(self):
-        """Move to the next year and reset to first stage"""
-        self.current_year += 1
+        """Move to the next interval boundary year and reset to first stage"""
+        self.current_year = self._next_current_year()
 
         if self.current_year <= self.end_year:
             logger.info(f"Starting year {self.current_year}")
             # Reset to the first enabled major stage for the new year
             self._initialize_first_stage()
-            # Recalculate forecast year for the new current year
-            next_year_candidate = self.current_year + (
-                self.initial_step
-                if self.current_year == 2010
-                else self.travel_model_freq
-            )
-            self.forecast_year = (
-                min(next_year_candidate, self.end_year)
-                if self._settings.get("land_use_enabled")
-                else self.start_year
-            )
+            self.forecast_year = self._compute_forecast_year()
 
         else:
             logger.info(f"Workflow complete at end year {self.end_year}")
