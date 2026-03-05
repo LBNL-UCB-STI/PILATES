@@ -19,7 +19,20 @@ from .metrics_activitysim import (
 )
 from .metrics_equilibrium import compute_equilibrium_metrics, write_equilibrium_metrics
 from .packaging import export_bundle
-from .runtime import create_analysis_tracker, resolve_archive_run_dir, resolve_db_path
+from .scenario_compare import (
+    compare_scenarios,
+    runset_from_run_ids,
+    write_scenario_comparison,
+)
+from .runtime import (
+    create_analysis_tracker,
+    db_health_to_frame,
+    get_db_health,
+    get_db_health_issues,
+    resolve_archive_run_dir,
+    resolve_db_path,
+)
+from .skim_analysis import build_skim_convergence_dataset, write_skim_convergence_dataset
 
 
 def _repo_root_default() -> Path:
@@ -253,6 +266,102 @@ def cmd_export_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_skim_dataset(args: argparse.Namespace) -> int:
+    archive_run_dir = resolve_archive_run_dir(args.archive_run_dir)
+    db_path = resolve_db_path(archive_run_dir, db_path=args.db_path)
+    tracker = _build_tracker(args)
+    concept_keys = args.concept_key or None
+    run_ids = args.run_id or None
+    dataset = build_skim_convergence_dataset(
+        tracker,
+        concept_keys=concept_keys,
+        run_ids=run_ids,
+        year=args.year,
+        iteration=args.iteration,
+        key_contains=args.key_contains,
+        limit=args.limit,
+    )
+    query = {
+        "concept_keys": concept_keys,
+        "run_ids": run_ids,
+        "year": args.year,
+        "iteration": args.iteration,
+        "key_contains": args.key_contains,
+        "limit": args.limit,
+    }
+    manifest = write_skim_convergence_dataset(
+        dataset,
+        output_dir=args.output_dir,
+        archive_run_dir=str(archive_run_dir),
+        db_path=str(db_path),
+        query=query,
+    )
+    _print_json(manifest.to_dict())
+    return 0
+
+
+def cmd_db_health(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    health = get_db_health(tracker, archive_run_dir=args.archive_run_dir)
+    issues = get_db_health_issues(health, strict=args.strict)
+    frame = db_health_to_frame(health)
+    payload: Dict[str, Any] = {
+        "healthy": bool(health.get("healthy", False)),
+        "strict": bool(args.strict),
+        "issues": issues,
+        "summary": frame.to_dict(orient="records")[0] if not frame.empty else {},
+    }
+    _print_json(payload)
+    if issues and args.fail_on_issues:
+        return 2
+    return 0
+
+
+def cmd_compare_scenarios(args: argparse.Namespace) -> int:
+    archive_run_dir = resolve_archive_run_dir(args.archive_run_dir)
+    db_path = resolve_db_path(archive_run_dir, db_path=args.db_path)
+    tracker = _build_tracker(args)
+
+    left = runset_from_run_ids(
+        tracker,
+        args.left_run_id,
+        name=args.left_name,
+    )
+    right = runset_from_run_ids(
+        tracker,
+        args.right_run_id,
+        name=args.right_name,
+    )
+    comparison = compare_scenarios(
+        tracker,
+        left,
+        right,
+        datasets=args.dataset,
+        year=args.year,
+        iteration=args.iteration,
+        config_namespace=args.config_namespace,
+    )
+    query = {
+        "left_name": args.left_name,
+        "right_name": args.right_name,
+        "left_run_ids": left.run_ids,
+        "right_run_ids": right.run_ids,
+        "datasets": args.dataset,
+        "year": args.year,
+        "iteration": args.iteration,
+        "config_namespace": args.config_namespace,
+    }
+    manifest = write_scenario_comparison(
+        comparison,
+        output_dir=args.output_dir,
+        archive_run_dir=str(archive_run_dir),
+        db_path=str(db_path),
+        query=query,
+    )
+    _print_json(manifest.to_dict())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pilates-consist-analysis",
@@ -349,6 +458,20 @@ def build_parser() -> argparse.ArgumentParser:
     asim_eq.add_argument("--output-json", required=True)
     asim_eq.set_defaults(func=cmd_activitysim_equilibrium_metrics)
 
+    skim = subparsers.add_parser(
+        "build-skim-dataset",
+        help="Build OpenMatrix skim convergence dataset across runs/iterations.",
+    )
+    _add_tracker_args(skim)
+    skim.add_argument("--concept-key", action="append", default=None, help="Explicit concept key; repeatable.")
+    skim.add_argument("--run-id", action="append", default=None, help="Optional run id filter; repeatable.")
+    skim.add_argument("--year", type=int, default=None)
+    skim.add_argument("--iteration", type=int, default=None)
+    skim.add_argument("--key-contains", default="skim")
+    skim.add_argument("--limit", type=int, default=10000)
+    skim.add_argument("--output-dir", required=True)
+    skim.set_defaults(func=cmd_build_skim_dataset)
+
     export = subparsers.add_parser(
         "export-bundle",
         help="Export portable Consist bundle for selected run ids.",
@@ -361,6 +484,37 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--no-include-children", action="store_true", default=False)
     export.add_argument("--dry-run", action="store_true", default=False)
     export.set_defaults(func=cmd_export_bundle)
+
+    health = subparsers.add_parser(
+        "db-health",
+        help="Run Consist DB inspect/doctor health checks for the archive DB.",
+    )
+    _add_tracker_args(health)
+    health.add_argument("--strict", action="store_true", default=False)
+    health.add_argument("--fail-on-issues", action="store_true", default=False)
+    health.set_defaults(func=cmd_db_health)
+
+    compare = subparsers.add_parser(
+        "compare-scenarios",
+        help="Compare two run sets across datasets and config diffs.",
+    )
+    _add_tracker_args(compare)
+    compare.add_argument("--left-name", default="left")
+    compare.add_argument("--right-name", default="right")
+    compare.add_argument("--left-run-id", action="append", required=True, help="Run id in left scenario; repeatable.")
+    compare.add_argument("--right-run-id", action="append", required=True, help="Run id in right scenario; repeatable.")
+    compare.add_argument(
+        "--dataset",
+        action="append",
+        choices=["linkstats", "asim_trips", "skims"],
+        default=None,
+        help="Dataset to compare; repeatable. Defaults to all.",
+    )
+    compare.add_argument("--year", type=int, default=None)
+    compare.add_argument("--iteration", type=int, default=None)
+    compare.add_argument("--config-namespace", default=None)
+    compare.add_argument("--output-dir", required=True)
+    compare.set_defaults(func=cmd_compare_scenarios)
 
     return parser
 

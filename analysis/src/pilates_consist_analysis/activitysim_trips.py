@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import inspect
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -390,6 +391,133 @@ def _resolve_trips_schema_model() -> Optional[type]:
         return None
 
 
+def _parse_artifact_param_value(raw: str) -> tuple[str, Any]:
+    value = raw.strip()
+    lowered = value.lower()
+    if lowered == "true":
+        return "bool", True
+    if lowered == "false":
+        return "bool", False
+    if lowered == "null":
+        return "null", None
+    try:
+        if "." not in value and "e" not in lowered:
+            return "num", int(value)
+        return "num", float(value)
+    except ValueError:
+        return "str", value
+
+
+def _parse_artifact_param_expression(expression: str) -> Dict[str, Any]:
+    raw = expression.strip()
+    operator = None
+    lhs = ""
+    rhs = ""
+    for candidate in (">=", "<=", "="):
+        idx = raw.find(candidate)
+        if idx > 0:
+            operator = candidate
+            lhs = raw[:idx].strip()
+            rhs = raw[idx + len(candidate) :].strip()
+            break
+    if operator is None:
+        raise ValueError(
+            f"Invalid artifact facet predicate {expression!r}. "
+            "Expected <key>=<value>, <key>>=<value>, or <key><=<value>."
+        )
+    if not lhs:
+        raise ValueError(f"Artifact facet predicate is missing a key: {expression!r}")
+    if rhs == "":
+        raise ValueError(f"Artifact facet predicate is missing a value: {expression!r}")
+
+    predicate_namespace = None
+    key_path = lhs
+    if "." in lhs:
+        maybe_namespace, remainder = lhs.split(".", 1)
+        if maybe_namespace and remainder:
+            predicate_namespace = maybe_namespace
+            key_path = remainder
+
+    value_kind, value = _parse_artifact_param_value(rhs)
+    if operator in {">=", "<="} and value_kind != "num":
+        raise ValueError(
+            f"Artifact facet predicate {expression!r} uses {operator} with a "
+            "non-numeric value."
+        )
+
+    return {
+        "namespace": predicate_namespace,
+        "key_path": key_path,
+        "op": operator,
+        "kind": value_kind,
+        "value": value,
+    }
+
+
+def _build_artifact_predicates(tracker: Any, params: list[str]) -> list[Dict[str, Any]]:
+    if not params:
+        return []
+    parser = getattr(tracker, "_parse_artifact_param_expression", None)
+    if callable(parser):
+        return [parser(param) for param in params]
+    return [_parse_artifact_param_expression(param) for param in params]
+
+
+def _resolve_grouped_schema_selector(
+    *,
+    tracker: Any,
+    schema_id: Optional[str],
+) -> Dict[str, Any]:
+    if schema_id:
+        return {"schema_id": schema_id}
+
+    schema_model = _resolve_trips_schema_model()
+    if schema_model is None:
+        return {}
+
+    db = getattr(tracker, "db", None)
+    if db is not None and hasattr(db, "find_schema_ids_for_model"):
+        schema_ids = db.find_schema_ids_for_model(schema_model=schema_model, compatible=False)
+        if not schema_ids:
+            schema_ids = db.find_schema_ids_for_model(schema_model=schema_model, compatible=True)
+        if schema_ids:
+            return {"schema_ids": list(schema_ids), "schema": schema_model}
+    return {"schema": schema_model}
+
+
+def _call_with_supported_kwargs(func: Any, kwargs: Dict[str, Any]) -> Any:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return func(**kwargs)
+    accepts_var_kw = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    if accepts_var_kw:
+        return func(**kwargs)
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in signature.parameters
+    }
+    return func(**filtered_kwargs)
+
+
+def _resolve_grouped_hybrid_creator(tracker: Any) -> Optional[Any]:
+    view_factory = getattr(tracker, "view_factory", None)
+    creator = getattr(view_factory, "create_grouped_hybrid_view", None)
+    if callable(creator):
+        return creator
+    try:
+        from consist.core.views import ViewFactory
+    except Exception:
+        return None
+    try:
+        creator = getattr(ViewFactory(tracker), "create_grouped_hybrid_view", None)
+    except Exception:
+        return None
+    return creator if callable(creator) else None
+
+
 def _create_grouped_view(
     *,
     tracker: Any,
@@ -428,21 +556,52 @@ def _create_grouped_view(
         year=year,
         iteration=iteration,
     )
+    selector = _resolve_grouped_schema_selector(tracker=tracker, schema_id=schema_id)
+    predicates = _build_artifact_predicates(tracker, params)
+    facets = list(_TRIPS_FACET_KEYS)
+    create_grouped_hybrid = _resolve_grouped_hybrid_creator(tracker)
+    can_use_hybrid = (
+        callable(create_grouped_hybrid)
+        and ("schema_id" in selector or "schema_ids" in selector)
+    )
 
-    selector: Dict[str, Any] = {}
-    if schema_id:
-        selector["schema_id"] = schema_id
-    else:
-        schema_model = _resolve_trips_schema_model()
-        if schema_model is not None:
-            selector["schema"] = schema_model
+    if can_use_hybrid:
+        grouped_kwargs: Dict[str, Any] = {
+            "view_name": grouped_view_name,
+            "namespace": namespace,
+            "predicates": predicates or None,
+            "drivers": drivers or ["parquet", "csv"],
+            "attach_facets": facets,
+            "facets": facets,
+            "include_system_columns": True,
+            "mode": mode,
+            "if_exists": "replace",
+            "missing_files": missing_files,
+            "run_id": run_id,
+            "year": year,
+            "iteration": iteration,
+            "schema_id": selector.get("schema_id"),
+            "schema_ids": selector.get("schema_ids"),
+        }
+        _call_with_supported_kwargs(create_grouped_hybrid, grouped_kwargs)
+        return grouped_view_name
+
+    legacy_selector: Dict[str, Any] = {}
+    if selector.get("schema_id"):
+        legacy_selector["schema_id"] = selector["schema_id"]
+    elif selector.get("schema") is not None:
+        legacy_selector["schema"] = selector["schema"]
+    elif selector.get("schema_ids"):
+        schema_ids = selector["schema_ids"]
+        if schema_ids:
+            legacy_selector["schema_id"] = schema_ids[0]
 
     tracker.create_grouped_view(
         view_name=grouped_view_name,
         namespace=namespace,
         params=params or None,
         drivers=drivers or ["parquet", "csv"],
-        attach_facets=list(_TRIPS_FACET_KEYS),
+        attach_facets=facets,
         include_system_columns=True,
         mode=mode,
         if_exists="replace",
@@ -450,7 +609,7 @@ def _create_grouped_view(
         run_id=run_id,
         year=year,
         iteration=iteration,
-        **selector,
+        **legacy_selector,
     )
     return grouped_view_name
 

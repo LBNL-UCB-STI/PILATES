@@ -51,10 +51,14 @@ If you are an LLM extending this package, start here:
 2. Tracker/bootstrap and path assumptions: `src/pilates_consist_analysis/runtime.py`
 3. Dataset assembly (current linkstats path): `src/pilates_consist_analysis/datasets.py`
 4. ActivitySim trips pipeline: `src/pilates_consist_analysis/activitysim_trips.py`
-5. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
-6. Manifest format: `src/pilates_consist_analysis/manifest.py`
-7. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
-8. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
+5. Skim convergence pipeline: `src/pilates_consist_analysis/skim_analysis.py`
+6. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
+7. Multi-run grouping/alignment abstraction: `src/pilates_consist_analysis/runset.py`
+8. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
+9. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
+10. Manifest format: `src/pilates_consist_analysis/manifest.py`
+11. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
+12. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
 
 When adding a new analysis family, mirror the linkstats pattern:
 - discover artifacts,
@@ -70,8 +74,11 @@ analysis/
   README.md
   src/pilates_consist_analysis/
     activitysim_trips.py
+    api.py
     cli.py
     runtime.py
+    runset.py
+    scenario_compare.py
     catalog.py
     datasets.py
     keys.py
@@ -79,6 +86,7 @@ analysis/
     metrics_activitysim.py
     metrics_equilibrium.py
     packaging.py
+    skim_analysis.py
 ```
 
 ## How It Works
@@ -146,6 +154,12 @@ Available commands:
   - Computes first-pass equilibrium diagnostics from deltas.
 - `activitysim-equilibrium-metrics`
   - Computes first-pass equilibrium diagnostics from `asim_trips_equilibrium_pairs.csv` (+ optional mode deltas).
+- `build-skim-dataset`
+  - Produces skim convergence datasets from OpenMatrix metadata views.
+- `db-health`
+  - Runs Consist `inspect` + `doctor` checks before heavy analysis.
+- `compare-scenarios`
+  - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and includes config diffs for representative runs.
 - `export-bundle`
   - Wraps Consist `DatabaseMaintenance.export` for portable subsets.
 
@@ -199,6 +213,68 @@ Example ActivitySim equilibrium metrics:
 pilates-consist-analysis activitysim-equilibrium-metrics \
   --dataset-dir /tmp/asim_trips_dataset \
   --output-json /tmp/asim_trips_dataset/activitysim_equilibrium_metrics.json
+```
+
+Example skim convergence dataset:
+
+```bash
+pilates-consist-analysis build-skim-dataset \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --output-dir /tmp/skim_dataset
+```
+
+Example DB health gate:
+
+```bash
+pilates-consist-analysis db-health \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --strict \
+  --fail-on-issues
+```
+
+Example scenario comparison:
+
+```bash
+pilates-consist-analysis compare-scenarios \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --left-name baseline \
+  --right-name policy \
+  --left-run-id <RUN_A1> \
+  --right-run-id <RUN_B1> \
+  --dataset linkstats \
+  --dataset asim_trips \
+  --dataset skims \
+  --output-dir /tmp/scenario_compare
+```
+
+## Python API (Notebook-Friendly)
+
+The package now exposes a session API:
+
+```python
+from pilates_consist_analysis import open_run
+
+session = open_run("/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES")
+
+runs = session.runs(runset_name="all-2030", year=2030)
+trips = session.trips(year=2030)
+skims = session.skims(year=2030)
+health = session.inspect_db()
+comparison = session.compare_scenarios(
+    left=["run-a1", "run-a2"],
+    right=["run-b1", "run-b2"],
+    datasets=["linkstats", "asim_trips", "skims"],
+)
+```
+
+`RunSet` supports split/alignment workflows for multi-run analysis:
+
+```python
+parts = runs.split_by("model")
+aligned = parts["activitysim"].align(parts["beam"], on=("year", "iteration"))
 ```
 
 Example export:
