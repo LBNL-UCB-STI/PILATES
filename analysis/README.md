@@ -55,7 +55,7 @@ Consolidated roadmap for this package (highest priority first):
 - [ ] **P1: Tagging hardening + consistency**
   - Tighten scenario/year/iteration/model coverage across runs so epoch grouping is fully deterministic without fallbacks.
   - Normalize ASim↔BEAM parent linkage patterns across historical archives.
-- [ ] **P1: Scenario compare + epoch integration**
+- [x] **P1: Scenario compare + epoch integration**
   - Add explicit converged-epoch selection modes to `compare-scenarios`.
   - Add guardrails for mixed-completeness epochs in cross-scenario alignment.
 - [ ] **P2: Portable analysis depth**
@@ -281,6 +281,28 @@ pilates-consist-analysis compare-scenarios \
 
 Use `--left-run-id/--right-run-id` to override filter mode with explicit run IDs.
 
+Example converged-epoch scenario comparison:
+
+```bash
+pilates-consist-analysis compare-scenarios \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --left-model beam \
+  --left-tag baseline \
+  --right-model beam \
+  --right-tag policy \
+  --align-on year \
+  --use-converged \
+  --converged-group-by year \
+  --converged-group-by scenario_id \
+  --dataset linkstats \
+  --output-dir /tmp/scenario_compare_converged
+```
+
+When `--use-converged` is enabled, compare validates that both sides have completed epoch candidates
+for each overlapping alignment key. If one side is incomplete/missing for an aligned key, it raises a
+`ValueError` with guidance to refine filters, adjust `--converged-group-by`, or disable converged mode.
+
 ## Python API (Notebook-Friendly)
 
 The package now exposes a session API:
@@ -302,6 +324,8 @@ comparison = session.compare_scenarios(
     left=["run-a1", "run-a2"],
     right=["run-b1", "run-b2"],
     datasets=["linkstats", "asim_trips", "skims"],
+    use_converged=True,
+    converged_group_by=["year", "scenario_id"],
 )
 ```
 

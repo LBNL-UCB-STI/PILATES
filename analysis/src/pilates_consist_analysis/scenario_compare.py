@@ -15,6 +15,23 @@ from .skim_analysis import build_skim_convergence_dataset
 
 SUPPORTED_DATASETS = ("linkstats", "asim_trips", "skims")
 
+_RUN_FIELD_ALIASES = {
+    "year": ("year", "simulation_year", "facet.year"),
+    "iteration": (
+        "iteration",
+        "outer_iteration",
+        "simulation_iteration",
+        "facet.iteration",
+    ),
+    "scenario_id": (
+        "scenario_id",
+        "scenario",
+        "scenario.id",
+        "facet.scenario_id",
+    ),
+    "model": ("model_name", "model", "facet.model"),
+}
+
 
 @dataclass
 class ScenarioComparison:
@@ -46,6 +63,13 @@ def _normalize_dataset_list(datasets: Optional[Sequence[str]]) -> list[str]:
     if not output:
         return list(SUPPORTED_DATASETS)
     return output
+
+
+def _normalize_group_by(values: Optional[Sequence[str]]) -> Optional[list[str]]:
+    if values is None:
+        return None
+    grouping = [str(value).strip() for value in values if str(value).strip()]
+    return grouping or None
 
 
 def _to_string_set(values: Iterable[Any]) -> set[str]:
@@ -108,6 +132,141 @@ def _metric_agg(metric: str) -> str:
     if any(token in metric_lower for token in sum_tokens):
         return "sum"
     return "mean"
+
+
+def _metadata_sources(run: Any) -> list[Mapping[str, Any]]:
+    output: list[Mapping[str, Any]] = []
+    for name in ("metadata", "meta"):
+        value = getattr(run, name, None)
+        if isinstance(value, Mapping):
+            output.append(value)
+    return output
+
+
+def _lookup_mapping(mapping: Mapping[str, Any], key_path: str) -> Any:
+    if key_path in mapping:
+        return mapping.get(key_path)
+    current: Any = mapping
+    for part in key_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _run_field(run: Any, field: str) -> Any:
+    aliases = _RUN_FIELD_ALIASES.get(field, (field,))
+    for key in aliases:
+        if "." not in key and hasattr(run, key):
+            value = getattr(run, key)
+            if value is not None and str(value).strip() != "":
+                return value
+
+    for source in _metadata_sources(run):
+        for key in aliases:
+            value = _lookup_mapping(source, key)
+            if value is not None and str(value).strip() != "":
+                return value
+
+    if field == "model":
+        value = getattr(run, "description", None)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_status(run: Any) -> str:
+    return str(getattr(run, "status", "") or "").strip().lower()
+
+
+def _normalized_align_key(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    output = str(value).strip()
+    return output or None
+
+
+def _align_key_for_run(run: Any, *, align_on: str) -> Optional[str]:
+    return _normalized_align_key(_run_field(run, align_on))
+
+
+def _is_complete_epoch_candidate(run: Any) -> bool:
+    return _run_status(run) == "completed" and _as_int(_run_field(run, "iteration")) is not None
+
+
+def _runset_keys(
+    runset: RunSet,
+    *,
+    align_on: str,
+    completed_only: bool,
+) -> set[str]:
+    output: set[str] = set()
+    for run in runset:
+        if completed_only and not _is_complete_epoch_candidate(run):
+            continue
+        key = _align_key_for_run(run, align_on=align_on)
+        if key is not None:
+            output.add(key)
+    return output
+
+
+def _format_key_list(values: Sequence[str], *, limit: int = 8) -> str:
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned:
+        return "<none>"
+    if len(cleaned) <= limit:
+        return ", ".join(cleaned)
+    hidden = len(cleaned) - limit
+    return f"{', '.join(cleaned[:limit])} (+{hidden} more)"
+
+
+def _validate_converged_alignment_candidates(
+    *,
+    run_set_left: RunSet,
+    run_set_right: RunSet,
+    left_converged: RunSet,
+    right_converged: RunSet,
+    align_on: str,
+    converged_group_by: Optional[Sequence[str]],
+) -> None:
+    overlapping_keys = sorted(
+        _runset_keys(run_set_left, align_on=align_on, completed_only=False)
+        & _runset_keys(run_set_right, align_on=align_on, completed_only=False)
+    )
+    if not overlapping_keys:
+        return
+
+    left_keys = _runset_keys(left_converged, align_on=align_on, completed_only=True)
+    right_keys = _runset_keys(right_converged, align_on=align_on, completed_only=True)
+    missing_left = sorted(key for key in overlapping_keys if key not in left_keys)
+    missing_right = sorted(key for key in overlapping_keys if key not in right_keys)
+    if not missing_left and not missing_right:
+        return
+
+    resolved_grouping = (
+        list(converged_group_by)
+        if converged_group_by
+        else ["year", "scenario_id"]
+    )
+    raise ValueError(
+        "Converged scenario compare requires complete epoch candidates on both sides "
+        f"for aligned keys (align_on='{align_on}'). "
+        f"Overlapping keys: {_format_key_list(overlapping_keys)}. "
+        f"Missing on left: {_format_key_list(missing_left)}. "
+        f"Missing on right: {_format_key_list(missing_right)}. "
+        "Ensure each side has completed runs with iteration values for these keys, "
+        f"adjust --converged-group-by (current={resolved_grouping}), "
+        "tighten side filters, or disable converged mode."
+    )
 
 
 def _aggregate_for_compare(frame: pd.DataFrame, key_cols: Sequence[str]) -> pd.DataFrame:
@@ -221,15 +380,30 @@ def _build_aligned_pair(
     *,
     align_on: str,
     latest_group_by: Optional[Sequence[str]] = None,
+    use_converged: bool = False,
+    converged_group_by: Optional[Sequence[str]] = None,
 ):
-    if latest_group_by:
-        grouping = [str(value).strip() for value in latest_group_by if str(value).strip()]
-    else:
-        grouping = [align_on]
+    compare_left = run_set_left
+    compare_right = run_set_right
+
+    resolved_converged_grouping = _normalize_group_by(converged_group_by)
+    if use_converged:
+        compare_left = run_set_left.converged(group_by=resolved_converged_grouping)
+        compare_right = run_set_right.converged(group_by=resolved_converged_grouping)
+        _validate_converged_alignment_candidates(
+            run_set_left=run_set_left,
+            run_set_right=run_set_right,
+            left_converged=compare_left,
+            right_converged=compare_right,
+            align_on=align_on,
+            converged_group_by=resolved_converged_grouping,
+        )
+
+    grouping = _normalize_group_by(latest_group_by) or [align_on]
     if not grouping:
         grouping = [align_on]
-    left_aligned = run_set_left.latest(group_by=grouping)
-    right_aligned = run_set_right.latest(group_by=grouping)
+    left_aligned = compare_left.latest(group_by=grouping)
+    right_aligned = compare_right.latest(group_by=grouping)
     return left_aligned.align(right_aligned, on=align_on)
 
 
@@ -381,6 +555,8 @@ def compare_scenarios(
     config_include_equal: bool = False,
     align_on: str = "year",
     latest_group_by: Optional[Sequence[str]] = None,
+    use_converged: bool = False,
+    converged_group_by: Optional[Sequence[str]] = None,
 ) -> ScenarioComparison:
     dataset_list = _normalize_dataset_list(datasets)
     left_name = runset_label(run_set_left, default="left")
@@ -390,6 +566,8 @@ def compare_scenarios(
         run_set_right,
         align_on=align_on,
         latest_group_by=latest_group_by,
+        use_converged=use_converged,
+        converged_group_by=converged_group_by,
     )
 
     output_frames: Dict[str, pd.DataFrame] = {}

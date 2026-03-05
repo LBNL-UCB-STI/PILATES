@@ -297,6 +297,8 @@ class AnalysisSession:
         config_include_equal: bool = False,
         align_on: str = "year",
         latest_group_by: Optional[Iterable[str]] = None,
+        use_converged: bool = False,
+        converged_group_by: Optional[Iterable[str]] = None,
     ) -> ScenarioComparison:
         if isinstance(left, str):
             left = [left]
@@ -338,6 +340,10 @@ class AnalysisSession:
             config_include_equal=config_include_equal,
             align_on=align_on,
             latest_group_by=list(latest_group_by) if latest_group_by is not None else None,
+            use_converged=bool(use_converged),
+            converged_group_by=list(converged_group_by)
+            if converged_group_by is not None
+            else None,
         )
 
 

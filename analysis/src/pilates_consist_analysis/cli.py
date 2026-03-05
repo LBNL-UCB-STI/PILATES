@@ -461,6 +461,8 @@ def cmd_compare_scenarios(args: argparse.Namespace) -> int:
             config_include_equal=args.config_include_equal,
             align_on=args.align_on,
             latest_group_by=args.latest_group_by,
+            use_converged=args.use_converged,
+            converged_group_by=args.converged_group_by,
         )
     except ValueError as exc:
         message = str(exc)
@@ -506,6 +508,8 @@ def cmd_compare_scenarios(args: argparse.Namespace) -> int:
         "right_filters": right_filters,
         "align_on": args.align_on,
         "latest_group_by": args.latest_group_by,
+        "use_converged": args.use_converged,
+        "converged_group_by": args.converged_group_by,
         "datasets": args.dataset,
         "year": args.year,
         "iteration": args.iteration,
@@ -749,6 +753,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Field/facet key for RunSet.latest(...); repeatable. Defaults to align key.",
     )
     compare.add_argument(
+        "--use-converged",
+        action="store_true",
+        default=False,
+        help=(
+            "Select RunSet.converged(...) before latest/alignment. "
+            "Disabled by default for backwards compatibility."
+        ),
+    )
+    compare.add_argument(
+        "--converged-group-by",
+        action="append",
+        default=None,
+        help=(
+            "Field/facet key for RunSet.converged(...); repeatable. "
+            "Defaults to year + scenario_id."
+        ),
+    )
+    compare.add_argument(
         "--dataset",
         action="append",
         choices=["linkstats", "asim_trips", "skims"],
@@ -785,4 +807,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             parser.error(
                 "compare-scenarios requires right selectors (--right-run-id or --right-* filters)."
             )
+        if args.converged_group_by and not args.use_converged:
+            parser.error("--converged-group-by requires --use-converged.")
     return int(args.func(args))

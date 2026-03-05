@@ -19,7 +19,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Tuple
+from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence
 
 from pilates.workspace import Workspace
 from pilates.generic.initialization import (
@@ -84,6 +84,240 @@ logger = logging.getLogger(__name__)
 
 
 _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_scenario_id(settings: Any) -> str:
+    run_cfg = getattr(settings, "run", None)
+    candidates = [
+        getattr(run_cfg, "scenario", None),
+        getattr(run_cfg, "output_run_name", None),
+    ]
+    for candidate in candidates:
+        text = str(candidate).strip() if candidate is not None else ""
+        if text:
+            return text
+    return "unknown_scenario"
+
+
+def _resolve_seed(settings: Any) -> Optional[int]:
+    candidates = [
+        getattr(getattr(settings, "activitysim", None), "random_seed", None),
+        getattr(getattr(settings, "run", None), "seed", None),
+        getattr(settings, "seed", None),
+    ]
+    for candidate in candidates:
+        value = _coerce_int(candidate)
+        if value is not None:
+            return value
+    return None
+
+
+def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
+    merged: List[str] = []
+    seen = set()
+    if isinstance(existing, Sequence) and not isinstance(existing, (str, bytes)):
+        for value in existing:
+            text = str(value).strip()
+            if text and text not in seen:
+                merged.append(text)
+                seen.add(text)
+    for value in additions:
+        text = str(value).strip()
+        if text and text not in seen:
+            merged.append(text)
+            seen.add(text)
+    return merged
+
+
+def _facet_to_mapping(facet: Any) -> Dict[str, Any]:
+    if isinstance(facet, Mapping):
+        return dict(facet)
+    model_dump = getattr(facet, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="json")
+        except TypeError:
+            dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+    return {}
+
+
+def _merge_epoch_facet(
+    *,
+    existing: Any,
+    scenario_id: str,
+    seed: Optional[int],
+    model: Optional[str],
+    year: Optional[int],
+    iteration: Optional[int],
+) -> Dict[str, Any]:
+    merged = _facet_to_mapping(existing)
+    merged["scenario_id"] = scenario_id
+    if seed is not None:
+        merged["seed"] = seed
+    if model:
+        merged["model"] = model
+    if year is not None:
+        merged["year"] = year
+    if iteration is not None:
+        merged["iteration"] = iteration
+    return merged
+
+
+class _EpochTaggingScenarioProxy:
+    """
+    Wrapper around a Consist scenario that injects epoch metadata and parent linkage.
+    """
+
+    def __init__(self, scenario: Any, *, scenario_id: str, seed: Optional[int]) -> None:
+        self._scenario = scenario
+        self._scenario_id = scenario_id
+        self._seed = seed
+        self._activitysim_run_ids: Dict[Tuple[int, int], str] = {}
+        self._activitysim_step_ids: Dict[Tuple[int, int], str] = {}
+        self._beam_run_ids: Dict[Tuple[int, int], str] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._scenario, name)
+
+    def _infer_model_name(self, run_kwargs: Mapping[str, Any]) -> Optional[str]:
+        explicit = run_kwargs.get("model")
+        if explicit:
+            return str(explicit)
+        fn = run_kwargs.get("fn")
+        meta = getattr(fn, "__consist_step__", None)
+        model_name = getattr(meta, "model", None)
+        if model_name:
+            return str(model_name)
+        return None
+
+    def _resolve_parent_run_id(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+    ) -> Optional[str]:
+        if model_name is None or year is None or iteration is None:
+            return None
+        model_norm = model_name.lower()
+        if model_norm == "beam" or model_norm.startswith("beam_"):
+            key = (year, iteration)
+            return self._activitysim_run_ids.get(key) or self._activitysim_step_ids.get(
+                key
+            )
+        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
+            return self._beam_run_ids.get((year, iteration - 1))
+        return None
+
+    def _should_expect_parent(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+    ) -> bool:
+        if model_name is None or year is None or iteration is None:
+            return False
+        model_norm = model_name.lower()
+        if model_norm == "beam" or model_norm.startswith("beam_"):
+            return True
+        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
+            return True
+        return False
+
+    def _remember_run_id(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+        run_id: Optional[str],
+    ) -> None:
+        if model_name is None or year is None or iteration is None or not run_id:
+            return
+        key = (year, iteration)
+        model_norm = model_name.lower()
+        if model_norm == "activitysim" or model_norm.startswith("activitysim_"):
+            self._activitysim_step_ids[key] = run_id
+            if model_norm in {"activitysim", "activitysim_run"}:
+                self._activitysim_run_ids[key] = run_id
+        elif model_norm in {"beam", "beam_run", "beam_full_skim"}:
+            self._beam_run_ids[key] = run_id
+
+    def run(self, *args: Any, **kwargs: Any) -> Any:
+        if len(args) > 2:
+            return self._scenario.run(*args, **kwargs)
+
+        run_kwargs: Dict[str, Any] = dict(kwargs)
+        if len(args) >= 1 and "fn" not in run_kwargs:
+            run_kwargs["fn"] = args[0]
+        if len(args) == 2 and "name" not in run_kwargs:
+            run_kwargs["name"] = args[1]
+
+        model_name = self._infer_model_name(run_kwargs)
+        year = _coerce_int(run_kwargs.get("year"))
+        iteration = _coerce_int(run_kwargs.get("iteration"))
+        if model_name and "model" not in run_kwargs:
+            run_kwargs["model"] = model_name
+
+        if not run_kwargs.get("parent_run_id"):
+            resolved_parent = self._resolve_parent_run_id(
+                model_name=model_name,
+                year=year,
+                iteration=iteration,
+            )
+            if resolved_parent:
+                run_kwargs["parent_run_id"] = resolved_parent
+            elif self._should_expect_parent(
+                model_name=model_name,
+                year=year,
+                iteration=iteration,
+            ):
+                # Keep execution behavior unchanged when lineage hints are unavailable.
+                logger.debug(
+                    "[RunTagging] parent_run_id unavailable for model=%s year=%s iteration=%s; leaving unset.",
+                    model_name,
+                    year,
+                    iteration,
+                )
+
+        tag_additions = [f"scenario_id:{self._scenario_id}"]
+        if self._seed is not None:
+            tag_additions.append(f"seed:{self._seed}")
+        if model_name:
+            tag_additions.append(f"model:{model_name}")
+        if year is not None:
+            tag_additions.append(f"year:{year}")
+        if iteration is not None:
+            tag_additions.append(f"iteration:{iteration}")
+        run_kwargs["tags"] = _merge_tag_list(run_kwargs.get("tags"), tag_additions)
+        run_kwargs["facet"] = _merge_epoch_facet(
+            existing=run_kwargs.get("facet"),
+            scenario_id=self._scenario_id,
+            seed=self._seed,
+            model=model_name,
+            year=year,
+            iteration=iteration,
+        )
+
+        result = self._scenario.run(**run_kwargs)
+        run_id = str(getattr(getattr(result, "run", None), "id", "")).strip() or None
+        self._remember_run_id(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+            run_id=run_id,
+        )
+        return result
 
 
 class _SchemaCoupler:
@@ -339,6 +573,8 @@ def run_bootstrap_phase(
     settings: Any,
     state: WorkflowState,
     workspace: Workspace,
+    scenario_id: str,
+    seed: Optional[int],
 ) -> Dict[str, Any]:
     """
     Execute initialization in a dedicated pre-scenario bootstrap phase.
@@ -367,13 +603,32 @@ def run_bootstrap_phase(
         "iteration": 0,
         "phase": "bootstrap",
         "stage": "bootstrap",
-        "tags": ["bootstrap", "init"],
         **build_step_consist_kwargs(
             "initialization",
             settings,
             workspace_path=workspace.full_path,
         ),
     }
+    run_kwargs["tags"] = _merge_tag_list(
+        run_kwargs.get("tags"),
+        [
+            "bootstrap",
+            "init",
+            f"scenario_id:{scenario_id}",
+            "model:initialization",
+            f"year:{state.start_year}",
+            "iteration:0",
+        ]
+        + ([f"seed:{seed}"] if seed is not None else []),
+    )
+    run_kwargs["facet"] = _merge_epoch_facet(
+        existing=run_kwargs.get("facet"),
+        scenario_id=scenario_id,
+        seed=seed,
+        model="initialization",
+        year=state.start_year,
+        iteration=0,
+    )
 
     if not _is_bootstrap_cache_enabled(settings):
         logger.info("Bootstrap cache disabled; running initialization once.")
@@ -914,6 +1169,13 @@ def main():
         partial_run_name = settings.run.output_run_name
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
+    scenario_id = _resolve_scenario_id(settings)
+    run_seed = _resolve_seed(settings)
+    logger.info(
+        "Resolved run tagging metadata: scenario_id=%s seed=%s",
+        scenario_id,
+        run_seed if run_seed is not None else "n/a",
+    )
 
     archive_run_dir = os.path.join(output_path, run_name)
     local_run_dir = os.path.join(local_root, run_name)
@@ -1085,6 +1347,8 @@ def main():
             settings=settings,
             state=state,
             workspace=workspace,
+            scenario_id=scenario_id,
+            seed=run_seed,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
         if not state.data_initialized:
@@ -1107,6 +1371,14 @@ def main():
     #   - Coupler coordination (step outputs → coupler → next step inputs)
     # The coupler is a shared dict-like object for passing artifacts between steps.
     scenario_kwargs = build_scenario_consist_kwargs(settings)
+    scenario_kwargs["facet"] = _merge_epoch_facet(
+        existing=scenario_kwargs.get("facet"),
+        scenario_id=scenario_id,
+        seed=run_seed,
+        model="pilates_orchestrator",
+        year=None,
+        iteration=None,
+    )
     scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
     scenario_kwargs.setdefault("cache_epoch", cache_epoch)
     schema_steps_all = _build_schema_steps()
@@ -1139,15 +1411,24 @@ def main():
         len(schema_steps_all),
         required_output_keys[:preview_count],
     )
+    scenario_tags = _merge_tag_list(
+        ["pilates_simulation"],
+        [f"scenario_id:{scenario_id}"] + ([f"seed:{run_seed}"] if run_seed is not None else []),
+    )
     try:
         with cr.scenario(
             run_name,
             tracker=tracker,
-            tags=["pilates_simulation"],
+            tags=scenario_tags,
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            coupler = scenario.coupler
+            tagged_scenario = _EpochTaggingScenarioProxy(
+                scenario,
+                scenario_id=scenario_id,
+                seed=run_seed,
+            )
+            coupler = tagged_scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),
                 warn_undefined=True,
@@ -1173,7 +1454,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.land_use):
                     usim_inputs = run_land_use_stage(
-                        scenario=scenario,
+                        scenario=tagged_scenario,
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1191,7 +1472,7 @@ def main():
                         f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
                     )
                     run_vehicle_ownership_stage(
-                        scenario=scenario,
+                        scenario=tagged_scenario,
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1206,7 +1487,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
-                        scenario=scenario,
+                        scenario=tagged_scenario,
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1228,7 +1509,7 @@ def main():
                 if state.should_run(WorkflowState.Stage.postprocessing):
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
-                        scenario=scenario,
+                        scenario=tagged_scenario,
                         state=state,
                         settings=settings,
                         workspace=workspace,
