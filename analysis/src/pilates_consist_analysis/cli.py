@@ -24,6 +24,7 @@ from .scenario_compare import (
     runset_from_run_ids,
     write_scenario_comparison,
 )
+from .runset import RunSet, runset_from_query, runset_run_ids
 from .runtime import (
     create_analysis_tracker,
     db_health_to_frame,
@@ -89,6 +90,95 @@ def _build_tracker(args: argparse.Namespace) -> Any:
 
 def _print_json(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _parse_metadata_items(items: Optional[list[str]]) -> Optional[dict[str, Any]]:
+    if not items:
+        return None
+    output: dict[str, Any] = {}
+    for raw in items:
+        value = str(raw).strip()
+        if not value:
+            continue
+        if "=" not in value:
+            raise ValueError(f"Invalid metadata filter '{value}'. Use key=value format.")
+        key, raw_value = value.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid metadata filter '{value}': missing key.")
+        parsed_value: Any
+        parsed_value_text = raw_value.strip()
+        if not parsed_value_text:
+            parsed_value = ""
+        else:
+            try:
+                parsed_value = json.loads(parsed_value_text)
+            except json.JSONDecodeError:
+                parsed_value = parsed_value_text
+        output[key] = parsed_value
+    return output or None
+
+
+def _parse_tags(items: Optional[list[str]]) -> Optional[list[str]]:
+    if not items:
+        return None
+    tags: list[str] = []
+    for raw in items:
+        for piece in str(raw).split(","):
+            value = piece.strip()
+            if value:
+                tags.append(value)
+    return tags or None
+
+
+def _build_compare_runset(
+    tracker: Any,
+    args: argparse.Namespace,
+    *,
+    side: str,
+) -> RunSet:
+    name = getattr(args, f"{side}_name")
+    run_ids = getattr(args, f"{side}_run_id")
+    if run_ids:
+        return runset_from_run_ids(tracker, run_ids, name=name)
+
+    metadata = _parse_metadata_items(getattr(args, f"{side}_metadata"))
+    tags = _parse_tags(getattr(args, f"{side}_tag"))
+    return runset_from_query(
+        tracker=tracker,
+        runset_name=name,
+        model=getattr(args, f"{side}_model"),
+        year=getattr(args, f"{side}_year"),
+        iteration=getattr(args, f"{side}_iteration"),
+        status=getattr(args, f"{side}_status"),
+        parent_id=getattr(args, f"{side}_parent_id"),
+        run_name=getattr(args, f"{side}_run_name"),
+        tags=tags,
+        metadata=metadata,
+        limit=getattr(args, f"{side}_limit"),
+    )
+
+
+def _has_side_selectors(args: argparse.Namespace, side: str) -> bool:
+    selector_fields = (
+        "run_id",
+        "model",
+        "year",
+        "iteration",
+        "status",
+        "parent_id",
+        "run_name",
+        "tag",
+        "metadata",
+    )
+    for field in selector_fields:
+        value = getattr(args, f"{side}_{field}")
+        if value is None:
+            continue
+        if isinstance(value, list) and len(value) == 0:
+            continue
+        return True
+    return False
 
 
 def cmd_discover_runs(args: argparse.Namespace) -> int:
@@ -322,34 +412,76 @@ def cmd_compare_scenarios(args: argparse.Namespace) -> int:
     db_path = resolve_db_path(archive_run_dir, db_path=args.db_path)
     tracker = _build_tracker(args)
 
-    left = runset_from_run_ids(
-        tracker,
-        args.left_run_id,
-        name=args.left_name,
-    )
-    right = runset_from_run_ids(
-        tracker,
-        args.right_run_id,
-        name=args.right_name,
-    )
-    comparison = compare_scenarios(
-        tracker,
-        left,
-        right,
-        datasets=args.dataset,
-        year=args.year,
-        iteration=args.iteration,
-        config_namespace=args.config_namespace,
-    )
+    left = _build_compare_runset(tracker, args, side="left")
+    right = _build_compare_runset(tracker, args, side="right")
+    if len(left) == 0:
+        raise ValueError("Left run set resolved to zero runs. Refine filters or specify --left-run-id.")
+    if len(right) == 0:
+        raise ValueError("Right run set resolved to zero runs. Refine filters or specify --right-run-id.")
+    try:
+        comparison = compare_scenarios(
+            tracker,
+            left,
+            right,
+            datasets=args.dataset,
+            year=args.year,
+            iteration=args.iteration,
+            config_namespace=args.config_namespace,
+            config_prefix=args.config_prefix,
+            config_include_equal=args.config_include_equal,
+            align_on=args.align_on,
+            latest_group_by=args.latest_group_by,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if "Cannot align on" in message:
+            raise ValueError(
+                f"{message} Try --latest-group-by {args.align_on} or a more specific grouping."
+            ) from exc
+        raise
+
+    left_filters = None
+    if not args.left_run_id:
+        left_filters = {
+            "model": args.left_model,
+            "year": args.left_year,
+            "iteration": args.left_iteration,
+            "status": args.left_status,
+            "parent_id": args.left_parent_id,
+            "name": args.left_run_name,
+            "tags": _parse_tags(args.left_tag),
+            "metadata": _parse_metadata_items(args.left_metadata),
+            "limit": args.left_limit,
+        }
+    right_filters = None
+    if not args.right_run_id:
+        right_filters = {
+            "model": args.right_model,
+            "year": args.right_year,
+            "iteration": args.right_iteration,
+            "status": args.right_status,
+            "parent_id": args.right_parent_id,
+            "name": args.right_run_name,
+            "tags": _parse_tags(args.right_tag),
+            "metadata": _parse_metadata_items(args.right_metadata),
+            "limit": args.right_limit,
+        }
+
     query = {
         "left_name": args.left_name,
         "right_name": args.right_name,
-        "left_run_ids": left.run_ids,
-        "right_run_ids": right.run_ids,
+        "left_run_ids": runset_run_ids(left),
+        "right_run_ids": runset_run_ids(right),
+        "left_filters": left_filters,
+        "right_filters": right_filters,
+        "align_on": args.align_on,
+        "latest_group_by": args.latest_group_by,
         "datasets": args.dataset,
         "year": args.year,
         "iteration": args.iteration,
         "config_namespace": args.config_namespace,
+        "config_prefix": args.config_prefix,
+        "config_include_equal": args.config_include_equal,
     }
     manifest = write_scenario_comparison(
         comparison,
@@ -360,6 +492,52 @@ def cmd_compare_scenarios(args: argparse.Namespace) -> int:
     )
     _print_json(manifest.to_dict())
     return 0
+
+
+def _add_compare_side_runset_args(parser: argparse.ArgumentParser, side: str) -> None:
+    parser.add_argument(
+        f"--{side}-run-id",
+        action="append",
+        default=None,
+        help=f"Explicit run id for {side} side; repeatable. Overrides {side} filters when provided.",
+    )
+    parser.add_argument(f"--{side}-model", default=None, help=f"Run model filter for {side} side.")
+    parser.add_argument(f"--{side}-year", type=int, default=None, help=f"Run year filter for {side} side.")
+    parser.add_argument(
+        f"--{side}-iteration",
+        type=int,
+        default=None,
+        help=f"Run iteration filter for {side} side.",
+    )
+    parser.add_argument(f"--{side}-status", default=None, help=f"Run status filter for {side} side.")
+    parser.add_argument(
+        f"--{side}-parent-id",
+        default=None,
+        help=f"Run parent id filter for {side} side.",
+    )
+    parser.add_argument(
+        f"--{side}-run-name",
+        default=None,
+        help=f"Run name/model-name alias filter for {side} side.",
+    )
+    parser.add_argument(
+        f"--{side}-tag",
+        action="append",
+        default=None,
+        help=f"Tag filter for {side} side; repeatable or comma-separated.",
+    )
+    parser.add_argument(
+        f"--{side}-metadata",
+        action="append",
+        default=None,
+        help=f"Metadata predicate for {side} side in key=value format; repeatable.",
+    )
+    parser.add_argument(
+        f"--{side}-limit",
+        type=int,
+        default=100,
+        help=f"Run query limit for {side} side in filter mode.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -501,8 +679,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_tracker_args(compare)
     compare.add_argument("--left-name", default="left")
     compare.add_argument("--right-name", default="right")
-    compare.add_argument("--left-run-id", action="append", required=True, help="Run id in left scenario; repeatable.")
-    compare.add_argument("--right-run-id", action="append", required=True, help="Run id in right scenario; repeatable.")
+    _add_compare_side_runset_args(compare, "left")
+    _add_compare_side_runset_args(compare, "right")
+    compare.add_argument(
+        "--align-on",
+        default="year",
+        help="Run field/facet key used for native RunSet alignment (for example year, iteration, model).",
+    )
+    compare.add_argument(
+        "--latest-group-by",
+        action="append",
+        default=None,
+        help="Field/facet key for RunSet.latest(...); repeatable. Defaults to align key.",
+    )
     compare.add_argument(
         "--dataset",
         action="append",
@@ -513,6 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--year", type=int, default=None)
     compare.add_argument("--iteration", type=int, default=None)
     compare.add_argument("--config-namespace", default=None)
+    compare.add_argument("--config-prefix", default=None)
+    compare.add_argument("--config-include-equal", action="store_true", default=False)
     compare.add_argument("--output-dir", required=True)
     compare.set_defaults(func=cmd_compare_scenarios)
 
@@ -528,5 +719,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not args.dataset_dir and not args.equilibrium_pairs_csv:
             parser.error(
                 "activitysim-equilibrium-metrics requires --dataset-dir or --equilibrium-pairs-csv."
+            )
+    if args.command == "compare-scenarios":
+        if not _has_side_selectors(args, "left"):
+            parser.error(
+                "compare-scenarios requires left selectors (--left-run-id or --left-* filters)."
+            )
+        if not _has_side_selectors(args, "right"):
+            parser.error(
+                "compare-scenarios requires right selectors (--right-run-id or --right-* filters)."
             )
     return int(args.func(args))

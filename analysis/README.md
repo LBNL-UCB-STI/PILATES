@@ -159,7 +159,7 @@ Available commands:
 - `db-health`
   - Runs Consist `inspect` + `doctor` checks before heavy analysis.
 - `compare-scenarios`
-  - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and includes config diffs for representative runs.
+  - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and computes config diffs for aligned run pairs.
 - `export-bundle`
   - Wraps Consist `DatabaseMaintenance.export` for portable subsets.
 
@@ -242,13 +242,22 @@ pilates-consist-analysis compare-scenarios \
   --project-root /Users/zaneedell/git/PILATES \
   --left-name baseline \
   --right-name policy \
-  --left-run-id <RUN_A1> \
-  --right-run-id <RUN_B1> \
+  --left-model beam \
+  --left-status completed \
+  --left-tag baseline \
+  --right-model beam \
+  --right-status completed \
+  --right-tag policy \
+  --align-on year \
+  --latest-group-by year \
+  --latest-group-by model \
   --dataset linkstats \
   --dataset asim_trips \
   --dataset skims \
   --output-dir /tmp/scenario_compare
 ```
+
+Use `--left-run-id/--right-run-id` to override filter mode with explicit run IDs.
 
 ## Python API (Notebook-Friendly)
 
@@ -274,7 +283,10 @@ comparison = session.compare_scenarios(
 
 ```python
 parts = runs.split_by("model")
-aligned = parts["activitysim"].align(parts["beam"], on=("year", "iteration"))
+baseline = parts["activitysim"].latest(group_by=["year"])
+policy = parts["beam"].latest(group_by=["year"])
+aligned = baseline.align(policy, on="year")
+config_diffs = aligned.config_diffs(namespace="beam")
 ```
 
 Example export:
