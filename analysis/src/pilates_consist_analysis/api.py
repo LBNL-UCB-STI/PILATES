@@ -19,6 +19,7 @@ from .scenario_compare import (
     runset_from_run_ids,
 )
 from .skim_analysis import SkimConvergenceDataset, build_skim_convergence_dataset
+from .epoch_views import EpochViews, epoch_views as build_epoch_views
 from .runset import RunSet, runset_from_query, runset_from_runs, runset_label, runs_to_frame
 from .runtime import (
     create_analysis_tracker,
@@ -148,6 +149,9 @@ class AnalysisSession:
             scenario_id=scenario_id,
             models=list(models) if models is not None else None,
         )
+
+    def views(self, epoch: SimulationEpoch) -> EpochViews:
+        return build_epoch_views(epoch=epoch, tracker=self.tracker)
 
     def trips(
         self,

@@ -305,6 +305,21 @@ comparison = session.compare_scenarios(
 )
 ```
 
+Epoch-scoped cross-model views (Batch 1):
+
+```python
+epoch = session.converged_epoch(year=2030, models=["activitysim", "beam", "urbansim"])
+views = session.views(epoch)
+
+trips_df = views.query("select * from {views.trips} limit 5")
+linkstats_df = views.query("select run_id, count(*) as n from {views.linkstats} group by 1")
+skim_meta = views.skim_summary
+```
+
+Current first-batch scope:
+- view helpers currently cover core ActivitySim/BEAM/UrbanSim artifact families,
+- and `skim_summary` is metadata-level (OpenMatrix matrix metadata), not full skim payload joins.
+
 `RunSet` supports split/alignment workflows for multi-run analysis:
 
 ```python

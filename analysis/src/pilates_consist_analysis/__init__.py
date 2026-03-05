@@ -9,6 +9,7 @@ from .epochs import (
     build_epoch_panel,
     converged_epoch,
 )
+from .epoch_views import ARTIFACT_FAMILIES, EpochViews, epoch_views
 from .scenario_compare import ScenarioComparison, compare_scenarios
 
 __all__ = [
@@ -22,6 +23,9 @@ __all__ = [
     "EpochPanel",
     "build_epoch_panel",
     "converged_epoch",
+    "ARTIFACT_FAMILIES",
+    "EpochViews",
+    "epoch_views",
     "ScenarioComparison",
     "compare_scenarios",
     "open_run",
