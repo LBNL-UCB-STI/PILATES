@@ -13,6 +13,7 @@ from .activitysim_trips import (
 )
 from .catalog import find_runs, runs_to_frame
 from .datasets import build_linkstats_dataset, write_linkstats_dataset
+from .epochs import build_epoch_panel
 from .metrics_activitysim import (
     compute_activitysim_equilibrium_metrics,
     write_activitysim_equilibrium_metrics,
@@ -407,6 +408,35 @@ def cmd_db_health(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_epoch_panel(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    panel = build_epoch_panel(
+        tracker,
+        scenario_id=args.scenario_id,
+        models=args.model or None,
+    )
+    if args.converged_only:
+        panel = panel.converged_epochs()
+    frame = panel.to_frame()
+
+    if args.output_csv:
+        output_csv = Path(args.output_csv).expanduser().resolve()
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(output_csv, index=False)
+        print(output_csv)
+    if args.output_json:
+        output_json = Path(args.output_json).expanduser().resolve()
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(frame.to_json(orient="records", indent=2), encoding="utf-8")
+        print(output_json)
+    if not args.output_csv and not args.output_json:
+        if frame.empty:
+            print("No epochs found.")
+        else:
+            print(frame.to_string(index=False))
+    return 0
+
+
 def cmd_compare_scenarios(args: argparse.Namespace) -> int:
     archive_run_dir = resolve_archive_run_dir(args.archive_run_dir)
     db_path = resolve_db_path(archive_run_dir, db_path=args.db_path)
@@ -671,6 +701,32 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--strict", action="store_true", default=False)
     health.add_argument("--fail-on-issues", action="store_true", default=False)
     health.set_defaults(func=cmd_db_health)
+
+    epoch_panel = subparsers.add_parser(
+        "epoch-panel",
+        help="Summarize runs grouped into simulation epochs.",
+    )
+    _add_tracker_args(epoch_panel)
+    epoch_panel.add_argument(
+        "--scenario-id",
+        default=None,
+        help="Optional scenario id filter for epoch grouping.",
+    )
+    epoch_panel.add_argument(
+        "--model",
+        action="append",
+        default=None,
+        help="Optional model filter; repeatable.",
+    )
+    epoch_panel.add_argument(
+        "--converged-only",
+        action="store_true",
+        default=False,
+        help="Show only converged epochs (max complete outer iteration per year/scenario).",
+    )
+    epoch_panel.add_argument("--output-csv", default=None)
+    epoch_panel.add_argument("--output-json", default=None)
+    epoch_panel.set_defaults(func=cmd_epoch_panel)
 
     compare = subparsers.add_parser(
         "compare-scenarios",

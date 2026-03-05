@@ -3,6 +3,12 @@
 from .keys import CANONICAL_KEY_COLUMNS, AnalysisKey
 from .api import AnalysisSession, open_run
 from .runset import RunSet, runset_from_query, runset_from_runs
+from .epochs import (
+    EpochPanel,
+    SimulationEpoch,
+    build_epoch_panel,
+    converged_epoch,
+)
 from .scenario_compare import ScenarioComparison, compare_scenarios
 
 __all__ = [
@@ -12,6 +18,10 @@ __all__ = [
     "RunSet",
     "runset_from_query",
     "runset_from_runs",
+    "SimulationEpoch",
+    "EpochPanel",
+    "build_epoch_panel",
+    "converged_epoch",
     "ScenarioComparison",
     "compare_scenarios",
     "open_run",

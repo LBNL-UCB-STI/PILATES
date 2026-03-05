@@ -43,6 +43,26 @@ in active use.
 - Composable layers: runtime bootstrap, catalog, dataset builders, metrics, packaging.
 - Migration-friendly: keep wrappers close to existing PILATES logic while APIs settle.
 
+## Prioritized TODO / Backlog
+
+Consolidated roadmap for this package (highest priority first):
+
+- [x] **P0: Epoch-aware multi-run API (first batch)**
+  - Extend `RunSet` with converged selection by max completed outer iteration per group (default `year + scenario_id`).
+  - Add epoch panel primitives (`SimulationEpoch`, `EpochPanel`) and builder helpers.
+  - Add runtime run-tag validation warnings and expose them on analysis sessions.
+  - Add CLI `epoch-panel` for quick multi-run epoch summaries.
+- [ ] **P1: Tagging hardening + consistency**
+  - Tighten scenario/year/iteration/model coverage across runs so epoch grouping is fully deterministic without fallbacks.
+  - Normalize ASim↔BEAM parent linkage patterns across historical archives.
+- [ ] **P1: Scenario compare + epoch integration**
+  - Add explicit converged-epoch selection modes to `compare-scenarios`.
+  - Add guardrails for mixed-completeness epochs in cross-scenario alignment.
+- [ ] **P2: Portable analysis depth**
+  - Expand portable mode coverage for workflows currently tied to attached DB/runtime queries.
+- [ ] **P2: Repository extraction readiness**
+  - Continue API hardening and dependency boundary cleanup for eventual split into a standalone analysis repository.
+
 ## LLM Quick Orientation
 
 If you are an LLM extending this package, start here:
@@ -158,6 +178,8 @@ Available commands:
   - Produces skim convergence datasets from OpenMatrix metadata views.
 - `db-health`
   - Runs Consist `inspect` + `doctor` checks before heavy analysis.
+- `epoch-panel`
+  - Summarizes simulation epochs by year/outer iteration/scenario and can emit converged-only rows.
 - `compare-scenarios`
   - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and computes config diffs for aligned run pairs.
 - `export-bundle`
@@ -269,9 +291,13 @@ from pilates_consist_analysis import open_run
 session = open_run("/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES")
 
 runs = session.runs(runset_name="all-2030", year=2030)
+converged_runs = runs.converged()
+panel = session.epochs(models=["activitysim", "beam"])
+epoch_2030 = session.converged_epoch(year=2030, models=["activitysim", "beam"])
 trips = session.trips(year=2030)
 skims = session.skims(year=2030)
 health = session.inspect_db()
+tagging_warnings = session.tagging_warnings
 comparison = session.compare_scenarios(
     left=["run-a1", "run-a2"],
     right=["run-b1", "run-b2"],
