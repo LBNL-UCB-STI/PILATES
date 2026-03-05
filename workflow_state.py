@@ -308,9 +308,17 @@ class WorkflowState:
         if year:
             out.forecast_year = out._compute_forecast_year()
 
-        # Initialize state if starting fresh (current_major_stage is None)
-        if out.current_major_stage is None:
+        # Initialize state only when we're not already in a terminal completed state.
+        if out.current_major_stage is None and not (
+            out.current_year is not None and out.current_year > out.end_year
+        ):
             out._initialize_first_stage()
+        elif out.current_major_stage is None:
+            logger.info(
+                "Loaded terminal workflow state (year=%s > end_year=%s); not reinitializing stages.",
+                out.current_year,
+                out.end_year,
+            )
 
         return out
 

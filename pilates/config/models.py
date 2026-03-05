@@ -80,6 +80,20 @@ class RunConfig(BaseModel):
             "Enable cache probing for the pre-scenario bootstrap initialization phase"
         ),
     )
+    restart_rehydrate_mode: Literal["bundle", "full", "off"] = Field(
+        "bundle",
+        description=(
+            "Restart artifact hydration mode: bundle copies only manifest-listed "
+            "artifacts, full mirrors archive->local, off disables hydration"
+        ),
+    )
+    restart_strict: bool = Field(
+        False,
+        description=(
+            "Fail startup if required restart artifacts are still missing after "
+            "startup hydration/preflight checks"
+        ),
+    )
     consist_db_local_run: bool = Field(
         True,
         description=(

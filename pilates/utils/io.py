@@ -130,8 +130,13 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     parser.add_argument(
         "-S",
         "--stage",
-        default="current_stage.yaml",
+        default=None,
         help="current state file to pick up from",
+    )
+    parser.add_argument(
+        "--allow-rewind-resume",
+        action="store_true",
+        help="allow resuming from an earlier year than the archive run state",
     )
     args = parser.parse_args()
 
@@ -139,12 +144,19 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     if args.config:
         settings_file = args.config
 
+    stage_file_loc = args.stage or "current_stage.yaml"
+    if args.stage is not None and not os.path.exists(stage_file_loc):
+        raise FileNotFoundError(
+            f"Explicit stage file provided via -S/--stage does not exist: {stage_file_loc}"
+        )
+
     # Load settings from the specified config file into a Pydantic model for validation and structured access.
     settings = load_config(settings_file)
 
     # Attach runtime-specific file paths to the settings object for easy access later.
-    settings.state_file_loc = args.stage
+    settings.state_file_loc = stage_file_loc
     settings.settings_file = settings_file
+    settings.allow_rewind_resume = args.allow_rewind_resume is True
 
     # Compute and attach model enabled flags to the settings object.
     enabled_flags = compute_model_enabled_flags(settings)

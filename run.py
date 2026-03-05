@@ -42,6 +42,11 @@ from pilates.utils.consist_db_snapshot import (
     snapshot_latest_dir,
 )
 from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
+from pilates.utils.restart_bundle import (
+    build_restart_bundle_manifest,
+    manifest_entries_to_local_artifacts,
+    write_restart_bundle_manifest,
+)
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
@@ -801,6 +806,59 @@ def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
     )
 
 
+def _resolve_restart_rehydrate_mode(settings: Any) -> str:
+    run_cfg = getattr(settings, "run", None)
+    raw = getattr(run_cfg, "restart_rehydrate_mode", "bundle")
+    mode = str(raw).strip().lower() if raw is not None else "bundle"
+    if mode in {"bundle", "full", "off"}:
+        return mode
+    logger.warning(
+        "Unknown run.restart_rehydrate_mode=%r; defaulting to 'bundle'.",
+        raw,
+    )
+    return "bundle"
+
+
+def _is_restart_strict(settings: Any) -> bool:
+    run_cfg = getattr(settings, "run", None)
+    return bool(getattr(run_cfg, "restart_strict", False))
+
+
+def _read_archive_run_state_year(state_path: str) -> Optional[int]:
+    if not state_path:
+        return None
+    try:
+        year, *_ = WorkflowState.read_current_stage(state_path)
+    except Exception as exc:
+        logger.warning("Failed reading archive run_state year from %s: %s", state_path, exc)
+        return None
+    return _coerce_int(year)
+
+
+def _enforce_resume_rewind_guardrail(
+    *,
+    state: WorkflowState,
+    archive_state_path: str,
+    allow_rewind_resume: bool,
+) -> None:
+    resume_year = _coerce_int(getattr(state, "current_year", None))
+    archive_year = _read_archive_run_state_year(archive_state_path)
+    if resume_year is None or archive_year is None:
+        return
+    if resume_year >= archive_year:
+        return
+
+    message = (
+        "Refusing rewind resume: requested resume year "
+        f"{resume_year} is lower than archive run_state year {archive_year} "
+        f"(archive={os.path.realpath(archive_state_path)})."
+    )
+    if allow_rewind_resume:
+        logger.warning("%s Proceeding because --allow-rewind-resume was set.", message)
+        return
+    raise RuntimeError(message + " Use --allow-rewind-resume to override.")
+
+
 def _map_local_path_to_archive(
     *,
     local_path: str,
@@ -946,6 +1004,73 @@ def _rehydrate_missing_local_artifacts_from_archive(
         summary["copy_errors"],
     )
     return summary
+
+
+def _rehydrate_full_local_run_from_archive(
+    *,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    summary = {
+        "copied": 0,
+        "skipped_existing": 0,
+        "skipped_missing_archive": 0,
+        "skipped_unmapped": 0,
+        "copy_errors": 0,
+    }
+    archive_root = os.path.realpath(archive_run_dir)
+    if not os.path.exists(archive_root):
+        summary["skipped_missing_archive"] = 1
+        logger.warning(
+            "[RestartRehydrate] Full mode archive root missing: %s",
+            archive_root,
+        )
+        return summary
+
+    try:
+        copied, skipped_existing = _copy_archive_entry_preserve_existing(
+            archive_path=archive_root,
+            local_path=os.path.realpath(local_run_dir),
+        )
+        summary["copied"] = copied
+        summary["skipped_existing"] = skipped_existing
+    except Exception as exc:
+        summary["copy_errors"] = 1
+        logger.warning(
+            "[RestartRehydrate] Full mode copy failed source=%s dest=%s error=%s",
+            archive_root,
+            os.path.realpath(local_run_dir),
+            exc,
+        )
+    return summary
+
+
+def _rehydrate_bundle_local_artifacts_from_archive(
+    *,
+    bundle_manifest: Optional[Dict[str, Any]],
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    bundle_artifacts = manifest_entries_to_local_artifacts(
+        manifest=bundle_manifest,
+        local_run_dir=local_run_dir,
+    )
+    if not bundle_artifacts:
+        logger.warning(
+            "[RestartRehydrate] Bundle mode found no manifest artifacts to hydrate."
+        )
+        return {
+            "copied": 0,
+            "skipped_existing": 0,
+            "skipped_missing_archive": 0,
+            "skipped_unmapped": 0,
+            "copy_errors": 0,
+        }
+    return _rehydrate_missing_local_artifacts_from_archive(
+        missing_artifacts=bundle_artifacts,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
 
 
 def _log_resume_doctor_check(
@@ -1263,10 +1388,38 @@ def main():
     )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
+    if is_restart_run:
+        _enforce_resume_rewind_guardrail(
+            state=state,
+            archive_state_path=archive_state_path,
+            allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+        )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:
         state.set_run_info_path(archive_state_path)
+
+    restart_rehydrate_mode = _resolve_restart_rehydrate_mode(settings)
+    restart_strict = _is_restart_strict(settings)
+    restart_bundle_manifest = build_restart_bundle_manifest(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+        local_consist_db_path=local_consist_db_path,
+    )
+    restart_bundle_manifest_path = write_restart_bundle_manifest(
+        archive_run_dir=archive_run_dir,
+        manifest=restart_bundle_manifest,
+    )
+    logger.info(
+        "Restart bundle manifest ready: path=%s artifacts=%s mode=%s strict=%s",
+        restart_bundle_manifest_path,
+        len(restart_bundle_manifest.get("artifacts", [])),
+        restart_rehydrate_mode,
+        restart_strict,
+    )
 
     restart_missing_artifacts_initial: List[Dict[str, str]] = []
     restart_missing_artifacts_after_rehydrate: List[Dict[str, str]] = []
@@ -1282,11 +1435,19 @@ def main():
                 "data_initialized=True: %s",
                 _format_missing_artifact_summary(restart_missing_artifacts_initial),
             )
-            _rehydrate_missing_local_artifacts_from_archive(
-                missing_artifacts=restart_missing_artifacts_initial,
-                local_run_dir=local_run_dir,
-                archive_run_dir=archive_run_dir,
-            )
+            if restart_rehydrate_mode == "off":
+                logger.info("Restart rehydration disabled (run.restart_rehydrate_mode=off).")
+            elif restart_rehydrate_mode == "full":
+                _rehydrate_full_local_run_from_archive(
+                    local_run_dir=local_run_dir,
+                    archive_run_dir=archive_run_dir,
+                )
+            else:
+                _rehydrate_bundle_local_artifacts_from_archive(
+                    bundle_manifest=restart_bundle_manifest,
+                    local_run_dir=local_run_dir,
+                    archive_run_dir=archive_run_dir,
+                )
             restart_missing_artifacts_after_rehydrate = (
                 _find_missing_restart_local_artifacts(
                     settings=settings,
@@ -1302,6 +1463,14 @@ def main():
                         restart_missing_artifacts_after_rehydrate
                     ),
                 )
+                if restart_strict:
+                    raise RuntimeError(
+                        "Strict restart preflight failed; required restart artifacts are "
+                        "still missing after hydration. missing="
+                        + _format_missing_artifact_summary(
+                            restart_missing_artifacts_after_rehydrate
+                        )
+                    )
     if is_restart_run:
         _run_resume_doctor_diagnostics(
             state=state,

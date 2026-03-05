@@ -195,6 +195,39 @@ def test_interval_only_progression_uses_forecast_boundaries(tmp_path):
     assert state.current_major_stage is None
 
 
+def test_interval_progression_waits_until_last_enabled_major_stage(tmp_path):
+    settings = _make_settings(
+        tmp_path, start_year=2017, end_year=2030, travel_model_freq=6
+    )
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = False
+
+    state = WorkflowState.from_settings(settings)
+
+    assert state.current_year == 2017
+    assert state.forecast_year == 2023
+    assert state.current_major_stage == WorkflowState.Stage.land_use
+
+    state.complete_step(WorkflowState.Stage.land_use)
+    assert state.current_year == 2017
+    assert state.current_major_stage == WorkflowState.Stage.vehicle_ownership_model
+
+    state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+    assert state.current_year == 2017
+    assert state.current_major_stage == WorkflowState.Stage.supply_demand_loop
+    assert state.current_sub_stage == WorkflowState.Stage.activity_demand
+
+    state.complete_step(
+        WorkflowState.Stage.supply_demand_loop,
+        completed_inner_iter=0,
+        completed_sub=WorkflowState.Stage.activity_demand,
+    )
+    assert state.current_year == 2023
+    assert state.forecast_year == 2029
+    assert state.current_major_stage == WorkflowState.Stage.land_use
+
+
 def test_land_use_disabled_forecast_year_matches_current_year(tmp_path):
     settings = _make_settings(tmp_path, start_year=2020, end_year=2030)
     settings.land_use_enabled = False
@@ -248,3 +281,30 @@ def test_2010_special_case_progression_has_no_backward_jumps(tmp_path):
     state.complete_step(WorkflowState.Stage.land_use)
     assert state.current_year == 2026
     assert state.current_major_stage is None
+
+
+def test_terminal_state_resume_does_not_reinitialize_stages(tmp_path):
+    settings = _make_settings(
+        tmp_path, start_year=2020, end_year=2025, travel_model_freq=6
+    )
+    terminal_year = settings.run.end_year + 1
+
+    WorkflowState.write_stage(
+        terminal_year,
+        None,
+        settings.state_file_loc,
+        0,
+        False,
+        None,
+        settings.state_file_loc,
+        True,
+    )
+
+    resumed = WorkflowState.from_settings(settings)
+    assert resumed.current_year == terminal_year
+    assert resumed.current_major_stage is None
+
+    with pytest.raises(StopIteration):
+        next(resumed)
+
+    assert not os.path.exists(settings.state_file_loc)

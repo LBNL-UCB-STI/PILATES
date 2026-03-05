@@ -492,6 +492,145 @@ def test_rehydrate_missing_local_artifacts_from_archive_partial_archive_missing_
     assert bool(remaining) is True
 
 
+def test_bundle_rehydrate_mode_copies_manifest_listed_artifact(tmp_path):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    rel_path = os.path.join("activitysim", "data", "households.csv")
+
+    archive_file = archive_run_dir / rel_path
+    archive_file.parent.mkdir(parents=True, exist_ok=True)
+    archive_file.write_text("archive-households", encoding="utf-8")
+
+    summary = run_module._rehydrate_bundle_local_artifacts_from_archive(
+        bundle_manifest={
+            "schema_version": 1,
+            "artifacts": [
+                {
+                    "key": "activitysim_input_households.csv",
+                    "rel_path": rel_path,
+                    "reason": "test bundle artifact",
+                }
+            ],
+        },
+        local_run_dir=str(local_run_dir),
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert summary["copied"] == 1
+    assert summary["copy_errors"] == 0
+    assert (local_run_dir / rel_path).read_text(encoding="utf-8") == "archive-households"
+
+
+def test_resume_rewind_guardrail_blocks_by_default_and_allows_override(tmp_path):
+    archive_state_path = tmp_path / "archive-run" / "run_state.yaml"
+    archive_state_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_state_path.write_text(
+        "year: 2022\nstage: null\niteration: 0\nasim_compiled: false\n",
+        encoding="utf-8",
+    )
+    state = SimpleNamespace(current_year=2019)
+
+    with pytest.raises(RuntimeError, match="Refusing rewind resume"):
+        run_module._enforce_resume_rewind_guardrail(
+            state=state,
+            archive_state_path=str(archive_state_path),
+            allow_rewind_resume=False,
+        )
+
+    run_module._enforce_resume_rewind_guardrail(
+        state=state,
+        archive_state_path=str(archive_state_path),
+        allow_rewind_resume=True,
+    )
+
+
+def test_main_strict_restart_preflight_fails_on_missing_artifacts(tmp_path, monkeypatch):
+    class StateStub:
+        def __init__(self, run_info_path: str):
+            self.run_info_path = run_info_path
+            self.data_initialized = True
+            self.current_year = 2018
+            self.current_inner_iter = 0
+            self.file_loc = None
+            self.mirror_file_loc = None
+
+        def set_run_info_path(self, path: str) -> None:
+            self.run_info_path = path
+
+        def set_data_initialized(self, initialized: bool) -> None:
+            self.data_initialized = initialized
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-run-002"
+    state = StateStub(str(archive_root / run_name / "run_state.yaml"))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused",
+            restart_rehydrate_mode="off",
+            restart_strict=True,
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        allow_rewind_resume=False,
+    )
+
+    missing_artifact = {
+        "key": "usim_datastore_base_h5",
+        "path": str(local_root / run_name / "urbansim" / "data" / "usim_000.h5"),
+        "reason": "required for restart",
+    }
+    missing_responses = [[missing_artifact], [missing_artifact]]
+    bootstrap_calls = []
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(
+        run_module,
+        "_find_missing_restart_local_artifacts",
+        lambda **_kwargs: missing_responses.pop(0),
+    )
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **kwargs: bootstrap_calls.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match="Strict restart preflight failed"):
+        run_module.main()
+
+    assert bootstrap_calls == []
+
+
 def test_main_forces_bootstrap_when_restart_artifacts_remain_missing(
     tmp_path, monkeypatch
 ):
