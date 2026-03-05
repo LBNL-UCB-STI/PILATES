@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pilates-consist-analysis"
+version = "0.1.0"
+description = "Consist-enabled post-run analysis scaffolding for PILATES."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+  "consist",
+  "numpy>=1.21",
+  "pandas>=1.5",
+  "sqlmodel>=0.0.16",
+]
+
+[project.scripts]
+pilates-consist-analysis = "pilates_consist_analysis.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pilates_consist_analysis"]
