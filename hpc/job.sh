@@ -60,7 +60,7 @@ PROJECT_DIR="/global/scratch/users/$USER/sources/PILATES"
 cd "$PROJECT_DIR" || { echo "Directory not found: $PROJECT_DIR"; exit 1; }
 
 # --- 5. Debugging / Node Info ---
-echo "Script Arguments: $1 $2"
+echo "Script Arguments: $1 ${2:-<none>}"
 
 echo "=== MEMORY INFORMATION ==="
 free -h
@@ -89,4 +89,8 @@ export BLIS_NUM_THREADS="$THREADS"
 export VECLIB_MAXIMUM_THREADS="$THREADS"
 echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
 
-python run.py -c "$1" -S "$2"
+if [ -n "${2:-}" ]; then
+    python run.py -c "$1" -S "$2"
+else
+    python run.py -c "$1"
+fi

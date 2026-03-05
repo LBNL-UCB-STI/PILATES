@@ -5,7 +5,7 @@ DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
 
 settings_file="settings.yaml"
-stage_file="current_stage_${JOB_NAME}.yaml"
+stage_file=""
 while getopts :c:s: name
 do
     case $name in
@@ -38,6 +38,6 @@ sbatch --partition="$PARTITION" \
     --job-name="$JOB_NAME" \
     --output="$JOB_LOG_FILE_PATH" \
     --time="$EXPECTED_EXECUTION_DURATION" \
-    "$(dirname $0)/job.sh" "$settings_file" "$stage_file"
+    "$(dirname $0)/job.sh" "$settings_file" ${stage_file:+"$stage_file"}
 
 echo $JOB_LOG_FILE_PATH
