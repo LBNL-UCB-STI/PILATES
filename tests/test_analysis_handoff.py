@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+
+import pandas as pd
+import pytest
+
+ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src"
+if str(ANALYSIS_SRC) not in sys.path:
+    sys.path.insert(0, str(ANALYSIS_SRC))
+
+import pilates_consist_analysis.cli as cli_module
+import pilates_consist_analysis.handoff as handoff
+
+
+@dataclass
+class FakeArtifact:
+    id: str
+    key: str
+    uri: str
+    meta: dict
+
+
+class FakeQueryResult:
+    def __init__(self, frame: pd.DataFrame):
+        self._frame = frame
+
+    def df(self) -> pd.DataFrame:
+        return self._frame.copy()
+
+
+class FakeDB:
+    def __init__(self, frame: pd.DataFrame):
+        self.frame = frame
+        self.sql_calls: list[str] = []
+
+    def query(self, sql: str):
+        self.sql_calls.append(sql)
+        return FakeQueryResult(self.frame)
+
+
+class FakeTracker:
+    def __init__(self, frame: pd.DataFrame | None = None):
+        self.db = FakeDB(frame if frame is not None else pd.DataFrame())
+        self.started: list[dict] = []
+        self.logged: list[dict] = []
+        self.ingested: list[str] = []
+
+    @contextmanager
+    def start_run(self, run_id: str, model: str, **kwargs):
+        self.started.append({"run_id": run_id, "model": model, **kwargs})
+        yield self
+
+    def log_artifact(self, path: str, key: str, direction: str, driver=None, **meta):
+        self.logged.append(
+            {
+                "path": path,
+                "key": key,
+                "direction": direction,
+                "driver": driver,
+                "meta": dict(meta),
+            }
+        )
+        return FakeArtifact(
+            id=f"art-{len(self.logged)}",
+            key=key,
+            uri=f"workspace://{Path(path).name}",
+            meta={"is_ingested": False},
+        )
+
+    def ingest(self, artifact: FakeArtifact, profile_schema: bool = True):
+        del profile_schema
+        artifact.meta["is_ingested"] = True
+        self.ingested.append(artifact.key)
+        return {"ok": True}
+
+
+class FakeRun:
+    def __init__(self, run_id: str):
+        self.id = run_id
+
+
+class FakeRunSet:
+    def __init__(self, run_ids):
+        self._run_ids = list(run_ids)
+
+    def filter(self, **kwargs):
+        del kwargs
+        return self
+
+    def converged(self, group_by=None):
+        del group_by
+        return self
+
+    def latest(self, group_by=None):
+        del group_by
+        return self
+
+    def __iter__(self):
+        for run_id in self._run_ids:
+            yield FakeRun(run_id)
+
+
+def test_parse_artifact_arg_supports_key_equals_path():
+    spec = handoff.parse_artifact_arg(
+        "trips=/tmp/trips.csv.gz",
+        direction="output",
+        driver="csv",
+        artifact_family="trips",
+    )
+    assert spec.key == "trips"
+    assert str(spec.path) == "/tmp/trips.csv.gz"
+    assert spec.direction == "output"
+    assert spec.driver == "csv"
+    assert spec.artifact_family == "trips"
+
+
+def test_ingest_artifacts_logs_and_ingests(tmp_path):
+    csv_path = tmp_path / "trips.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+
+    tracker = FakeTracker()
+    payload = handoff.ingest_artifacts(
+        tracker,
+        [
+            handoff.ArtifactIngestSpec(
+                path=csv_path,
+                key="trips",
+                artifact_family="trips",
+                driver="csv",
+            )
+        ],
+        run_id="ingest-run",
+        model="analysis_ingest",
+        scenario_id="baseline-2030",
+        year=2030,
+        iteration=3,
+        seed=123,
+    )
+
+    assert payload["run_id"] == "ingest-run"
+    assert payload["artifact_count"] == 1
+    assert tracker.started
+    assert tracker.logged[0]["key"] == "trips"
+    assert tracker.logged[0]["meta"]["artifact_family"] == "trips"
+    assert tracker.ingested == ["trips"]
+
+
+def test_ingest_artifacts_requires_standard_mode(tmp_path):
+    csv_path = tmp_path / "trips.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    tracker = FakeTracker()
+    tracker.access_mode = "analysis"
+
+    with pytest.raises(RuntimeError, match="access_mode='standard'"):
+        handoff.ingest_artifacts(
+            tracker,
+            [handoff.ArtifactIngestSpec(path=csv_path, key="trips")],
+        )
+
+
+def test_export_sql_query_writes_csv(tmp_path):
+    frame = pd.DataFrame({"trip_mode": ["car", "walk"], "n": [10, 5]})
+    tracker = FakeTracker(frame=frame)
+
+    output_path = tmp_path / "mode_counts.csv"
+    payload = handoff.export_sql_query(
+        tracker,
+        sql="SELECT * FROM v_trips",
+        output_path=output_path,
+        output_format="csv",
+        limit=1,
+    )
+
+    assert output_path.exists()
+    exported = pd.read_csv(output_path)
+    assert len(exported) == 1
+    assert payload["row_count"] == 1
+    assert tracker.db.sql_calls == ["SELECT * FROM v_trips"]
+
+
+def test_export_scenario_bundle_uses_runset_and_export(monkeypatch, tmp_path):
+    tracker = FakeTracker()
+
+    calls: dict[str, object] = {}
+
+    def _fake_runset_from_query(**kwargs):
+        calls["runset_query"] = kwargs
+        return FakeRunSet(["run-a", "run-b"])
+
+    def _fake_export_bundle(_tracker, **kwargs):
+        calls["export"] = kwargs
+        return {"artifact_count": 2, "out_path": str(kwargs["out_path"])}
+
+    monkeypatch.setattr(handoff, "runset_from_query", _fake_runset_from_query)
+    monkeypatch.setattr(handoff, "export_bundle", _fake_export_bundle)
+
+    payload = handoff.export_scenario_bundle(
+        tracker,
+        archive_run_dir=tmp_path,
+        out_path=tmp_path / "subset.duckdb",
+        scenario_id="baseline-2030",
+        limit=50,
+    )
+
+    assert calls["runset_query"]["limit"] == 50
+    assert calls["export"]["run_ids"] == ["run-a", "run-b"]
+    assert payload["selected_run_ids"] == ["run-a", "run-b"]
+
+
+def test_cli_registers_new_handoff_commands():
+    parser = cli_module.build_parser()
+    subparser_action = next(
+        action for action in parser._subparsers._group_actions if hasattr(action, "choices")
+    )
+    choices = set(subparser_action.choices.keys())
+
+    assert "ingest-artifacts" in choices
+    assert "export-scenario-db" in choices
+    assert "export-sql" in choices
+    assert "export-asim-inputs" in choices
+
+    ingest_args = parser.parse_args(
+        [
+            "ingest-artifacts",
+            "--archive-run-dir",
+            "/tmp/archive",
+            "--project-root",
+            "/tmp/project",
+            "--artifact",
+            "k=/tmp/f.csv",
+        ]
+    )
+    assert ingest_args.access_mode == "standard"
+
+
+def test_cli_export_sql_invokes_pipeline(monkeypatch, tmp_path):
+    parser = cli_module.build_parser()
+    args = parser.parse_args(
+        [
+            "export-sql",
+            "--archive-run-dir",
+            str(tmp_path / "archive"),
+            "--project-root",
+            str(tmp_path / "project"),
+            "--sql",
+            "SELECT 1",
+            "--output-path",
+            str(tmp_path / "out.csv"),
+        ]
+    )
+
+    called = {}
+    monkeypatch.setattr(cli_module, "_build_tracker", lambda _args: object())
+
+    def _fake_export_sql_query(tracker, **kwargs):
+        del tracker
+        called.update(kwargs)
+        return {"output_path": kwargs["output_path"], "row_count": 0}
+
+    monkeypatch.setattr(cli_module, "export_sql_query", _fake_export_sql_query)
+
+    exit_code = cli_module.cmd_export_sql(args)
+    assert exit_code == 0
+    assert called["sql"] == "SELECT 1"
+    assert called["output_format"] == "csv"

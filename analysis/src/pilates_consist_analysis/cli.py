@@ -14,6 +14,16 @@ from .activitysim_trips import (
 from .catalog import find_runs, runs_to_frame
 from .datasets import build_linkstats_dataset, write_linkstats_dataset
 from .epochs import build_epoch_panel
+from .handoff import (
+    export_activitysim_inputs,
+    export_scenario_bundle,
+    export_sql_query,
+    ingest_artifacts,
+    parse_artifact_arg,
+    parse_columns_arg,
+    parse_rename_args,
+    TableTransformSpec,
+)
 from .metrics_activitysim import (
     compute_activitysim_equilibrium_metrics,
     write_activitysim_equilibrium_metrics,
@@ -449,6 +459,114 @@ def cmd_run_tagging(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_artifacts(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    artifact_specs = [
+        parse_artifact_arg(
+            raw,
+            direction=args.direction,
+            driver=args.driver,
+            artifact_family=args.artifact_family,
+        )
+        for raw in (args.artifact or [])
+    ]
+    payload = ingest_artifacts(
+        tracker,
+        artifact_specs,
+        run_id=args.run_id,
+        model=args.model,
+        scenario_id=args.scenario_id,
+        seed=args.seed,
+        year=args.year,
+        iteration=args.iteration,
+        parent_run_id=args.parent_run_id,
+        tags=_parse_tags(args.tag),
+        run_config=_parse_metadata_items(args.run_config),
+        ingest_data=not args.no_ingest,
+        profile_schema=not args.no_profile_schema,
+    )
+    _print_json(payload)
+    return 0
+
+
+def cmd_export_scenario_db(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    payload = export_scenario_bundle(
+        tracker,
+        archive_run_dir=args.archive_run_dir,
+        out_path=args.out_path,
+        scenario_id=args.scenario_id,
+        seed=args.seed,
+        model=args.model,
+        status=args.status,
+        year=args.year,
+        iteration=args.iteration,
+        tags=_parse_tags(args.tag),
+        metadata=_parse_metadata_items(args.metadata),
+        limit=args.limit,
+        use_converged=not args.no_converged,
+        converged_group_by=args.converged_group_by,
+        latest_group_by=args.latest_group_by,
+        include_data=not args.no_include_data,
+        include_snapshots=args.include_snapshots,
+        include_children=not args.no_include_children,
+        dry_run=args.dry_run,
+    )
+    _print_json(payload)
+    return 0
+
+
+def cmd_export_sql(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    sql_inline = args.sql.strip() if args.sql else ""
+    sql_file = args.sql_file.strip() if args.sql_file else ""
+    if bool(sql_inline) == bool(sql_file):
+        raise ValueError("Provide exactly one of --sql or --sql-file.")
+    sql_text = (
+        sql_inline
+        if sql_inline
+        else Path(sql_file).expanduser().resolve().read_text(encoding="utf-8")
+    )
+    payload = export_sql_query(
+        tracker,
+        sql=sql_text,
+        output_path=args.output_path,
+        output_format=args.output_format,
+        limit=args.limit,
+    )
+    _print_json(payload)
+    return 0
+
+
+def cmd_export_asim_inputs(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    trips_spec = TableTransformSpec(
+        columns=parse_columns_arg(args.trips_columns),
+        rename=parse_rename_args(args.trips_rename),
+        where_sql=args.trips_where,
+    )
+    persons_spec = TableTransformSpec(
+        columns=parse_columns_arg(args.persons_columns),
+        rename=parse_rename_args(args.persons_rename),
+        where_sql=args.persons_where,
+    )
+    payload = export_activitysim_inputs(
+        tracker,
+        output_dir=args.output_dir,
+        scenario_id=args.scenario_id,
+        year=args.year,
+        iteration=args.iteration,
+        use_converged=not args.no_converged,
+        trips=trips_spec,
+        persons=persons_spec,
+        include_trips=not args.skip_trips,
+        include_persons=not args.skip_persons,
+        output_format=args.output_format,
+    )
+    _print_json(payload)
+    return 0
+
+
 def cmd_epoch_panel(args: argparse.Namespace) -> int:
     tracker = _build_tracker(args)
     panel = build_epoch_panel(
@@ -773,6 +891,147 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print issue lines when output format is table.",
     )
     tagging.set_defaults(func=cmd_run_tagging)
+
+    ingest = subparsers.add_parser(
+        "ingest-artifacts",
+        help="Log and optionally ingest arbitrary files into the Consist DB.",
+    )
+    _add_tracker_args(ingest)
+    ingest.set_defaults(access_mode="standard")
+    ingest.add_argument("--run-id", default=None, help="Optional explicit run id.")
+    ingest.add_argument("--model", default="analysis_ingest")
+    ingest.add_argument("--scenario-id", default=None)
+    ingest.add_argument("--seed", type=int, default=None)
+    ingest.add_argument("--year", type=int, default=None)
+    ingest.add_argument("--iteration", type=int, default=None)
+    ingest.add_argument("--parent-run-id", default=None)
+    ingest.add_argument(
+        "--artifact",
+        action="append",
+        required=True,
+        help="Artifact spec PATH or key=PATH; repeatable.",
+    )
+    ingest.add_argument(
+        "--artifact-family",
+        default=None,
+        help="Optional artifact_family metadata applied to every artifact in this command.",
+    )
+    ingest.add_argument(
+        "--direction",
+        choices=["input", "output"],
+        default="output",
+    )
+    ingest.add_argument("--driver", default=None)
+    ingest.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Optional run tags; repeatable or comma-separated.",
+    )
+    ingest.add_argument(
+        "--run-config",
+        action="append",
+        default=None,
+        help="Optional run config key=value; repeatable.",
+    )
+    ingest.add_argument("--no-ingest", action="store_true", default=False)
+    ingest.add_argument("--no-profile-schema", action="store_true", default=False)
+    ingest.set_defaults(func=cmd_ingest_artifacts)
+
+    export_scenario = subparsers.add_parser(
+        "export-scenario-db",
+        help="Select scenario runs and export a standalone Consist DB shard.",
+    )
+    _add_tracker_args(export_scenario)
+    export_scenario.add_argument("--out-path", required=True)
+    export_scenario.add_argument("--scenario-id", default=None)
+    export_scenario.add_argument("--seed", type=int, default=None)
+    export_scenario.add_argument("--model", default=None)
+    export_scenario.add_argument("--status", default="completed")
+    export_scenario.add_argument("--year", type=int, default=None)
+    export_scenario.add_argument("--iteration", type=int, default=None)
+    export_scenario.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Run tags filter; repeatable or comma-separated.",
+    )
+    export_scenario.add_argument(
+        "--metadata",
+        action="append",
+        default=None,
+        help="Run metadata filter key=value; repeatable.",
+    )
+    export_scenario.add_argument("--limit", type=int, default=10000)
+    export_scenario.add_argument(
+        "--converged-group-by",
+        action="append",
+        default=None,
+        help="Field/facet grouping keys for converged selection; repeatable.",
+    )
+    export_scenario.add_argument(
+        "--latest-group-by",
+        action="append",
+        default=None,
+        help="Field/facet grouping keys for latest selection; repeatable.",
+    )
+    export_scenario.add_argument("--no-converged", action="store_true", default=False)
+    export_scenario.add_argument("--no-include-data", action="store_true", default=False)
+    export_scenario.add_argument("--include-snapshots", action="store_true", default=False)
+    export_scenario.add_argument("--no-include-children", action="store_true", default=False)
+    export_scenario.add_argument("--dry-run", action="store_true", default=False)
+    export_scenario.set_defaults(func=cmd_export_scenario_db)
+
+    export_sql = subparsers.add_parser(
+        "export-sql",
+        help="Run SQL against the Consist DB and export result rows.",
+    )
+    _add_tracker_args(export_sql)
+    export_sql.add_argument("--sql", default=None, help="Inline SQL query text.")
+    export_sql.add_argument("--sql-file", default=None, help="Path to SQL file.")
+    export_sql.add_argument("--output-path", required=True)
+    export_sql.add_argument("--output-format", choices=["csv", "parquet"], default="csv")
+    export_sql.add_argument("--limit", type=int, default=None)
+    export_sql.set_defaults(func=cmd_export_sql)
+
+    export_asim = subparsers.add_parser(
+        "export-asim-inputs",
+        help="Export ActivitySim trips/persons tables for one epoch with optional transforms.",
+    )
+    _add_tracker_args(export_asim)
+    export_asim.add_argument("--output-dir", required=True)
+    export_asim.add_argument("--scenario-id", default=None)
+    export_asim.add_argument("--year", type=int, default=None)
+    export_asim.add_argument("--iteration", type=int, default=None)
+    export_asim.add_argument("--no-converged", action="store_true", default=False)
+    export_asim.add_argument("--output-format", choices=["csv", "parquet"], default="csv")
+    export_asim.add_argument("--skip-trips", action="store_true", default=False)
+    export_asim.add_argument("--skip-persons", action="store_true", default=False)
+    export_asim.add_argument(
+        "--trips-columns",
+        default=None,
+        help="Comma-separated subset of trips columns to export.",
+    )
+    export_asim.add_argument(
+        "--persons-columns",
+        default=None,
+        help="Comma-separated subset of persons columns to export.",
+    )
+    export_asim.add_argument(
+        "--trips-rename",
+        action="append",
+        default=None,
+        help="Trips column rename old:new; repeatable.",
+    )
+    export_asim.add_argument(
+        "--persons-rename",
+        action="append",
+        default=None,
+        help="Persons column rename old:new; repeatable.",
+    )
+    export_asim.add_argument("--trips-where", default=None, help="Optional SQL WHERE clause for trips.")
+    export_asim.add_argument("--persons-where", default=None, help="Optional SQL WHERE clause for persons.")
+    export_asim.set_defaults(func=cmd_export_asim_inputs)
 
     epoch_panel = subparsers.add_parser(
         "epoch-panel",

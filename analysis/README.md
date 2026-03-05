@@ -75,10 +75,11 @@ If you are an LLM extending this package, start here:
 6. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
 7. Multi-run grouping/alignment abstraction: `src/pilates_consist_analysis/runset.py`
 8. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
-9. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
-10. Manifest format: `src/pilates_consist_analysis/manifest.py`
-11. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
-12. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
+9. Handoff ingest/export helpers: `src/pilates_consist_analysis/handoff.py`
+10. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
+11. Manifest format: `src/pilates_consist_analysis/manifest.py`
+12. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
+13. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
 
 When adding a new analysis family, mirror the linkstats pattern:
 - discover artifacts,
@@ -96,6 +97,7 @@ analysis/
     activitysim_trips.py
     api.py
     cli.py
+    handoff.py
     runtime.py
     runset.py
     scenario_compare.py
@@ -184,6 +186,14 @@ Available commands:
   - Summarizes simulation epochs by year/outer iteration/scenario and can emit converged-only rows.
 - `compare-scenarios`
   - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and computes config diffs for aligned run pairs.
+- `ingest-artifacts`
+  - Creates an analysis run, logs selected files as artifacts, and optionally ingests them into DuckDB hot tables.
+- `export-scenario-db`
+  - Selects runs by scenario/filters and exports a standalone shard (`DatabaseMaintenance.export` wrapper).
+- `export-sql`
+  - Executes SQL against the attached Consist DB and exports query results to CSV/Parquet.
+- `export-asim-inputs`
+  - Exports ActivitySim `trips`/`persons` tables for a selected epoch, with simple column filtering/renaming.
 - `export-bundle`
   - Wraps Consist `DatabaseMaintenance.export` for portable subsets.
 
@@ -348,6 +358,43 @@ When `--use-converged` is enabled, compare validates that both sides have comple
 for each overlapping alignment key. If one side is incomplete/missing for an aligned key, it raises a
 `ValueError` with guidance to refine filters, adjust `--converged-group-by`, or disable converged mode.
 
+Example ingestion of archived outputs into DB:
+
+```bash
+pilates-consist-analysis ingest-artifacts \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --access-mode standard \
+  --scenario-id baseline-2030 \
+  --year 2030 \
+  --iteration 3 \
+  --artifact trips=/scratch/archive/activitysim/trips.csv.gz \
+  --artifact persons=/scratch/archive/activitysim/persons.csv.gz \
+  --artifact-family trips \
+  --driver csv
+```
+
+Example scenario export to standalone DB:
+
+```bash
+pilates-consist-analysis export-scenario-db \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --scenario-id baseline-2030 \
+  --out-path /scratch/analysis/baseline_2030.duckdb
+```
+
+Example SQL export:
+
+```bash
+pilates-consist-analysis export-sql \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --sql \"SELECT trip_mode, COUNT(*) AS n FROM v_trips GROUP BY 1\" \
+  --output-path /scratch/analysis/trip_mode_counts.csv \
+  --output-format csv
+```
+
 ## Python API (Notebook-Friendly)
 
 The package now exposes a session API:
@@ -412,6 +459,13 @@ skim_meta = views.skim_summary
 Current first-batch scope:
 - view helpers currently cover core ActivitySim/BEAM/UrbanSim artifact families,
 - and `skim_summary` is metadata-level (OpenMatrix matrix metadata), not full skim payload joins.
+
+HPC notebook starter:
+- `analysis/notebooks/hpc_consist_handoff_starter.ipynb` gives a minimal end-to-end template for:
+  - opening an archive session on a node,
+  - ingesting selected files,
+  - exporting scenario shards,
+  - and exporting modified `trips/persons` tables.
 
 `RunSet` supports split/alignment workflows for multi-run analysis:
 

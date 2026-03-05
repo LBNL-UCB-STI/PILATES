@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 from consist import RunSet as ConsistRunSet
 
 from .activitysim_trips import ActivitySimTripsDataset, build_activitysim_trips_dataset
+from .handoff import (
+    ArtifactIngestSpec,
+    TableTransformSpec,
+    export_activitysim_inputs as export_activitysim_inputs_core,
+    export_scenario_bundle,
+    export_sql_query,
+    ingest_artifacts as ingest_artifacts_core,
+)
 from .epochs import (
     EpochPanel,
     SimulationEpoch,
@@ -366,6 +374,125 @@ class AnalysisSession:
             raise_on_issues=raise_on_issues,
         )
         return self.run_tagging_report()
+
+    def ingest_artifacts(
+        self,
+        artifact_specs: Sequence[ArtifactIngestSpec],
+        *,
+        run_id: Optional[str] = None,
+        model: str = "analysis_ingest",
+        scenario_id: Optional[str] = None,
+        seed: Optional[int] = None,
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        parent_run_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
+        run_config: Optional[Mapping[str, Any]] = None,
+        ingest_data: bool = True,
+        profile_schema: bool = True,
+    ) -> dict[str, Any]:
+        return ingest_artifacts_core(
+            self.tracker,
+            artifact_specs,
+            run_id=run_id,
+            model=model,
+            scenario_id=scenario_id,
+            seed=seed,
+            year=year,
+            iteration=iteration,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            run_config=run_config,
+            ingest_data=ingest_data,
+            profile_schema=profile_schema,
+        )
+
+    def export_scenario_db(
+        self,
+        *,
+        out_path: str | Path,
+        scenario_id: Optional[str] = None,
+        seed: Optional[int] = None,
+        model: Optional[str] = None,
+        status: Optional[str] = "completed",
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        limit: int = 10000,
+        use_converged: bool = True,
+        converged_group_by: Optional[Iterable[str]] = None,
+        latest_group_by: Optional[Iterable[str]] = None,
+        include_data: bool = True,
+        include_snapshots: bool = False,
+        include_children: bool = True,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return export_scenario_bundle(
+            self.tracker,
+            archive_run_dir=self.archive_run_dir,
+            out_path=out_path,
+            scenario_id=scenario_id,
+            seed=seed,
+            model=model,
+            status=status,
+            year=year,
+            iteration=iteration,
+            tags=tags,
+            metadata=metadata,
+            limit=limit,
+            use_converged=use_converged,
+            converged_group_by=list(converged_group_by) if converged_group_by is not None else None,
+            latest_group_by=list(latest_group_by) if latest_group_by is not None else None,
+            include_data=include_data,
+            include_snapshots=include_snapshots,
+            include_children=include_children,
+            dry_run=dry_run,
+        )
+
+    def export_sql(
+        self,
+        *,
+        sql: str,
+        output_path: str | Path,
+        output_format: str = "csv",
+        limit: Optional[int] = None,
+    ) -> dict[str, Any]:
+        return export_sql_query(
+            self.tracker,
+            sql=sql,
+            output_path=output_path,
+            output_format=output_format,
+            limit=limit,
+        )
+
+    def export_activitysim_inputs(
+        self,
+        *,
+        output_dir: str | Path,
+        scenario_id: Optional[str] = None,
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        use_converged: bool = True,
+        trips: Optional[TableTransformSpec] = None,
+        persons: Optional[TableTransformSpec] = None,
+        include_trips: bool = True,
+        include_persons: bool = True,
+        output_format: str = "csv",
+    ) -> dict[str, Any]:
+        return export_activitysim_inputs_core(
+            self.tracker,
+            output_dir=output_dir,
+            scenario_id=scenario_id,
+            year=year,
+            iteration=iteration,
+            use_converged=use_converged,
+            trips=trips,
+            persons=persons,
+            include_trips=include_trips,
+            include_persons=include_persons,
+            output_format=output_format,
+        )
 
     def compare_scenarios(
         self,

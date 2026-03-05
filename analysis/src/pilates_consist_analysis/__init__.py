@@ -18,6 +18,14 @@ from .epoch_views import (
     resolve_artifact_families,
 )
 from .scenario_compare import ScenarioComparison, compare_scenarios
+from .handoff import (
+    ArtifactIngestSpec,
+    TableTransformSpec,
+    export_activitysim_inputs,
+    export_scenario_bundle,
+    export_sql_query,
+    ingest_artifacts,
+)
 from .runtime import (
     assert_run_tagging_consistent,
     get_run_tagging_issues,
@@ -44,6 +52,12 @@ __all__ = [
     "resolve_artifact_families",
     "ScenarioComparison",
     "compare_scenarios",
+    "ArtifactIngestSpec",
+    "TableTransformSpec",
+    "ingest_artifacts",
+    "export_scenario_bundle",
+    "export_sql_query",
+    "export_activitysim_inputs",
     "open_run",
     "inspect_run_tagging",
     "get_run_tagging_issues",
