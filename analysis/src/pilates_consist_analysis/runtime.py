@@ -268,16 +268,36 @@ def db_health_to_frame(health_payload: Mapping[str, Any]) -> pd.DataFrame:
 
 def validate_run_tagging(tracker: Any) -> list[str]:
     """Return non-fatal warning messages about run tagging/linkage quality."""
+    report = inspect_run_tagging(tracker)
+    return list(report.get("warnings", []) or [])
 
+
+def inspect_run_tagging(tracker: Any) -> Dict[str, Any]:
+    """Return structured run-tagging diagnostics for analysis sessions/CLI."""
     runs = _collect_runs_for_tag_validation(tracker)
     if not runs:
-        return ["No runs available for run-tag validation."]
+        warning = "No runs available for run-tag validation."
+        return {
+            "total_runs": 0,
+            "missing_counts": {"scenario_id": 0, "year": 0, "iteration": 0, "model": 0},
+            "linkage_counts": {
+                "beam_parent_checked": 0,
+                "beam_parent_missing": 0,
+                "beam_parent_mismatch": 0,
+                "asim_parent_checked": 0,
+                "asim_parent_missing": 0,
+                "asim_parent_mismatch": 0,
+            },
+            "warnings": [warning],
+        }
 
     total = len(runs)
     warnings_out: list[str] = []
+    missing_counts: Dict[str, int] = {}
 
     for field in ("scenario_id", "year", "iteration", "model"):
         missing = sum(1 for run in runs if _normalize_text(_run_field(run, field)) is None)
+        missing_counts[field] = int(missing)
         if missing > 0:
             warnings_out.append(
                 f"run_tagging.{field}.missing={missing}/{total}"
@@ -294,8 +314,12 @@ def validate_run_tagging(tracker: Any) -> list[str]:
     missing_beam_parent = 0
     mismatched_beam_parent = 0
     checked_beam_runs = 0
+    missing_asim_parent = 0
+    mismatched_asim_parent = 0
+    checked_asim_runs = 0
 
-    for group_runs in grouped.values():
+    for group_key, group_runs in grouped.items():
+        scenario_id, year, iteration = group_key
         asim_runs = [
             run
             for run in group_runs
@@ -307,19 +331,52 @@ def validate_run_tagging(tracker: Any) -> list[str]:
             if "beam" in (_normalize_text(_run_field(run, "model")) or "").lower()
         ]
         if not asim_runs or not beam_runs:
+            if scenario_id is None or year is None or iteration is None:
+                continue
+        else:
+            asim_anchor = _pick_anchor_run(asim_runs)
+            asim_run_id = _normalize_text(getattr(asim_anchor, "id", None))
+            if asim_run_id is None:
+                continue
+
+            for beam_run in beam_runs:
+                checked_beam_runs += 1
+                parent_run_id = _normalize_text(getattr(beam_run, "parent_run_id", None))
+                if parent_run_id is None:
+                    missing_beam_parent += 1
+                elif parent_run_id != asim_run_id:
+                    mismatched_beam_parent += 1
+
+        if scenario_id is None or year is None or iteration is None or int(iteration) <= 0:
+            continue
+        prev_key = (scenario_id, int(year), int(iteration) - 1)
+        prev_group_runs = grouped.get(prev_key, [])
+        prev_beam_runs = [
+            run
+            for run in prev_group_runs
+            if "beam" in (_normalize_text(_run_field(run, "model")) or "").lower()
+        ]
+        if not prev_beam_runs:
             continue
 
-        asim_run_id = _normalize_text(getattr(asim_runs[0], "id", None))
-        if asim_run_id is None:
+        prev_beam_ids = {
+            run_id
+            for run_id in (
+                _normalize_text(getattr(run, "id", None))
+                for run in prev_beam_runs
+            )
+            if run_id is not None
+        }
+        if not prev_beam_ids:
             continue
 
-        for beam_run in beam_runs:
-            checked_beam_runs += 1
-            parent_run_id = _normalize_text(getattr(beam_run, "parent_run_id", None))
+        for asim_run in asim_runs:
+            checked_asim_runs += 1
+            parent_run_id = _normalize_text(getattr(asim_run, "parent_run_id", None))
             if parent_run_id is None:
-                missing_beam_parent += 1
-            elif parent_run_id != asim_run_id:
-                mismatched_beam_parent += 1
+                missing_asim_parent += 1
+            elif parent_run_id not in prev_beam_ids:
+                mismatched_asim_parent += 1
 
     if checked_beam_runs > 0 and missing_beam_parent > 0:
         warnings_out.append(
@@ -331,8 +388,163 @@ def validate_run_tagging(tracker: Any) -> list[str]:
             "run_tagging.beam_parent_mismatch="
             f"{mismatched_beam_parent}/{checked_beam_runs} (compared to ActivitySim sibling run id)"
         )
+    if checked_asim_runs > 0 and missing_asim_parent > 0:
+        warnings_out.append(
+            "run_tagging.asim_parent_missing="
+            f"{missing_asim_parent}/{checked_asim_runs} (expected previous-iteration BEAM parent_run_id)"
+        )
+    if checked_asim_runs > 0 and mismatched_asim_parent > 0:
+        warnings_out.append(
+            "run_tagging.asim_parent_mismatch="
+            f"{mismatched_asim_parent}/{checked_asim_runs} (compared to previous-iteration BEAM sibling run ids)"
+        )
 
-    return warnings_out
+    return {
+        "total_runs": int(total),
+        "missing_counts": missing_counts,
+        "linkage_counts": {
+            "beam_parent_checked": int(checked_beam_runs),
+            "beam_parent_missing": int(missing_beam_parent),
+            "beam_parent_mismatch": int(mismatched_beam_parent),
+            "asim_parent_checked": int(checked_asim_runs),
+            "asim_parent_missing": int(missing_asim_parent),
+            "asim_parent_mismatch": int(mismatched_asim_parent),
+        },
+        "warnings": warnings_out,
+    }
+
+
+def get_run_tagging_issues(
+    tagging_payload: Mapping[str, Any] | Sequence[str],
+    *,
+    strict: bool = False,
+) -> list[str]:
+    if not isinstance(tagging_payload, Mapping):
+        issues = [str(item) for item in (tagging_payload or []) if str(item).strip()]
+        if strict:
+            return issues
+        return [item for item in issues if not item.startswith("No runs available")]
+
+    issues: list[str] = []
+    total_runs = int(tagging_payload.get("total_runs", 0) or 0)
+    missing_counts = dict(tagging_payload.get("missing_counts", {}) or {})
+    linkage_counts = dict(tagging_payload.get("linkage_counts", {}) or {})
+
+    for field in ("scenario_id", "year", "iteration"):
+        count = int(missing_counts.get(field, 0) or 0)
+        if count > 0:
+            issues.append(f"run_tagging.{field}.missing={count}/{total_runs}")
+
+    if strict:
+        model_missing = int(missing_counts.get("model", 0) or 0)
+        if model_missing > 0:
+            issues.append(f"run_tagging.model.missing={model_missing}/{total_runs}")
+
+    beam_checked = int(linkage_counts.get("beam_parent_checked", 0) or 0)
+    beam_missing = int(linkage_counts.get("beam_parent_missing", 0) or 0)
+    beam_mismatch = int(linkage_counts.get("beam_parent_mismatch", 0) or 0)
+    if beam_checked > 0 and beam_missing > 0:
+        issues.append(f"run_tagging.beam_parent_missing={beam_missing}/{beam_checked}")
+    if beam_checked > 0 and beam_mismatch > 0:
+        issues.append(f"run_tagging.beam_parent_mismatch={beam_mismatch}/{beam_checked}")
+
+    asim_checked = int(linkage_counts.get("asim_parent_checked", 0) or 0)
+    asim_missing = int(linkage_counts.get("asim_parent_missing", 0) or 0)
+    asim_mismatch = int(linkage_counts.get("asim_parent_mismatch", 0) or 0)
+    if asim_checked > 0 and asim_missing > 0:
+        issues.append(f"run_tagging.asim_parent_missing={asim_missing}/{asim_checked}")
+    if asim_checked > 0 and asim_mismatch > 0:
+        issues.append(f"run_tagging.asim_parent_mismatch={asim_mismatch}/{asim_checked}")
+
+    return issues
+
+
+def assert_run_tagging_report(
+    tagging_report: Mapping[str, Any],
+    *,
+    strict: bool = False,
+    raise_on_issues: bool = False,
+) -> None:
+    issues = get_run_tagging_issues(tagging_report, strict=strict)
+    if issues and (strict or raise_on_issues):
+        mode = "strict" if strict else "requested"
+        raise RuntimeError(f"Run tagging validation failed ({mode}): {', '.join(issues)}")
+
+
+def assert_run_tagging_consistent(
+    tracker: Any,
+    *,
+    strict: bool = False,
+    raise_on_issues: bool = False,
+) -> Dict[str, Any]:
+    report = inspect_run_tagging(tracker)
+    assert_run_tagging_report(
+        report,
+        strict=strict,
+        raise_on_issues=raise_on_issues,
+    )
+    return report
+
+
+def run_tagging_to_frame(
+    tagging_payload: Mapping[str, Any] | Sequence[str],
+    *,
+    strict: bool = False,
+) -> pd.DataFrame:
+    if not isinstance(tagging_payload, Mapping):
+        normalized_warnings = [str(item) for item in (tagging_payload or [])]
+        issues = get_run_tagging_issues(normalized_warnings, strict=strict)
+        return pd.DataFrame(
+            [
+                {
+                    "healthy": len(issues) == 0,
+                    "strict": bool(strict),
+                    "warning_count": len(normalized_warnings),
+                    "issue_count": len(issues),
+                    "warnings": normalized_warnings,
+                    "issues": issues,
+                }
+            ]
+        )
+
+    missing_counts = dict(tagging_payload.get("missing_counts", {}) or {})
+    linkage_counts = dict(tagging_payload.get("linkage_counts", {}) or {})
+    row: Dict[str, Any] = {
+        "total_runs": int(tagging_payload.get("total_runs", 0) or 0),
+        "warning_count": len(tagging_payload.get("warnings", []) or []),
+        "issue_count": len(get_run_tagging_issues(tagging_payload, strict=strict)),
+        "healthy": len(get_run_tagging_issues(tagging_payload, strict=strict)) == 0,
+        "strict": bool(strict),
+    }
+    row.update({f"missing_{key}": int(value or 0) for key, value in missing_counts.items()})
+    row.update({str(key): int(value or 0) for key, value in linkage_counts.items()})
+    return pd.DataFrame([row])
+
+
+def _pick_anchor_run(runs: Sequence[Any]) -> Any:
+    if len(runs) <= 1:
+        return runs[0]
+    return sorted(
+        runs,
+        key=lambda run: (
+            getattr(run, "created_at", None) is None,
+            getattr(run, "created_at", None),
+            _normalize_text(getattr(run, "id", None)) or "",
+        ),
+    )[0]
+
+
+def assert_run_tagging(
+    tracker: Any,
+    *,
+    strict: bool = False,
+) -> list[str]:
+    report = inspect_run_tagging(tracker)
+    issues = get_run_tagging_issues(report, strict=strict)
+    if issues:
+        mode = "strict" if strict else "standard"
+        raise RuntimeError(f"Run tagging validation failed ({mode}): {', '.join(issues)}")
+    return list(report.get("warnings", []) or [])
 
 
 def _collect_runs_for_tag_validation(tracker: Any) -> list[Any]:

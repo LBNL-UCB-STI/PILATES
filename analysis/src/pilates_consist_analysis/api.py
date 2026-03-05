@@ -27,13 +27,16 @@ from .epoch_views import (
 )
 from .runset import RunSet, runset_from_query, runset_from_runs, runset_label, runs_to_frame
 from .runtime import (
+    assert_run_tagging_report,
     create_analysis_tracker,
     db_health_to_frame,
     get_db_health,
     get_db_health_issues,
+    get_run_tagging_issues,
+    inspect_run_tagging as inspect_run_tagging_report,
     resolve_archive_run_dir,
     resolve_db_path,
-    validate_run_tagging,
+    run_tagging_to_frame,
 )
 
 
@@ -49,6 +52,8 @@ class AnalysisSession:
         access_mode: str = "analysis",
         hashing_strategy: str = "fast",
         tracker: Optional[Any] = None,
+        strict_tagging: bool = False,
+        fail_on_tagging_issues: bool = False,
         artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
@@ -71,9 +76,39 @@ class AnalysisSession:
             hashing_strategy=hashing_strategy,
         )
         try:
-            self.tagging_warnings = validate_run_tagging(self.tracker)
+            self.tagging_report = inspect_run_tagging_report(self.tracker)
         except Exception as exc:
-            self.tagging_warnings = [f"run_tagging.validation_failed: {exc}"]
+            message = f"run_tagging.validation_failed: {exc}"
+            if strict_tagging or fail_on_tagging_issues:
+                raise RuntimeError(message) from exc
+            self.tagging_report = {
+                "total_runs": 0,
+                "missing_counts": {
+                    "scenario_id": 0,
+                    "year": 0,
+                    "iteration": 0,
+                    "model": 0,
+                },
+                "linkage_counts": {
+                    "beam_parent_checked": 0,
+                    "beam_parent_missing": 0,
+                    "beam_parent_mismatch": 0,
+                    "asim_parent_checked": 0,
+                    "asim_parent_missing": 0,
+                    "asim_parent_mismatch": 0,
+                },
+                "warnings": [message],
+            }
+        self.tagging_warnings = list(self.tagging_report.get("warnings", []) or [])
+        self.tagging_issues = get_run_tagging_issues(
+            self.tagging_report,
+            strict=strict_tagging,
+        )
+        assert_run_tagging_report(
+            self.tagging_report,
+            strict=strict_tagging,
+            raise_on_issues=fail_on_tagging_issues,
+        )
 
     @classmethod
     def open(
@@ -86,6 +121,8 @@ class AnalysisSession:
         extra_mounts: Optional[Mapping[str, str | Path]] = None,
         access_mode: str = "analysis",
         hashing_strategy: str = "fast",
+        strict_tagging: bool = False,
+        fail_on_tagging_issues: bool = False,
         artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
@@ -101,6 +138,8 @@ class AnalysisSession:
             extra_mounts=extra_mounts,
             access_mode=access_mode,
             hashing_strategy=hashing_strategy,
+            strict_tagging=strict_tagging,
+            fail_on_tagging_issues=fail_on_tagging_issues,
             artifact_families=artifact_families,
             artifact_families_json_path=artifact_families_json_path,
             artifact_families_env_var=artifact_families_env_var,
@@ -305,6 +344,29 @@ class AnalysisSession:
             raise RuntimeError(f"DB health check failed ({mode}): {', '.join(issues)}")
         return db_health_to_frame(health)
 
+    def run_tagging_report(self) -> dict[str, Any]:
+        return dict(self.tagging_report)
+
+    def inspect_run_tagging(self, strict: bool = False) -> pd.DataFrame:
+        return run_tagging_to_frame(self.tagging_report, strict=strict)
+
+    def assert_run_tagging(self, strict: bool = False) -> pd.DataFrame:
+        assert_run_tagging_report(self.tagging_report, strict=strict, raise_on_issues=True)
+        return run_tagging_to_frame(self.tagging_report, strict=strict)
+
+    def assert_run_tagging_consistent(
+        self,
+        *,
+        strict: bool = True,
+        raise_on_issues: bool = True,
+    ) -> dict[str, Any]:
+        assert_run_tagging_report(
+            self.tagging_report,
+            strict=strict,
+            raise_on_issues=raise_on_issues,
+        )
+        return self.run_tagging_report()
+
     def compare_scenarios(
         self,
         left: RunSet | Iterable[str],
@@ -379,6 +441,8 @@ def open_run(
     extra_mounts: Optional[Mapping[str, str | Path]] = None,
     access_mode: str = "analysis",
     hashing_strategy: str = "fast",
+    strict_tagging: bool = False,
+    fail_on_tagging_issues: bool = False,
     artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
     artifact_families_json_path: Optional[str | Path] = None,
     artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
@@ -391,6 +455,8 @@ def open_run(
         extra_mounts=extra_mounts,
         access_mode=access_mode,
         hashing_strategy=hashing_strategy,
+        strict_tagging=strict_tagging,
+        fail_on_tagging_issues=fail_on_tagging_issues,
         artifact_families=artifact_families,
         artifact_families_json_path=artifact_families_json_path,
         artifact_families_env_var=artifact_families_env_var,

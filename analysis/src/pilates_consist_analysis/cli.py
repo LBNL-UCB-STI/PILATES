@@ -31,8 +31,11 @@ from .runtime import (
     db_health_to_frame,
     get_db_health,
     get_db_health_issues,
+    get_run_tagging_issues,
+    inspect_run_tagging,
     resolve_archive_run_dir,
     resolve_db_path,
+    run_tagging_to_frame,
 )
 from .skim_analysis import build_skim_convergence_dataset, write_skim_convergence_dataset
 
@@ -408,6 +411,44 @@ def cmd_db_health(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_tagging(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    tagging_report = inspect_run_tagging(tracker)
+    issues = get_run_tagging_issues(tagging_report, strict=args.strict)
+    frame = run_tagging_to_frame(tagging_report, strict=args.strict)
+
+    if args.output_format == "table":
+        if frame.empty:
+            print("No tagging report rows.")
+        else:
+            print(frame.to_string(index=False))
+        if args.include_warnings:
+            warnings = list(tagging_report.get("warnings", []) or [])
+            if warnings:
+                print("")
+                print("Warnings:")
+                for warning in warnings:
+                    print(f"- {warning}")
+        if args.include_issues and issues:
+            print("")
+            print("Issues:")
+            for issue in issues:
+                print(f"- {issue}")
+    else:
+        payload: Dict[str, Any] = {
+            "healthy": len(issues) == 0,
+            "strict": bool(args.strict),
+            "issues": issues,
+            "summary": frame.to_dict(orient="records")[0] if not frame.empty else {},
+            "report": tagging_report,
+        }
+        _print_json(payload)
+
+    if issues and args.fail_on_issues:
+        return 2
+    return 0
+
+
 def cmd_epoch_panel(args: argparse.Namespace) -> int:
     tracker = _build_tracker(args)
     panel = build_epoch_panel(
@@ -705,6 +746,33 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--strict", action="store_true", default=False)
     health.add_argument("--fail-on-issues", action="store_true", default=False)
     health.set_defaults(func=cmd_db_health)
+
+    tagging = subparsers.add_parser(
+        "run-tagging",
+        help="Inspect run-tagging metadata quality and parent linkage consistency.",
+    )
+    _add_tracker_args(tagging)
+    tagging.add_argument("--strict", action="store_true", default=False)
+    tagging.add_argument("--fail-on-issues", action="store_true", default=False)
+    tagging.add_argument(
+        "--output-format",
+        choices=["json", "table"],
+        default="json",
+        help="Output format for tagging report.",
+    )
+    tagging.add_argument(
+        "--include-warnings",
+        action="store_true",
+        default=False,
+        help="Print warning lines when output format is table.",
+    )
+    tagging.add_argument(
+        "--include-issues",
+        action="store_true",
+        default=False,
+        help="Print issue lines when output format is table.",
+    )
+    tagging.set_defaults(func=cmd_run_tagging)
 
     epoch_panel = subparsers.add_parser(
         "epoch-panel",

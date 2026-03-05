@@ -18,6 +18,12 @@ from .epoch_views import (
     resolve_artifact_families,
 )
 from .scenario_compare import ScenarioComparison, compare_scenarios
+from .runtime import (
+    assert_run_tagging_consistent,
+    get_run_tagging_issues,
+    inspect_run_tagging,
+    run_tagging_to_frame,
+)
 
 __all__ = [
     "AnalysisKey",
@@ -39,4 +45,8 @@ __all__ = [
     "ScenarioComparison",
     "compare_scenarios",
     "open_run",
+    "inspect_run_tagging",
+    "get_run_tagging_issues",
+    "assert_run_tagging_consistent",
+    "run_tagging_to_frame",
 ]

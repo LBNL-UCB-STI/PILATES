@@ -121,9 +121,22 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
         settings=_settings(cache_enabled=True),
         state=_state(),
         workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
     )
 
     assert len(tracker.calls) == 1
+    first_call = tracker.calls[0]
+    assert "scenario_id:seattle-baseline" in first_call["tags"]
+    assert "seed:12345" in first_call["tags"]
+    assert "year:2017" in first_call["tags"]
+    assert "iteration:0" in first_call["tags"]
+    assert "model:initialization" in first_call["tags"]
+    assert first_call["facet"]["scenario_id"] == "seattle-baseline"
+    assert first_call["facet"]["seed"] == 12345
+    assert first_call["facet"]["year"] == 2017
+    assert first_call["facet"]["iteration"] == 0
+    assert first_call["facet"]["model"] == "initialization"
     assert result["bootstrap_cache_hit"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["manifest_reference"] == {"probe_run_id": "bootstrap_probe"}
@@ -150,6 +163,8 @@ def test_run_bootstrap_phase_cache_hit_materializes_with_overwrite(monkeypatch):
         settings=_settings(cache_enabled=True),
         state=_state(),
         workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
     )
 
     assert len(tracker.calls) == 2
@@ -180,9 +195,16 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
         settings=_settings(cache_enabled=False),
         state=_state(),
         workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=None,
     )
 
     assert len(tracker.calls) == 1
+    first_call = tracker.calls[0]
+    assert "scenario_id:seattle-baseline" in first_call["tags"]
+    assert all(not tag.startswith("seed:") for tag in first_call["tags"])
+    assert first_call["facet"]["scenario_id"] == "seattle-baseline"
+    assert "seed" not in first_call["facet"]
     cache_options = tracker.calls[0]["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_mode == "off"
