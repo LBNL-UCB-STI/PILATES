@@ -6,6 +6,7 @@ import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
+from pilates.utils.coupler_helpers import enqueue_archive_copy
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
@@ -114,6 +115,21 @@ def create_next_iter_usim_data(
     output_store.close()
 
     logger.info(f"Prepared merged input H5 for next iteration: {input_store_path}")
+
+    # Ensure restart-critical UrbanSim H5s are copied to archive as soon as they
+    # are produced/updated.
+    enqueue_archive_copy(
+        key=f"usim_year_output_h5_{forecast_year}",
+        path=output_store_path,
+    )
+    enqueue_archive_copy(
+        key=f"usim_input_archive_{forecast_year}",
+        path=archived_input_store_path,
+    )
+    enqueue_archive_copy(
+        key=f"usim_input_merged_{forecast_year}",
+        path=input_store_path,
+    )
 
     return [
         FileRecord(

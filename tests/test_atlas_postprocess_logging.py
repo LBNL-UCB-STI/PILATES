@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from pilates.generic.records import RecordStore
+from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasPostprocessOutputs
 from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
@@ -113,3 +115,62 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
+
+
+def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        atlas_postprocessor,
+        "enqueue_archive_copy",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    usim_dir = tmp_path / "urbansim" / "data"
+    atlas_output_dir = tmp_path / "atlas" / "atlas_output"
+    atlas_input_dir = tmp_path / "atlas" / "atlas_input" / "year2023"
+    usim_dir.mkdir(parents=True)
+    atlas_output_dir.mkdir(parents=True)
+    atlas_input_dir.mkdir(parents=True)
+
+    usim_h5 = usim_dir / "model_data_2023.h5"
+    usim_h5.write_text("h5")
+    (atlas_output_dir / "householdv_2023.csv").write_text("household_id,nvehicles\n1,1\n")
+    (atlas_output_dir / "vehicles_2023.csv").write_text(
+        "bodytype,pred_power,modelyear\nsedan,gas,2020\n"
+    )
+    (atlas_input_dir / "vehicles_output.RData").write_text("rdata")
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(
+            urbansim=SimpleNamespace(
+                output_file_template="model_data_{year}.h5",
+                input_file_template="model_data_{region_id}.h5",
+                region_mappings={"region_to_region_id": {"test": "000"}},
+            ),
+            run=SimpleNamespace(region="test"),
+        ),
+        forecast_year=2023,
+        current_year=2023,
+        is_start_year=lambda: False,
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(usim_dir),
+        get_atlas_output_dir=lambda: str(atlas_output_dir),
+        get_atlas_mutable_input_dir=lambda: str(tmp_path / "atlas" / "atlas_input"),
+    )
+
+    postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
+    monkeypatch.setattr(postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: None)
+
+    postprocessor._postprocess(RecordStore(), workspace)
+
+    assert any(
+        call["key"] == "atlas_input_year_dir_2023"
+        and str(call["path"]).endswith("year2023")
+        for call in calls
+    )
+    assert any(
+        call["key"] == "atlas_rdata_2023"
+        and str(call["path"]).endswith("vehicles_output.RData")
+        for call in calls
+    )

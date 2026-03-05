@@ -455,6 +455,42 @@ def test_land_use_stage_contract(stage_env):
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
+def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch):
+    """Land use boundary should enqueue restart H5s and flush archive queue."""
+    from pilates.workflows.stages import land_use as land_use_stage
+    from pilates.workflows.steps import StepOutputsHolder
+
+    enqueue_calls = []
+    flush_calls = []
+    monkeypatch.setattr(
+        land_use_stage,
+        "enqueue_archive_copy",
+        lambda **kwargs: enqueue_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: flush_calls.append(timeout),
+    )
+
+    outputs_holder = StepOutputsHolder()
+    run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    keys = {call["key"] for call in enqueue_calls}
+    assert USIM_DATASTORE_BASE_H5 in keys
+    assert USIM_DATASTORE_CURRENT_H5 in keys
+    assert any(key.startswith("usim_year_output_h5_") for key in keys)
+    assert flush_calls == [300]
+
+
 def test_vehicle_ownership_stage_contract(stage_env):
     """Vehicle ownership should consume UrbanSim inputs and keep datastore state."""
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
@@ -469,6 +505,65 @@ def test_vehicle_ownership_stage_contract(stage_env):
         build_atlas_static_inputs_fallback=lambda workspace: {},
     )
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+
+
+def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
+    """ATLAS subyear boundaries should enqueue restart artifacts and flush."""
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    workspace = stage_env["workspace"]
+    scenario = stage_env["scenario"]
+    coupler = stage_env["coupler"]
+
+    state.forecast_year = state.year + 4  # 2017, 2019, 2021
+    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+
+    atlas_years = [state.year, state.year + 2, state.year + 4]
+    for atlas_year in atlas_years:
+        year_dir = (
+            Path(workspace.get_atlas_mutable_input_dir()) / f"year{atlas_year}"
+        )
+        year_dir.mkdir(parents=True, exist_ok=True)
+        _write_file(year_dir / "vehicles_output.RData")
+
+    enqueue_calls = []
+    flush_calls = []
+    monkeypatch.setattr(
+        vo_stage,
+        "enqueue_archive_copy",
+        lambda **kwargs: enqueue_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        vo_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: flush_calls.append(timeout),
+    )
+
+    run_vehicle_ownership_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    )
+
+    assert flush_calls == [300, 300, 300]
+    for atlas_year in atlas_years:
+        assert any(
+            call["key"] == f"atlas_input_year_dir_{atlas_year}"
+            and str(call["path"]).endswith(f"year{atlas_year}")
+            for call in enqueue_calls
+        )
+        assert any(
+            call["key"] == f"atlas_rdata_{atlas_year}"
+            and str(call["path"]).endswith("vehicles_output.RData")
+            for call in enqueue_calls
+        )
 
 
 def test_supply_demand_stage_contract(stage_env, tmp_path):
@@ -508,6 +603,55 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     ]
     assert asim_run_calls, "Expected an ActivitySim run step call."
     assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
+
+
+def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):
+    """Supply-demand iteration boundary should enqueue/flush manifest artifacts."""
+    from pilates.workflows.stages import supply_demand as sd_stage
+
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    manifest_path = tmp_path / "manifest_boundary.yaml"
+
+    enqueue_calls = []
+    flush_calls = []
+    monkeypatch.setattr(
+        sd_stage,
+        "enqueue_archive_copy",
+        lambda **kwargs: enqueue_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        sd_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: flush_calls.append(timeout),
+    )
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, _year, _iteration: manifest_path,
+    )
+
+    assert manifest_path.exists()
+    assert any(
+        call["key"] == "workflow_manifest" and Path(call["path"]) == manifest_path
+        for call in enqueue_calls
+    )
+    assert flush_calls == [300]
 
 
 def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):

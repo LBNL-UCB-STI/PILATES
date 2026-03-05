@@ -39,10 +39,16 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "zarr_skims_*",
     "asim_input_skims_zarr_archived",
     ASIM_SHARROW_CACHE_DIR,
+    "atlas_input_year_dir",
+    "atlas_input_year_dir_*",
 )
-_archive_queue: Optional["queue.Queue[Optional[tuple[str, str, str, bool]]]"] = None
+_archive_queue: Optional[
+    "queue.Queue[Optional[tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]]]"
+] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
+_archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
+_archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
 
 
 def _archive_enabled() -> bool:
@@ -130,6 +136,14 @@ def _archive_dir_allowed(key: str) -> bool:
     return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
 
 
+def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int, bool]]:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
+
+
 def _archive_worker() -> None:
     while True:
         task = _archive_queue.get() if _archive_queue is not None else None
@@ -137,15 +151,24 @@ def _archive_worker() -> None:
             if _archive_queue is not None:
                 _archive_queue.task_done()
             break
-        key, src, dest, is_dir = task
+        key, src, dest, is_dir, signature = task
         try:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if is_dir:
                 shutil.copytree(src, dest, dirs_exist_ok=True)
             else:
                 shutil.copy2(src, dest)
+            if signature is not None:
+                with _archive_lock:
+                    if _archive_inflight_signature.get(dest) == signature:
+                        _archive_inflight_signature.pop(dest, None)
+                    _archive_last_copied_signature[dest] = signature
             logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
         except Exception as exc:
+            if signature is not None:
+                with _archive_lock:
+                    if _archive_inflight_signature.get(dest) == signature:
+                        _archive_inflight_signature.pop(dest, None)
             logger.warning(
                 "[Archive] Failed to copy %s -> %s (key=%s): %s",
                 src,
@@ -195,30 +218,80 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
     dest = _resolve_archive_path(path, local_root, archive_root)
     if dest is None or dest == path:
         return
+    signature = _archive_path_signature(path, is_dir)
+    if signature is not None:
+        with _archive_lock:
+            if _archive_inflight_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
+                    path,
+                    key,
+                )
+                return
+            if _archive_last_copied_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (already copied): %s (key=%s)",
+                    path,
+                    key,
+                )
+                return
+            _archive_inflight_signature[dest] = signature
     _ensure_archive_worker()
     logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
     if _archive_queue is not None:
-        _archive_queue.put((key, path, dest, is_dir))
+        _archive_queue.put((key, path, dest, is_dir, signature))
 
 
-def flush_archive_queue(timeout: Optional[float] = None) -> None:
-    if _archive_queue is None:
+def enqueue_archive_copy(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> None:
+    """
+    Public wrapper to enqueue archive copy work for a file or allowlisted directory.
+
+    Parameters
+    ----------
+    key : str
+        Artifact key associated with ``path``.
+    path : str or PathLike, optional
+        Local or workspace URI path to enqueue.
+    workspace : Workspace, optional
+        Workspace used to resolve ``workspace://`` paths.
+    """
+    if path is None:
         return
+    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
+    if not resolved:
+        return
+    _enqueue_archive_copy(key, resolved)
+
+
+def flush_archive_queue(
+    timeout: Optional[float] = None,
+    *,
+    fail_on_timeout: bool = False,
+) -> bool:
+    if _archive_queue is None:
+        return True
     pending = _archive_queue.unfinished_tasks
     logger.info("[Archive] Flushing queue (pending=%s)", pending)
     if timeout is None:
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
-        return
+        return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
-            return
+            return True
         time.sleep(0.1)
-    logger.warning(
-        "[Archive] Flush timed out (pending=%s)", _archive_queue.unfinished_tasks
-    )
+    message = f"[Archive] Flush timed out (pending={_archive_queue.unfinished_tasks})"
+    if fail_on_timeout:
+        raise TimeoutError(message)
+    logger.warning(message)
+    return False
 
 
 def stop_archive_worker(timeout: Optional[float] = None) -> None:

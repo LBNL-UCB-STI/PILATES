@@ -178,6 +178,8 @@ Available commands:
   - Produces skim convergence datasets from OpenMatrix metadata views.
 - `db-health`
   - Runs Consist `inspect` + `doctor` checks before heavy analysis.
+- `run-tagging`
+  - Emits structured run-tagging coverage/linkage diagnostics (`json` or `table`), with strict and fail-on-issues modes.
 - `epoch-panel`
   - Summarizes simulation epochs by year/outer iteration/scenario and can emit converged-only rows.
 - `compare-scenarios`
@@ -363,6 +365,8 @@ trips = session.trips(year=2030)
 skims = session.skims(year=2030)
 health = session.inspect_db()
 tagging_warnings = session.tagging_warnings
+tagging_report = session.run_tagging_report()
+session.assert_run_tagging_consistent(strict=True)
 comparison = session.compare_scenarios(
     left=["run-a1", "run-a2"],
     right=["run-b1", "run-b2"],
@@ -370,6 +374,28 @@ comparison = session.compare_scenarios(
     use_converged=True,
     converged_group_by=["year", "scenario_id"],
 )
+```
+
+Optional strict tagging enforcement at session open:
+
+```python
+session = open_run(
+    "/path/to/archive/run",
+    project_root="/Users/zaneedell/git/PILATES",
+    strict_tagging=True,
+)
+```
+
+CLI tagging report examples:
+
+```bash
+pilates-consist-analysis run-tagging \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --output-format table \
+  --include-issues \
+  --strict \
+  --fail-on-issues
 ```
 
 Epoch-scoped cross-model views (Batch 1):

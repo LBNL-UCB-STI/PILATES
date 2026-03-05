@@ -9,6 +9,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 from pilates.utils.formatting import formatted_print
+from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.step_io import merge_model_expected_inputs
@@ -185,5 +186,24 @@ def run_land_use_stage(
         and USIM_DATASTORE_CURRENT_H5 in usim_inputs
     ):
         usim_inputs[USIM_DATASTORE_BASE_H5] = usim_inputs[USIM_DATASTORE_CURRENT_H5]
+
+    # Keep restart-critical UrbanSim H5 artifacts durable at stage boundaries.
+    enqueue_archive_copy(
+        key=USIM_DATASTORE_BASE_H5,
+        path=usim_inputs.get(USIM_DATASTORE_BASE_H5),
+    )
+    enqueue_archive_copy(
+        key=USIM_DATASTORE_CURRENT_H5,
+        path=usim_inputs.get(USIM_DATASTORE_CURRENT_H5),
+    )
+    usim_forecast_output_path = os.path.join(
+        workspace.get_usim_mutable_data_dir(),
+        settings.urbansim.output_file_template.format(year=state.forecast_year),
+    )
+    enqueue_archive_copy(
+        key=f"usim_year_output_h5_{state.forecast_year}",
+        path=usim_forecast_output_path,
+    )
+    flush_archive_queue(timeout=300, fail_on_timeout=True)
 
     return usim_inputs

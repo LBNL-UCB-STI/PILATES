@@ -14,6 +14,8 @@ from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     clean_expected_outputs,
+    enqueue_archive_copy,
+    flush_archive_queue,
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
@@ -1288,6 +1290,14 @@ def run_supply_demand_stage(
                 inputs=traffic_inputs,
                 outputs_holder=outputs_holder,
             ).previous_beam_outputs
+
+        if os.path.exists(manifest_path):
+            enqueue_archive_copy(
+                key="workflow_manifest",
+                path=manifest_path,
+            )
+        # Year/iteration boundary durability checkpoint for restart artifacts.
+        flush_archive_queue(timeout=300, fail_on_timeout=True)
 
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)

@@ -8,6 +8,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
+from pilates.utils.coupler_helpers import enqueue_archive_copy
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.workflows.artifact_keys import USIM_H5_UPDATED
@@ -239,6 +240,24 @@ class AtlasPostprocessor(GenericPostprocessor):
                     short_name="atlas_vehicles2_output",
                 )
                 output_records.append(atlas_veh2_output_record)
+
+        # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
+        atlas_input_root = workspace.get_atlas_mutable_input_dir()
+        atlas_year_input_dir = os.path.join(atlas_input_root, f"year{output_year}")
+        enqueue_archive_copy(
+            key=f"atlas_input_year_dir_{output_year}",
+            path=atlas_year_input_dir,
+        )
+        for base_dir in (
+            atlas_year_input_dir,
+            atlas_input_root,
+            workspace.get_atlas_output_dir(),
+        ):
+            for filename in ("vehicles_output.RData", "households_output.RData"):
+                enqueue_archive_copy(
+                    key=f"atlas_rdata_{output_year}",
+                    path=os.path.join(base_dir, filename),
+                )
 
         return RecordStore(recordList=output_records)
 

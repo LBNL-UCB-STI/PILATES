@@ -23,6 +23,16 @@ def save_step_manifest(manifest: Dict[str, Any], manifest_path: Path) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with manifest_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(manifest, handle, sort_keys=False)
+    try:
+        from pilates.utils.coupler_helpers import enqueue_archive_copy
+
+        enqueue_archive_copy(key="workflow_manifest", path=manifest_path)
+    except Exception as exc:
+        logger.warning(
+            "Failed to enqueue workflow manifest for archive copy (%s): %s",
+            manifest_path,
+            exc,
+        )
 
 
 def load_step_manifest(manifest_path: Path) -> Optional[Dict[str, Any]]:

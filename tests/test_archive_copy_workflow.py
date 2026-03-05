@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import logging
+import queue
 
 import pytest
 
@@ -55,6 +56,8 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_inflight_signature.clear()
+    ch._archive_last_copied_signature.clear()
     monkeypatch.delenv("PILATES_ENABLE_ARCHIVE_COPY", raising=False)
     monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
     monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
@@ -62,6 +65,8 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_inflight_signature.clear()
+    ch._archive_last_copied_signature.clear()
 
 
 def test_archive_copy_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):
@@ -158,6 +163,65 @@ def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tm
     archived = archive_root / "shared_cache" / "numba" / "nested" / "entry.bin"
     assert archived.exists()
     assert archived.read_text() == "cache"
+
+
+def test_archive_copy_allows_atlas_year_input_directory(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    directory = local_root / "atlas" / "atlas_input" / "year2030"
+    _write_file(directory / "vehicles_output.RData", "atlas-rdata")
+
+    ch.enqueue_archive_copy(
+        key="atlas_input_year_dir_2030",
+        path=str(directory),
+    )
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    archived = archive_root / "atlas" / "atlas_input" / "year2030" / "vehicles_output.RData"
+    assert archived.exists()
+    assert archived.read_text() == "atlas-rdata"
+
+
+def test_archive_copy_dedupes_same_signature(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "beam" / "output" / "linkstats.csv.gz"
+    _write_file(source, "linkstats")
+
+    copy_calls = []
+    original_copy2 = ch.shutil.copy2
+
+    def _counting_copy2(src, dst, *args, **kwargs):
+        copy_calls.append((src, dst))
+        return original_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ch.shutil, "copy2", _counting_copy2)
+
+    ch._enqueue_archive_copy("linkstats", str(source))
+    ch._enqueue_archive_copy("linkstats", str(source))
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    archived = archive_root / "beam" / "output" / "linkstats.csv.gz"
+    assert archived.exists()
+    assert archived.read_text() == "linkstats"
+    assert len(copy_calls) == 1
+
+
+def test_flush_archive_queue_can_fail_on_timeout():
+    ch._archive_queue = queue.Queue()
+    ch._archive_queue.put(("pending",))
+    with pytest.raises(TimeoutError, match="Flush timed out"):
+        ch.flush_archive_queue(timeout=0.01, fail_on_timeout=True)
 
 
 def test_log_output_only_enqueues_archive_copy(monkeypatch, tmp_path):
