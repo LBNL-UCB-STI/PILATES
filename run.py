@@ -750,7 +750,20 @@ def _restart_required_local_artifacts(
     )
 
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "activity_demand", None) == "activitysim":
+    current_stage = getattr(state, "current_major_stage", None)
+    requires_activitysim_locals = (
+        getattr(model_cfg, "activity_demand", None) == "activitysim"
+        and (
+            current_stage is None
+            or current_stage
+            in {
+                WorkflowState.Stage.supply_demand_loop,
+                WorkflowState.Stage.activity_demand,
+                WorkflowState.Stage.activity_demand_directly_from_land_use,
+            }
+        )
+    )
+    if requires_activitysim_locals:
         asim_data_dir = workspace.get_asim_mutable_data_dir()
         for filename in ("households.csv", "persons.csv", "land_use.csv"):
             required.append(

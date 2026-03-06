@@ -10,6 +10,7 @@ from consist.types import CacheOptions
 import run as run_module
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_db_snapshot as snapshot_module
+from workflow_state import WorkflowState
 
 
 class DummyWorkspace:
@@ -392,6 +393,19 @@ def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
         "activitysim_input_land_use.csv",
         "activitysim_settings_yaml",
     }
+
+
+def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(tmp_path):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(current_major_stage=WorkflowState.Stage.vehicle_ownership_model)
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    assert {item["key"] for item in missing} == {"usim_datastore_base_h5"}
 
 
 def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preserves_existing(
