@@ -28,6 +28,9 @@ class DummyWorkspace:
     def get_asim_mutable_configs_dir(self):
         return os.path.join(self.full_path, "activitysim", "configs")
 
+    def get_asim_output_dir(self):
+        return os.path.join(self.full_path, "activitysim", "output")
+
     def get_atlas_mutable_input_dir(self):
         return os.path.join(self.full_path, "atlas", "atlas_input")
 
@@ -412,6 +415,7 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
     keys = {item["key"] for item in missing}
     assert "usim_datastore_base_h5" in keys
     assert "activitysim_settings_yaml" not in keys
+    assert "zarr_skims" not in keys
     assert any(key.startswith("atlas_static::") for key in keys)
 
 
@@ -428,6 +432,27 @@ def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_pat
     paths = {item["path"] for item in missing}
     assert any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
     assert any(path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths)
+
+
+def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_demand(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        asim_compiled=True,
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    keys = {item["key"] for item in missing}
+    paths = {item["path"] for item in missing}
+    assert "zarr_skims" in keys
+    assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
 
 
 def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preserves_existing(

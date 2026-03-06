@@ -17,6 +17,7 @@ contract expectations explicit without running heavy model containers.
 """
 
 from pathlib import Path
+import shutil
 
 import pytest
 import yaml
@@ -25,6 +26,7 @@ from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -334,6 +336,8 @@ def stage_env(tmp_path, monkeypatch):
 
     zarr_path = asim_out_dir / "cache" / "skims.zarr"
     _write_file(zarr_path)
+    numba_cache_path = Path(workspace.full_path) / "shared_cache" / "numba"
+    _write_file(numba_cache_path / "cache.bin")
 
     beam_plans_path = beam_dir / "plans.csv"
     beam_households_path = beam_dir / "households.csv"
@@ -375,8 +379,16 @@ def stage_env(tmp_path, monkeypatch):
                     ]
                 )
             if model_name == "activitysim_compile":
+                _write_file(zarr_path)
+                _write_file(numba_cache_path / "cache.bin")
                 return RecordStore(
-                    recordList=[FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS)]
+                    recordList=[
+                        FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS),
+                        FileRecord(
+                            file_path=str(numba_cache_path),
+                            short_name=ASIM_SHARROW_CACHE_DIR,
+                        ),
+                    ]
                 )
             if model_name == "beam_full_skim":
                 return RecordStore(
@@ -603,6 +615,53 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     ]
     assert asim_run_calls, "Expected an ActivitySim run step call."
     assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
+
+
+def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
+    stage_env, tmp_path
+):
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    # Simulate restart state claiming ActivitySim is already compiled.
+    state.compile_asim()
+
+    # Keep zarr skims present but delete numba cache to trigger forced compile.
+    zarr_path = Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
+
+    numba_cache_dir = Path(stage_env["workspace"].full_path) / "shared_cache" / "numba"
+    if numba_cache_dir.exists():
+        shutil.rmtree(numba_cache_dir)
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_force_compile_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    compile_calls = [
+        call for call in stage_env["scenario"].calls if call.get("model") == "activitysim_compile"
+    ]
+    assert compile_calls, "Expected forced ActivitySim compile when numba cache is missing."
 
 
 def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):

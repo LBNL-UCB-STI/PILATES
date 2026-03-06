@@ -43,6 +43,7 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
     ASIM_OMX_SKIMS,
     ATLAS_VEHICLES2_INPUT,
     BEAM_HOUSEHOLDS_IN,
@@ -57,6 +58,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
+from pilates.activitysim.runner import persist_sharrow_cache_enabled
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -424,8 +426,78 @@ def _run_activity_demand_phase(
         iteration=inputs.iteration,
     )
 
+    def _resolved_existing_zarr_skims_path() -> Optional[str]:
+        zarr_value = None
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            zarr_value = resolve_artifact_from_value(
+                get_value(ZARR_SKIMS),
+                key=ZARR_SKIMS,
+                workspace=workspace,
+            )
+        zarr_path = artifact_to_path(zarr_value, workspace)
+        if not zarr_path:
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(),
+                "cache",
+                "skims.zarr",
+            )
+            if os.path.exists(candidate):
+                zarr_path = candidate
+        if zarr_path and os.path.exists(zarr_path):
+            return zarr_path
+        return None
+
+    def _resolved_existing_numba_cache_path() -> Optional[str]:
+        cache_value = None
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            cache_value = resolve_artifact_from_value(
+                get_value(ASIM_SHARROW_CACHE_DIR),
+                key=ASIM_SHARROW_CACHE_DIR,
+                workspace=workspace,
+            )
+        cache_path = artifact_to_path(cache_value, workspace)
+        if not cache_path:
+            cache_path = os.path.join(workspace.full_path, "shared_cache", "numba")
+        if os.path.isdir(cache_path):
+            for _root, _dirs, files in os.walk(cache_path):
+                if files:
+                    return cache_path
+        return None
+
+    activitysim_cfg = getattr(settings, "activitysim", None)
+    requires_numba_cache = bool(
+        getattr(activitysim_cfg, "num_processes", 1) > 1
+        and persist_sharrow_cache_enabled(settings)
+    )
+
     # ActivitySim Compilation: run once per year after preprocess.
-    if not state.asim_compiled:
+    # Restart safety: if state says compiled but zarr skims are missing on local
+    # ephemeral storage, force recompile instead of hard-failing.
+    needs_compile = not state.asim_compiled
+    if not needs_compile:
+        existing_zarr_path = _resolved_existing_zarr_skims_path()
+        existing_cache_path = (
+            _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
+        )
+        if not existing_zarr_path or (
+            requires_numba_cache and not existing_cache_path
+        ):
+            missing_parts = []
+            if not existing_zarr_path:
+                missing_parts.append("zarr_skims")
+            if requires_numba_cache and not existing_cache_path:
+                missing_parts.append("numba_cache")
+            logger.warning(
+                "ActivitySim marked compiled for year %s but compiled artifacts were "
+                "missing (%s); forcing recompilation.",
+                state.current_year,
+                ",".join(missing_parts),
+            )
+            needs_compile = True
+
+    if needs_compile:
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
@@ -488,29 +560,21 @@ def _run_activity_demand_phase(
                 "expected_outputs": expected_compile_outputs,
             },
         )
-    else:
-        zarr_value = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            zarr_value = resolve_artifact_from_value(
-                get_value(ZARR_SKIMS),
-                key=ZARR_SKIMS,
-                workspace=workspace,
-            )
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(),
-                "cache",
-                "skims.zarr",
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
-        if not zarr_path or not os.path.exists(zarr_path):
-            raise RuntimeError(
-                "ActivitySim run requires zarr_skims, "
-                "but none were found while asim_compiled=True."
-            )
+    final_zarr_path = _resolved_existing_zarr_skims_path()
+    final_cache_path = (
+        _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
+    )
+    if not final_zarr_path or (requires_numba_cache and not final_cache_path):
+        missing_parts = []
+        if not final_zarr_path:
+            missing_parts.append("zarr_skims")
+        if requires_numba_cache and not final_cache_path:
+            missing_parts.append("numba_cache")
+        raise RuntimeError(
+            "ActivitySim run requires compiled artifacts before execution, but "
+            f"missing after compile check: {','.join(missing_parts)}. "
+            "This guard prevents multi-process runtime re-compilation races."
+        )
 
     upstream_preprocess = outputs_holder.activitysim_preprocess
     if upstream_preprocess is None:

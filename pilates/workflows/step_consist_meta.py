@@ -58,26 +58,47 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             return None
 
         workspace_obj = _workspace(ctx)
-        config_root: Optional[Path] = None
+        mutable_configs_root: Optional[Path] = None
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_asim_mutable_configs_dir"
         ):
-            config_root = (
-                Path(workspace_obj.get_asim_mutable_configs_dir())
-                / activitysim_settings.main_configs_dir
-            )
+            mutable_configs_root = Path(workspace_obj.get_asim_mutable_configs_dir())
         else:
             ws_path = _workspace_path(ctx)
             if ws_path:
-                config_root = (
+                mutable_configs_root = (
                     Path(ws_path)
                     / activitysim_settings.local_mutable_configs_folder
-                    / activitysim_settings.main_configs_dir
                 )
-        if config_root is None or not config_root.exists():
+        if mutable_configs_root is None:
             return None
 
-        return ActivitySimConfigAdapter(root_dirs=[config_root])
+        main_configs_dir = getattr(activitysim_settings, "main_configs_dir", "configs")
+        candidates = [
+            main_configs_dir,
+            "configs",
+            "configs_extended",
+            "configs_mp",
+            "configs_sh_compile",
+        ]
+        seen = set()
+        ordered_unique_candidates = []
+        for name in candidates:
+            if name in seen:
+                continue
+            seen.add(name)
+            ordered_unique_candidates.append(name)
+
+        config_roots = []
+        for dirname in ordered_unique_candidates:
+            candidate = mutable_configs_root / dirname
+            if candidate.exists():
+                config_roots.append(candidate)
+
+        if not config_roots:
+            return None
+
+        return ActivitySimConfigAdapter(root_dirs=config_roots)
 
     def _beam_adapter(ctx: StepContext) -> Any:
         settings = _settings(ctx)

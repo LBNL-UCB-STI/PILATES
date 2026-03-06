@@ -381,6 +381,13 @@ class ActivitysimRunner(GenericRunner):
                     "configs_sh_compile",
                 )
             )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    working_dir,
+                    settings.activitysim.local_mutable_configs_folder,
+                    "configs_mp",
+                )
+            )
         else:
             asim_local_mutable_data_folder = os.path.abspath(
                 settings.activitysim.local_mutable_data_folder
@@ -400,18 +407,30 @@ class ActivitysimRunner(GenericRunner):
                     "configs_sh_compile",
                 )
             )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    settings.activitysim.local_configs_folder,
+                    region,
+                    "configs_mp",
+                )
+            )
         asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
         asim_remote_output_folder = os.path.join(asim_remote_workdir, "output")
         asim_remote_configs_folder = os.path.join(asim_remote_workdir, "configs")
         asim_remote_configs_compile_folder = os.path.join(
             asim_remote_workdir, "configs_sh_compile"
         )
+        asim_remote_configs_mp_folder = os.path.join(asim_remote_workdir, "configs_mp")
         asim_docker_vols = {
             asim_local_mutable_data_folder: {
                 "bind": asim_remote_input_folder,
                 "mode": "rw",
             },
             asim_local_output_folder: {"bind": asim_remote_output_folder, "mode": "rw"},
+            asim_local_configs_mp_folder: {
+                "bind": asim_remote_configs_mp_folder,
+                "mode": "rw",
+            },
             asim_local_configs_compile_folder: {
                 "bind": asim_remote_configs_compile_folder,
                 "mode": "rw",

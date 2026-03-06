@@ -249,6 +249,54 @@ def update_asim_config(
             file.writelines(config_header + ": " + str(config_value) + "\n")
 
 
+def _ensure_required_asim_config_dirs(
+    *,
+    configs_dest_dir: str,
+    main_configs_dir: str,
+) -> None:
+    """
+    Ensure expected ActivitySim config overlays exist in mutable configs.
+
+    Some region config bundles only ship ``configs``/``configs_extended``.
+    ActivitySim compile/run flows may still search ``configs_mp`` and
+    ``configs_sh_compile``. When missing, synthesize them by copying from a
+    stable base config directory.
+    """
+    required_dirs = [
+        main_configs_dir,
+        "configs",
+        "configs_extended",
+        "configs_mp",
+        "configs_sh_compile",
+    ]
+
+    base_candidates = [main_configs_dir, "configs_extended", "configs"]
+    base_dir = None
+    for candidate in base_candidates:
+        candidate_path = os.path.join(configs_dest_dir, candidate)
+        if os.path.isdir(candidate_path):
+            base_dir = candidate_path
+            break
+
+    if base_dir is None:
+        raise RuntimeError(
+            "ActivitySim mutable configs are missing all base directories. "
+            f"Expected one of: {base_candidates} under {configs_dest_dir}"
+        )
+
+    for dirname in required_dirs:
+        target_dir = os.path.join(configs_dest_dir, dirname)
+        if os.path.isdir(target_dir):
+            continue
+        logger.warning(
+            "ActivitySim config directory missing; synthesizing from base config. "
+            "missing=%s base=%s",
+            target_dir,
+            base_dir,
+        )
+        shutil.copytree(base_dir, target_dir, dirs_exist_ok=True)
+
+
 ####################################
 #### RAW BEAM SKIMS TO SKIMS.OMX ###
 ####################################
@@ -2585,6 +2633,10 @@ def _copy_data_to_mutable_location(
     if os.path.exists(configs_dest_dir):
         shutil.rmtree(configs_dest_dir)
     shutil.copytree(configs_source_dir, configs_dest_dir)
+    _ensure_required_asim_config_dirs(
+        configs_dest_dir=configs_dest_dir,
+        main_configs_dir=get_setting(settings, "activitysim.main_configs_dir", "configs"),
+    )
 
     # ActivitySim configs are captured via the config adapter; no artifact logging here.
     return input_records, output_records

@@ -787,6 +787,31 @@ def _restart_required_local_artifacts(
             }
         )
 
+    requires_activitysim_zarr = (
+        getattr(model_cfg, "activity_demand", None) == "activitysim"
+        and bool(getattr(state, "asim_compiled", False))
+        and current_stage
+        in {
+            WorkflowState.Stage.supply_demand_loop,
+            WorkflowState.Stage.activity_demand,
+            WorkflowState.Stage.activity_demand_directly_from_land_use,
+            WorkflowState.Stage.traffic_assignment,
+        }
+    )
+    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if requires_activitysim_zarr and callable(get_asim_output_dir):
+        required.append(
+            {
+                "key": "zarr_skims",
+                "path": os.path.join(
+                    get_asim_output_dir(),
+                    "cache",
+                    "skims.zarr",
+                ),
+                "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
+            }
+        )
+
     requires_atlas_locals = (
         getattr(model_cfg, "vehicle_ownership", None) == "atlas"
         and current_stage == WorkflowState.Stage.vehicle_ownership_model

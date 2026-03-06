@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_db_snapshot import snapshot_latest_dir
 
@@ -119,6 +120,26 @@ def _add_activitysim_candidates(
         key="activitysim_settings_yaml",
         local_path=os.path.join(get_cfg_dir(), main_configs_dir, "settings.yaml"),
         reason="ActivitySim restart settings",
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+
+    get_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if callable(get_output_dir):
+        _append_local_candidate(
+            artifacts,
+            key="zarr_skims",
+            local_path=os.path.join(get_output_dir(), "cache", "skims.zarr"),
+            reason="ActivitySim compiled skims cache for restart",
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
+
+    _append_local_candidate(
+        artifacts,
+        key=ASIM_SHARROW_CACHE_DIR,
+        local_path=os.path.join(local_run_dir, "shared_cache", "numba"),
+        reason="ActivitySim persisted numba/sharrow cache directory for faster restart",
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
     )
