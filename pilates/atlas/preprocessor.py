@@ -259,16 +259,27 @@ class AtlasPreprocessor(GenericPreprocessor):
         source_dir = get_setting(
             settings, "atlas.host_input_folder", "pilates/atlas/atlas_input"
         )
+        project_root = find_project_root(start_path=os.path.dirname(__file__))
+        if not project_root:
+            project_root = os.path.realpath(os.getcwd())
+            logger.warning(
+                "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                "falling back to cwd='%s'.",
+                project_root,
+            )
+
         if not os.path.isabs(source_dir):
-            project_root = find_project_root(start_path=os.path.dirname(__file__))
-            if not project_root:
-                project_root = os.path.realpath(os.getcwd())
-                logger.warning(
-                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                    "falling back to cwd='%s'.",
-                    project_root,
-                )
             source_dir = os.path.join(project_root, source_dir)
+        source_dir = os.path.realpath(source_dir)
+
+        default_source_dir = os.path.realpath(
+            os.path.join(project_root, "pilates/atlas/atlas_input")
+        )
+
+        source_dirs = [source_dir]
+        if default_source_dir not in source_dirs:
+            source_dirs.append(default_source_dir)
+
         scenario = get_setting(settings, "atlas.scenario")
         adscen = get_setting(settings, "atlas.adscen")
         scenario_key = str(scenario).lower() if scenario else ""
@@ -284,49 +295,80 @@ class AtlasPreprocessor(GenericPreprocessor):
                 adscen,
                 scenario,
             )
-        allowed_relpaths = set(atlas_static_input_relpaths(settings))
+        required_relpaths = atlas_static_input_relpaths(settings)
         logger.info(
-            f"[AtlasPreprocessor] Copying files from {source_dir} to {output_dir}"
+            "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
+            "(primary=%s fallback=%s)",
+            source_dir,
+            default_source_dir,
         )
+        missing_required_relpaths: List[str] = []
+        fallback_copy_count = 0
 
-        for root, dirs, files in os.walk(source_dir):
-            for filename in files:
-                if "readme" in filename.lower():
-                    continue
+        for relpath in required_relpaths:
+            normalized_relpath = relpath.replace("\\", "/")
+            source_path = None
+            source_base = None
+            for base_dir in source_dirs:
+                candidate = os.path.realpath(os.path.join(base_dir, normalized_relpath))
+                if os.path.exists(candidate):
+                    source_path = candidate
+                    source_base = base_dir
+                    break
 
-                source_path = os.path.join(root, filename)
-                relative_path = os.path.relpath(source_path, source_dir)
-                normalized_relpath = relative_path.replace("\\", "/")
-                if normalized_relpath not in allowed_relpaths:
-                    continue
+            if source_path is None:
+                missing_required_relpaths.append(normalized_relpath)
+                continue
 
-                dest_path = os.path.join(output_dir, relative_path)
-
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.copy(source_path, dest_path)
-
-                rel_no_ext = os.path.splitext(normalized_relpath)[0]
-                rel_key = rel_no_ext
-                short_name = sanitize_artifact_key(rel_key) or rel_key
-
-                input_meta = {}
-                if filename.lower().endswith(".csv"):
-                    input_meta["profile_file_schema"] = True
-                input_records.append(
-                    FileRecord(
-                        file_path=source_path,
-                        description=f"ATLAS input file: {filename}",
-                        short_name=short_name,
-                        metadata=input_meta,
-                    )
+            if source_base is not None and source_base != source_dir:
+                fallback_copy_count += 1
+                logger.warning(
+                    "[AtlasPreprocessor] Required file missing in primary source, "
+                    "using fallback: %s",
+                    normalized_relpath,
                 )
-                output_records.append(
-                    FileRecord(
-                        file_path=dest_path,
-                        description=f"Mutable ATLAS input file: {filename}",
-                        short_name=short_name,
-                    )
+
+            dest_path = os.path.join(output_dir, normalized_relpath)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.copy(source_path, dest_path)
+
+            rel_no_ext = os.path.splitext(normalized_relpath)[0]
+            rel_key = rel_no_ext
+            short_name = sanitize_artifact_key(rel_key) or rel_key
+            filename = os.path.basename(normalized_relpath)
+
+            input_meta = {}
+            if filename.lower().endswith(".csv"):
+                input_meta["profile_file_schema"] = True
+            input_records.append(
+                FileRecord(
+                    file_path=source_path,
+                    description=f"ATLAS input file: {filename}",
+                    short_name=short_name,
+                    metadata=input_meta,
                 )
+            )
+            output_records.append(
+                FileRecord(
+                    file_path=dest_path,
+                    description=f"Mutable ATLAS input file: {filename}",
+                    short_name=short_name,
+                )
+            )
+
+        if missing_required_relpaths:
+            preview = ", ".join(sorted(missing_required_relpaths)[:8])
+            raise RuntimeError(
+                "Missing required ATLAS static input files "
+                f"(count={len(missing_required_relpaths)}). "
+                f"Preview: {preview}"
+            )
+
+        if fallback_copy_count:
+            logger.warning(
+                "[AtlasPreprocessor] Copied %s files via fallback source.",
+                fallback_copy_count,
+            )
 
         logger.info(
             f"[AtlasPreprocessor] Finished copying {len(output_records)} files."

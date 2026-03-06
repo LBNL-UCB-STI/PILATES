@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_db_snapshot import snapshot_latest_dir
 
@@ -203,6 +204,32 @@ def _add_atlas_year_dir_candidates(
             )
 
 
+def _add_atlas_static_candidates(
+    artifacts: List[Dict[str, Any]],
+    *,
+    settings: Any,
+    workspace: Any,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> None:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return
+    getter = getattr(workspace, "get_atlas_mutable_input_dir", None)
+    if not callable(getter):
+        return
+    atlas_input_dir = getter()
+    for relpath in atlas_static_input_relpaths(settings):
+        _append_local_candidate(
+            artifacts,
+            key=f"atlas_static::{relpath}",
+            local_path=os.path.join(atlas_input_dir, relpath),
+            reason="ATLAS static input required for restart",
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
+
+
 def _add_workflow_manifest_candidates(
     artifacts: List[Dict[str, Any]],
     *,
@@ -290,6 +317,13 @@ def build_restart_bundle_manifest(
     )
     _add_atlas_year_dir_candidates(
         artifacts,
+        workspace=workspace,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_root,
+    )
+    _add_atlas_static_candidates(
+        artifacts,
+        settings=settings,
         workspace=workspace,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_root,

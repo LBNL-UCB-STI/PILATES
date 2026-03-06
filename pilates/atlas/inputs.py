@@ -200,11 +200,9 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
             if relpath.replace("\\", "/").startswith("adopt/"):
                 filtered.append(relpath)
                 continue
-            rel_no_ext = relpath.rsplit(".", 1)[0]
-            rel_key = rel_no_ext.replace("/", "_")
-            match = _YEAR_SUFFIX.search(rel_key)
-            if match and int(match.group(1)) not in run_years:
-                continue
+            # Non-ADOPT static files are foundational ATLAS inputs and should
+            # never be pruned by year suffix heuristics (for example
+            # accessbility_2015.RData is required in later-year runs).
             filtered.append(relpath)
         relpaths = filtered
 

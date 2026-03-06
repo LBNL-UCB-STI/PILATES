@@ -28,6 +28,9 @@ class DummyWorkspace:
     def get_asim_mutable_configs_dir(self):
         return os.path.join(self.full_path, "activitysim", "configs")
 
+    def get_atlas_mutable_input_dir(self):
+        return os.path.join(self.full_path, "atlas", "atlas_input")
+
 
 class DummyInitialization:
     def __init__(self, *_args, **_kwargs):
@@ -241,8 +244,9 @@ def _restart_settings():
     return SimpleNamespace(
         run=SimpleNamespace(
             region="test",
-            models=SimpleNamespace(activity_demand="activitysim"),
+            models=SimpleNamespace(activity_demand="activitysim", vehicle_ownership="atlas"),
         ),
+        atlas=SimpleNamespace(scenario="baseline"),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
@@ -405,7 +409,25 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
         workspace=workspace,
     )
 
-    assert {item["key"] for item in missing} == {"usim_datastore_base_h5"}
+    keys = {item["key"] for item in missing}
+    assert "usim_datastore_base_h5" in keys
+    assert "activitysim_settings_yaml" not in keys
+    assert any(key.startswith("atlas_static::") for key in keys)
+
+
+def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_path):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(current_major_stage=WorkflowState.Stage.vehicle_ownership_model)
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    paths = {item["path"] for item in missing}
+    assert any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
+    assert any(path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths)
 
 
 def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preserves_existing(

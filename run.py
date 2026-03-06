@@ -47,6 +47,7 @@ from pilates.utils.restart_bundle import (
     manifest_entries_to_local_artifacts,
     write_restart_bundle_manifest,
 )
+from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
@@ -785,6 +786,22 @@ def _restart_required_local_artifacts(
                 "reason": "ActivitySim mutable config required on restart",
             }
         )
+
+    requires_atlas_locals = (
+        getattr(model_cfg, "vehicle_ownership", None) == "atlas"
+        and current_stage == WorkflowState.Stage.vehicle_ownership_model
+    )
+    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+    if requires_atlas_locals and callable(get_atlas_input_dir):
+        atlas_input_dir = get_atlas_input_dir()
+        for relpath in atlas_static_input_relpaths(settings):
+            required.append(
+                {
+                    "key": f"atlas_static::{relpath}",
+                    "path": os.path.join(atlas_input_dir, relpath),
+                    "reason": "ATLAS static input required during vehicle ownership restart",
+                }
+            )
 
     return required
 
