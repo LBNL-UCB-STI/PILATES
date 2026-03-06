@@ -19,7 +19,9 @@ from .handoff import (
     export_scenario_bundle,
     export_sql_query,
     ingest_artifacts,
+    list_run_artifacts,
     parse_artifact_arg,
+    parse_artifact_ref_arg,
     parse_columns_arg,
     parse_rename_args,
     TableTransformSpec,
@@ -470,6 +472,21 @@ def cmd_ingest_artifacts(args: argparse.Namespace) -> int:
         )
         for raw in (args.artifact or [])
     ]
+    artifact_specs.extend(
+        [
+            parse_artifact_ref_arg(
+                raw,
+                direction=args.direction,
+                driver=args.driver,
+                artifact_family=args.artifact_family,
+            )
+            for raw in (args.artifact_from_run or [])
+        ]
+    )
+    if not artifact_specs:
+        raise ValueError(
+            "ingest-artifacts requires at least one --artifact or --artifact-from-run value."
+        )
     payload = ingest_artifacts(
         tracker,
         artifact_specs,
@@ -486,6 +503,33 @@ def cmd_ingest_artifacts(args: argparse.Namespace) -> int:
         profile_schema=not args.no_profile_schema,
     )
     _print_json(payload)
+    return 0
+
+
+def cmd_list_run_artifacts(args: argparse.Namespace) -> int:
+    tracker = _build_tracker(args)
+    frame = list_run_artifacts(
+        tracker,
+        run_id=args.run_id,
+        direction=args.direction,
+        key_contains=args.key_contains,
+        artifact_family_prefix=args.artifact_family_prefix,
+    )
+    if args.output_csv:
+        output_csv = Path(args.output_csv).expanduser().resolve()
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(output_csv, index=False)
+        print(output_csv)
+    if args.output_json:
+        output_json = Path(args.output_json).expanduser().resolve()
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(frame.to_json(orient="records", indent=2), encoding="utf-8")
+        print(output_json)
+    if not args.output_csv and not args.output_json:
+        if frame.empty:
+            print("No artifacts found.")
+        else:
+            print(frame.to_string(index=False))
     return 0
 
 
@@ -908,8 +952,14 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--artifact",
         action="append",
-        required=True,
+        default=None,
         help="Artifact spec PATH or key=PATH; repeatable.",
+    )
+    ingest.add_argument(
+        "--artifact-from-run",
+        action="append",
+        default=None,
+        help="Artifact reference RUN_ID:KEY resolved via Consist internals; repeatable.",
     )
     ingest.add_argument(
         "--artifact-family",
@@ -937,6 +987,23 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--no-ingest", action="store_true", default=False)
     ingest.add_argument("--no-profile-schema", action="store_true", default=False)
     ingest.set_defaults(func=cmd_ingest_artifacts)
+
+    list_artifacts = subparsers.add_parser(
+        "list-run-artifacts",
+        help="List artifacts for a run with resolved paths (for copy/paste into ingest workflows).",
+    )
+    _add_tracker_args(list_artifacts)
+    list_artifacts.add_argument("--run-id", required=True)
+    list_artifacts.add_argument(
+        "--direction",
+        choices=["input", "output", "both"],
+        default="output",
+    )
+    list_artifacts.add_argument("--key-contains", default=None)
+    list_artifacts.add_argument("--artifact-family-prefix", default=None)
+    list_artifacts.add_argument("--output-csv", default=None)
+    list_artifacts.add_argument("--output-json", default=None)
+    list_artifacts.set_defaults(func=cmd_list_run_artifacts)
 
     export_scenario = subparsers.add_parser(
         "export-scenario-db",

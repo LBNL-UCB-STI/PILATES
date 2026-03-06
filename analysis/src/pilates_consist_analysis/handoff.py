@@ -18,11 +18,15 @@ from .runset import runset_from_query, runset_run_ids
 class ArtifactIngestSpec:
     """Specification for logging and optional ingestion of one artifact file."""
 
-    path: str | Path
+    path: Optional[str | Path] = None
     key: Optional[str] = None
     direction: str = "output"
     driver: Optional[str] = None
     artifact_family: Optional[str] = None
+    source_run_id: Optional[str] = None
+    source_key: Optional[str] = None
+    source_artifact_id: Optional[str] = None
+    source_direction: str = "output"
     meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -88,7 +92,7 @@ def ingest_artifacts(
         facet=run_facet or None,
     ):
         for spec in artifact_specs:
-            resolved_spec = _resolve_spec(spec)
+            resolved_spec = _resolve_spec(spec, tracker)
             path = Path(resolved_spec.path).expanduser().resolve()
             if not path.exists():
                 raise FileNotFoundError(f"Artifact path does not exist: {path}")
@@ -133,6 +137,74 @@ def ingest_artifacts(
         "profile_schema": bool(profile_schema),
         "artifacts": artifact_rows,
     }
+
+
+def list_run_artifacts(
+    tracker: Any,
+    *,
+    run_id: str,
+    direction: str = "output",
+    key_contains: Optional[str] = None,
+    artifact_family_prefix: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    List artifacts for a run with resolved filesystem paths when available.
+
+    This is useful for notebook/CLI workflows where users need a copy-pasteable
+    inventory (`run_id`, `key`, `uri`, `resolved_path`) before ingestion/export.
+    """
+    if direction not in {"input", "output", "both"}:
+        raise ValueError("direction must be one of: input, output, both")
+
+    records = tracker.get_artifacts_for_run(run_id)
+    run = tracker.get_run(run_id) if hasattr(tracker, "get_run") else None
+    rows: list[dict[str, Any]] = []
+
+    selected: list[tuple[str, Any]] = []
+    if direction in {"input", "both"}:
+        selected.extend([("input", artifact) for artifact in (records.inputs or {}).values()])
+    if direction in {"output", "both"}:
+        selected.extend([("output", artifact) for artifact in (records.outputs or {}).values()])
+
+    for role, artifact in selected:
+        key = str(getattr(artifact, "key", "") or "")
+        if key_contains and key_contains not in key:
+            continue
+        meta = getattr(artifact, "meta", {})
+        family = meta.get("artifact_family") if isinstance(meta, dict) else None
+        if artifact_family_prefix and not str(family or "").startswith(artifact_family_prefix):
+            continue
+
+        resolved_path = _resolve_artifact_path(tracker, artifact=artifact, run=run)
+        rows.append(
+            {
+                "run_id": run_id,
+                "direction": role,
+                "artifact_id": str(getattr(artifact, "id", "") or ""),
+                "key": key,
+                "artifact_family": family,
+                "driver": getattr(artifact, "driver", None),
+                "container_uri": str(getattr(artifact, "container_uri", "") or ""),
+                "resolved_path": str(resolved_path) if resolved_path is not None else None,
+                "path_exists": bool(resolved_path.exists()) if resolved_path is not None else False,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "run_id",
+                "direction",
+                "artifact_id",
+                "key",
+                "artifact_family",
+                "driver",
+                "container_uri",
+                "resolved_path",
+                "path_exists",
+            ]
+        )
+    return pd.DataFrame(rows).sort_values(["direction", "key"]).reset_index(drop=True)
 
 
 def export_scenario_bundle(
@@ -287,7 +359,13 @@ def export_activitysim_inputs(
     return payload
 
 
-def parse_artifact_arg(raw: str, *, direction: str = "output", driver: Optional[str] = None, artifact_family: Optional[str] = None) -> ArtifactIngestSpec:
+def parse_artifact_arg(
+    raw: str,
+    *,
+    direction: str = "output",
+    driver: Optional[str] = None,
+    artifact_family: Optional[str] = None,
+) -> ArtifactIngestSpec:
     """Parse CLI artifact arg in KEY=PATH or PATH form into ArtifactIngestSpec."""
     value = str(raw).strip()
     if not value:
@@ -313,6 +391,42 @@ def parse_artifact_arg(raw: str, *, direction: str = "output", driver: Optional[
         direction=direction,
         driver=driver,
         artifact_family=artifact_family,
+    )
+
+
+def parse_artifact_ref_arg(
+    raw: str,
+    *,
+    direction: str = "output",
+    driver: Optional[str] = None,
+    artifact_family: Optional[str] = None,
+) -> ArtifactIngestSpec:
+    """
+    Parse CLI artifact reference in RUN_ID:KEY form into ArtifactIngestSpec.
+    """
+    value = str(raw).strip()
+    if not value:
+        raise ValueError("Artifact reference cannot be empty.")
+    if ":" not in value:
+        raise ValueError(
+            f"Invalid artifact reference '{value}'. Use RUN_ID:KEY format."
+        )
+    run_id, key = value.split(":", 1)
+    run_id = run_id.strip()
+    key = key.strip()
+    if not run_id or not key:
+        raise ValueError(
+            f"Invalid artifact reference '{value}'. Use RUN_ID:KEY format."
+        )
+    return ArtifactIngestSpec(
+        path=None,
+        key=key,
+        direction=direction,
+        driver=driver,
+        artifact_family=artifact_family,
+        source_run_id=run_id,
+        source_key=key,
+        source_direction="output",
     )
 
 
@@ -398,17 +512,146 @@ def _read_view_table(tracker: Any, view_name: str, *, transform: Optional[TableT
     return frame
 
 
-def _resolve_spec(spec: ArtifactIngestSpec) -> ArtifactIngestSpec:
-    path = Path(spec.path).expanduser().resolve()
-    key = spec.key or path.stem
-    return ArtifactIngestSpec(
-        path=path,
-        key=key,
-        direction=spec.direction,
-        driver=spec.driver,
-        artifact_family=spec.artifact_family,
-        meta=dict(spec.meta),
+def _resolve_spec(spec: ArtifactIngestSpec, tracker: Any) -> ArtifactIngestSpec:
+    if spec.path is not None:
+        path = Path(spec.path).expanduser().resolve()
+        key = spec.key or path.stem
+        return ArtifactIngestSpec(
+            path=path,
+            key=key,
+            direction=spec.direction,
+            driver=spec.driver,
+            artifact_family=spec.artifact_family,
+            source_run_id=spec.source_run_id,
+            source_key=spec.source_key,
+            source_artifact_id=spec.source_artifact_id,
+            source_direction=spec.source_direction,
+            meta=dict(spec.meta),
+        )
+
+    artifact, run = _resolve_source_artifact(tracker, spec)
+    resolved_path = _resolve_artifact_path(tracker, artifact=artifact, run=run)
+    if resolved_path is None:
+        raise ValueError(
+            "Could not resolve artifact path from Consist metadata for "
+            f"source_run_id={spec.source_run_id!r}, source_key={spec.source_key!r}."
+        )
+
+    artifact_meta = getattr(artifact, "meta", {})
+    merged_meta = dict(artifact_meta) if isinstance(artifact_meta, dict) else {}
+    merged_meta.update(dict(spec.meta))
+    resolved_key = spec.key or getattr(artifact, "key", None) or resolved_path.stem
+    resolved_family = (
+        spec.artifact_family
+        or merged_meta.get("artifact_family")
     )
+    resolved_driver = spec.driver or getattr(artifact, "driver", None)
+
+    return ArtifactIngestSpec(
+        path=resolved_path,
+        key=str(resolved_key),
+        direction=spec.direction,
+        driver=resolved_driver,
+        artifact_family=resolved_family,
+        source_run_id=spec.source_run_id,
+        source_key=spec.source_key,
+        source_artifact_id=spec.source_artifact_id,
+        source_direction=spec.source_direction,
+        meta=merged_meta,
+    )
+
+
+def _resolve_source_artifact(tracker: Any, spec: ArtifactIngestSpec) -> tuple[Any, Optional[Any]]:
+    artifact = None
+    run = None
+
+    if spec.source_artifact_id:
+        artifact = tracker.get_artifact(spec.source_artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact not found: {spec.source_artifact_id}")
+        run_id = getattr(artifact, "run_id", None) or spec.source_run_id
+        if run_id and hasattr(tracker, "get_run"):
+            run = tracker.get_run(str(run_id))
+        return artifact, run
+
+    if spec.source_run_id and spec.source_key:
+        artifact = _artifact_lookup_by_run_key(
+            tracker,
+            run_id=spec.source_run_id,
+            key=spec.source_key,
+            source_direction=spec.source_direction,
+        )
+        if artifact is None:
+            raise ValueError(
+                f"Artifact not found for run_id={spec.source_run_id!r} key={spec.source_key!r}."
+            )
+        if hasattr(tracker, "get_run"):
+            run = tracker.get_run(str(spec.source_run_id))
+        return artifact, run
+
+    raise ValueError(
+        "ArtifactIngestSpec requires either path or source reference fields "
+        "(source_artifact_id or source_run_id + source_key)."
+    )
+
+
+def _artifact_lookup_by_run_key(
+    tracker: Any,
+    *,
+    run_id: str,
+    key: str,
+    source_direction: str,
+) -> Any:
+    role = (source_direction or "output").strip().lower()
+    if role not in {"input", "output"}:
+        raise ValueError("source_direction must be 'input' or 'output'.")
+
+    artifacts_for_run = tracker.get_artifacts_for_run(run_id)
+    if role == "output":
+        artifact = (artifacts_for_run.outputs or {}).get(key)
+        if artifact is not None:
+            return artifact
+    else:
+        artifact = (artifacts_for_run.inputs or {}).get(key)
+        if artifact is not None:
+            return artifact
+
+    if role == "output":
+        found = tracker.find_artifacts(creator=run_id, key=key, limit=50)
+    else:
+        found = tracker.find_artifacts(consumer=run_id, key=key, limit=50)
+    return found[0] if found else None
+
+
+def _resolve_artifact_path(
+    tracker: Any,
+    *,
+    artifact: Any,
+    run: Optional[Any],
+) -> Optional[Path]:
+    if artifact is None:
+        return None
+
+    abs_path = getattr(artifact, "abs_path", None)
+    if isinstance(abs_path, (str, Path)) and str(abs_path).strip():
+        path = Path(abs_path).expanduser().resolve()
+        return path
+
+    if run is not None and hasattr(tracker, "resolve_historical_path"):
+        try:
+            path = Path(tracker.resolve_historical_path(artifact, run)).expanduser().resolve()
+            return path
+        except Exception:
+            pass
+
+    container_uri = str(getattr(artifact, "container_uri", "") or "").strip()
+    if container_uri and hasattr(tracker, "resolve_uri"):
+        try:
+            path = Path(tracker.resolve_uri(container_uri)).expanduser().resolve()
+            return path
+        except Exception:
+            return None
+    return None
 
 
 def _build_ingest_tags(

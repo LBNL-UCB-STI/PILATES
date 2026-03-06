@@ -14,6 +14,7 @@ from .handoff import (
     export_scenario_bundle,
     export_sql_query,
     ingest_artifacts as ingest_artifacts_core,
+    list_run_artifacts as list_run_artifacts_core,
 )
 from .epochs import (
     EpochPanel,
@@ -390,7 +391,7 @@ class AnalysisSession:
         run_config: Optional[Mapping[str, Any]] = None,
         ingest_data: bool = True,
         profile_schema: bool = True,
-    ) -> dict[str, Any]:
+        ) -> dict[str, Any]:
         return ingest_artifacts_core(
             self.tracker,
             artifact_specs,
@@ -405,6 +406,22 @@ class AnalysisSession:
             run_config=run_config,
             ingest_data=ingest_data,
             profile_schema=profile_schema,
+        )
+
+    def list_run_artifacts(
+        self,
+        *,
+        run_id: str,
+        direction: str = "output",
+        key_contains: Optional[str] = None,
+        artifact_family_prefix: Optional[str] = None,
+    ) -> pd.DataFrame:
+        return list_run_artifacts_core(
+            self.tracker,
+            run_id=run_id,
+            direction=direction,
+            key_contains=key_contains,
+            artifact_family_prefix=artifact_family_prefix,
         )
 
     def export_scenario_db(

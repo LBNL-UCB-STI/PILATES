@@ -25,6 +25,8 @@ from .handoff import (
     export_scenario_bundle,
     export_sql_query,
     ingest_artifacts,
+    list_run_artifacts,
+    parse_artifact_ref_arg,
 )
 from .runtime import (
     assert_run_tagging_consistent,
@@ -58,6 +60,8 @@ __all__ = [
     "export_scenario_bundle",
     "export_sql_query",
     "export_activitysim_inputs",
+    "list_run_artifacts",
+    "parse_artifact_ref_arg",
     "open_run",
     "inspect_run_tagging",
     "get_run_tagging_issues",

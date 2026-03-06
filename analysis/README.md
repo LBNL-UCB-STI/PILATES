@@ -188,6 +188,9 @@ Available commands:
   - Compares two run sets across `linkstats`, `asim_trips`, and/or `skims`, and computes config diffs for aligned run pairs.
 - `ingest-artifacts`
   - Creates an analysis run, logs selected files as artifacts, and optionally ingests them into DuckDB hot tables.
+  - Supports direct file specs (`--artifact key=/path/file`) and artifact refs (`--artifact-from-run RUN_ID:KEY`) to avoid manual URI/path lookup.
+- `list-run-artifacts`
+  - Lists run artifacts with resolved paths, so you can pick references for ingestion without CLI truncation pain.
 - `export-scenario-db`
   - Selects runs by scenario/filters and exports a standalone shard (`DatabaseMaintenance.export` wrapper).
 - `export-sql`
@@ -368,10 +371,18 @@ pilates-consist-analysis ingest-artifacts \
   --scenario-id baseline-2030 \
   --year 2030 \
   --iteration 3 \
-  --artifact trips=/scratch/archive/activitysim/trips.csv.gz \
-  --artifact persons=/scratch/archive/activitysim/persons.csv.gz \
-  --artifact-family trips \
-  --driver csv
+  --artifact-from-run RUN_ID_FOR_ASIM:trips \
+  --artifact-from-run RUN_ID_FOR_ASIM:persons
+```
+
+Resolve refs first (if needed):
+
+```bash
+pilates-consist-analysis list-run-artifacts \
+  --archive-run-dir /path/to/archive/run \
+  --project-root /Users/zaneedell/git/PILATES \
+  --run-id RUN_ID_FOR_ASIM \
+  --direction output
 ```
 
 Example scenario export to standalone DB:

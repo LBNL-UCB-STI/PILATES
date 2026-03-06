@@ -22,6 +22,22 @@ class FakeArtifact:
     key: str
     uri: str
     meta: dict
+    container_uri: str | None = None
+    abs_path: str | None = None
+    run_id: str | None = None
+    driver: str | None = None
+
+
+@dataclass
+class FakeRunArtifacts:
+    inputs: dict
+    outputs: dict
+
+
+@dataclass
+class FakeRunRecord:
+    id: str
+    meta: dict
 
 
 class FakeQueryResult:
@@ -45,9 +61,12 @@ class FakeDB:
 class FakeTracker:
     def __init__(self, frame: pd.DataFrame | None = None):
         self.db = FakeDB(frame if frame is not None else pd.DataFrame())
+        self.access_mode = "standard"
         self.started: list[dict] = []
         self.logged: list[dict] = []
         self.ingested: list[str] = []
+        self._run_artifacts: dict[str, FakeRunArtifacts] = {}
+        self._runs: dict[str, FakeRunRecord] = {}
 
     @contextmanager
     def start_run(self, run_id: str, model: str, **kwargs):
@@ -68,6 +87,10 @@ class FakeTracker:
             id=f"art-{len(self.logged)}",
             key=key,
             uri=f"workspace://{Path(path).name}",
+            container_uri=f"workspace://{Path(path).name}",
+            abs_path=str(Path(path).resolve()),
+            run_id=(self.started[-1]["run_id"] if self.started else None),
+            driver=driver,
             meta={"is_ingested": False},
         )
 
@@ -76,6 +99,21 @@ class FakeTracker:
         artifact.meta["is_ingested"] = True
         self.ingested.append(artifact.key)
         return {"ok": True}
+
+    def get_artifacts_for_run(self, run_id: str):
+        return self._run_artifacts.get(
+            run_id, FakeRunArtifacts(inputs={}, outputs={})
+        )
+
+    def get_run(self, run_id: str):
+        return self._runs.get(run_id)
+
+    def find_artifacts(self, creator=None, consumer=None, key=None, limit=50):
+        del creator, consumer, key, limit
+        return []
+
+    def resolve_uri(self, uri: str):
+        return uri
 
 
 class FakeRun:
@@ -118,6 +156,13 @@ def test_parse_artifact_arg_supports_key_equals_path():
     assert spec.artifact_family == "trips"
 
 
+def test_parse_artifact_ref_arg_supports_run_key_format():
+    spec = handoff.parse_artifact_ref_arg("run-123:trips")
+    assert spec.source_run_id == "run-123"
+    assert spec.source_key == "trips"
+    assert spec.path is None
+
+
 def test_ingest_artifacts_logs_and_ingests(tmp_path):
     csv_path = tmp_path / "trips.csv"
     csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -147,6 +192,43 @@ def test_ingest_artifacts_logs_and_ingests(tmp_path):
     assert tracker.logged[0]["key"] == "trips"
     assert tracker.logged[0]["meta"]["artifact_family"] == "trips"
     assert tracker.ingested == ["trips"]
+
+
+def test_ingest_artifacts_resolves_source_run_key(tmp_path):
+    csv_path = tmp_path / "trips.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    tracker = FakeTracker()
+    tracker._runs["source-run"] = FakeRunRecord(id="source-run", meta={})
+    tracker._run_artifacts["source-run"] = FakeRunArtifacts(
+        inputs={},
+        outputs={
+            "trips": FakeArtifact(
+                id="src-art-1",
+                key="trips",
+                uri="workspace://trips.csv",
+                container_uri="workspace://trips.csv",
+                abs_path=str(csv_path.resolve()),
+                run_id="source-run",
+                driver="csv",
+                meta={"artifact_family": "trips"},
+            )
+        },
+    )
+
+    payload = handoff.ingest_artifacts(
+        tracker,
+        [
+            handoff.ArtifactIngestSpec(
+                source_run_id="source-run",
+                source_key="trips",
+            )
+        ],
+        run_id="ingest-run",
+    )
+
+    assert payload["artifact_count"] == 1
+    assert tracker.logged[0]["path"] == str(csv_path.resolve())
+    assert tracker.logged[0]["meta"]["artifact_family"] == "trips"
 
 
 def test_ingest_artifacts_requires_standard_mode(tmp_path):
@@ -180,6 +262,33 @@ def test_export_sql_query_writes_csv(tmp_path):
     assert len(exported) == 1
     assert payload["row_count"] == 1
     assert tracker.db.sql_calls == ["SELECT * FROM v_trips"]
+
+
+def test_list_run_artifacts_resolves_paths(tmp_path):
+    csv_path = tmp_path / "trips.csv"
+    csv_path.write_text("a,b\n1,2\n", encoding="utf-8")
+    tracker = FakeTracker()
+    tracker._runs["run-1"] = FakeRunRecord(id="run-1", meta={})
+    tracker._run_artifacts["run-1"] = FakeRunArtifacts(
+        inputs={},
+        outputs={
+            "trips": FakeArtifact(
+                id="src-art-1",
+                key="trips",
+                uri="workspace://trips.csv",
+                container_uri="workspace://trips.csv",
+                abs_path=str(csv_path.resolve()),
+                run_id="run-1",
+                driver="csv",
+                meta={"artifact_family": "trips"},
+            )
+        },
+    )
+
+    frame = handoff.list_run_artifacts(tracker, run_id="run-1")
+    assert len(frame) == 1
+    assert frame.iloc[0]["key"] == "trips"
+    assert bool(frame.iloc[0]["path_exists"]) is True
 
 
 def test_export_scenario_bundle_uses_runset_and_export(monkeypatch, tmp_path):
@@ -267,3 +376,34 @@ def test_cli_export_sql_invokes_pipeline(monkeypatch, tmp_path):
     assert exit_code == 0
     assert called["sql"] == "SELECT 1"
     assert called["output_format"] == "csv"
+
+
+def test_cli_ingest_artifacts_accepts_artifact_from_run(monkeypatch, tmp_path):
+    parser = cli_module.build_parser()
+    args = parser.parse_args(
+        [
+            "ingest-artifacts",
+            "--archive-run-dir",
+            str(tmp_path / "archive"),
+            "--project-root",
+            str(tmp_path / "project"),
+            "--artifact-from-run",
+            "run-1:trips",
+        ]
+    )
+
+    monkeypatch.setattr(cli_module, "_build_tracker", lambda _args: object())
+    captured = {}
+
+    def _fake_ingest_artifacts(tracker, artifact_specs, **kwargs):
+        del tracker, kwargs
+        captured["artifact_specs"] = artifact_specs
+        return {"run_id": "ingest-run", "artifact_count": len(artifact_specs)}
+
+    monkeypatch.setattr(cli_module, "ingest_artifacts", _fake_ingest_artifacts)
+    exit_code = cli_module.cmd_ingest_artifacts(args)
+    assert exit_code == 0
+    assert len(captured["artifact_specs"]) == 1
+    spec = captured["artifact_specs"][0]
+    assert spec.source_run_id == "run-1"
+    assert spec.source_key == "trips"
