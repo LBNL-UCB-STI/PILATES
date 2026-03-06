@@ -102,6 +102,31 @@ def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
     return None
 
 
+def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
+    """
+    Discover top-level static ATLAS global inputs that must be present in mutable input.
+
+    Returns tuples of (absolute_source_path, label_for_logging).
+    """
+    patterns = (
+        ("*.csv", "CSV"),
+        ("*.RData", "RData"),
+        ("*.Rdat", "Rdat"),
+        ("*.rdata", "RData"),
+        ("*.rdat", "Rdat"),
+    )
+    discovered: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for pattern, label in patterns:
+        for path in glob.glob(os.path.join(global_source_dir, pattern)):
+            real = os.path.realpath(path)
+            if real in seen:
+                continue
+            seen.add(real)
+            discovered.append((real, label))
+    return discovered
+
+
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
@@ -328,39 +353,35 @@ class AtlasPreprocessor(GenericPreprocessor):
         settings = self.state.full_settings
 
         # --- Ensure global ATLAS input files are present for every year ---
-        # Source for global files (e.g., cpi.csv, RData files)
+        # Source for global files (e.g., cpi.csv, RData/Rdat files)
         global_source_dir = "pilates/atlas/atlas_input"
+        if not os.path.isabs(global_source_dir):
+            project_root = find_project_root(start_path=os.path.dirname(__file__))
+            if not project_root:
+                project_root = os.path.realpath(os.getcwd())
+                logger.warning(
+                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
+                    "falling back to cwd='%s'.",
+                    project_root,
+                )
+            global_source_dir = os.path.join(project_root, global_source_dir)
+
         # Destination for global files in the current run's mutable directory
         current_atlas_mutable_input_root = workspace.get_atlas_mutable_input_dir()
 
-        # Copy global CSV files
-        for f in glob.glob(os.path.join(global_source_dir, "*.csv")):
+        # Copy global top-level ATLAS files, including legacy *.Rdat.
+        for f, label in _discover_global_atlas_input_files(global_source_dir):
             dest_path = os.path.realpath(
                 os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
             )
             if not os.path.exists(dest_path):
                 shutil.copy(f, dest_path)
                 logger.info(
-                    f"[AtlasPreprocessor] Copied global CSV file: {f} to {dest_path}"
+                    f"[AtlasPreprocessor] Copied global {label} file: {f} to {dest_path}"
                 )
             else:
                 logger.debug(
-                    f"[AtlasPreprocessor] Global CSV file already exists: {dest_path}"
-                )
-
-        # Copy global RData files
-        for f in glob.glob(os.path.join(global_source_dir, "*.RData")):
-            dest_path = os.path.realpath(
-                os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
-            )
-            if not os.path.exists(dest_path):
-                shutil.copy(f, dest_path)
-                logger.info(
-                    f"[AtlasPreprocessor] Copied global RData file: {f} to {dest_path}"
-                )
-            else:
-                logger.debug(
-                    f"[AtlasPreprocessor] Global RData file already exists: {dest_path}"
+                    f"[AtlasPreprocessor] Global {label} file already exists: {dest_path}"
                 )
 
         # --- End Global File Handling ---
