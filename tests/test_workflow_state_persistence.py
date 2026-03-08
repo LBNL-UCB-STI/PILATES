@@ -123,6 +123,39 @@ def test_state_resume_after_interruption(tmp_path):
     assert resumed.sub_stage_progress == "preprocess"
 
 
+def test_state_resume_maps_supply_demand_substage_into_major_and_substage(tmp_path):
+    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    state_path = settings.state_file_loc
+    with open(state_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {
+                "year": 2017,
+                "stage": "activity_demand",
+                "iteration": 0,
+                "asim_compiled": False,
+                "sub_stage_progress": None,
+                "run_info_path": str(tmp_path / "run_state.yaml"),
+                "data_initialized": True,
+            },
+            handle,
+        )
+
+    resumed = WorkflowState.from_settings(settings)
+
+    assert resumed.current_year == 2017
+    assert resumed.current_major_stage == WorkflowState.Stage.supply_demand_loop
+    assert resumed.current_sub_stage == WorkflowState.Stage.activity_demand
+    assert resumed.should_run(
+        WorkflowState.Stage.supply_demand_loop,
+        target_inner_iter=0,
+        target_sub_stage=WorkflowState.Stage.activity_demand,
+    )
+    assert not resumed.should_run(WorkflowState.Stage.land_use)
+
+
 def test_state_write_mirrors_to_secondary_path(tmp_path):
     settings = _make_settings(tmp_path)
     state = WorkflowState.from_settings(settings)

@@ -265,6 +265,17 @@ class WorkflowState:
             data_initialized,
         ] = cls.read_current_stage(file_loc)
 
+        resume_major_stage = stage
+        resume_sub_stage = None
+        loop_stage_aliases = {
+            cls.Stage.activity_demand,
+            cls.Stage.activity_demand_directly_from_land_use,
+            cls.Stage.traffic_assignment,
+        }
+        if stage in loop_stage_aliases:
+            resume_major_stage = cls.Stage.supply_demand_loop
+            resume_sub_stage = stage
+
         year = year or start_year
 
         out = cls(
@@ -277,9 +288,9 @@ class WorkflowState:
             traffic_assignment_enabled,
             replanning_enabled,
             year,
-            stage,
+            resume_major_stage,
             iteration,
-            None,
+            resume_sub_stage,
             file_loc,
             asim_compiled,
             settings,
@@ -420,10 +431,13 @@ class WorkflowState:
                 target_idx = self.major_stage_order.index(target_major)
                 return current_idx == target_idx
             except ValueError:
-                logger.warning(
-                    f"Target major stage {target_major.name} not found in order, allowing run"
+                logger.error(
+                    "State inconsistency: current major stage %s or target stage %s "
+                    "not found in major_stage_order; refusing run.",
+                    self.current_major_stage.name if self.current_major_stage else None,
+                    target_major.name if target_major else None,
                 )
-                return True
+                return False
 
         # For substages within the supply-demand loop
         if target_sub_stage is not None:
