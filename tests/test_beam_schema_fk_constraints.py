@@ -6,6 +6,7 @@ from pilates.database.schema.beam_schema import (
     PlansBeamIn,
     VehiclesBeamIn,
 )
+from pilates.database.schema.activitysim_schema import BeamPlansAsimOut
 
 
 def _table_arg_fk_targets(model_cls):
@@ -46,3 +47,22 @@ def test_plans_beam_in_trip_id_points_to_trips_asim_out() -> None:
     trip_col = PlansBeamIn.model_fields["trip_id"].sa_column
     fk_targets = {str(fk.target_fullname) for fk in trip_col.foreign_keys}
     assert "tripsAsimOut.trip_id" in fk_targets
+
+
+def test_plans_beam_in_tour_id_points_to_tours_asim_out() -> None:
+    tour_col = PlansBeamIn.model_fields["tour_id"].sa_column
+    fk_targets = {str(fk.target_fullname) for fk in tour_col.foreign_keys}
+    assert "ToursAsimOut.tour_id" in fk_targets
+
+
+def test_beam_plans_asim_out_bridges_trip_and_tour_ids() -> None:
+    trip_targets = {
+        str(fk.target_fullname)
+        for fk in BeamPlansAsimOut.model_fields["trip_id"].sa_column.foreign_keys
+    }
+    tour_targets = {
+        str(fk.target_fullname)
+        for fk in BeamPlansAsimOut.model_fields["tour_id"].sa_column.foreign_keys
+    }
+    assert "tripsAsimOut.trip_id" in trip_targets
+    assert "ToursAsimOut.tour_id" in tour_targets

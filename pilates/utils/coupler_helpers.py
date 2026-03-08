@@ -1110,6 +1110,16 @@ def _log_with_optional_h5_container(
     requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        if tables_used:
+            normalized_paths = sorted(
+                {
+                    name if str(name).startswith("/") else f"/{name}"
+                    for name in tables_used
+                    if name
+                }
+            )
+            meta.setdefault("h5_table_paths", normalized_paths)
+            meta.setdefault("h5_table_count", len(normalized_paths))
         base_filter = (
             _h5_table_filter_from_list(tables_used)
             if tables_used

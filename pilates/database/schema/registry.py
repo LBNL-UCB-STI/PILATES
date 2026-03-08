@@ -12,6 +12,7 @@ from pilates.database.schema.activitysim_schema import (
     LandUseAsimIn,
     PersonsAsimIn,
     PersonsAsimOut,
+    ToursAsimOut,
     TripsAsimOut,
 )
 from pilates.database.schema.atlas_schema import (
@@ -56,6 +57,7 @@ _SCHEMA_BY_KEY: Dict[str, Type[SQLModel]] = {
     "persons_asim_in": PersonsAsimIn,
     "households_asim_out": HouseholdsAsimOut,
     "persons_asim_out": PersonsAsimOut,
+    "tours_asim_out": ToursAsimOut,
     "beam_plans_asim_out": BeamPlansAsimOut,
     "trips_asim_out": TripsAsimOut,
     "households_beam_in": HouseholdsBeamIn,

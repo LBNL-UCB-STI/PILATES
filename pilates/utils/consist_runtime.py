@@ -201,6 +201,11 @@ def log_h5_container(
     Falls back to log_input/log_output if the Tracker method is unavailable.
     """
     resolved_enabled = _is_enabled(enabled)
+    if key and "schema" not in meta:
+        schema = _schema_for_key(key)
+        if schema is not None:
+            meta = {**meta, "schema": schema}
+    meta = _with_declared_schema_meta(meta)
     if not resolved_enabled:
         return (
             log_output(path, key=key, enabled=False, **meta)
@@ -231,6 +236,11 @@ def log_h5_table(
     if the Tracker method is unavailable.
     """
     resolved_enabled = _is_enabled(enabled)
+    if key and "schema" not in meta:
+        schema = _schema_for_key(key)
+        if schema is not None:
+            meta = {**meta, "schema": schema}
+    meta = _with_declared_schema_meta(meta)
     if not resolved_enabled:
         return (
             log_output(path, key=key, enabled=False, **meta)

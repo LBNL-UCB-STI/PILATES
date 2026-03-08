@@ -227,6 +227,48 @@ def test_log_output_persons_asim_out_key_attaches_schema(monkeypatch):
     assert meta["schema"].__name__ == "PersonsAsimOut"
 
 
+def test_log_output_tours_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "tours_asim_out"
+    cr.log_output("/tmp/tours.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "ToursAsimOut"
+
+
+def test_log_h5_table_attaches_declared_schema_metadata(monkeypatch):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    artifact = cr.log_h5_table(
+        "/tmp/data.h5",
+        key="tours_asim_out",
+        table_path="/2030/tours",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact is not None
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "tours_asim_out"
+    assert table_path == "/2030/tours"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "ToursAsimOut"
+    assert meta["declared_schema_class"] == "ToursAsimOut"
+    assert meta["declared_schema_table"] == "ToursAsimOut"
+
+
 def test_log_output_beam_plans_asim_out_key_attaches_schema(monkeypatch):
     calls = []
     _install_consist_stub(monkeypatch, calls)
@@ -349,3 +391,17 @@ def test_log_output_warns_when_schema_fk_target_not_registered(monkeypatch, capl
 
     assert calls
     assert "target table is not registered in schema registry" in caplog.text
+
+
+def test_log_output_trips_asim_out_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/trips.parquet", key="trips_asim_out", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "trips_asim_out"
+    assert meta["schema"].__name__ == "TripsAsimOut"
+    assert "target table is not registered in schema registry" not in caplog.text

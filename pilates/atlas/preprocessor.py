@@ -127,6 +127,58 @@ def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str
     return discovered
 
 
+def _atlas_static_input_metadata(
+    *,
+    relpath: str,
+    settings,
+    source_origin: str,
+    source_path: str,
+) -> Dict[str, object]:
+    normalized_relpath = relpath.replace("\\", "/")
+    filename = os.path.basename(normalized_relpath)
+    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
+    scenario_value = str(scenario_name) if scenario_name is not None else None
+
+    input_group = "global"
+    selected_scenario = scenario_value.lower() if scenario_value else None
+    input_year = None
+    compact_key = normalized_relpath.replace("/", "_")
+    compact_stem = os.path.splitext(compact_key)[0]
+
+    if normalized_relpath.startswith("adopt/"):
+        input_group = "adopt"
+        parts = normalized_relpath.split("/")
+        if len(parts) >= 2:
+            selected_scenario = parts[1]
+    elif compact_key.startswith("vehicle_type_mapping_"):
+        input_group = "vehicle_type_mapping"
+        if "baseline" in compact_key:
+            selected_scenario = "baseline"
+        elif "evMandForced2" in compact_key:
+            selected_scenario = "zev_mandate"
+        elif "ESS_const_220_price" in compact_key:
+            selected_scenario = "ess_cons"
+
+    tail = compact_stem.rsplit("_", 1)
+    if len(tail) == 2 and len(tail[1]) == 4 and tail[1].isdigit():
+        input_year = int(tail[1])
+
+    metadata: Dict[str, object] = {
+        "atlas_static_input": True,
+        "atlas_relpath": normalized_relpath,
+        "atlas_source_origin": source_origin,
+        "atlas_source_path": os.path.realpath(source_path),
+        "atlas_input_group": input_group,
+    }
+    if selected_scenario:
+        metadata["atlas_scenario"] = selected_scenario
+    if input_year is not None:
+        metadata["atlas_input_year"] = input_year
+    if filename.lower().endswith(".csv"):
+        metadata["profile_file_schema"] = True
+    return metadata
+
+
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
@@ -337,9 +389,14 @@ class AtlasPreprocessor(GenericPreprocessor):
             short_name = sanitize_artifact_key(rel_key) or rel_key
             filename = os.path.basename(normalized_relpath)
 
-            input_meta = {}
-            if filename.lower().endswith(".csv"):
-                input_meta["profile_file_schema"] = True
+            input_meta = _atlas_static_input_metadata(
+                relpath=normalized_relpath,
+                settings=settings,
+                source_origin=(
+                    "fallback" if source_base is not None and source_base != source_dir else "primary"
+                ),
+                source_path=source_path,
+            )
             input_records.append(
                 FileRecord(
                     file_path=source_path,

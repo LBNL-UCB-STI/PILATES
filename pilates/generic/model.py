@@ -68,6 +68,12 @@ def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
         meta = dict(getattr(record, "metadata", None) or {})
         if tables_used:
             table_filter = _h5_table_filter_from_list(tables_used)
+            normalized_tables = sorted(
+                {_normalize_h5_table_name(name) for name in tables_used if name}
+            )
+            if normalized_tables:
+                meta.setdefault("h5_table_paths", normalized_tables)
+                meta.setdefault("h5_table_count", len(normalized_tables))
             cr.log_h5_container(
                 path,
                 key=key,

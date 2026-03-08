@@ -60,6 +60,21 @@ def test_copy_data_to_mutable_location_uses_fallback_source_for_missing_required
     }
     assert set(required_relpaths) <= output_paths
 
+    inputs_by_key = {record.short_name: record for record in _inputs.all_records()}
+    psid_record = inputs_by_key["psid_names"]
+    assert psid_record.metadata["atlas_static_input"] is True
+    assert psid_record.metadata["atlas_relpath"] == "psid_names.Rdat"
+    assert psid_record.metadata["atlas_source_origin"] == "fallback"
+    assert psid_record.metadata["atlas_input_group"] == "global"
+
+    adopt_record = inputs_by_key["adopt/zev_mandate/new_vehicles_biannual_values_2021"]
+    assert adopt_record.metadata["atlas_static_input"] is True
+    assert adopt_record.metadata["atlas_source_origin"] == "fallback"
+    assert adopt_record.metadata["atlas_input_group"] == "adopt"
+    assert adopt_record.metadata["atlas_scenario"] == "zev_mandate"
+    assert adopt_record.metadata["atlas_input_year"] == 2021
+    assert adopt_record.metadata["profile_file_schema"] is True
+
 
 def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
     tmp_path, monkeypatch

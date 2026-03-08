@@ -171,7 +171,13 @@ class PlansBeamIn(SQLModel, table=True):
     tour_id: Optional[int] = Field(
         default=None,
         description="Tour identifier in ActivitySim outputs.",
-        sa_column=Column("tour_id", BigInteger, nullable=True, index=True),
+        sa_column=Column(
+            "tour_id",
+            BigInteger,
+            ForeignKey("ToursAsimOut.tour_id"),
+            nullable=True,
+            index=True,
+        ),
     )
     trip_id: Optional[int] = Field(
         default=None,

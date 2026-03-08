@@ -520,6 +520,10 @@ def _restore_restart_workspace_atlas_registry(
         metadata = {}
         if local_path.lower().endswith(".csv"):
             metadata["profile_file_schema"] = True
+        metadata["atlas_static_input"] = True
+        metadata["atlas_relpath"] = normalized_relpath
+        metadata["atlas_source_origin"] = "restart_local"
+        metadata["atlas_source_path"] = os.path.realpath(local_path)
         records.append(
             FileRecord(
                 file_path=local_path,

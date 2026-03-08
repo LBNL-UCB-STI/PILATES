@@ -189,6 +189,16 @@ def _log_record_store(
             meta["profile_file_schema"] = "if_changed"
         tables_used = getattr(record, "h5_tables_used", None)
         if tables_used:
+            normalized_tables = sorted(
+                {
+                    name if name.startswith("/") else f"/{name}"
+                    for name in tables_used
+                    if name
+                }
+            )
+            if normalized_tables:
+                meta["h5_table_paths"] = normalized_tables
+                meta["h5_table_count"] = len(normalized_tables)
             artifact = cr.log_h5_container(
                 path,
                 key=key,

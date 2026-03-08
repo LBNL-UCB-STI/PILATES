@@ -73,3 +73,21 @@ def test_h5_container_filter_excludes_flattened_pandas_internal_names(monkeypatc
     assert table_filter("/2023/households") is True
     assert table_filter("/axis1") is False
     assert table_filter("/2023/travel_data_axis1_level0") is False
+
+
+def test_log_output_only_preserves_h5_table_paths_metadata(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    ch.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/data.h5",
+        description="test",
+        h5_tables_used=["households", "/2023/persons"],
+    )
+
+    assert calls
+    assert calls[0][0] == "h5_container"
+    meta = calls[0][3]
+    assert meta["h5_table_paths"] == ["/2023/persons", "/households"]
+    assert meta["h5_table_count"] == 2
