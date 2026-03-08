@@ -39,6 +39,8 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "zarr_skims_*",
     "asim_input_skims_zarr_archived",
     ASIM_SHARROW_CACHE_DIR,
+    "activitysim_bootstrap_data_root",
+    "activitysim_bootstrap_configs_root",
     "atlas_input_year_dir",
     "atlas_input_year_dir_*",
 )

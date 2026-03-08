@@ -220,6 +220,74 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     assert result["manifest_reference"] == {"probe_run_id": "bootstrap_off"}
 
 
+def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monkeypatch, tmp_path):
+    class BootstrapInit:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, _settings, workspace):
+            os.makedirs(workspace.get_usim_mutable_data_dir(), exist_ok=True)
+            os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
+            os.makedirs(workspace.get_asim_mutable_configs_dir(), exist_ok=True)
+            Path(workspace.get_usim_mutable_data_dir(), "usim_000.h5").write_text("h5")
+            Path(workspace.get_asim_mutable_data_dir(), "households.csv").write_text("hh")
+            Path(workspace.get_asim_mutable_configs_dir(), "configs").mkdir(parents=True, exist_ok=True)
+            rec = RecordStore(
+                recordList=[
+                    FileRecord(unique_id="out1", short_name="bootstrap_out", file_path="/tmp/dest")
+                ]
+            )
+            return rec
+
+    monkeypatch.setattr(run_module, "Initialization", BootstrapInit)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    enqueued = []
+    flushed = []
+    monkeypatch.setattr(
+        run_module,
+        "enqueue_archive_copy",
+        lambda *, key, path, workspace=None: enqueued.append((key, path)),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: flushed.append((timeout, fail_on_timeout)) or True,
+    )
+
+    tracker = DummyTracker(
+        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}]
+    )
+    workspace = DummyWorkspace(str(tmp_path / "workspace"))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            bootstrap_cache_enabled=True,
+            region="test",
+            models=SimpleNamespace(activity_demand="activitysim"),
+        ),
+        activitysim=SimpleNamespace(main_configs_dir="configs"),
+        urbansim=SimpleNamespace(
+            region_mappings={"region_to_region_id": {"test": "000"}},
+            input_file_template="usim_{region_id}.h5",
+        ),
+    )
+    state = SimpleNamespace(start_year=2017)
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        scenario_id="test-scenario",
+        seed=None,
+    )
+
+    assert ("bootstrap_usim_datastore_base_h5", os.path.join(workspace.get_usim_mutable_data_dir(), "usim_000.h5")) in enqueued
+    assert ("activitysim_bootstrap_data_root", workspace.get_asim_mutable_data_dir()) in enqueued
+    assert ("activitysim_bootstrap_configs_root", workspace.get_asim_mutable_configs_dir()) in enqueued
+    assert flushed == [(300, True)]
+
+
 def test_bootstrap_output_invariant_accepts_valid_result():
     run_module._assert_bootstrap_output_invariant(
         {

@@ -165,6 +165,38 @@ def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tm
     assert archived.read_text() == "cache"
 
 
+@pytest.mark.parametrize(
+    "key, relpath",
+    [
+        ("activitysim_bootstrap_data_root", "activitysim/data/households.csv"),
+        ("activitysim_bootstrap_configs_root", "activitysim/configs/configs/settings.yaml"),
+    ],
+)
+def test_archive_copy_allows_activitysim_bootstrap_runtime_directories(
+    monkeypatch, tmp_path, key, relpath
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    path = local_root / relpath
+    _write_file(path, "bootstrap")
+
+    directory = path.parent if path.name != "households.csv" else local_root / "activitysim" / "data"
+    if key == "activitysim_bootstrap_configs_root":
+        directory = local_root / "activitysim" / "configs"
+
+    ch._enqueue_archive_copy(key, str(directory))
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    archived = archive_root / relpath
+    assert archived.exists()
+    assert archived.read_text() == "bootstrap"
+
+
 def test_archive_copy_allows_atlas_year_input_directory(monkeypatch, tmp_path):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"

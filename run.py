@@ -42,7 +42,11 @@ from pilates.utils.consist_db_snapshot import (
     seed_local_consist_db_from_shared,
     snapshot_latest_dir,
 )
-from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
+from pilates.utils.coupler_helpers import (
+    enqueue_archive_copy,
+    flush_archive_queue,
+    stop_archive_worker,
+)
 from pilates.utils.restart_bundle import (
     build_restart_bundle_manifest,
     manifest_entries_to_local_artifacts,
@@ -642,6 +646,54 @@ def _build_bootstrap_manifest_reference(
     return reference
 
 
+def _archive_bootstrap_restart_artifacts(
+    *,
+    settings: Any,
+    workspace: Workspace,
+) -> None:
+    """
+    Durably archive bootstrap-created local runtime state needed for restart.
+
+    This is intentionally narrow and correctness-oriented. These paths are part
+    of the mutable runtime contract that restart preflight expects to be
+    restorable from the archive run tree.
+    """
+    run_cfg = getattr(settings, "run", None)
+    model_cfg = getattr(run_cfg, "models", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if (
+        run_cfg is not None
+        and getattr(run_cfg, "region", None)
+        and urbansim_cfg is not None
+    ):
+        usim_base_path = os.path.join(
+            workspace.get_usim_mutable_data_dir(),
+            get_usim_datastore_fname(settings, io="input"),
+        )
+        if os.path.exists(usim_base_path):
+            enqueue_archive_copy(
+                key="bootstrap_usim_datastore_base_h5",
+                path=usim_base_path,
+            )
+
+    if getattr(model_cfg, "activity_demand", None) == "activitysim":
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
+        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
+
+        if os.path.isdir(asim_data_dir):
+            enqueue_archive_copy(
+                key="activitysim_bootstrap_data_root",
+                path=asim_data_dir,
+            )
+        if os.path.isdir(asim_configs_dir):
+            enqueue_archive_copy(
+                key="activitysim_bootstrap_configs_root",
+                path=asim_configs_dir,
+            )
+
+    flush_archive_queue(timeout=300, fail_on_timeout=True)
+
+
 def run_bootstrap_phase(
     *,
     tracker: Any,
@@ -713,6 +765,10 @@ def run_bootstrap_phase(
         )
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+        _archive_bootstrap_restart_artifacts(
+            settings=settings,
+            workspace=workspace,
+        )
         return {
             "bootstrap_cache_hit": False,
             "staged_artifact_summary": staged_artifact_summary,
@@ -735,6 +791,10 @@ def run_bootstrap_phase(
         )
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+        _archive_bootstrap_restart_artifacts(
+            settings=settings,
+            workspace=workspace,
+        )
         return {
             "bootstrap_cache_hit": True,
             "staged_artifact_summary": staged_artifact_summary,
@@ -749,6 +809,10 @@ def run_bootstrap_phase(
     logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
     if not staged_artifact_summary:
         staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+    _archive_bootstrap_restart_artifacts(
+        settings=settings,
+        workspace=workspace,
+    )
     return {
         "bootstrap_cache_hit": False,
         "staged_artifact_summary": staged_artifact_summary,
