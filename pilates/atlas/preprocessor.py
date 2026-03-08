@@ -17,6 +17,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.utils import consist_runtime as cr
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
@@ -662,6 +663,17 @@ class AtlasPreprocessor(GenericPreprocessor):
                 )
                 try:
                     table_data = data[resolved_table_name]
+                    cr.log_h5_table(
+                        urbansim_output,
+                        key=f"atlas_preprocess_usim_{table_name_root}_table_input",
+                        table_path=resolved_table_name,
+                        direction="input",
+                        description=(
+                            f"UrbanSim {table_name_root} table consumed by ATLAS preprocess"
+                        ),
+                        profile_file_schema=True,
+                        h5_table_name=table_name_root,
+                    )
                     output_csv_path = f"{atlas_input_path}/{output_csv_name}.csv"
                     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
                     _export_atlas_table_to_csv(

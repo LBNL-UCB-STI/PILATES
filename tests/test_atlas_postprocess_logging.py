@@ -28,6 +28,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     output_logger = captured["output_logger"]
     output_only_keys = []
     set_output_keys = []
+    h5_table_calls = []
 
     def _log_output_only(*, key, path, description, **meta):
         output_only_keys.append(key)
@@ -40,6 +41,11 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         steps_urbansim_atlas,
         "log_and_set_output",
         _log_and_set_output,
+    )
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        lambda **kwargs: h5_table_calls.append(kwargs),
     )
 
     h5_path = tmp_path / "model_data_2023.h5"
@@ -59,13 +65,18 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     output_logger(
         outputs,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(forecast_year=2023),
+        state=SimpleNamespace(forecast_year=2023, is_start_year=lambda: False),
         workspace=SimpleNamespace(),
         holder=SimpleNamespace(),
     )
 
     assert output_only_keys == ["atlas_vehicles2_output"]
     assert set_output_keys == ["usim_datastore_h5"]
+    assert len(h5_table_calls) == 1
+    assert h5_table_calls[0]["direction"] == "output"
+    assert h5_table_calls[0]["table_keys"] == {
+        "/2023/households": "atlas_postprocess_usim_households_table_updated"
+    }
 
 
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
@@ -88,11 +99,17 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
 
     input_logger = captured["input_logger"]
     calls = []
+    h5_table_calls = []
 
     def _log_input_only(*, key, path, description, **meta):
         calls.append((key, path, meta))
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        lambda **kwargs: h5_table_calls.append(kwargs),
+    )
 
     usim_path = tmp_path / "model_data_2023.h5"
     usim_path.write_text("x")
@@ -102,7 +119,7 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
     )
-    state = SimpleNamespace(forecast_year=2023)
+    state = SimpleNamespace(forecast_year=2023, is_start_year=lambda: False)
 
     input_logger(
         settings=settings,
@@ -115,6 +132,11 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
+    assert len(h5_table_calls) == 1
+    assert h5_table_calls[0]["direction"] == "input"
+    assert h5_table_calls[0]["table_keys"] == {
+        "/2023/households": "atlas_postprocess_usim_households_table_input"
+    }
 
 
 def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, tmp_path):

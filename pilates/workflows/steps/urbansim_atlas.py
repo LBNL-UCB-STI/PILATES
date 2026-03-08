@@ -28,6 +28,7 @@ from .shared import (
     _execute_preprocess,
     _execute_urbansim_postprocess,
     _execute_urbansim_run,
+    _log_named_h5_tables,
     _log_step_records,
     _make_generic_step_function,
     _urbansim_output_facet_meta,
@@ -459,6 +460,23 @@ def make_atlas_postprocess_step(
                     USIM_DATASTORE_H5, forecast_year=state.forecast_year
                 ),
             )
+            households_table_path = (
+                "/households"
+                if state.is_start_year()
+                else f"/{state.forecast_year}/households"
+            )
+            _log_named_h5_tables(
+                path=usim_output_path,
+                direction="input",
+                table_keys={
+                    households_table_path: "atlas_postprocess_usim_households_table_input"
+                },
+                description_by_table={
+                    households_table_path: (
+                        "UrbanSim households table consumed by ATLAS postprocess"
+                    )
+                },
+            )
         return {}
 
     def _log_outputs(
@@ -492,6 +510,23 @@ def make_atlas_postprocess_step(
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=state.forecast_year
                 ),
+            )
+            households_table_path = (
+                "/households"
+                if state.is_start_year()
+                else f"/{state.forecast_year}/households"
+            )
+            _log_named_h5_tables(
+                path=str(outputs.usim_datastore_h5),
+                direction="output",
+                table_keys={
+                    households_table_path: "atlas_postprocess_usim_households_table_updated"
+                },
+                description_by_table={
+                    households_table_path: (
+                        "UrbanSim households table updated by ATLAS postprocess"
+                    )
+                },
             )
 
     return _make_generic_step_function(

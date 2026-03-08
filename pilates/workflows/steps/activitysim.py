@@ -40,6 +40,7 @@ from .shared import (
     _execute_postprocess,
     _execute_preprocess,
     _execute_run,
+    _log_named_h5_tables,
     _log_step_records,
     _make_generic_step_function,
     artifact_to_path,
@@ -308,6 +309,18 @@ def make_activitysim_preprocess_step(
                 "jobs",
                 "blocks",
             ]
+            table_keys = {
+                "/households": "activitysim_preprocess_usim_households_table_input",
+                "/persons": "activitysim_preprocess_usim_persons_table_input",
+                "/jobs": "activitysim_preprocess_usim_jobs_table_input",
+                "/blocks": "activitysim_preprocess_usim_blocks_table_input",
+            }
+            table_descriptions = {
+                "/households": "UrbanSim households table used by ActivitySim preprocess",
+                "/persons": "UrbanSim persons table used by ActivitySim preprocess",
+                "/jobs": "UrbanSim jobs table used by ActivitySim preprocess",
+                "/blocks": "UrbanSim blocks table used by ActivitySim preprocess",
+            }
             start_year = state.start_year
             if start_year is not None:
                 h5_tables_used.extend(
@@ -318,6 +331,38 @@ def make_activitysim_preprocess_step(
                         f"/{start_year}/blocks",
                     ]
                 )
+                table_keys.update(
+                    {
+                        f"/{start_year}/households": (
+                            "activitysim_preprocess_usim_households_table_start_year_input"
+                        ),
+                        f"/{start_year}/persons": (
+                            "activitysim_preprocess_usim_persons_table_start_year_input"
+                        ),
+                        f"/{start_year}/jobs": (
+                            "activitysim_preprocess_usim_jobs_table_start_year_input"
+                        ),
+                        f"/{start_year}/blocks": (
+                            "activitysim_preprocess_usim_blocks_table_start_year_input"
+                        ),
+                    }
+                )
+                table_descriptions.update(
+                    {
+                        f"/{start_year}/households": (
+                            "UrbanSim start-year households table used by ActivitySim preprocess"
+                        ),
+                        f"/{start_year}/persons": (
+                            "UrbanSim start-year persons table used by ActivitySim preprocess"
+                        ),
+                        f"/{start_year}/jobs": (
+                            "UrbanSim start-year jobs table used by ActivitySim preprocess"
+                        ),
+                        f"/{start_year}/blocks": (
+                            "UrbanSim start-year blocks table used by ActivitySim preprocess"
+                        ),
+                    }
+                )
             log_and_set_input(
                 key=input_key,
                 path=usim_path,
@@ -326,6 +371,12 @@ def make_activitysim_preprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 h5_tables_used=h5_tables_used,
+            )
+            _log_named_h5_tables(
+                path=usim_path,
+                direction="input",
+                table_keys=table_keys,
+                description_by_table=table_descriptions,
             )
         return {}
 
@@ -646,6 +697,18 @@ def make_activitysim_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+            )
+            _log_named_h5_tables(
+                path=str(outputs.usim_datastore_h5),
+                direction="output",
+                table_keys={
+                    "/households": "activitysim_postprocess_usim_households_table_updated",
+                    "/persons": "activitysim_postprocess_usim_persons_table_updated",
+                },
+                description_by_table={
+                    "/households": "UrbanSim households table updated by ActivitySim postprocess",
+                    "/persons": "UrbanSim persons table updated by ActivitySim postprocess",
+                },
             )
 
     return _make_generic_step_function(
