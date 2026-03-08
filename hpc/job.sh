@@ -75,6 +75,9 @@ echo "=========================="
 
 # --- 6. Run Python Script ---
 # 'python' now refers to the binary inside PILATES-env
+# dlt 1.19.x reads the runtime section directly from RUNTIME__* env vars.
+# Keep the older DLT__* form as well for compatibility with older installs.
+export RUNTIME__DLTHUB_TELEMETRY=false
 export DLT__RUNTIME__DLTHUB_TELEMETRY=false
 
 # Cap implicit native thread pools used by NumPy/BLAS/OpenMP-backed libraries.
