@@ -203,6 +203,7 @@ from typing import (
     TypeVar,
 )
 
+import h5py
 from consist import define_step
 
 from pilates.generic.model_factory import ModelFactory
@@ -395,31 +396,42 @@ def _log_named_h5_tables(
         Callback returning extra metadata for each `(artifact_key, table_path)`.
     """
     description_by_table = description_by_table or {}
-    for table_path, artifact_key in table_keys.items():
-        normalized_path = (
-            table_path if str(table_path).startswith("/") else f"/{table_path}"
-        )
-        meta: Dict[str, Any] = {
-            "profile_file_schema": True,
-            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0]
-            if "_table_" in artifact_key
-            else artifact_key,
-            "h5_table_name": normalized_path.split("/")[-1],
-        }
-        if extra_meta_fn is not None:
-            extra_meta = extra_meta_fn(artifact_key, normalized_path)
-            if extra_meta:
-                meta.update(extra_meta)
-        cr.log_h5_table(
-            path,
-            key=artifact_key,
-            table_path=normalized_path,
-            direction=direction,
-            description=description_by_table.get(
-                table_path, f"HDF5 table {normalized_path}"
-            ),
-            **meta,
-        )
+    try:
+        with h5py.File(path, "r") as h5_file:
+            for table_path, artifact_key in table_keys.items():
+                normalized_path = (
+                    table_path if str(table_path).startswith("/") else f"/{table_path}"
+                )
+                if normalized_path not in h5_file:
+                    logger.debug(
+                        "Skipping HDF5 table log for missing dataset %s in %s",
+                        normalized_path,
+                        path,
+                    )
+                    continue
+                meta: Dict[str, Any] = {
+                    "profile_file_schema": True,
+                    "h5_parent_key": artifact_key.rsplit("_table_", 1)[0]
+                    if "_table_" in artifact_key
+                    else artifact_key,
+                    "h5_table_name": normalized_path.split("/")[-1],
+                }
+                if extra_meta_fn is not None:
+                    extra_meta = extra_meta_fn(artifact_key, normalized_path)
+                    if extra_meta:
+                        meta.update(extra_meta)
+                cr.log_h5_table(
+                    path,
+                    key=artifact_key,
+                    table_path=normalized_path,
+                    direction=direction,
+                    description=description_by_table.get(
+                        table_path, f"HDF5 table {normalized_path}"
+                    ),
+                    **meta,
+                )
+    except OSError:
+        logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
 
 
 def _parse_prefixed_iteration_key(short_name: str, prefix: str) -> Optional[Dict[str, Any]]:
