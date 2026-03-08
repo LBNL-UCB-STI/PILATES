@@ -14,8 +14,9 @@ from workflow_state import WorkflowState
 
 
 class DummyWorkspace:
-    def __init__(self, full_path="/tmp/bootstrap"):
+    def __init__(self, full_path="/tmp/bootstrap", settings=None):
         self.full_path = full_path
+        self.settings = settings
         self.input_data = {}
         self.output_data = {}
 
@@ -398,7 +399,10 @@ def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
         "activitysim_input_households.csv",
         "activitysim_input_persons.csv",
         "activitysim_input_land_use.csv",
-        "activitysim_settings_yaml",
+        "activitysim_config_settings_yaml_configs",
+        "activitysim_config_settings_yaml_configs_extended",
+        "activitysim_config_settings_yaml_configs_mp",
+        "activitysim_config_settings_yaml_configs_sh_compile",
     }
 
 
@@ -414,7 +418,8 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
 
     keys = {item["key"] for item in missing}
     assert "usim_datastore_base_h5" in keys
-    assert "activitysim_settings_yaml" not in keys
+    assert "activitysim_config_settings_yaml_configs" not in keys
+    assert "activitysim_config_settings_yaml_configs_mp" not in keys
     assert "zarr_skims" not in keys
     assert any(key.startswith("atlas_static::") for key in keys)
 
@@ -453,6 +458,58 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     paths = {item["path"] for item in missing}
     assert "zarr_skims" in keys
     assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
+
+
+def test_restore_restart_workspace_atlas_registry_rebuilds_expected_keys(tmp_path):
+    settings = _restart_settings()
+    workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
+
+    atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    (atlas_input_dir / "psid_names.Rdat").parent.mkdir(parents=True, exist_ok=True)
+    (atlas_input_dir / "psid_names.Rdat").write_text("psid", encoding="utf-8")
+    (
+        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
+    ).parent.mkdir(parents=True, exist_ok=True)
+    (
+        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
+    ).write_text("used", encoding="utf-8")
+
+    restored = run_module._restore_restart_workspace_atlas_registry(
+        settings=settings,
+        workspace=workspace,
+    )
+
+    assert restored >= 2
+    atlas_store = workspace.input_data["atlas"]
+    mapping = atlas_store.to_mapping()
+    assert mapping["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
+    assert (
+        mapping["adopt/baseline/used_vehicles_2017"]
+        == str(atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv")
+    )
+
+
+def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_path):
+    settings = _restart_settings()
+    workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
+    atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    (atlas_input_dir / "psid_names.Rdat").parent.mkdir(parents=True, exist_ok=True)
+    (atlas_input_dir / "psid_names.Rdat").write_text("psid", encoding="utf-8")
+    (
+        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
+    ).parent.mkdir(parents=True, exist_ok=True)
+    (
+        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
+    ).write_text("used", encoding="utf-8")
+
+    fallback = run_module.build_atlas_static_inputs_fallback(workspace)
+
+    assert fallback["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
+    assert (
+        fallback["adopt/baseline/used_vehicles_2017"]
+        == str(atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv")
+    )
+    assert "atlas_static_psid_names.Rdat" not in fallback
 
 
 def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preserves_existing(
@@ -519,7 +576,7 @@ def test_rehydrate_missing_local_artifacts_from_archive_partial_archive_missing_
     )
     assert missing
 
-    missing_archive_key = "activitysim_settings_yaml"
+    missing_archive_key = "activitysim_config_settings_yaml_configs_mp"
     for artifact in missing:
         if artifact["key"] == missing_archive_key:
             continue
@@ -580,6 +637,42 @@ def test_bundle_rehydrate_mode_copies_manifest_listed_artifact(tmp_path):
     assert summary["copied"] == 1
     assert summary["copy_errors"] == 0
     assert (local_run_dir / rel_path).read_text(encoding="utf-8") == "archive-households"
+
+
+def test_bundle_rehydrate_mode_repairs_existing_directory_from_manifest(tmp_path):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    rel_dir = os.path.join("activitysim", "configs", "configs_mp")
+
+    local_dir = local_run_dir / rel_dir
+    local_dir.mkdir(parents=True, exist_ok=True)
+    (local_dir / "settings.yaml").write_text("local-settings", encoding="utf-8")
+
+    archive_dir = archive_run_dir / rel_dir
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / "settings.yaml").write_text("archive-settings", encoding="utf-8")
+    (archive_dir / "constants.yaml").write_text("archive-constants", encoding="utf-8")
+
+    summary = run_module._rehydrate_bundle_local_artifacts_from_archive(
+        bundle_manifest={
+            "schema_version": 1,
+            "artifacts": [
+                {
+                    "key": "activitysim_config_dir_configs_mp",
+                    "rel_path": rel_dir,
+                    "reason": "test bundle config dir",
+                    "kind": "dir",
+                }
+            ],
+        },
+        local_run_dir=str(local_run_dir),
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert summary["copied"] == 1
+    assert summary["skipped_existing"] >= 1
+    assert (local_dir / "settings.yaml").read_text(encoding="utf-8") == "local-settings"
+    assert (local_dir / "constants.yaml").read_text(encoding="utf-8") == "archive-constants"
 
 
 def test_resume_rewind_guardrail_blocks_by_default_and_allows_override(tmp_path):

@@ -436,7 +436,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     _write_file(omx_path)
 
     zarr_path = asim_out_dir / "cache" / "skims.zarr"
+    sharrow_cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
     _write_file(zarr_path)
+    _write_file(sharrow_cache_dir / "compile-cache.bin")
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"
     )
@@ -757,6 +759,7 @@ def golden_stub_env(tmp_path, monkeypatch):
                     "usim_input_path": str(usim_input_path),
                     "usim_merged_path": str(usim_merged_path),
                     "zarr_path": str(zarr_path),
+                    "sharrow_cache_dir": str(sharrow_cache_dir),
                     "promoted_linkstats": str(promoted_linkstats),
                     "promoted_plans": str(promoted_plans),
                 }

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_db_snapshot import snapshot_latest_dir
@@ -115,14 +116,15 @@ def _add_activitysim_candidates(
         getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
         or "configs"
     )
-    _append_local_candidate(
-        artifacts,
-        key="activitysim_settings_yaml",
-        local_path=os.path.join(get_cfg_dir(), main_configs_dir, "settings.yaml"),
-        reason="ActivitySim restart settings",
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-    )
+    for dirname in required_asim_config_dirs(main_configs_dir):
+        _append_local_candidate(
+            artifacts,
+            key=f"activitysim_config_dir_{dirname}",
+            local_path=os.path.join(get_cfg_dir(), dirname),
+            reason=f"ActivitySim restart config directory ({dirname})",
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
 
     get_output_dir = getattr(workspace, "get_asim_output_dir", None)
     if callable(get_output_dir):
@@ -418,6 +420,7 @@ def manifest_entries_to_local_artifacts(
                 "key": str(item.get("key") or rel_path),
                 "path": local_path,
                 "reason": str(item.get("reason") or "bundle manifest entry"),
+                "kind": str(item.get("kind") or "file"),
             }
         )
     return mapped

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence
 
 from pilates.workspace import Workspace
+from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -48,6 +49,7 @@ from pilates.utils.restart_bundle import (
     write_restart_bundle_manifest,
 )
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
@@ -461,14 +463,77 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
     atlas_input_dir = workspace.get_atlas_mutable_input_dir()
     if not os.path.exists(atlas_input_dir):
         return {}
+
+    settings = getattr(workspace, "settings", None)
+    if settings is not None:
+        inputs: Dict[str, str] = {}
+        for relpath in atlas_static_input_relpaths(settings):
+            normalized_relpath = relpath.replace("\\", "/")
+            path = os.path.join(atlas_input_dir, normalized_relpath)
+            if not os.path.exists(path):
+                continue
+            rel_no_ext = os.path.splitext(normalized_relpath)[0]
+            key = sanitize_artifact_key(rel_no_ext) or rel_no_ext
+            inputs.setdefault(key, path)
+        if inputs:
+            return inputs
+
     inputs: Dict[str, str] = {}
     for root, _, files in os.walk(atlas_input_dir):
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relpath = os.path.relpath(path, atlas_input_dir)
-            key = f"atlas_static_{relpath.replace(os.sep, '__')}"
+            rel_no_ext = os.path.splitext(relpath.replace("\\", "/"))[0]
+            key = sanitize_artifact_key(rel_no_ext) or rel_no_ext
             inputs.setdefault(key, path)
     return inputs
+
+
+def _restore_restart_workspace_atlas_registry(
+    *,
+    settings: Any,
+    workspace: Workspace,
+) -> int:
+    """
+    Rebuild the in-memory ATLAS static-input registry from local mutable inputs.
+
+    On restart, ``workspace.input_data`` starts empty even if the local ATLAS
+    input tree was rehydrated successfully. Reconstruct the registry so stage
+    code can keep using the same authoritative input-source contract.
+    """
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return 0
+
+    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+    if not os.path.exists(atlas_input_dir):
+        return 0
+
+    records = []
+    for relpath in atlas_static_input_relpaths(settings):
+        normalized_relpath = relpath.replace("\\", "/")
+        local_path = os.path.join(atlas_input_dir, normalized_relpath)
+        if not os.path.exists(local_path):
+            continue
+        rel_no_ext = os.path.splitext(normalized_relpath)[0]
+        short_name = sanitize_artifact_key(rel_no_ext) or rel_no_ext
+        metadata = {}
+        if local_path.lower().endswith(".csv"):
+            metadata["profile_file_schema"] = True
+        records.append(
+            FileRecord(
+                file_path=local_path,
+                short_name=short_name,
+                description=f"Restart-local ATLAS static input: {os.path.basename(local_path)}",
+                metadata=metadata,
+            )
+        )
+
+    if not records:
+        return 0
+
+    workspace.input_data["atlas"] = RecordStore(recordList=records)
+    return len(records)
 
 
 def _read_mount_table() -> Dict[str, str]:
@@ -779,13 +844,17 @@ def _restart_required_local_artifacts(
             getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
             or "configs"
         )
-        required.append(
-            {
-                "key": "activitysim_settings_yaml",
-                "path": os.path.join(asim_configs_dir, main_configs_dir, "settings.yaml"),
-                "reason": "ActivitySim mutable config required on restart",
-            }
-        )
+        for dirname in required_asim_config_dirs(main_configs_dir):
+            required.append(
+                {
+                    "key": f"activitysim_config_settings_yaml_{dirname}",
+                    "path": os.path.join(asim_configs_dir, dirname, "settings.yaml"),
+                    "reason": (
+                        "ActivitySim mutable config tree required on restart "
+                        f"(config_dir={dirname})"
+                    ),
+                }
+            )
 
     requires_activitysim_zarr = (
         getattr(model_cfg, "activity_demand", None) == "activitysim"
@@ -991,8 +1060,9 @@ def _rehydrate_missing_local_artifacts_from_archive(
     for artifact in missing_artifacts:
         local_path = os.path.realpath(artifact["path"])
         key = artifact.get("key", "unknown")
+        kind = artifact.get("kind", "file")
 
-        if os.path.exists(local_path):
+        if os.path.exists(local_path) and not (kind == "dir" and os.path.isdir(local_path)):
             summary["skipped_existing"] += 1
             logger.info(
                 "[RestartRehydrate] Skip existing local artifact key=%s path=%s",
@@ -1526,6 +1596,15 @@ def main():
                             restart_missing_artifacts_after_rehydrate
                         )
                     )
+        restored_atlas_records = _restore_restart_workspace_atlas_registry(
+            settings=settings,
+            workspace=workspace,
+        )
+        if restored_atlas_records:
+            logger.info(
+                "Restored ATLAS restart registry from local mutable inputs: records=%s",
+                restored_atlas_records,
+            )
     if is_restart_run:
         _run_resume_doctor_diagnostics(
             state=state,

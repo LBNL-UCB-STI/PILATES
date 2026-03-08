@@ -262,13 +262,7 @@ def _ensure_required_asim_config_dirs(
     ``configs_sh_compile``. When missing, synthesize them by copying from a
     stable base config directory.
     """
-    required_dirs = [
-        main_configs_dir,
-        "configs",
-        "configs_extended",
-        "configs_mp",
-        "configs_sh_compile",
-    ]
+    required_dirs = required_asim_config_dirs(main_configs_dir)
 
     base_candidates = [main_configs_dir, "configs_extended", "configs"]
     base_dir = None
@@ -295,6 +289,30 @@ def _ensure_required_asim_config_dirs(
             base_dir,
         )
         shutil.copytree(base_dir, target_dir, dirs_exist_ok=True)
+
+
+def required_asim_config_dirs(main_configs_dir: str) -> list[str]:
+    """
+    Return the canonical mutable ActivitySim config directories.
+
+    The mutable config tree may contain a scenario-specific main root plus the
+    standard overlay directories used by compile/run flows.
+    """
+    ordered = [
+        main_configs_dir,
+        "configs",
+        "configs_extended",
+        "configs_mp",
+        "configs_sh_compile",
+    ]
+    seen = set()
+    result = []
+    for dirname in ordered:
+        if not dirname or dirname in seen:
+            continue
+        seen.add(dirname)
+        result.append(dirname)
+    return result
 
 
 ####################################

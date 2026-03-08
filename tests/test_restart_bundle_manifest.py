@@ -142,3 +142,7 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     keys = {item["key"] for item in manifest["artifacts"]}
     assert "zarr_skims" in keys
     assert "asim_sharrow_cache_dir" in keys
+    assert "activitysim_config_dir_configs" in keys
+    assert "activitysim_config_dir_configs_extended" in keys
+    assert "activitysim_config_dir_configs_mp" in keys
+    assert "activitysim_config_dir_configs_sh_compile" in keys

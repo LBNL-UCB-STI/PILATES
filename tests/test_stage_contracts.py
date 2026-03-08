@@ -503,6 +503,78 @@ def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch
     assert flush_calls == [300]
 
 
+def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_partial(
+    stage_env, monkeypatch
+):
+    """Restart-thin preprocess outputs must not drop the required UrbanSim H5."""
+    from types import SimpleNamespace
+    from pilates.workflows.stages import land_use as land_use_stage
+    from pilates.workflows.steps import StepOutputsHolder
+
+    geoid_to_zone_path = (
+        Path(stage_env["workspace"].get_usim_mutable_data_dir()) / "geoid_to_zone.csv"
+    )
+    _write_file(geoid_to_zone_path)
+
+    captured = {}
+
+    def _fake_run_workflow(
+        *,
+        steps,
+        outputs_holder,
+        workspace,
+        state,
+        **_kwargs,
+    ):
+        if any(step.name == "urbansim_preprocess" for step in steps):
+            outputs_holder.urbansim_preprocess = SimpleNamespace(
+                to_record_store=lambda: RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(geoid_to_zone_path),
+                            short_name="geoid_to_zone",
+                        )
+                    ]
+                )
+            )
+            return
+
+        run_step = next(step for step in steps if step.name == "urbansim_run")
+        captured["inputs"] = dict(run_step.inputs or {})
+        captured["input_keys"] = list(run_step.input_keys or [])
+        outputs_holder.urbansim_run = SimpleNamespace(
+            usim_datastore_h5=Path(stage_env["usim_input_path"])
+        )
+        outputs_holder.urbansim_postprocess = None
+
+    monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)
+    monkeypatch.setattr(
+        land_use_stage,
+        "enqueue_archive_copy",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda **_kwargs: None,
+    )
+
+    outputs_holder = StepOutputsHolder()
+    run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    assert captured["inputs"]["geoid_to_zone"] == str(geoid_to_zone_path)
+    assert captured["inputs"][USIM_DATASTORE_CURRENT_H5] == stage_env["usim_input_path"]
+    assert captured["inputs"][USIM_DATASTORE_BASE_H5] == stage_env["usim_input_path"]
+
+
 def test_vehicle_ownership_stage_contract(stage_env):
     """Vehicle ownership should consume UrbanSim inputs and keep datastore state."""
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
