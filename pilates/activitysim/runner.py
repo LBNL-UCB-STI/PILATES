@@ -586,12 +586,11 @@ class ActivitysimRunner(GenericRunner):
         )
 
         if not success:
-            logger.error(
-                "ASIM run failed for year {0} iteration {1}".format(
-                    self.state.current_year, self.state.current_inner_iter
-                )
+            message = "ASIM run failed for year {0} iteration {1}".format(
+                self.state.current_year, self.state.current_inner_iter
             )
-            return RecordStore()
+            logger.error(message)
+            raise RuntimeError(message)
 
         # Assemble outputs: find the expected output files and return as a RecordStore
         output_dir = os.path.join(workspace.get_asim_output_dir(), "final_pipeline")

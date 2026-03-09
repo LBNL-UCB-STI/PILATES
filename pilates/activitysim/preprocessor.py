@@ -3083,6 +3083,40 @@ def _update_jobs_table(
     return num_reassigned, jobs
 
 
+def _validate_household_person_consistency(
+    households: pd.DataFrame,
+    persons: pd.DataFrame,
+) -> None:
+    """
+    Ensure ActivitySim household/person inputs satisfy the core membership invariant.
+
+    Every retained household must have at least one retained person, and every
+    retained person must point at a retained household.
+    """
+    if "household_id" not in persons.columns:
+        raise ValueError(
+            "ActivitySim preprocess produced persons data without a 'household_id' column."
+        )
+
+    household_ids = pd.Index(households.index)
+    person_household_ids = pd.Index(persons["household_id"]).astype(household_ids.dtype)
+
+    households_with_persons = pd.Index(person_household_ids.unique())
+    households_without_persons = household_ids.difference(households_with_persons)
+    orphan_person_refs = households_with_persons.difference(household_ids)
+
+    if len(households_without_persons) or len(orphan_person_refs):
+        missing_sample = [str(v) for v in households_without_persons[:10]]
+        orphan_sample = [str(v) for v in orphan_person_refs[:10]]
+        raise ValueError(
+            "ActivitySim preprocess produced inconsistent household/person inputs: "
+            f"households_without_persons={len(households_without_persons)} "
+            f"orphan_person_household_refs={len(orphan_person_refs)} "
+            f"households_sample={missing_sample} "
+            f"orphan_sample={orphan_sample}"
+        )
+
+
 def _update_blocks_table(
     settings: PilatesConfig,
     year: int,
@@ -3564,6 +3598,8 @@ def create_asim_data_from_h5(
     geoid_to_zone_mapping_updated, blocks = _update_blocks_table(
         settings, state.year, blocks, households, jobs, asim_zone_id_col, workspace
     )
+
+    _validate_household_person_consistency(households, persons)
 
     # Create land use table
     land_use = _create_land_use_table(

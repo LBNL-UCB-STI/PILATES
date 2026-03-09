@@ -4,7 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
+import pytest
+
 from pilates.activitysim.runner import ActivitysimCompileRunner
+from pilates.activitysim.runner import ActivitysimRunner
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
@@ -304,3 +307,64 @@ def test_activitysim_compile_does_not_log_cache_output_when_gate_off(
 
     assert ZARR_SKIMS in logged_keys
     assert ASIM_SHARROW_CACHE_DIR not in logged_keys
+
+
+def test_activitysim_run_raises_when_container_execution_fails(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    asim_output_dir = root / "activitysim" / "output"
+    asim_output_dir.mkdir(parents=True)
+    asim_data_dir = root / "activitysim" / "data"
+    asim_data_dir.mkdir(parents=True)
+    for name in ("land_use.csv", "households.csv", "persons.csv"):
+        (asim_data_dir / name).write_text("dummy")
+    asim_configs_dir = root / "activitysim" / "configs" / "configs_extended"
+    asim_configs_dir.mkdir(parents=True)
+    (root / "activitysim" / "configs" / "configs_mp").mkdir(parents=True)
+    (root / "activitysim" / "configs" / "configs_sh_compile").mkdir(parents=True)
+    zarr_dir = asim_output_dir / "cache" / "skims.zarr"
+    zarr_dir.mkdir(parents=True)
+
+    workspace = SimpleNamespace(
+        full_path=str(root),
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_asim_mutable_data_dir=lambda: str(asim_data_dir),
+        get_asim_mutable_configs_dir=lambda: str(root / "activitysim" / "configs"),
+    )
+    state = SimpleNamespace(
+        current_year=2023,
+        current_inner_iter=0,
+        forecast_year=2029,
+        set_sub_stage_progress=lambda _value: None,
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        activitysim=SimpleNamespace(
+            local_output_folder="activitysim/output",
+            local_mutable_data_folder="activitysim/data",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs_extended",
+            household_sample_size=0,
+            num_processes=1,
+            chunk_size=0,
+            sharrow=False,
+            file_format="parquet",
+            region_mappings={"region_to_subdir": {"test": "prototype"}},
+        ),
+        infrastructure=SimpleNamespace(container_manager="singularity"),
+    )
+    state.full_settings = settings
+
+    runner = ActivitysimRunner("activitysim", state)
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args, **_kwargs: ("activitysim", "docker://fake"))
+    monkeypatch.setattr(runner, "get_asim_docker_vols", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(runner, "get_base_asim_cmd", lambda *_args, **_kwargs: "asim run")
+    monkeypatch.setattr(
+        runner,
+        "get_asim_additional_args",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(runner, "run_container", lambda **_kwargs: False)
+
+    with pytest.raises(RuntimeError, match="ASIM run failed for year 2023 iteration 0"):
+        runner.run(RecordStore(), workspace)

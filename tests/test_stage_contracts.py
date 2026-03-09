@@ -950,6 +950,50 @@ def test_supply_demand_stage_standalone_full_skim_skips_beam_run(stage_env, tmp_
     assert coupler.get(BEAM_FULL_SKIMS) is not None
 
 
+def test_supply_demand_stage_does_not_skip_next_year_land_use_after_final_substage(
+    stage_env, tmp_path
+):
+    """
+    Completing the final traffic-assignment substage should advance into the
+    next year's land-use stage exactly once.
+    """
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    start_year = state.current_year
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_no_skip_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=stage_env["workspace"],
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    assert state.current_year == start_year + 1
+    assert state.current_major_stage == state.Stage.land_use
+    assert state.current_sub_stage is None
+
+
 def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     stage_env, monkeypatch, tmp_path
 ):

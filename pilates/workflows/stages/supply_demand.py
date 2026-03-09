@@ -1366,4 +1366,8 @@ def run_supply_demand_stage(
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)
 
-    state.complete_step(state.Stage.supply_demand_loop)
+    # The final substage completion may already have advanced the workflow
+    # into the next year/major stage. Only complete the major stage here when
+    # the state is still inside the supply-demand loop.
+    if state.current_major_stage == state.Stage.supply_demand_loop:
+        state.complete_step(state.Stage.supply_demand_loop)
