@@ -275,6 +275,23 @@ class ManifestConfig:
     path: Path
 
 
+def _publish_recovered_outputs(
+    *,
+    step_func: Callable[..., Any],
+    outputs: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+) -> None:
+    replayer = getattr(step_func, "__pilates_output_replayer__", None)
+    if callable(replayer):
+        replayer(outputs, settings, state, workspace, outputs_holder)
+        return
+    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+
+
 def run_manifested_steps(
     *,
     stage_name: str,
@@ -309,12 +326,6 @@ def run_manifested_steps(
         **(runtime_kwargs_extra or {}),
     )
 
-    def _publish_recovered_outputs(step_func: Callable[..., Any], outputs: Any) -> None:
-        replayer = getattr(step_func, "__pilates_output_replayer__", None)
-        if callable(replayer):
-            replayer(outputs, settings, state, workspace, outputs_holder)
-        _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
-
     for raw_step in steps:
         spec = raw_step
         if spec.name in manifest:
@@ -325,7 +336,15 @@ def run_manifested_steps(
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
             if outputs is not None:
-                _publish_recovered_outputs(spec.step_func, outputs)
+                _publish_recovered_outputs(
+                    step_func=spec.step_func,
+                    outputs=outputs,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                )
             continue
 
         validate_step_ready(spec.name, outputs_holder)
@@ -353,7 +372,15 @@ def run_manifested_steps(
                 publish_outputs=False,
             )
             if outputs is not None:
-                _publish_recovered_outputs(spec.step_func, outputs)
+                _publish_recovered_outputs(
+                    step_func=spec.step_func,
+                    outputs=outputs,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                )
         if outputs is None and getattr(result, "cache_hit", False):
             logger.warning(
                 "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
@@ -378,7 +405,15 @@ def run_manifested_steps(
                     publish_outputs=False,
                 )
                 if outputs is not None:
-                    _publish_recovered_outputs(spec.step_func, outputs)
+                    _publish_recovered_outputs(
+                        step_func=spec.step_func,
+                        outputs=outputs,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        coupler=coupler,
+                        outputs_holder=outputs_holder,
+                    )
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
         manifest[spec.name] = {
@@ -471,7 +506,7 @@ def run_workflow(
             outputs_holder.get_attribute(spec.name) is None
             and getattr(result, "cache_hit", False)
         ):
-            _recover_cached_outputs(
+            recovered = _recover_cached_outputs(
                 step_name=spec.name,
                 outputs_holder=outputs_holder,
                 settings=settings,
@@ -481,7 +516,18 @@ def run_workflow(
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
                 run_id=getattr(getattr(result, "run", None), "id", None),
+                publish_outputs=False,
             )
+            if recovered is not None:
+                _publish_recovered_outputs(
+                    step_func=spec.step_func,
+                    outputs=recovered,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                )
         if (
             outputs_holder.get_attribute(spec.name) is None
             and getattr(result, "cache_hit", False)
@@ -498,7 +544,7 @@ def run_workflow(
                 outputs_holder.get_attribute(spec.name) is None
                 and getattr(result, "cache_hit", False)
             ):
-                _recover_cached_outputs(
+                recovered = _recover_cached_outputs(
                     step_name=spec.name,
                     outputs_holder=outputs_holder,
                     settings=settings,
@@ -508,7 +554,18 @@ def run_workflow(
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
                     run_id=getattr(getattr(result, "run", None), "id", None),
+                    publish_outputs=False,
                 )
+                if recovered is not None:
+                    _publish_recovered_outputs(
+                        step_func=spec.step_func,
+                        outputs=recovered,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        coupler=coupler,
+                        outputs_holder=outputs_holder,
+                    )
 
         if coupler_keys is not None:
             try:

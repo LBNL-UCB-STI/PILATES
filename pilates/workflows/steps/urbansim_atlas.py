@@ -106,6 +106,14 @@ def _make_typed_step_function(
 
         logger.info("%s %s completed successfully", model_name, phase)
 
+    if output_logger is not None:
+        setattr(
+            _step_func,
+            "__pilates_output_replayer__",
+            lambda outputs, settings, state, workspace, holder: output_logger(
+                outputs, settings, state, workspace, holder
+            ),
+        )
     return _decorate_step_with_consist(
         step_func=_step_func,
         step_model=f"{model_name}_{phase}",

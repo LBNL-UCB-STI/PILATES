@@ -376,6 +376,14 @@ def test_manifest_restore_skips_run_and_rehydrates_coupler(tmp_path):
         raise AssertionError("step function should not execute on manifest restore")
 
     _should_not_run.__consist_step__ = object()
+    _should_not_run.__pilates_output_replayer__ = (
+        lambda outputs, settings, state, workspace, holder: (
+            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
+            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
+            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
+            coupler.set("replayed_manifest_outputs", str(outputs.households_table)),
+        )
+    )
 
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
@@ -406,6 +414,9 @@ def test_manifest_restore_skips_run_and_rehydrates_coupler(tmp_path):
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     assert coupler.get(ASIM_PERSONS_IN) is not None
     assert coupler.get(ASIM_LAND_USE_IN) is not None
+    assert coupler.get("replayed_manifest_outputs") == str(
+        holder.activitysim_preprocess.households_table
+    )
 
 
 def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):

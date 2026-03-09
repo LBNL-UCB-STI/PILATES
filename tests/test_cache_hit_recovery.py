@@ -13,14 +13,22 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_INPUT_MERGED_PREFIX,
+    ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
-from pilates.workflows.orchestration import run_manifested_steps
+from pilates.workflows.orchestration import run_manifested_steps, run_workflow
 from pilates.workflows.orchestration import StepRef
-from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_atlas_postprocess_step,
+    make_beam_postprocess_step,
+    make_urbansim_run_step,
+)
+from pilates.beam.outputs import BeamRunOutputs
 
 
 class DummyScenario:
@@ -195,9 +203,11 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
         raise AssertionError("step function should not execute on cache hit")
     _noop_step.__consist_step__ = object()
     _noop_step.__pilates_output_replayer__ = (
-        lambda outputs, settings, state, workspace, holder: coupler.set(
-            "replayed_cache_outputs",
-            str(outputs.households_table),
+        lambda outputs, settings, state, workspace, holder: (
+            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
+            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
+            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
+            coupler.set("replayed_cache_outputs", str(outputs.households_table)),
         )
     )
 
@@ -490,3 +500,177 @@ def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monk
     assert holder.beam_full_skim is not None
     assert holder.beam_full_skim.full_skims == full_skims
     assert coupler.get(BEAM_FULL_SKIMS) is not None
+
+
+def test_run_workflow_cache_hit_uses_output_replayer(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+
+    coupler = DummyCoupler()
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(cache_hit=True)
+
+    def _noop_step(**_kwargs):
+        raise AssertionError("step function should not execute on cache hit")
+
+    _noop_step.__consist_step__ = object()
+    _noop_step.__pilates_output_replayer__ = (
+        lambda outputs, settings, state, workspace, holder: (
+            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
+            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
+            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
+            coupler.set("non_manifest_replay", str(outputs.households_table)),
+        )
+    )
+
+    holder = StepOutputsHolder()
+    run_workflow(
+        stage_name="activity_demand_preprocess",
+        steps=[StepRef(name="activitysim_preprocess", step_func=_noop_step)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.activitysim_preprocess is not None
+    assert coupler.get("non_manifest_replay") == str(
+        holder.activitysim_preprocess.households_table
+    )
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
+
+
+def test_run_workflow_cache_hit_beam_postprocess_replays_promoted_outputs(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    linkstats = Path(workspace.get_beam_output_dir()) / "linkstats.csv.gz"
+    plans = Path(workspace.get_beam_output_dir()) / "plans.csv.gz"
+    zarr = Path(workspace.get_beam_output_dir()) / "skims.zarr"
+    for path in (linkstats, plans, zarr):
+        _write_file(path)
+
+    holder.beam_run = BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()),
+        raw_outputs={
+            LINKSTATS: linkstats,
+            BEAM_PLANS_OUT: plans,
+        },
+    )
+    step_func = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(cache_hit=True, outputs={ZARR_SKIMS: str(zarr)})
+
+    run_workflow(
+        stage_name="beam_postprocess",
+        steps=[StepRef(name="beam_postprocess", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.beam_postprocess is not None
+    assert coupler.get(ZARR_SKIMS) is not None
+    assert coupler.get(LINKSTATS) is not None
+    assert coupler.get(BEAM_PLANS_OUT) is not None
+
+
+def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    holder.urbansim_preprocess = object()
+
+    usim_output = Path(workspace.get_usim_mutable_data_dir()) / "usim_output.h5"
+    _write_file(usim_output)
+    step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs={USIM_FORECAST_OUTPUT: str(usim_output)},
+            )
+
+    run_workflow(
+        stage_name="urbansim_run",
+        steps=[StepRef(name="urbansim_run", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.urbansim_run is not None
+    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_FORECAST_OUTPUT) is None
+
+
+def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_key(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    holder.atlas_run = object()
+
+    updated_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_2018.h5"
+    vehicles2 = Path(workspace.get_atlas_output_dir()) / "vehicles2_2018.csv"
+    for path in (updated_h5, vehicles2):
+        _write_file(path)
+    step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs={
+                    USIM_H5_UPDATED: str(updated_h5),
+                    "atlas_vehicles2_output": str(vehicles2),
+                },
+            )
+
+    state = SimpleNamespace(
+        year=2017,
+        forecast_year=2018,
+        iteration=0,
+        is_start_year=lambda: False,
+    )
+
+    run_workflow(
+        stage_name="atlas_postprocess",
+        steps=[StepRef(name="atlas_postprocess", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.atlas_postprocess is not None
+    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_H5_UPDATED) is None
