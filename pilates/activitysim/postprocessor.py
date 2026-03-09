@@ -208,6 +208,38 @@ def _prepare_updated_tables(
 
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols["persons"]
+
+    def _normalize_person_household_ids(
+        persons_df: pd.DataFrame, target_dtype
+    ) -> pd.DataFrame:
+        if "household_id" not in persons_df.columns:
+            return persons_df
+
+        numeric = pd.to_numeric(persons_df["household_id"], errors="coerce")
+        invalid_mask = numeric.isna()
+        invalid_mask |= (numeric % 1 != 0).fillna(False)
+
+        if invalid_mask.any():
+            dropped = int(invalid_mask.sum())
+            sample_person_ids = []
+            if persons_df.index.name == "person_id":
+                sample_person_ids = persons_df.index[invalid_mask].tolist()[:10]
+            elif "person_id" in persons_df.columns:
+                sample_person_ids = (
+                    persons_df.loc[invalid_mask, "person_id"].tolist()[:10]
+                )
+            logger.warning(
+                "Dropping %s ActivitySim persons rows with missing/invalid household_id "
+                "before writing the updated UrbanSim persons table. Sample person_ids=%s",
+                dropped,
+                sample_person_ids,
+            )
+            persons_df = persons_df.loc[~invalid_mask].copy()
+            numeric = numeric.loc[~invalid_mask]
+
+        persons_df.loc[:, "household_id"] = numeric.astype(target_dtype)
+        return persons_df
+
     def _set_from_source(df: pd.DataFrame, target: str, sources) -> bool:
         for source in sources:
             if source in df.columns:
@@ -273,6 +305,9 @@ def _prepare_updated_tables(
                 )
             else:
                 persons = aligned.join(usim_persons[missing_person_cols], how="left")
+        persons = _normalize_person_household_ids(
+            persons, usim_persons["household_id"].dtype
+        )
         asim_output_dict["persons"] = persons[p_cols_to_include]
 
     logger.info("Preparing households table!")

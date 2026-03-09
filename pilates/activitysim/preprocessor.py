@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils import consist_runtime as cr
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
     load_canonical_zones,
@@ -3570,12 +3571,23 @@ def create_asim_data_from_h5(
             mode="r",
         )
     try:
-        households = store[prefix + "/households"]
-        persons = store[prefix + "/persons"]
-        jobs = store[prefix + "/jobs"]
-        blocks = store[prefix + "/blocks"]
+        resolved_h5_table_paths = {
+            "households": _activitysim_h5_table_path(prefix, "households"),
+            "persons": _activitysim_h5_table_path(prefix, "persons"),
+            "jobs": _activitysim_h5_table_path(prefix, "jobs"),
+            "blocks": _activitysim_h5_table_path(prefix, "blocks"),
+        }
+        households = store[resolved_h5_table_paths["households"]]
+        persons = store[resolved_h5_table_paths["persons"]]
+        jobs = store[resolved_h5_table_paths["jobs"]]
+        blocks = store[resolved_h5_table_paths["blocks"]]
     finally:
         store.close()
+    _log_activitysim_usim_input_tables(
+        h5_path=usim_input_path,
+        resolved_table_paths=resolved_h5_table_paths,
+        start_year=getattr(state, "start_year", None),
+    )
 
     # Add zone id to blocks table
     blocks[asim_zone_id_col] = blocks.index.map(block_to_zone_map)
@@ -3623,3 +3635,47 @@ def create_asim_data_from_h5(
         )
 
     return output_records
+
+
+def _activitysim_h5_table_path(prefix: Optional[Union[str, int]], table_name: str) -> str:
+    normalized_prefix = str(prefix).strip("/") if prefix not in (None, "") else ""
+    if normalized_prefix:
+        return f"/{normalized_prefix}/{table_name}"
+    return f"/{table_name}"
+
+
+def _activitysim_preprocess_h5_input_key(
+    table_name: str,
+    *,
+    table_path: str,
+    start_year: Optional[Union[str, int]],
+) -> str:
+    normalized = table_path if table_path.startswith("/") else f"/{table_path}"
+    parent = normalized.rsplit("/", 1)[0].strip("/")
+    if parent and start_year is not None and parent == str(start_year):
+        return f"activitysim_preprocess_usim_{table_name}_table_start_year_input"
+    return f"activitysim_preprocess_usim_{table_name}_table_input"
+
+
+def _log_activitysim_usim_input_tables(
+    *,
+    h5_path: str,
+    resolved_table_paths: Dict[str, str],
+    start_year: Optional[Union[str, int]],
+) -> None:
+    for table_name, table_path in resolved_table_paths.items():
+        cr.log_h5_table(
+            h5_path,
+            key=_activitysim_preprocess_h5_input_key(
+                table_name,
+                table_path=table_path,
+                start_year=start_year,
+            ),
+            table_path=table_path,
+            direction="input",
+            description=(
+                f"UrbanSim {table_name} table consumed by ActivitySim preprocess"
+            ),
+            profile_file_schema=True,
+            h5_table_name=table_name,
+        )

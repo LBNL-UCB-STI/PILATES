@@ -6,10 +6,13 @@ from sqlmodel import SQLModel
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.database.schema.activitysim_schema import (
+    AccessibilityAsimOut,
     BeamPlansAsimOut,
     HouseholdsAsimIn,
     HouseholdsAsimOut,
     LandUseAsimIn,
+    LandUseAsimOut,
+    JointTourParticipantsAsimOut,
     PersonsAsimIn,
     PersonsAsimOut,
     ToursAsimOut,
@@ -26,6 +29,9 @@ from pilates.database.schema.atlas_schema import (
     VehiclesAtlasOut,
 )
 from pilates.database.schema.beam_schema import (
+    BeamEventsParquet,
+    BeamPlansOut,
+    BeamFinalVehicles,
     BeamEventsActEnd,
     BeamEventsActStart,
     BeamEventsArrival,
@@ -43,10 +49,15 @@ from pilates.database.schema.beam_schema import (
     BeamEventsTeleportationEvent,
     BeamNetworkFinal,
     BeamPathTraversalLinks,
+    BeamRouteHistory,
     HouseholdsBeamIn,
     PlansBeamIn,
     PersonsBeamIn,
     VehiclesBeamIn,
+)
+from pilates.database.schema.urbansim_schema import (
+    ActivitysimPostprocessUsimHouseholdsUpdated,
+    ActivitysimPostprocessUsimPersonsUpdated,
 )
 
 # Central mapping of artifact keys to curated schema classes.
@@ -60,9 +71,15 @@ _SCHEMA_BY_KEY: Dict[str, Type[SQLModel]] = {
     "tours_asim_out": ToursAsimOut,
     "beam_plans_asim_out": BeamPlansAsimOut,
     "trips_asim_out": TripsAsimOut,
+    "accessibility_asim_out": AccessibilityAsimOut,
+    "land_use_asim_out": LandUseAsimOut,
+    "joint_tour_participants_asim_out": JointTourParticipantsAsimOut,
+    "activitysim_postprocess_usim_households_table_updated": ActivitysimPostprocessUsimHouseholdsUpdated,
+    "activitysim_postprocess_usim_persons_table_updated": ActivitysimPostprocessUsimPersonsUpdated,
     "households_beam_in": HouseholdsBeamIn,
     "persons_beam_in": PersonsBeamIn,
     "plans_beam_in": PlansBeamIn,
+    "beam_plans_out": BeamPlansOut,
     "beam_network_final": BeamNetworkFinal,
     "linkstats": BeamLinkstats,
     "linkstats_warmstart": BeamLinkstats,
@@ -80,8 +97,11 @@ _SCHEMA_BY_KEY: Dict[str, Type[SQLModel]] = {
 _SCHEMA_BY_PREFIX: Dict[str, Type[SQLModel]] = {
     # BEAM linkstats artifacts are commonly iteration/version-scoped keys, e.g.
     # linkstats_parquet_2018_0_sub1 or linkstats_unmodified_parquet__y2018__i0__...
+    "events_parquet_": BeamEventsParquet,
+    "final_vehicles_": BeamFinalVehicles,
     "linkstats_": BeamLinkstats,
     "path_traversal_links_": BeamPathTraversalLinks,
+    "route_history_": BeamRouteHistory,
     # ATLAS run outputs are year-scoped keys, e.g. householdv_2023(.csv)
     # and vehicles_2023(.csv).
     "householdv_": HouseholdVAtlasOut,

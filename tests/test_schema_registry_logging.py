@@ -240,6 +240,45 @@ def test_log_output_tours_asim_out_key_attaches_schema(monkeypatch):
     assert meta["schema"].__name__ == "ToursAsimOut"
 
 
+def test_log_output_accessibility_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "accessibility_asim_out"
+    cr.log_output("/tmp/accessibility.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "AccessibilityAsimOut"
+
+
+def test_log_output_land_use_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "land_use_asim_out"
+    cr.log_output("/tmp/land_use.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "LandUseAsimOut"
+
+
+def test_log_output_joint_tour_participants_asim_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "joint_tour_participants_asim_out"
+    cr.log_output("/tmp/joint_tour_participants.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "JointTourParticipantsAsimOut"
+
+
 def test_log_h5_table_attaches_declared_schema_metadata(monkeypatch):
     calls = []
 
@@ -269,6 +308,60 @@ def test_log_h5_table_attaches_declared_schema_metadata(monkeypatch):
     assert meta["declared_schema_table"] == "ToursAsimOut"
 
 
+def test_log_h5_table_activitysim_postprocess_households_key_attaches_schema(monkeypatch):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    artifact = cr.log_h5_table(
+        "/tmp/data.h5",
+        key="activitysim_postprocess_usim_households_table_updated",
+        table_path="/households",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact is not None
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "activitysim_postprocess_usim_households_table_updated"
+    assert table_path == "/households"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "ActivitysimPostprocessUsimHouseholdsUpdated"
+
+
+def test_log_h5_table_activitysim_postprocess_persons_key_attaches_schema(monkeypatch):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    artifact = cr.log_h5_table(
+        "/tmp/data.h5",
+        key="activitysim_postprocess_usim_persons_table_updated",
+        table_path="/persons",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact is not None
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "activitysim_postprocess_usim_persons_table_updated"
+    assert table_path == "/persons"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "ActivitysimPostprocessUsimPersonsUpdated"
+
+
 def test_log_output_beam_plans_asim_out_key_attaches_schema(monkeypatch):
     calls = []
     _install_consist_stub(monkeypatch, calls)
@@ -280,6 +373,58 @@ def test_log_output_beam_plans_asim_out_key_attaches_schema(monkeypatch):
     _, resolved_key, meta = calls[0]
     assert resolved_key == key
     assert meta["schema"].__name__ == "BeamPlansAsimOut"
+
+
+def test_log_output_beam_plans_out_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "beam_plans_out"
+    cr.log_output("/tmp/beam_plans.csv.gz", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamPlansOut"
+
+
+def test_log_output_events_parquet_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "events_parquet_2023_0"
+    cr.log_output("/tmp/events.parquet", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamEventsParquet"
+
+
+def test_log_output_final_vehicles_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "final_vehicles_2023_0"
+    cr.log_output("/tmp/final_vehicles.csv.gz", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamFinalVehicles"
+
+
+def test_log_output_route_history_key_attaches_schema(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    key = "route_history_2023_0"
+    cr.log_output("/tmp/route_history.csv.gz", key=key, enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == key
+    assert meta["schema"].__name__ == "BeamRouteHistory"
 
 
 def test_log_output_trips_asim_out_key_attaches_schema(monkeypatch):
@@ -404,4 +549,104 @@ def test_log_output_trips_asim_out_fk_targets_are_registered(monkeypatch, caplog
     _, resolved_key, meta = calls[0]
     assert resolved_key == "trips_asim_out"
     assert meta["schema"].__name__ == "TripsAsimOut"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_output_beam_plans_out_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/beam_plans.csv.gz", key="beam_plans_out", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "beam_plans_out"
+    assert meta["schema"].__name__ == "BeamPlansOut"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_output_accessibility_asim_out_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/accessibility.parquet", key="accessibility_asim_out", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "accessibility_asim_out"
+    assert meta["schema"].__name__ == "AccessibilityAsimOut"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_output_events_parquet_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/events.parquet", key="events_parquet_2023_0", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "events_parquet_2023_0"
+    assert meta["schema"].__name__ == "BeamEventsParquet"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_output_final_vehicles_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/final_vehicles.csv.gz", key="final_vehicles_2023_0", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "final_vehicles_2023_0"
+    assert meta["schema"].__name__ == "BeamFinalVehicles"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_output_route_history_fk_targets_are_registered(monkeypatch, caplog):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with caplog.at_level("WARNING"):
+        cr.log_output("/tmp/route_history.csv.gz", key="route_history_2023_0", enabled=True)
+
+    assert calls
+    _, resolved_key, meta = calls[0]
+    assert resolved_key == "route_history_2023_0"
+    assert meta["schema"].__name__ == "BeamRouteHistory"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_activitysim_postprocess_persons_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="activitysim_postprocess_usim_persons_table_updated",
+            table_path="/persons",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "activitysim_postprocess_usim_persons_table_updated"
+    assert table_path == "/persons"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "ActivitysimPostprocessUsimPersonsUpdated"
     assert "target table is not registered in schema registry" not in caplog.text
