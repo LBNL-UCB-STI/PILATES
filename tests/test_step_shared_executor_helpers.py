@@ -202,16 +202,12 @@ def test_execute_postprocess_uses_activitysim_run_postprocess_record_store(
 
     captured = {}
 
-    def _fake_run_postprocessor(postprocessor, raw_outputs, workspace, model_run_hash=None):
-        captured["postprocessor"] = postprocessor
-        captured["raw_outputs"] = raw_outputs
-        captured["workspace"] = workspace
-        return raw_outputs
-
-    monkeypatch.setattr(
-        "pilates.workflows.steps.shared.run_postprocessor",
-        _fake_run_postprocessor,
-    )
+    class _Postprocessor:
+        def postprocess(self, raw_outputs, workspace, model_run_hash=None):
+            captured["postprocessor"] = self
+            captured["raw_outputs"] = raw_outputs
+            captured["workspace"] = workspace
+            return raw_outputs
 
     workspace = type(
         "Workspace",
@@ -220,7 +216,7 @@ def test_execute_postprocess_uses_activitysim_run_postprocess_record_store(
     )()
 
     result = _execute_postprocess(
-        postprocessor=object(),
+        postprocessor=_Postprocessor(),
         workspace=workspace,
         outputs_holder=holder,
     )

@@ -295,6 +295,58 @@ def test_recover_activitysim_run_outputs_carries_source_input_hashes(
     )
 
 
+def test_recover_activitysim_run_outputs_does_not_require_source_input_paths_to_exist(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = output_dir / "year-2018-iteration-0"
+    _write_file(iter_dir / "households.parquet")
+    _write_file(output_dir / "cache" / "skims.zarr")
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
+    )
+
+    holder = StepOutputsHolder()
+    holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=asim_dir / "land_use.csv",
+        households_table=asim_dir / "households.csv",
+        persons_table=asim_dir / "persons.csv",
+        omx_skims=asim_dir / "skims.omx",
+        input_hashes={
+            ASIM_HOUSEHOLDS_IN: "hash-households",
+            ASIM_PERSONS_IN: "hash-persons",
+            ASIM_LAND_USE_IN: "hash-land-use",
+            ASIM_OMX_SKIMS: "hash-omx",
+        },
+    )
+
+    outputs = _recover_cached_outputs(
+        step_name="activitysim_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, iteration=0),
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs=None,
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_run.raw_outputs["households_asim_out_temp"] == (
+        iter_dir / "households.parquet"
+    )
+    assert holder.activitysim_run.source_input_paths[ASIM_HOUSEHOLDS_IN] == (
+        asim_dir / "households.csv"
+    )
+    assert holder.activitysim_run.source_input_hashes[ASIM_HOUSEHOLDS_IN] == (
+        "hash-households"
+    )
+
+
 def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_dir = Path(workspace.get_asim_mutable_data_dir())

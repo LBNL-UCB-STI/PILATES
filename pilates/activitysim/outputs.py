@@ -285,7 +285,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "output_dir"
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
-    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs", "source_input_paths")
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)

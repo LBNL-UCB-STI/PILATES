@@ -132,16 +132,10 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
 
-    # After run, mutable outputs remain available on the workspace, while
-    # input counts are derived from the returned bootstrap records.
+    # Initialization returns the copied records and does not maintain a
+    # duplicate runtime cache on the workspace.
     assert workspace.input_data == {}
-    assert "beam" in workspace.output_data
-    assert "urbansim" in workspace.output_data
-
-    # Verify that the stored mutable output records are FileRecord instances
-    for model_key in ("beam", "urbansim"):
-        for rec in workspace.output_data[model_key].all_records():
-            assert isinstance(rec, FileRecord)
+    assert workspace.output_data == {}
 
 
 def test_initialization_handles_missing_models_gracefully(monkeypatch):
@@ -290,8 +284,14 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
 
 def test_build_bootstrap_artifact_summary_counts_records_by_model():
     workspace = DummyWorkspace()
-    workspace.output_data["beam"] = RecordStore(
+    copied_records = RecordStore(
         recordList=[
+            FileRecord(
+                unique_id="in1",
+                short_name="beam_in",
+                file_path="/tmp/in",
+                metadata={"model": "beam", "bootstrap_direction": "input"},
+            ),
             FileRecord(
                 unique_id="out1",
                 short_name="beam_out1",
@@ -304,18 +304,6 @@ def test_build_bootstrap_artifact_summary_counts_records_by_model():
                 file_path="/tmp/out2",
                 metadata={"model": "beam", "bootstrap_direction": "output"},
             ),
-        ]
-    )
-
-    copied_records = RecordStore(
-        recordList=[
-            FileRecord(
-                unique_id="in1",
-                short_name="beam_in",
-                file_path="/tmp/in",
-                metadata={"model": "beam", "bootstrap_direction": "input"},
-            ),
-            *workspace.output_data["beam"].all_records(),
         ]
     )
 

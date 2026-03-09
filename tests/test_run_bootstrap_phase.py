@@ -61,7 +61,6 @@ class DummyInitialization:
                 )
             ]
         )
-        workspace.output_data["beam"] = rec_out
         combined = RecordStore()
         combined += rec_in
         combined += rec_out

@@ -248,9 +248,6 @@ from pilates.workflows.step_exec import (
     Postprocessor,
     Preprocessor,
     Runner,
-    run_postprocessor,
-    run_preprocessor,
-    run_runner,
     warm_start_activities as warm_start_activities,
 )
 from pilates.workflows.outputs_base import (
@@ -1222,7 +1219,7 @@ def _execute_preprocess(
     RecordStore
         Preprocessor outputs.
     """
-    return run_preprocessor(preprocessor, workspace)
+    return preprocessor.preprocess(workspace)
 
 
 def _build_required_input_store(
@@ -1334,7 +1331,7 @@ def _execute_run(
         coupler=coupler,
         extra_inputs=extra_inputs,
     )
-    return run_runner(runner, input_store, workspace)
+    return runner.run(input_store, workspace)
 
 
 def _execute_postprocess(
@@ -1379,7 +1376,7 @@ def _execute_postprocess(
             coupler=None,
             warn_missing_coupler_inputs=False,
         )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
+    return postprocessor.postprocess(raw_outputs, workspace)
 
 
 def _execute_beam_preprocess(
@@ -1505,7 +1502,7 @@ def _execute_beam_run(
         coupler=coupler,
         extra_inputs=extra_inputs,
     )
-    return run_runner(runner, input_store, workspace)
+    return runner.run(input_store, workspace)
 
 
 def _execute_beam_postprocess(
@@ -1542,7 +1539,7 @@ def _execute_beam_postprocess(
         coupler=None,
         warn_missing_coupler_inputs=False,
     )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
+    return postprocessor.postprocess(raw_outputs, workspace)
 
 
 def _execute_beam_full_skim(
@@ -1587,7 +1584,7 @@ def _execute_beam_full_skim(
         coupler=coupler,
         extra_inputs=extra_inputs,
     )
-    return run_runner(runner, input_store, workspace)
+    return runner.run(input_store, workspace)
 
 
 def _execute_urbansim_run(
@@ -1626,7 +1623,7 @@ def _execute_urbansim_run(
         context=context,
         coupler=coupler,
     )
-    return run_runner(runner, input_store, workspace)
+    return runner.run(input_store, workspace)
 
 
 def _execute_urbansim_postprocess(
@@ -1665,7 +1662,7 @@ def _execute_urbansim_postprocess(
         context=context,
         coupler=coupler,
     )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
+    return postprocessor.postprocess(raw_outputs, workspace)
 
 
 def _execute_atlas_run(
@@ -1704,7 +1701,7 @@ def _execute_atlas_run(
         context=context,
         coupler=coupler,
     )
-    return run_runner(runner, input_store, workspace)
+    return runner.run(input_store, workspace)
 
 
 def _execute_atlas_postprocess(
@@ -1743,4 +1740,4 @@ def _execute_atlas_postprocess(
         context=context,
         coupler=coupler,
     )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
+    return postprocessor.postprocess(raw_outputs, workspace)

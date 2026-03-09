@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+import pilates.generic.model as generic_model
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
@@ -15,7 +16,6 @@ from pilates.workflows.orchestration import _update_coupler_from_outputs
 from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
-from pilates.workflows.steps import shared as shared_steps
 from pilates.workflows.steps.shared import _build_required_input_store, _execute_run
 
 
@@ -151,15 +151,14 @@ def test_execute_run_materializes_runner_inputs_from_typed_output_items(
     runner_outputs = RecordStore()
     captured = {}
 
-    def _fake_run_runner(runner, input_store, workspace):
-        captured["runner"] = runner
-        captured["input_store"] = input_store
-        captured["workspace"] = workspace
-        return runner_outputs
+    class _Runner:
+        def run(self, input_store, workspace):
+            captured["runner"] = self
+            captured["input_store"] = input_store
+            captured["workspace"] = workspace
+            return runner_outputs
 
-    monkeypatch.setattr(shared_steps, "run_runner", _fake_run_runner)
-
-    runner = object()
+    runner = _Runner()
     workspace = object()
     result = _execute_run(runner, workspace, holder, context="activitysim_run")
 
@@ -300,3 +299,8 @@ def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -
 
     assert mapping == {"linkstats": str(first)}
     assert "Duplicate typed-output artifact key 'linkstats'" in caplog.text
+
+
+def test_generic_model_boundary_drops_decorator_compat_surface() -> None:
+    assert not hasattr(generic_model, "provenance_logging")
+    assert not hasattr(generic_model.Model, "update_state")

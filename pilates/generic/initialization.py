@@ -22,12 +22,6 @@ if TYPE_CHECKING:
 _BOOTSTRAP_DIRECTION_KEY = "bootstrap_direction"
 
 
-def _record_count(record_store: object) -> int:
-    if isinstance(record_store, RecordStore):
-        return len(record_store.all_records())
-    return 0
-
-
 def _counts_by_model_from_records(
     copied_records: Optional[RecordStore],
     *,
@@ -35,7 +29,6 @@ def _counts_by_model_from_records(
 ) -> Dict[str, int]:
     if not isinstance(copied_records, RecordStore):
         return {}
-
     counts: Dict[str, int] = {}
     for record in copied_records.all_records():
         metadata = getattr(record, "metadata", None) or {}
@@ -56,22 +49,11 @@ def build_bootstrap_artifact_summary(
 
     This summary is intentionally lightweight for Phase 1 bootstrap reporting.
     """
-    workspace_input_counts = {
-        model_name: _record_count(records)
-        for model_name, records in getattr(workspace, "input_data", {}).items()
-        if _record_count(records) > 0
-    }
-    workspace_output_counts = {
-        model_name: _record_count(records)
-        for model_name, records in getattr(workspace, "output_data", {}).items()
-        if _record_count(records) > 0
-    }
-
-    input_counts = workspace_input_counts or _counts_by_model_from_records(
+    input_counts = _counts_by_model_from_records(
         copied_records,
         direction="input",
     )
-    output_counts = workspace_output_counts or _counts_by_model_from_records(
+    output_counts = _counts_by_model_from_records(
         copied_records,
         direction="output",
     )
@@ -79,11 +61,7 @@ def build_bootstrap_artifact_summary(
     models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
     input_total = sum(input_counts.values())
     output_total = sum(output_counts.values())
-    copied_total = (
-        len(copied_records.all_records())
-        if isinstance(copied_records, RecordStore)
-        else input_total + output_total
-    )
+    copied_total = len(copied_records.all_records()) if isinstance(copied_records, RecordStore) else 0
 
     return {
         "models": models,
@@ -262,27 +240,12 @@ def _log_record_store(
             if record_hash:
                 record.content_hash = record_hash
 
-
-def _store_workspace_output_records(
-    workspace: Workspace,
-    model_key: str,
-    rec_out: RecordStore,
-) -> None:
-    """Store copied mutable outputs under the model key, appending if already present."""
-    if model_key in workspace.output_data:
-        workspace.output_data[model_key] += rec_out
-    else:
-        workspace.output_data[model_key] = rec_out
-
-
 def _accumulate_copy_result(
     *,
     result: Optional[Tuple[RecordStore, RecordStore]],
     model_name: str,
     initialization_records_in: RecordStore,
     initialization_records_out: RecordStore,
-    workspace: Optional[Workspace] = None,
-    workspace_model_key: Optional[str] = None,
 ) -> bool:
     """
     Tag and append copy outputs, optionally storing them on workspace caches.
@@ -300,13 +263,6 @@ def _accumulate_copy_result(
     _tag_record_store(rec_out, model_name, direction="output")
     initialization_records_in += rec_in
     initialization_records_out += rec_out
-
-    if workspace is not None:
-        _store_workspace_output_records(
-            workspace,
-            workspace_model_key or model_name,
-            rec_out,
-        )
     return True
 
 
@@ -349,8 +305,6 @@ class Initialization(Model):
                     model_name="beam",
                     initialization_records_in=initialization_records_in,
                     initialization_records_out=initialization_records_out,
-                    workspace=workspace,
-                    workspace_model_key="beam",
                 )
 
             if settings.run.models.travel == "beam":
@@ -451,8 +405,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
                     have_not_copied_usim_data = False
 
@@ -471,8 +423,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
 
@@ -493,8 +443,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
 
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed

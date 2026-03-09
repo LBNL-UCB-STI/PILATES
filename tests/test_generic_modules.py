@@ -5,7 +5,6 @@ from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
-from pilates.workflows.step_exec import run_postprocessor, run_preprocessor
 
 
 # ----------------------------------------------------------------------
@@ -107,7 +106,7 @@ def test_get_model_and_image_missing_image():
         GenericRunner.get_model_and_image(settings, "land_use_model")
 
 
-def test_run_preprocessor_forwards_previous_records():
+def test_preprocessor_protocol_shape_forwards_previous_records():
     workspace = object()
     previous_records = RecordStore()
     captured = {}
@@ -118,7 +117,7 @@ def test_run_preprocessor_forwards_previous_records():
             captured["previous_records"] = previous_records_arg
             return previous_records_arg
 
-    result = run_preprocessor(_Preprocessor(), workspace, previous_records)
+    result = _Preprocessor().preprocess(workspace, previous_records)
 
     assert captured == {
         "workspace": workspace,
@@ -127,7 +126,7 @@ def test_run_preprocessor_forwards_previous_records():
     assert result is previous_records
 
 
-def test_run_postprocessor_forwards_model_run_hash():
+def test_postprocessor_protocol_shape_forwards_model_run_hash():
     raw_outputs = RecordStore()
     workspace = object()
     captured = {}
@@ -139,8 +138,7 @@ def test_run_postprocessor_forwards_model_run_hash():
             captured["model_run_hash"] = model_run_hash
             return raw_outputs_arg
 
-    result = run_postprocessor(
-        _Postprocessor(),
+    result = _Postprocessor().postprocess(
         raw_outputs,
         workspace,
         model_run_hash="run-hash-123",

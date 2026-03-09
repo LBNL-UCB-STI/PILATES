@@ -753,6 +753,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             source_input_hashes = getattr(
                 raw_outputs, "activitysim_source_input_hashes", {}
             )
+            if not source_input_paths and not source_input_hashes:
+                logger.warning(
+                    "ActivitySim postprocess raw outputs are missing source input metadata; "
+                    "archived input content hashes may be unavailable."
+                )
             for short_name, source_path in source_input_paths.items():
                 record_hash = source_input_hashes.get(short_name)
                 if not record_hash or not source_path:
