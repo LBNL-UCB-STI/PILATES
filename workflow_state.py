@@ -68,7 +68,6 @@ class WorkflowState:
 
         # Store settings for access by methods that need them
         self._settings = {
-            "end_year": end_year,
             "supply_demand_iters": 1,  # Default, will be updated in from_settings
             "land_use_enabled": land_use_enabled,
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
@@ -102,9 +101,6 @@ class WorkflowState:
         # If we have activity demand OR traffic assignment, we need the supply-demand loop
         if activity_demand_enabled or traffic_assignment_enabled:
             self.enabled_stages.add(self.Stage.supply_demand_loop)
-            if self.Stage.supply_demand_loop not in self.major_stage_order:
-                self.major_stage_order.append(self.Stage.supply_demand_loop)
-                logger.debug("Added supply_demand_loop to major_stage_order")
 
         # Define what happens inside the supply-demand loop
         self.loop_substages = []
@@ -644,19 +640,3 @@ class WorkflowState:
     def set_data_initialized(self, value: bool):
         self.data_initialized = value
         self.write_state()
-
-    def get_sub_stages_from(self, start_sub_stage: Optional[Stage]):
-        """Returns the sequence of sub-stages starting from the given stage (inclusive)."""
-        if not self.loop_substages:
-            return []
-        if start_sub_stage is None:
-            return self.loop_substages
-        try:
-            start_index = self.loop_substages.index(start_sub_stage)
-            return self.loop_substages[start_index:]
-        except ValueError:
-            logger.error(
-                "Start sub-stage %s not found in sequence. Restarting from beginning.",
-                start_sub_stage.name if start_sub_stage else None,
-            )
-            return self.loop_substages

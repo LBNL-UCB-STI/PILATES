@@ -739,6 +739,28 @@ def run_bootstrap_phase(
             copied_records,
         )
 
+    def _finalize_bootstrap_result(
+        *,
+        cache_hit: bool,
+        probe_run_id: Optional[str],
+        materialization_run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        nonlocal staged_artifact_summary
+        if not staged_artifact_summary:
+            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
+        _archive_bootstrap_restart_artifacts(
+            settings=settings,
+            workspace=workspace,
+        )
+        return {
+            "bootstrap_cache_hit": cache_hit,
+            "staged_artifact_summary": staged_artifact_summary,
+            "manifest_reference": _build_bootstrap_manifest_reference(
+                probe_run_id=probe_run_id,
+                materialization_run_id=materialization_run_id,
+            ),
+        }
+
     run_kwargs: Dict[str, Any] = {
         "fn": _execute_initialization,
         "name": "bootstrap_initialization",
@@ -780,19 +802,10 @@ def run_bootstrap_phase(
             **run_kwargs,
             cache_options=CacheOptions(cache_mode="off"),
         )
-        if not staged_artifact_summary:
-            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-        _archive_bootstrap_restart_artifacts(
-            settings=settings,
-            workspace=workspace,
+        return _finalize_bootstrap_result(
+            cache_hit=False,
+            probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
         )
-        return {
-            "bootstrap_cache_hit": False,
-            "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": _build_bootstrap_manifest_reference(
-                probe_run_id=getattr(getattr(run_result, "run", None), "id", None)
-            ),
-        }
 
     probe_result = tracker.run(**run_kwargs)
     probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
@@ -806,37 +819,19 @@ def run_bootstrap_phase(
             **run_kwargs,
             cache_options=CacheOptions(cache_mode="overwrite"),
         )
-        if not staged_artifact_summary:
-            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-        _archive_bootstrap_restart_artifacts(
-            settings=settings,
-            workspace=workspace,
-        )
-        return {
-            "bootstrap_cache_hit": True,
-            "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": _build_bootstrap_manifest_reference(
-                probe_run_id=probe_run_id,
-                materialization_run_id=getattr(
-                    getattr(materialized_result, "run", None), "id", None
-                ),
+        return _finalize_bootstrap_result(
+            cache_hit=True,
+            probe_run_id=probe_run_id,
+            materialization_run_id=getattr(
+                getattr(materialized_result, "run", None), "id", None
             ),
-        }
+        )
 
     logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
-    if not staged_artifact_summary:
-        staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-    _archive_bootstrap_restart_artifacts(
-        settings=settings,
-        workspace=workspace,
+    return _finalize_bootstrap_result(
+        cache_hit=False,
+        probe_run_id=probe_run_id,
     )
-    return {
-        "bootstrap_cache_hit": False,
-        "staged_artifact_summary": staged_artifact_summary,
-        "manifest_reference": _build_bootstrap_manifest_reference(
-            probe_run_id=probe_run_id
-        ),
-    }
 
 
 def _assert_bootstrap_output_invariant(
