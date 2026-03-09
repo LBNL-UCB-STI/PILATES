@@ -206,51 +206,6 @@ def merge_model_expected_inputs(
     return merge_expected_inputs(base_inputs, expected, prefer_expected=prefer_expected)
 
 
-def merge_expected_model_inputs(
-    model_names: Iterable[str],
-    base_inputs: MutableMapping[str, Any],
-    settings: "PilatesConfig",
-    state: "WorkflowState",
-    workspace: "Workspace",
-    *,
-    prefer_expected: bool = False,
-) -> MutableMapping[str, Any]:
-    """
-    Merge expected inputs for multiple models in sequence.
-
-    Parameters
-    ----------
-    model_names : iterable of str
-        Model keys registered in the factory, merged in order.
-    base_inputs : dict
-        Pre-populated inputs to augment.
-    settings : PilatesConfig
-        Parsed simulation settings.
-    state : WorkflowState
-        Current workflow state.
-    workspace : Workspace
-        Workspace instance with paths.
-    prefer_expected : bool, optional
-        When True, expected values override existing keys.
-
-    Returns
-    -------
-    dict
-        Updated input mapping with expected inputs merged in.
-    """
-    merged = base_inputs
-    for model_name in model_names:
-        merged = merge_model_expected_inputs(
-            model_name,
-            merged,
-            settings,
-            state,
-            workspace,
-            prefer_expected=prefer_expected,
-        )
-    return merged
-
-
 def build_outputs(
     model_name: str,
     settings: "PilatesConfig",

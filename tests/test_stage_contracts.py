@@ -25,6 +25,16 @@ import yaml
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.atlas.outputs import (
+    AtlasPostprocessOutputs,
+    AtlasPreprocessOutputs,
+    AtlasRunOutputs,
+)
+from pilates.urbansim.outputs import (
+    UrbanSimPostprocessOutputs,
+    UrbanSimPreprocessOutputs,
+    UrbanSimRunOutputs,
+)
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
@@ -352,6 +362,16 @@ def stage_env(tmp_path, monkeypatch):
 
     def record_builder(model_name, phase):
         if phase == "preprocess":
+            if model_name == "urbansim":
+                return UrbanSimPreprocessOutputs(
+                    usim_mutable_data_dir=usim_dir,
+                    prepared_inputs={},
+                )
+            if model_name == "atlas":
+                return AtlasPreprocessOutputs(
+                    atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
+                    prepared_inputs={},
+                )
             if model_name == "activitysim":
                 return RecordStore(
                     recordList=[
@@ -373,10 +393,16 @@ def stage_env(tmp_path, monkeypatch):
             return RecordStore()
         if phase == "run":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(usim_output_path), short_name=USIM_FORECAST_OUTPUT)
-                    ]
+                return UrbanSimRunOutputs(
+                    usim_datastore_h5=usim_output_path,
+                    raw_outputs={
+                        USIM_FORECAST_OUTPUT: usim_output_path,
+                    },
+                )
+            if model_name == "atlas":
+                return AtlasRunOutputs(
+                    atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+                    raw_outputs={},
                 )
             if model_name == "activitysim_compile":
                 _write_file(zarr_path)
@@ -402,13 +428,17 @@ def stage_env(tmp_path, monkeypatch):
             return RecordStore()
         if phase == "postprocess":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(usim_merged_path),
-                            short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-                        )
-                    ]
+                return UrbanSimPostprocessOutputs(
+                    usim_datastore_h5=usim_merged_path,
+                    processed_outputs={
+                        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}": usim_merged_path,
+                    },
+                )
+            if model_name == "atlas":
+                return AtlasPostprocessOutputs(
+                    atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+                    usim_datastore_h5=Path(usim_input_path),
+                    processed_outputs={},
                 )
             return RecordStore()
         return RecordStore()

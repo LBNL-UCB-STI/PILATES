@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
+from typing import ClassVar, Dict, Iterable, Tuple, TYPE_CHECKING
 
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,

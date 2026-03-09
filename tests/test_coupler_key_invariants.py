@@ -39,7 +39,9 @@ from pilates.workflows.stages.supply_demand import (
 )
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
-from tests.test_stage_contracts import _write_file, stage_env
+from tests.test_stage_contracts import _write_file
+
+pytest_plugins = ("tests.test_stage_contracts",)
 
 
 def _coupler_keys(coupler) -> set[str]:

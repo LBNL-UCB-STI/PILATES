@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.workflows.outputs_base import StepOutputsBase
-from pilates.workflows.artifact_keys import USIM_H5_UPDATED
 
 if TYPE_CHECKING:
     pass

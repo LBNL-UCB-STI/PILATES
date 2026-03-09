@@ -4,7 +4,6 @@ from pilates.workflows.artifact_key_migrations import (
     resolve_artifact_key,
 )
 from pilates.workflows.artifact_keys import ArtifactKeys
-from pilates.workflows.artifact_constants import BEAM_FULL_SKIMS
 
 
 def test_resolve_artifact_key_alias():
@@ -21,9 +20,9 @@ def test_canonicalize_artifact_mapping_prefers_canonical():
     assert mapping[ArtifactKeys.ASIM_HOUSEHOLDS_IN] == "/tmp/canonical.csv"
 
 
-def test_artifact_constants_compatibility_exports():
+def test_artifact_keys_export_canonical_constants():
     assert ASIM_HOUSEHOLDS_IN == ArtifactKeys.ASIM_HOUSEHOLDS_IN
-    assert BEAM_FULL_SKIMS == ArtifactKeys.BEAM_FULL_SKIMS
+    assert ArtifactKeys.BEAM_FULL_SKIMS == "beam_full_skims"
 
 
 def test_resolve_artifact_key_usim_current_aliases():
