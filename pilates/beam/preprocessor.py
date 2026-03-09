@@ -326,7 +326,7 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         Prepares all data needed to run BEAM for the current iteration.
         """
-        input_records = workspace.output_data.get("beam", RecordStore())
+        input_records = RecordStore()
         output_records = RecordStore()
 
         # Collect necessary records from the previous (ActivitySim) step

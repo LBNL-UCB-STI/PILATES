@@ -1,29 +1,29 @@
 from types import SimpleNamespace
 
-from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+)
+from pilates.generic.records import RecordStore
 from pilates.workflows import steps
 from pilates.workflows.steps import activitysim as steps_activitysim
 
 
-def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
-    captured = {}
-
-    def _fake_make_generic_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_activitysim,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+def _dummy_coupler():
+    return SimpleNamespace(
+        get=lambda *args, **kwargs: None,
+        set=lambda *args, **kwargs: None,
+        update=lambda *args, **kwargs: None,
+        set_from_artifact=lambda *args, **kwargs: None,
     )
 
-    steps.make_activitysim_postprocess_step(
-        coupler=SimpleNamespace(),
+
+def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
-
-    output_logger = captured["output_logger"]
+    output_logger = step_fn.__pilates_output_replayer__
     calls = []
     h5_table_calls = []
 
@@ -63,24 +63,28 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
 
 
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
-    captured = {}
-
-    def _fake_make_generic_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
-        return lambda *args, **inner_kwargs: None
-
+    monkeypatch.setattr(
+        steps_activitysim.ModelFactory,
+        "get_postprocessor",
+        lambda self, *args, **kwargs: object(),
+    )
     monkeypatch.setattr(
         steps_activitysim,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_execute_postprocess",
+        lambda *_args, **_kwargs: RecordStore(),
     )
-
-    steps.make_activitysim_postprocess_step(
-        coupler=SimpleNamespace(),
-        outputs_holder=SimpleNamespace(),
+    monkeypatch.setattr(
+        steps_activitysim,
+        "record_store_to_outputs",
+        lambda **_kwargs: ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=tmp_path,
+            processed_outputs={},
+        ),
     )
-
-    input_logger = captured["input_logger"]
+    monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
+    monkeypatch.setattr(steps_activitysim, "log_and_set_output", lambda **_kwargs: None)
+    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
     calls = []
 
     def _log_input_only(*, key, path, description, **meta):
@@ -120,7 +124,11 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
         Stage=SimpleNamespace(land_use="land_use"),
     )
 
-    input_logger(settings=settings, state=state, workspace=workspace, holder=None)
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(activitysim_run=None),
+    )
+    step_fn(settings=settings, state=state, workspace=workspace)
 
     keys = {key for key, _path in calls}
     assert "households_asim_in" in keys
@@ -133,24 +141,16 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
 
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:
-    captured = {}
-
-    def _fake_make_generic_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
-        return lambda *args, **inner_kwargs: None
-
+    monkeypatch.setattr(
+        steps_activitysim.ModelFactory,
+        "get_preprocessor",
+        lambda self, *args, **kwargs: object(),
+    )
     monkeypatch.setattr(
         steps_activitysim,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_execute_preprocess",
+        lambda *_args, **_kwargs: RecordStore(),
     )
-
-    steps.make_activitysim_preprocess_step(
-        coupler=SimpleNamespace(get=lambda *args, **kwargs: None, set=lambda *args, **kwargs: None),
-        outputs_holder=SimpleNamespace(),
-    )
-
-    input_logger = captured["input_logger"]
     table_calls = []
 
     monkeypatch.setattr(steps_activitysim, "resolve_preferred_step_input", lambda **_kwargs: {})
@@ -180,15 +180,35 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         "_log_named_h5_tables",
         lambda **kwargs: table_calls.append(kwargs),
     )
+    monkeypatch.setattr(steps_activitysim, "_log_step_records", lambda **_kwargs: None)
 
     h5_path = tmp_path / "model_data.h5"
     h5_path.write_text("x")
+    asim_data_dir = tmp_path / "asim_data"
+    asim_data_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("land_use.csv", "households.csv", "persons.csv"):
+        (asim_data_dir / filename).write_text("x")
+    monkeypatch.setattr(
+        steps_activitysim,
+        "record_store_to_outputs",
+        lambda **_kwargs: ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_data_dir,
+            land_use_table=asim_data_dir / "land_use.csv",
+            households_table=asim_data_dir / "households.csv",
+            persons_table=asim_data_dir / "persons.csv",
+            omx_skims=None,
+        ),
+    )
 
-    input_logger(
+    step_fn = steps.make_activitysim_preprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    step_fn(
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2023, start_year=2017),
-        workspace=SimpleNamespace(),
-        holder=SimpleNamespace(),
+        workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_data_dir)),
     )
 
     assert len(table_calls) == 1
@@ -203,24 +223,11 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
 
 
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
-    captured = {}
-
-    def _fake_make_generic_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
-        return lambda *args, **inner_kwargs: None
-
-    monkeypatch.setattr(
-        steps_activitysim,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
-    )
-
-    steps.make_activitysim_postprocess_step(
-        coupler=SimpleNamespace(),
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
-
-    output_logger = captured["output_logger"]
+    output_logger = step_fn.__pilates_output_replayer__
     table_calls = []
 
     monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)

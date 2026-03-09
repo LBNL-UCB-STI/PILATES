@@ -206,7 +206,6 @@ from typing import (
 import h5py
 from consist import define_step
 
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.beam_warmstart import (
@@ -219,7 +218,6 @@ from pilates.utils.coupler_helpers import (
     log_and_set_output as log_and_set_output,
     log_input_only as log_input_only,
     log_output_only as log_output_only,
-    record_store_to_outputs,
     resolve_artifact_from_value as resolve_artifact_from_value,
     update_coupler_from_beam_outputs as update_coupler_from_beam_outputs,
 )
@@ -256,7 +254,6 @@ from pilates.workflows.step_exec import (
     warm_start_activities as warm_start_activities,
 )
 from pilates.workflows.outputs_base import (
-    ValidationContext,
     declared_outputs_for_step_outputs_class,
     iter_step_output_items,
 )
@@ -1197,141 +1194,6 @@ def _decorate_step_with_consist(
     if outputs:
         kwargs["outputs"] = outputs
     return define_step(**kwargs)(step_func)
-
-
-def _make_generic_step_function(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., RecordStore],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[InputLogger] = None,
-    output_logger: Optional[OutputLogger] = None,
-) -> Callable[..., None]:
-    """
-    Build a step function with common RecordStore-to-StepOutputs plumbing.
-
-    The returned function executes a model component (preprocess/run/postprocess),
-    converts its RecordStore outputs into a typed outputs dataclass, validates
-    the outputs, logs any configured inputs/outputs for provenance, and stores
-    the results in the shared outputs holder.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder used to store outputs for downstream steps.
-    model_name : str
-        Model identifier for logging.
-    phase : str
-        Step phase name (preprocess/run/postprocess).
-    outputs_class : type
-        StepOutputs dataclass type.
-    component_getter : callable
-        Callable that returns the component instance.
-    component_executor : callable
-        Callable that executes the component.
-    outputs_holder_setter : callable
-        Callback that stores outputs on the holder.
-    input_logger : callable, optional
-        Optional hook for logging step inputs.
-    output_logger : callable, optional
-        Optional hook for logging step outputs.
-
-    Returns
-    -------
-    callable
-        Step function compatible with Consist scenario execution.
-    """
-
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        logger.debug("Starting %s %s step", model_name, phase)
-        factory = ModelFactory()
-        component = component_getter(factory, state)
-
-        extra_kwargs: Dict[str, Any] = {}
-        if input_logger is not None:
-            extra_kwargs = (
-                input_logger(settings, state, workspace, outputs_holder) or {}
-            )
-            logger.debug(
-                "%s %s input logger keys: %s",
-                model_name,
-                phase,
-                list(extra_kwargs.keys()),
-            )
-
-        record_store = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if record_store is not None:
-            try:
-                record_keys = list(record_store.to_mapping().keys())
-            except AttributeError:
-                record_keys = []
-            logger.debug(
-                "%s %s record store keys: %s",
-                model_name,
-                phase,
-                record_keys,
-            )
-
-        step_outputs = record_store_to_outputs(
-            record_store=record_store,
-            output_class=outputs_class,
-            workspace=workspace,
-        )
-        validation_context = ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name=f"{model_name}_{phase}",
-            upstream_outputs=_upstream_outputs_view(
-                outputs_holder, current_step_name=f"{model_name}_{phase}"
-            ),
-        )
-        step_outputs.validate(context=validation_context)
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-        logger.info("%s %s completed successfully", model_name, phase)
-
-    step_model = f"{model_name}_{phase}"
-    if output_logger is not None:
-        setattr(
-            _step_func,
-            "__pilates_output_replayer__",
-            lambda outputs, settings, state, workspace, holder: output_logger(
-                outputs, settings, state, workspace, holder
-            ),
-        )
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=step_model,
-        description=f"{model_name} {phase} workflow step",
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=_declared_outputs_from_class(outputs_class),
-        tags=[model_name, phase],
-    )
 
 
 def _execute_preprocess(

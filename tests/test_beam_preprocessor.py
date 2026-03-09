@@ -205,6 +205,7 @@ from types import SimpleNamespace  # Import SimpleNamespace for mocking Workflow
 from pilates.beam.preprocessor import (
     BeamPreprocessor,
 )  # Import BeamPreprocessor
+from pilates.generic.records import FileRecord, RecordStore
 
 # Define a canonical order for GEOIDs that our test will enforce
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
@@ -389,3 +390,72 @@ class TestBeamPreprocessor:
 
         # 2. Verify the new shapefile is used in the BEAM config
         assert mock_settings.beam.skim_zone_geoid_col in sorted_gdf.columns
+
+
+def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settings, mock_workspace):
+    state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        forecast_year=2020,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(
+        model_name="beam",
+        state=state,
+        major_stage=None,
+    )
+    object.__setattr__(preprocessor.settings, "vehicle_ownership_model_enabled", False)
+    object.__setattr__(
+        preprocessor.settings,
+        "activitysim",
+        SimpleNamespace(file_format="parquet"),
+    )
+
+    cached_beam_record = FileRecord(
+        file_path="/tmp/cached_beam_plans.parquet",
+        short_name="beam_plans",
+        description="stale BEAM cache record",
+    )
+    mock_workspace.output_data = {
+        "beam": RecordStore(recordList=[cached_beam_record]),
+    }
+
+    previous_records = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path="/tmp/households.parquet",
+                short_name="households_asim_out",
+                description="fresh ActivitySim households",
+            )
+        ]
+    )
+
+    captured = {}
+
+    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor,
+        "prepare_beam_zone_shapefile",
+        lambda _workspace: None,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_copy_vehicles_from_atlas",
+        lambda _workspace: None,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_handle_linkstats",
+        lambda _workspace, _previous_beam_records, _store: None,
+    )
+
+    def _capture_input_records(input_records, _workspace):
+        captured["keys"] = [record.short_name for record in input_records.all_records()]
+        return RecordStore()
+
+    monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _capture_input_records)
+
+    preprocessor._preprocess(mock_workspace, previous_records=previous_records)
+
+    assert captured["keys"] == ["households_asim_out"]

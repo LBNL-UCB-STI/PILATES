@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from pilates.config.models import PilatesConfig
+from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import LINKSTATS, LINKSTATS_WARMSTART
+from pilates.workflows.outputs_base import ValidationContext
+from pilates.utils.coupler_helpers import record_store_to_outputs
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -22,13 +25,15 @@ from .shared import (
     WorkflowState,
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
+    _decorate_step_with_consist,
     _execute_beam_full_skim,
     _execute_beam_postprocess,
     _execute_beam_preprocess,
     _execute_beam_run,
     _log_beam_r5_osm_input,
     _log_step_records,
-    _make_generic_step_function,
+    _schema_outputs_from_class,
+    _upstream_outputs_view,
     cr,
     find_last_run_output_plans,
     log_and_set_input,
@@ -165,6 +170,83 @@ def _publish_beam_run_outputs(
         )
 
 
+def _make_beam_step_function(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    model_name: str,
+    phase: str,
+    outputs_class,
+    component_getter,
+    component_executor,
+    outputs_holder_setter,
+    input_logger=None,
+    output_logger=None,
+) -> Callable[..., None]:
+    @cr.require_runtime_kwargs("settings", "state", "workspace")
+    def _step_func(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        **kwargs: Any,
+    ) -> None:
+        factory = ModelFactory()
+        component = component_getter(factory, state)
+
+        extra_kwargs = dict(
+            input_logger(settings, state, workspace, outputs_holder) or {}
+        ) if input_logger is not None else {}
+        record_store = component_executor(
+            component,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context=f"{model_name}_{phase}",
+            **extra_kwargs,
+            **kwargs,
+        )
+        step_outputs = record_store_to_outputs(
+            record_store=record_store,
+            output_class=outputs_class,
+            workspace=workspace,
+        )
+        step_outputs.validate(
+            context=ValidationContext(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name=f"{model_name}_{phase}",
+                upstream_outputs=_upstream_outputs_view(
+                    outputs_holder,
+                    current_step_name=f"{model_name}_{phase}",
+                ),
+            )
+        )
+        outputs_holder_setter(outputs_holder, step_outputs)
+
+        if output_logger is not None:
+            output_logger(step_outputs, settings, state, workspace, outputs_holder)
+
+    if output_logger is not None:
+        setattr(
+            _step_func,
+            "__pilates_output_replayer__",
+            lambda outputs, settings, state, workspace, holder: output_logger(
+                outputs, settings, state, workspace, holder
+            ),
+        )
+
+    step_model = f"{model_name}_{phase}"
+    return _decorate_step_with_consist(
+        step_func=_step_func,
+        step_model=step_model,
+        description=f"{step_model} workflow step",
+        schema_outputs=_schema_outputs_from_class(outputs_class),
+        outputs=list(outputs_class.declared_output_keys()) or None,
+        tags=[model_name, phase],
+    )
+
+
 def make_beam_preprocess_step(
     *,
     coupler: CouplerProtocol,
@@ -242,7 +324,7 @@ def make_beam_preprocess_step(
             },
         )
 
-    return _make_generic_step_function(
+    return _make_beam_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="beam",
@@ -380,7 +462,7 @@ def make_beam_run_step(
             extra_meta_fn=_beam_run_extra_meta,
         )
 
-    return _make_generic_step_function(
+    return _make_beam_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="beam",
@@ -459,7 +541,7 @@ def make_beam_postprocess_step(
             return
         _publish_beam_run_outputs(outputs=upstream, coupler=coupler)
 
-    return _make_generic_step_function(
+    return _make_beam_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="beam",
@@ -503,7 +585,7 @@ def make_beam_full_skim_step(
                 coupler=coupler,
             )
 
-    return _make_generic_step_function(
+    return _make_beam_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="beam_full",

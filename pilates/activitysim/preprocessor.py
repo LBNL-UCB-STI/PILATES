@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Optional, List, Tuple, Union, Dict
+from typing import Optional, List, Tuple, Union, Dict, TYPE_CHECKING
 
 import numpy as np
 import openmatrix as omx
@@ -27,6 +27,9 @@ from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -2001,7 +2004,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         major_stage: Optional["WorkflowState.Stage"] = None,
     ):
         super().__init__(model_name, state, major_stage)
-        self.required_input_data = ["usim_datastore_h5", "beam_geoms"]
 
     def copy_data_to_mutable_location(
         self,
@@ -2065,23 +2067,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 )
             )
 
-        input_records = workspace.output_data.get("activitysim", RecordStore())
-        input_records_filtered = RecordStore(
-            recordList=[
-                rec
-                for rec in input_records.all_records()
-                if rec.short_name in self.required_input_data
-            ]
-        )
-
         if os.path.exists(
             path_to_beam_skims_in_current_run_workspace
         ):  # <--- This condition should now be true
-            input_skims_record = FileRecord(
-                file_path=path_to_beam_skims_in_current_run_workspace,
-                short_name="omx_skims",
-                description="Raw BEAM OD skims",
-            )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
             os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
             if _should_refresh_skims_copy(
@@ -2098,7 +2086,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
                     skims_loc,
                 )
-            input_records.add_record(input_skims_record)
         else:
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             skims_loc = create_skims_from_beam(

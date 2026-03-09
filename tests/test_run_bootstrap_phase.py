@@ -47,6 +47,7 @@ class DummyInitialization:
                     unique_id="in1",
                     short_name="bootstrap_in",
                     file_path="/tmp/source",
+                    metadata={"model": "beam", "bootstrap_direction": "input"},
                 )
             ]
         )
@@ -56,10 +57,10 @@ class DummyInitialization:
                     unique_id="out1",
                     short_name="bootstrap_out",
                     file_path="/tmp/dest",
+                    metadata={"model": "beam", "bootstrap_direction": "output"},
                 )
             ]
         )
-        workspace.input_data["beam"] = rec_in
         workspace.output_data["beam"] = rec_out
         combined = RecordStore()
         combined += rec_in

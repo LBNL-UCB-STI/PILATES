@@ -365,14 +365,15 @@ def _prepare_updated_tables(
                 for col in required_cols[table_name]
             ]
         ):
+            missing_columns = [
+                col
+                for col in required_cols[table_name]
+                if col not in asim_output_dict[table_name].columns
+            ]
             raise KeyError(
-                "Not all required columns are in the {0} table! We're missing".format(
+                "Not all required columns are in the {0} table! We're missing {1}".format(
                     table_name,
-                    [
-                        col
-                        for col in required_cols[table_name]
-                        if col not in asim_output_dict[table_name].columns
-                    ],
+                    missing_columns,
                 )
             )
         # make sure data types match
@@ -444,7 +445,6 @@ def create_usim_input_data(
     in the ActivitySim outputs. Likewise, UrbanSim *inputs* are only passed
     on to the next iteration if they were not found in the UrbanSim *outputs*.
     """
-    input_year = state.year
     forecast_year = state.forecast_year
     # parse settings
     data_dir = workspace.get_usim_mutable_data_dir()

@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Optional, Type, TypeVar
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.outputs_base import StepOutputsBase
+from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -24,7 +24,6 @@ from .shared import (
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
-    ValidationContext,
     WorkflowState,
     _atlas_artifact_facet_meta,
     _decorate_step_with_consist,

@@ -15,9 +15,9 @@ from pilates.workflows.outputs_base import (
     ValidationContext,
     ValidationResult,
 )
+from pilates.workflows.steps.activitysim import _make_activitysim_typed_step_function
 from pilates.workflows.steps.shared import (
     StepOutputsHolder,
-    _make_generic_step_function,
 )
 
 
@@ -155,7 +155,7 @@ def test_cross_step_validator_reads_upstream_outputs_from_context(tmp_path: Path
     outputs_holder = StepOutputsHolder()
     outputs_holder.urbansim_run = SimpleNamespace(token="upstream-ok")
 
-    step_func = _make_generic_step_function(
+    step_func = _make_activitysim_typed_step_function(
         coupler=SimpleNamespace(),
         outputs_holder=outputs_holder,
         model_name="dummy",

@@ -139,6 +139,7 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert staged_omx.exists()
     assert staged_omx.read_bytes() == b"beam-od-skims"
 
+    # Postprocess still uses workspace.output_data to preserve archived input hashes.
     workspace.output_data["activitysim"] = preprocess_outputs
 
     asim_output_dir = Path(workspace.get_asim_output_dir())

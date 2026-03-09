@@ -132,17 +132,14 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
 
-    # After run, records should be stored in workspace dicts
-    # Two records per model (input + output)
-    assert "beam" in workspace.input_data
+    # After run, mutable outputs remain available on the workspace, while
+    # input counts are derived from the returned bootstrap records.
+    assert workspace.input_data == {}
     assert "beam" in workspace.output_data
-    assert "urbansim" in workspace.input_data
     assert "urbansim" in workspace.output_data
 
-    # Verify that the stored records are FileRecord instances
+    # Verify that the stored mutable output records are FileRecord instances
     for model_key in ("beam", "urbansim"):
-        for rec in workspace.input_data[model_key].all_records():
-            assert isinstance(rec, FileRecord)
         for rec in workspace.output_data[model_key].all_records():
             assert isinstance(rec, FileRecord)
 
@@ -293,19 +290,34 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
 
 def test_build_bootstrap_artifact_summary_counts_records_by_model():
     workspace = DummyWorkspace()
-    workspace.input_data["beam"] = RecordStore(
-        recordList=[FileRecord(unique_id="in1", short_name="beam_in", file_path="/tmp/in")]
-    )
     workspace.output_data["beam"] = RecordStore(
         recordList=[
-            FileRecord(unique_id="out1", short_name="beam_out1", file_path="/tmp/out1"),
-            FileRecord(unique_id="out2", short_name="beam_out2", file_path="/tmp/out2"),
+            FileRecord(
+                unique_id="out1",
+                short_name="beam_out1",
+                file_path="/tmp/out1",
+                metadata={"model": "beam", "bootstrap_direction": "output"},
+            ),
+            FileRecord(
+                unique_id="out2",
+                short_name="beam_out2",
+                file_path="/tmp/out2",
+                metadata={"model": "beam", "bootstrap_direction": "output"},
+            ),
         ]
     )
 
-    copied_records = RecordStore()
-    copied_records += workspace.input_data["beam"]
-    copied_records += workspace.output_data["beam"]
+    copied_records = RecordStore(
+        recordList=[
+            FileRecord(
+                unique_id="in1",
+                short_name="beam_in",
+                file_path="/tmp/in",
+                metadata={"model": "beam", "bootstrap_direction": "input"},
+            ),
+            *workspace.output_data["beam"].all_records(),
+        ]
+    )
 
     summary = build_bootstrap_artifact_summary(workspace, copied_records)
 

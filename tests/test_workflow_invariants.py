@@ -136,14 +136,14 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     """
     captured = {}
 
-    def _fake_make_generic_step_function(**kwargs):
+    def _fake_make_beam_step_function(**kwargs):
         captured["output_logger"] = kwargs["output_logger"]
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_make_beam_step_function",
+        _fake_make_beam_step_function,
     )
 
     steps.make_beam_run_step(
@@ -186,14 +186,14 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
 ):
     captured = {}
 
-    def _fake_make_generic_step_function(**kwargs):
+    def _fake_make_beam_step_function(**kwargs):
         captured["output_logger"] = kwargs["output_logger"]
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_make_beam_step_function",
+        _fake_make_beam_step_function,
     )
 
     steps.make_beam_postprocess_step(

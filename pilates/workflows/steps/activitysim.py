@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from pilates.activitysim.runner import (
     asim_sharrow_cache_dir,
@@ -10,7 +10,14 @@ from pilates.activitysim.runner import (
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
+from pilates.generic.model_factory import ModelFactory
+from pilates.utils.coupler_helpers import record_store_to_outputs
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
+from pilates.workflows.outputs_base import (
+    StepOutputsBase,
+    ValidationContext,
+    iter_step_output_items,
+)
 from pilates.workspace import Workspace
 
 # Model-specific step factories for ActivitySim.
@@ -31,18 +38,19 @@ from .shared import (
     ActivitySimRunOutputs,
     CouplerProtocol,
     FileRecord,
-    ModelFactory,
     RecordStore,
     StepOutputsHolder,
     WorkflowState,
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
+    _declared_outputs_from_class,
     _execute_postprocess,
     _execute_preprocess,
     _execute_run,
     _log_named_h5_tables,
     _log_step_records,
-    _make_generic_step_function,
+    _schema_outputs_from_class,
+    _upstream_outputs_view,
     artifact_to_path,
     cr,
     log_and_set_input,
@@ -57,9 +65,91 @@ from pilates.workflows.input_resolution import (
     resolve_preferred_step_input,
     resolved_value_for_key,
 )
-from pilates.workflows.outputs_base import iter_step_output_items
 
 logger = logging.getLogger(__name__)
+
+StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _make_activitysim_typed_step_function(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    model_name: str,
+    phase: str,
+    outputs_class: Type[StepOutputsT],
+    component_getter: Callable[[ModelFactory, WorkflowState], Any],
+    component_executor: Callable[..., RecordStore],
+    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
+    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
+    output_logger: Optional[Callable[..., None]] = None,
+) -> Callable[..., None]:
+    @cr.require_runtime_kwargs("settings", "state", "workspace")
+    def _step_func(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        **kwargs: Any,
+    ) -> None:
+        logger.debug("Starting %s %s step", model_name, phase)
+        factory = ModelFactory()
+        component = component_getter(factory, state)
+
+        extra_kwargs: Dict[str, Any] = {}
+        if input_logger is not None:
+            extra_kwargs = (
+                input_logger(settings, state, workspace, outputs_holder) or {}
+            )
+
+        record_store = component_executor(
+            component,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context=f"{model_name}_{phase}",
+            **extra_kwargs,
+            **kwargs,
+        )
+        step_outputs = record_store_to_outputs(
+            record_store=record_store,
+            output_class=outputs_class,
+            workspace=workspace,
+        )
+        validation_context = ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name=f"{model_name}_{phase}",
+            upstream_outputs=_upstream_outputs_view(
+                outputs_holder,
+                current_step_name=f"{model_name}_{phase}",
+            ),
+        )
+        step_outputs.validate(context=validation_context)
+        outputs_holder_setter(outputs_holder, step_outputs)
+
+        if output_logger is not None:
+            output_logger(step_outputs, settings, state, workspace, outputs_holder)
+
+        logger.info("%s %s completed successfully", model_name, phase)
+
+    if output_logger is not None:
+        setattr(
+            _step_func,
+            "__pilates_output_replayer__",
+            lambda outputs, settings, state, workspace, holder: output_logger(
+                outputs, settings, state, workspace, holder
+            ),
+        )
+
+    return _decorate_step_with_consist(
+        step_func=_step_func,
+        step_model=f"{model_name}_{phase}",
+        description=f"{model_name} {phase} workflow step",
+        schema_outputs=_schema_outputs_from_class(outputs_class),
+        outputs=_declared_outputs_from_class(outputs_class),
+        tags=[model_name, phase],
+    )
 
 
 def _compile_step_schema_outputs(ctx: Any) -> list[str]:
@@ -420,7 +510,7 @@ def make_activitysim_preprocess_step(
             profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
         )
 
-    return _make_generic_step_function(
+    return _make_activitysim_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="activitysim",
@@ -542,7 +632,7 @@ def make_activitysim_run_step(
             if artifact is not None and getattr(artifact, "hash", None):
                 outputs.raw_output_hashes[short_name] = artifact.hash
 
-    return _make_generic_step_function(
+    return _make_activitysim_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="activitysim",
@@ -716,7 +806,7 @@ def make_activitysim_postprocess_step(
                 },
             )
 
-    return _make_generic_step_function(
+    return _make_activitysim_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="activitysim",

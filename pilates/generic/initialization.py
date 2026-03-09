@@ -1,4 +1,4 @@
-from typing import Optional, Iterator, Tuple, Dict, Any
+from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -15,10 +15,37 @@ import shutil
 logger = logging.getLogger(__name__)
 
 
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
+
+
+_BOOTSTRAP_DIRECTION_KEY = "bootstrap_direction"
+
+
 def _record_count(record_store: object) -> int:
     if isinstance(record_store, RecordStore):
         return len(record_store.all_records())
     return 0
+
+
+def _counts_by_model_from_records(
+    copied_records: Optional[RecordStore],
+    *,
+    direction: str,
+) -> Dict[str, int]:
+    if not isinstance(copied_records, RecordStore):
+        return {}
+
+    counts: Dict[str, int] = {}
+    for record in copied_records.all_records():
+        metadata = getattr(record, "metadata", None) or {}
+        if metadata.get(_BOOTSTRAP_DIRECTION_KEY) != direction:
+            continue
+        model_name = metadata.get("model")
+        if not model_name:
+            continue
+        counts[model_name] = counts.get(model_name, 0) + 1
+    return counts
 
 
 def build_bootstrap_artifact_summary(
@@ -29,16 +56,25 @@ def build_bootstrap_artifact_summary(
 
     This summary is intentionally lightweight for Phase 1 bootstrap reporting.
     """
-    input_counts = {
+    workspace_input_counts = {
         model_name: _record_count(records)
         for model_name, records in getattr(workspace, "input_data", {}).items()
         if _record_count(records) > 0
     }
-    output_counts = {
+    workspace_output_counts = {
         model_name: _record_count(records)
         for model_name, records in getattr(workspace, "output_data", {}).items()
         if _record_count(records) > 0
     }
+
+    input_counts = workspace_input_counts or _counts_by_model_from_records(
+        copied_records,
+        direction="input",
+    )
+    output_counts = workspace_output_counts or _counts_by_model_from_records(
+        copied_records,
+        direction="output",
+    )
 
     models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
     input_total = sum(input_counts.values())
@@ -59,13 +95,20 @@ def build_bootstrap_artifact_summary(
     }
 
 
-def _tag_record_store(record_store: RecordStore, model_name: Optional[str]) -> None:
+def _tag_record_store(
+    record_store: RecordStore,
+    model_name: Optional[str],
+    *,
+    direction: Optional[str] = None,
+) -> None:
     if not model_name:
         return
     for record in record_store.all_records():
         metadata = getattr(record, "metadata", None)
         if isinstance(metadata, dict):
             metadata.setdefault("model", model_name)
+            if direction is not None:
+                metadata.setdefault(_BOOTSTRAP_DIRECTION_KEY, direction)
 
 
 def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
@@ -220,15 +263,12 @@ def _log_record_store(
                 record.content_hash = record_hash
 
 
-def _merge_workspace_records(
-    workspace: Workspace, model_key: str, rec_in: RecordStore, rec_out: RecordStore
+def _store_workspace_output_records(
+    workspace: Workspace,
+    model_key: str,
+    rec_out: RecordStore,
 ) -> None:
-    """Store copied records under the model key, appending if already present."""
-    if model_key in workspace.input_data:
-        workspace.input_data[model_key] += rec_in
-    else:
-        workspace.input_data[model_key] = rec_in
-
+    """Store copied mutable outputs under the model key, appending if already present."""
     if model_key in workspace.output_data:
         workspace.output_data[model_key] += rec_out
     else:
@@ -256,16 +296,15 @@ def _accumulate_copy_result(
         return False
 
     rec_in, rec_out = result
-    _tag_record_store(rec_in, model_name)
-    _tag_record_store(rec_out, model_name)
+    _tag_record_store(rec_in, model_name, direction="input")
+    _tag_record_store(rec_out, model_name, direction="output")
     initialization_records_in += rec_in
     initialization_records_out += rec_out
 
     if workspace is not None:
-        _merge_workspace_records(
+        _store_workspace_output_records(
             workspace,
             workspace_model_key or model_name,
-            rec_in,
             rec_out,
         )
     return True

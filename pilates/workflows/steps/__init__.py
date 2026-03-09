@@ -7,8 +7,9 @@ implementations live in sibling modules.
 
 from __future__ import annotations
 
+from pilates.generic.model_factory import ModelFactory as ModelFactory
+
 from .shared import (
-    ModelFactory as ModelFactory,
     STEP_OUTPUTS_CLASSES as STEP_OUTPUTS_CLASSES,
     StepOutputsHolder as StepOutputsHolder,
     validate_step_ready as validate_step_ready,
@@ -18,7 +19,6 @@ from .shared import (
     _beam_artifact_facets as _beam_artifact_facets,
     _beam_log_facet_meta as _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta as _beam_postprocess_split_facet_meta,
-    _make_generic_step_function as _make_generic_step_function,
     _urbansim_output_facet_meta as _urbansim_output_facet_meta,
 )
 from .activitysim import (
