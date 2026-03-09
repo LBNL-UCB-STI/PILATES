@@ -457,6 +457,24 @@ def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path
     )
 
 
+def _atlas_static_input_key(relpath: str) -> str:
+    normalized_relpath = relpath.replace("\\", "/")
+    rel_no_ext = os.path.splitext(normalized_relpath)[0]
+    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
+
+
+def _iter_existing_atlas_static_inputs(
+    settings: Any,
+    atlas_input_dir: str,
+):
+    for relpath in atlas_static_input_relpaths(settings):
+        normalized_relpath = relpath.replace("\\", "/")
+        path = os.path.join(atlas_input_dir, normalized_relpath)
+        if not os.path.exists(path):
+            continue
+        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
+
+
 def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
     """
     Enumerate static ATLAS inputs from the mutable input directory.
@@ -472,13 +490,9 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
     settings = getattr(workspace, "settings", None)
     if settings is not None:
         inputs: Dict[str, str] = {}
-        for relpath in atlas_static_input_relpaths(settings):
-            normalized_relpath = relpath.replace("\\", "/")
-            path = os.path.join(atlas_input_dir, normalized_relpath)
-            if not os.path.exists(path):
-                continue
-            rel_no_ext = os.path.splitext(normalized_relpath)[0]
-            key = sanitize_artifact_key(rel_no_ext) or rel_no_ext
+        for _relpath, key, path in _iter_existing_atlas_static_inputs(
+            settings, atlas_input_dir
+        ):
             inputs.setdefault(key, path)
         if inputs:
             return inputs
@@ -488,8 +502,7 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relpath = os.path.relpath(path, atlas_input_dir)
-            rel_no_ext = os.path.splitext(relpath.replace("\\", "/"))[0]
-            key = sanitize_artifact_key(rel_no_ext) or rel_no_ext
+            key = _atlas_static_input_key(relpath)
             inputs.setdefault(key, path)
     return inputs
 
@@ -515,13 +528,9 @@ def _restore_restart_workspace_atlas_registry(
         return 0
 
     records = []
-    for relpath in atlas_static_input_relpaths(settings):
-        normalized_relpath = relpath.replace("\\", "/")
-        local_path = os.path.join(atlas_input_dir, normalized_relpath)
-        if not os.path.exists(local_path):
-            continue
-        rel_no_ext = os.path.splitext(normalized_relpath)[0]
-        short_name = sanitize_artifact_key(rel_no_ext) or rel_no_ext
+    for normalized_relpath, short_name, local_path in _iter_existing_atlas_static_inputs(
+        settings, atlas_input_dir
+    ):
         metadata = {}
         if local_path.lower().endswith(".csv"):
             metadata["profile_file_schema"] = True

@@ -34,7 +34,6 @@ class WorkflowState:
         vehicle_ownership_model_enabled: bool,
         activity_demand_enabled: bool,
         traffic_assignment_enabled: bool,
-        replanning_enabled: bool,
         year: int | None,
         major_stage: Stage | None,
         inner_iter: int,
@@ -119,14 +118,6 @@ class WorkflowState:
             self.loop_substages.append(self.Stage.traffic_assignment)
 
     @property
-    def settings(self):
-        return (
-            self._settings
-            if hasattr(self, "_settings")
-            else {"end_year": self.end_year}
-        )
-
-    @property
     def asim_compiled(self):
         if self.current_year is not None:
             if self.__asim_compiled:
@@ -175,9 +166,6 @@ class WorkflowState:
     def set_sub_stage_progress(self, sub_stage_progress: Optional[str]):
         self.sub_stage_progress = sub_stage_progress
         self.write_state()
-
-    def enabled(self, stage):
-        return stage in self.enabled_stages
 
     @classmethod
     def write_stage(
@@ -252,7 +240,6 @@ class WorkflowState:
         traffic_assignment_enabled = getattr(
             settings, "traffic_assignment_enabled", False
         )
-        replanning_enabled = getattr(settings, "replanning_enabled", False)
         file_loc = getattr(settings, "state_file_loc", "current_stage.yaml")
 
         [
@@ -286,7 +273,6 @@ class WorkflowState:
             vehicle_ownership_model_enabled,
             activity_demand_enabled,
             traffic_assignment_enabled,
-            replanning_enabled,
             year,
             resume_major_stage,
             iteration,
