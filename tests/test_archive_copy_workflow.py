@@ -168,11 +168,12 @@ def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tm
 @pytest.mark.parametrize(
     "key, relpath",
     [
+        ("urbansim_bootstrap_data_root", "urbansim/data/hsize_ct_000.csv"),
         ("activitysim_bootstrap_data_root", "activitysim/data/households.csv"),
         ("activitysim_bootstrap_configs_root", "activitysim/configs/configs/settings.yaml"),
     ],
 )
-def test_archive_copy_allows_activitysim_bootstrap_runtime_directories(
+def test_archive_copy_allows_bootstrap_runtime_directories(
     monkeypatch, tmp_path, key, relpath
 ):
     local_root = tmp_path / "local" / "run"
@@ -184,7 +185,11 @@ def test_archive_copy_allows_activitysim_bootstrap_runtime_directories(
     path = local_root / relpath
     _write_file(path, "bootstrap")
 
-    directory = path.parent if path.name != "households.csv" else local_root / "activitysim" / "data"
+    directory = path.parent
+    if key == "urbansim_bootstrap_data_root":
+        directory = local_root / "urbansim" / "data"
+    if path.name == "households.csv":
+        directory = local_root / "activitysim" / "data"
     if key == "activitysim_bootstrap_configs_root":
         directory = local_root / "activitysim" / "configs"
 

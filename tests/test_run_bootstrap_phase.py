@@ -282,6 +282,7 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
         seed=None,
     )
 
+    assert ("urbansim_bootstrap_data_root", workspace.get_usim_mutable_data_dir()) in enqueued
     assert ("bootstrap_usim_datastore_base_h5", os.path.join(workspace.get_usim_mutable_data_dir(), "usim_000.h5")) in enqueued
     assert ("activitysim_bootstrap_data_root", workspace.get_asim_mutable_data_dir()) in enqueued
     assert ("activitysim_bootstrap_configs_root", workspace.get_asim_mutable_configs_dir()) in enqueued
@@ -464,6 +465,12 @@ def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
 
     assert {item["key"] for item in missing} == {
         "usim_datastore_base_h5",
+        "omx_skims",
+        "hh_size",
+        "income_rates",
+        "relmap",
+        "schools",
+        "school_districts",
         "activitysim_input_households.csv",
         "activitysim_input_persons.csv",
         "activitysim_input_land_use.csv",

@@ -666,8 +666,14 @@ def _archive_bootstrap_restart_artifacts(
         and getattr(run_cfg, "region", None)
         and urbansim_cfg is not None
     ):
+        usim_data_dir = workspace.get_usim_mutable_data_dir()
+        if os.path.isdir(usim_data_dir):
+            enqueue_archive_copy(
+                key="urbansim_bootstrap_data_root",
+                path=usim_data_dir,
+            )
         usim_base_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(),
+            usim_data_dir,
             get_usim_datastore_fname(settings, io="input"),
         )
         if os.path.exists(usim_base_path):
@@ -874,14 +880,74 @@ def _restart_required_local_artifacts(
     """
     required: List[Dict[str, str]] = []
 
+    usim_data_dir = workspace.get_usim_mutable_data_dir()
     usim_base_fname = get_usim_datastore_fname(settings, io="input")
     required.append(
         {
             "key": "usim_datastore_base_h5",
-            "path": os.path.join(workspace.get_usim_mutable_data_dir(), usim_base_fname),
+            "path": os.path.join(usim_data_dir, usim_base_fname),
             "reason": "UrbanSim base datastore required for downstream restart inputs",
         }
     )
+
+    region = getattr(getattr(settings, "run", None), "region", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if region and urbansim_cfg is not None:
+        region_id = (
+            getattr(urbansim_cfg, "region_mappings", {})
+            .get("region_to_region_id", {})
+            .get(region)
+        )
+        if region_id:
+            required.extend(
+                [
+                    {
+                        "key": "omx_skims",
+                        "path": os.path.join(
+                            usim_data_dir,
+                            f"skims_mpo_{region_id}.omx",
+                        ),
+                        "reason": "UrbanSim run requires mutable OMX skims in the local workspace",
+                    },
+                    {
+                        "key": "hh_size",
+                        "path": os.path.join(
+                            usim_data_dir,
+                            f"hsize_ct_{region_id}.csv",
+                        ),
+                        "reason": "UrbanSim run requires household-size lookup data in the local workspace",
+                    },
+                    {
+                        "key": "income_rates",
+                        "path": os.path.join(
+                            usim_data_dir,
+                            f"income_rates_{region_id}.csv",
+                        ),
+                        "reason": "UrbanSim run requires income-rate lookup data in the local workspace",
+                    },
+                    {
+                        "key": "relmap",
+                        "path": os.path.join(
+                            usim_data_dir,
+                            f"relmap_{region_id}.csv",
+                        ),
+                        "reason": "UrbanSim run requires relationship-mapping data in the local workspace",
+                    },
+                    {
+                        "key": "schools",
+                        "path": os.path.join(usim_data_dir, "schools_2010.csv"),
+                        "reason": "UrbanSim run requires schools lookup data in the local workspace",
+                    },
+                    {
+                        "key": "school_districts",
+                        "path": os.path.join(
+                            usim_data_dir,
+                            "blocks_school_districts_2010.csv",
+                        ),
+                        "reason": "UrbanSim run requires school-district lookup data in the local workspace",
+                    },
+                ]
+            )
 
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
     current_stage = getattr(state, "current_major_stage", None)
