@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from pilates.activitysim.runner import (
@@ -44,7 +45,6 @@ from .shared import (
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
     _declared_outputs_from_class,
-    _execute_postprocess,
     _execute_preprocess,
     _execute_run,
     _log_named_h5_tables,
@@ -69,6 +69,19 @@ from pilates.workflows.input_resolution import (
 logger = logging.getLogger(__name__)
 
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    """
+    Extract a content hash from an artifact-like value when available.
+    """
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
 
 
 def _make_activitysim_typed_step_function(
@@ -552,6 +565,8 @@ def make_activitysim_run_step(
         Step function for ActivitySim run.
     """
 
+    compile_input_hashes: Dict[str, str] = {}
+
     def _log_inputs(
         settings: PilatesConfig,
         state: WorkflowState,
@@ -578,6 +593,7 @@ def make_activitysim_run_step(
             )
 
         extra_input_records = []
+        compile_input_hashes.clear()
         zarr_value = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -586,6 +602,9 @@ def make_activitysim_run_step(
                 key=ZARR_SKIMS,
                 workspace=workspace,
             )
+        zarr_content_hash = _artifact_content_hash(zarr_value)
+        if zarr_content_hash:
+            compile_input_hashes[ZARR_SKIMS] = zarr_content_hash
         zarr_path = artifact_to_path(zarr_value, workspace)
         if not zarr_path:
             candidate = os.path.join(
@@ -618,6 +637,32 @@ def make_activitysim_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        upstream = holder.activitysim_preprocess
+        if upstream is not None:
+            carried_hashes = getattr(upstream, "input_hashes", {}) or {}
+            for short_name, path, _description in upstream._iter_record_items():
+                outputs.source_input_paths[short_name] = Path(path)
+                content_hash = carried_hashes.get(short_name)
+                if content_hash:
+                    outputs.source_input_hashes[short_name] = content_hash
+
+        get_value = getattr(coupler, "get", None)
+        zarr_value = get_value(ZARR_SKIMS) if callable(get_value) else None
+        zarr_path = artifact_to_path(zarr_value, workspace)
+        if not zarr_path:
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+            if os.path.exists(candidate):
+                zarr_path = candidate
+        if zarr_path and os.path.exists(zarr_path):
+            outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
+            content_hash = _artifact_content_hash(zarr_value) or compile_input_hashes.get(
+                ZARR_SKIMS
+            )
+            if content_hash:
+                outputs.source_input_hashes[ZARR_SKIMS] = content_hash
+
         for short_name, path, description in outputs._iter_record_items():
             artifact = cr.log_output(
                 str(path),
@@ -806,6 +851,32 @@ def make_activitysim_postprocess_step(
                 },
             )
 
+    def _execute_activitysim_postprocess(
+        postprocessor: Any,
+        workspace: Workspace,
+        outputs_holder: StepOutputsHolder,
+        **kwargs: Any,
+    ) -> RecordStore:
+        upstream = outputs_holder.activitysim_run
+        if upstream is None:
+            raise RuntimeError("ActivitySim run must complete first")
+        if hasattr(upstream, "to_postprocess_record_store"):
+            raw_outputs = upstream.to_postprocess_record_store()
+        elif hasattr(upstream, "to_record_store"):
+            raw_outputs = upstream.to_record_store()
+        else:
+            raw_outputs = RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path=str(path),
+                        short_name=short_name,
+                        description=description,
+                    )
+                    for short_name, path, description in iter_step_output_items(upstream)
+                ]
+            )
+        return postprocessor.postprocess(raw_outputs, workspace)
+
     return _make_activitysim_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
@@ -815,7 +886,7 @@ def make_activitysim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "activitysim", state, WorkflowState.Stage.activity_demand
         ),
-        component_executor=_execute_postprocess,
+        component_executor=_execute_activitysim_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_postprocess", outputs
         ),

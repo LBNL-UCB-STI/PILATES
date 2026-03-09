@@ -1260,6 +1260,19 @@ def _build_required_input_store(
     RecordStore
         Input store for runner/postprocessor execution.
     """
+    def _content_hash_for(short_name: str) -> Optional[str]:
+        for attr_name in (
+            "input_hashes",
+            "raw_output_hashes",
+            "processed_output_hashes",
+        ):
+            hashes = getattr(upstream, attr_name, None)
+            if isinstance(hashes, Mapping):
+                content_hash = hashes.get(short_name)
+                if content_hash:
+                    return str(content_hash)
+        return None
+
     upstream = getattr(outputs_holder, upstream_attr, None)
     if upstream is None:
         raise RuntimeError(missing_message)
@@ -1269,6 +1282,7 @@ def _build_required_input_store(
                 file_path=str(path),
                 short_name=short_name,
                 description=description,
+                content_hash=_content_hash_for(short_name),
             )
             for short_name, path, description in iter_step_output_items(upstream)
         ]
@@ -1349,14 +1363,22 @@ def _execute_postprocess(
     RecordStore
         Postprocessor outputs.
     """
-    raw_outputs = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="activitysim_run",
-        missing_message="ActivitySim run must complete first",
-        context="activitysim_postprocess",
-        coupler=None,
-        warn_missing_coupler_inputs=False,
-    )
+    upstream = getattr(outputs_holder, "activitysim_run", None)
+    if upstream is None:
+        raise RuntimeError("ActivitySim run must complete first")
+
+    to_postprocess_record_store = getattr(upstream, "to_postprocess_record_store", None)
+    if callable(to_postprocess_record_store):
+        raw_outputs = to_postprocess_record_store()
+    else:
+        raw_outputs = _build_required_input_store(
+            outputs_holder=outputs_holder,
+            upstream_attr="activitysim_run",
+            missing_message="ActivitySim run must complete first",
+            context="activitysim_postprocess",
+            coupler=None,
+            warn_missing_coupler_inputs=False,
+        )
     return run_postprocessor(postprocessor, raw_outputs, workspace)
 
 

@@ -8,10 +8,13 @@ import pytest
 
 from pilates.activitysim.runner import ActivitysimCompileRunner
 from pilates.activitysim.runner import ActivitysimRunner
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_PERSONS_IN,
     ASIM_SHARROW_CACHE_DIR,
     ArtifactKeys,
     ZARR_SKIMS,
@@ -168,6 +171,90 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
     extra_inputs = captured["extra_inputs"]
     assert isinstance(extra_inputs, RecordStore)
     assert extra_inputs.to_mapping().get(ZARR_SKIMS) == str(zarr_path)
+
+
+def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asim_output_dir = tmp_path / "asim_output"
+    asim_output_dir.mkdir(parents=True)
+    zarr_path = asim_output_dir / "cache" / "skims.zarr"
+    zarr_path.parent.mkdir(parents=True)
+    zarr_path.write_text("dummy-zarr")
+
+    asim_mutable_dir = tmp_path / "asim_mutable"
+    asim_mutable_dir.mkdir(parents=True)
+    land_use = asim_mutable_dir / "land_use.csv"
+    households = asim_mutable_dir / "households.csv"
+    persons = asim_mutable_dir / "persons.csv"
+    for path in (land_use, households, persons):
+        path.write_text("dummy")
+
+    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    coupler = _DummyCoupler()
+    coupler.set(
+        ZARR_SKIMS,
+        SimpleNamespace(path=str(zarr_path), hash="hash_zarr_compile"),
+    )
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_mutable_dir,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+        input_hashes={
+            ASIM_LAND_USE_IN: "hash_land_use",
+            ASIM_HOUSEHOLDS_IN: "hash_households",
+            ASIM_PERSONS_IN: "hash_persons",
+        },
+    )
+
+    def _get_runner(self, model_name, state=None, major_stage=None):
+        if model_name != "activitysim":
+            raise AssertionError(f"Unexpected model_name: {model_name}")
+        return object()
+
+    def _fake_execute_run(runner, workspace, outputs_holder, **kwargs):
+        output_path = workspace.get_asim_output_dir() + "/households.parquet"
+        Path(output_path).write_text("out")
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=output_path,
+                    short_name="households_asim_out_temp",
+                    description="ActivitySim raw output: households_asim_out_temp",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
+    monkeypatch.setattr(activitysim_steps, "_execute_run", _fake_execute_run)
+    monkeypatch.setattr(
+        activitysim_steps.cr,
+        "log_output",
+        lambda *args, **kwargs: SimpleNamespace(hash="hash_households_out"),
+    )
+
+    run_step = activitysim_steps.make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+    )
+    run_step(settings=SimpleNamespace(), state=state, workspace=workspace)
+
+    run_outputs = outputs_holder.activitysim_run
+    assert isinstance(run_outputs, ActivitySimRunOutputs)
+    assert run_outputs.raw_output_hashes["households_asim_out_temp"] == "hash_households_out"
+    assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
+    assert run_outputs.source_input_paths[ASIM_HOUSEHOLDS_IN] == households
+    assert run_outputs.source_input_paths[ASIM_PERSONS_IN] == persons
+    assert run_outputs.source_input_paths[ZARR_SKIMS] == zarr_path
+    assert run_outputs.source_input_hashes == {
+        ASIM_LAND_USE_IN: "hash_land_use",
+        ASIM_HOUSEHOLDS_IN: "hash_households",
+        ASIM_PERSONS_IN: "hash_persons",
+        ZARR_SKIMS: "hash_zarr_compile",
+    }
 
 
 def test_activitysim_compile_reads_omx_from_iter_record_items_only(

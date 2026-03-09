@@ -749,16 +749,15 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 record_hash = getattr(record, "content_hash", None)
                 if record_hash:
                     hash_map[path] = record_hash
-            for store in (workspace.output_data or {}).values():
-                if not isinstance(store, RecordStore):
+            source_input_paths = getattr(raw_outputs, "activitysim_source_input_paths", {})
+            source_input_hashes = getattr(
+                raw_outputs, "activitysim_source_input_hashes", {}
+            )
+            for short_name, source_path in source_input_paths.items():
+                record_hash = source_input_hashes.get(short_name)
+                if not record_hash or not source_path:
                     continue
-                for record in store.all_records():
-                    path = record.get_absolute_path(base_path=workspace.full_path)
-                    if not path:
-                        continue
-                    record_hash = getattr(record, "content_hash", None)
-                    if record_hash:
-                        hash_map[path] = record_hash
+                hash_map[os.path.abspath(str(source_path))] = record_hash
             return hash_map
 
         content_hash_map = _build_content_hash_map()

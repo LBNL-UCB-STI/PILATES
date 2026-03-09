@@ -63,15 +63,13 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
 
 
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
+    fake_postprocessor = SimpleNamespace(
+        postprocess=lambda _raw_outputs, _workspace: RecordStore()
+    )
     monkeypatch.setattr(
         steps_activitysim.ModelFactory,
         "get_postprocessor",
-        lambda self, *args, **kwargs: object(),
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "_execute_postprocess",
-        lambda *_args, **_kwargs: RecordStore(),
+        lambda self, *args, **kwargs: fake_postprocessor,
     )
     monkeypatch.setattr(
         steps_activitysim,
@@ -126,7 +124,9 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
 
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),
-        outputs_holder=SimpleNamespace(activitysim_run=None),
+        outputs_holder=SimpleNamespace(
+            activitysim_run=SimpleNamespace(to_postprocess_record_store=RecordStore)
+        ),
     )
     step_fn(settings=settings, state=state, workspace=workspace)
 

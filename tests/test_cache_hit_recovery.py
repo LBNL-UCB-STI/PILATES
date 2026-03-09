@@ -2,9 +2,11 @@ from pathlib import Path
 from types import SimpleNamespace
 import yaml
 
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     BEAM_PLANS_OUT,
     BEAM_FULL_SKIMS,
@@ -14,6 +16,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_H5,
+    USIM_DATASTORE_BASE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_INPUT_MERGED_PREFIX,
@@ -51,6 +54,9 @@ class DummyWorkspace:
 
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._root / "activitysim" / "data")
+
+    def get_asim_output_dir(self) -> str:
+        return str(self._root / "activitysim" / "output")
 
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._root / "beam" / "input")
@@ -114,6 +120,41 @@ def test_recover_activitysim_preprocess_outputs(tmp_path):
     assert coupler.get(ASIM_PERSONS_IN) is not None
     assert coupler.get(ASIM_LAND_USE_IN) is not None
     holder.activitysim_preprocess.validate()
+
+
+def test_recover_activitysim_preprocess_outputs_preserves_input_hashes(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+    _write_file(asim_dir / "skims.omx")
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
+    )
+
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="activitysim_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs=None,
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_preprocess.input_hashes[ASIM_HOUSEHOLDS_IN] == (
+        f"hash-{ASIM_HOUSEHOLDS_IN}"
+    )
+    assert holder.activitysim_preprocess.input_hashes[ASIM_OMX_SKIMS] == (
+        f"hash-{ASIM_OMX_SKIMS}"
+    )
 
 
 def test_recover_activitysim_preprocess_outputs_from_archive_only(tmp_path, monkeypatch):
@@ -192,6 +233,68 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     holder.beam_preprocess.validate()
 
 
+def test_recover_activitysim_run_outputs_carries_source_input_hashes(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = output_dir / "year-2018-iteration-0"
+    _write_file(asim_dir / "land_use.csv")
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "skims.omx")
+    _write_file(iter_dir / "households.parquet")
+    _write_file(output_dir / "cache" / "skims.zarr")
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
+    )
+
+    holder = StepOutputsHolder()
+    holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=asim_dir / "land_use.csv",
+        households_table=asim_dir / "households.csv",
+        persons_table=asim_dir / "persons.csv",
+        omx_skims=asim_dir / "skims.omx",
+        input_hashes={
+            ASIM_HOUSEHOLDS_IN: "hash-households",
+            ASIM_PERSONS_IN: "hash-persons",
+            ASIM_LAND_USE_IN: "hash-land-use",
+            ASIM_OMX_SKIMS: "hash-omx",
+        },
+    )
+
+    outputs = _recover_cached_outputs(
+        step_name="activitysim_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, iteration=0),
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs=None,
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_run.source_input_paths[ASIM_HOUSEHOLDS_IN] == (
+        asim_dir / "households.csv"
+    )
+    assert holder.activitysim_run.source_input_hashes[ASIM_HOUSEHOLDS_IN] == (
+        "hash-households"
+    )
+    assert holder.activitysim_run.source_input_paths[ZARR_SKIMS] == (
+        output_dir / "cache" / "skims.zarr"
+    )
+    assert holder.activitysim_run.source_input_hashes[ZARR_SKIMS] == (
+        f"hash-{ZARR_SKIMS}"
+    )
+    assert holder.activitysim_run.raw_output_hashes["households_asim_out_temp"] == (
+        "hash-households_asim_out_temp"
+    )
+
+
 def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
@@ -247,6 +350,61 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     )
     manifest = yaml.safe_load(manifest_path.read_text())
     assert manifest["activitysim_preprocess"]["cache_hit"]
+
+
+def test_recover_activitysim_postprocess_outputs_preserves_hashes(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = asim_output_dir / "year-2018-iteration-0"
+    _write_file(iter_dir / "households.parquet")
+    _write_file(iter_dir / "persons.parquet")
+    _write_file(iter_dir / "beam_plans.parquet")
+
+    inputs_dir = asim_output_dir / "inputs-year-2018-iteration-0"
+    _write_file(inputs_dir / "households.csv")
+    _write_file(inputs_dir / "persons.csv")
+    _write_file(inputs_dir / "land_use.csv")
+    _write_file(inputs_dir / "skims.omx")
+    _write_file(inputs_dir / "skims.zarr")
+
+    usim_h5 = Path(workspace.get_usim_mutable_data_dir()) / "base.h5"
+    _write_file(usim_h5)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
+    )
+
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="activitysim_postprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(
+            urbansim=SimpleNamespace(
+                region_id="000",
+                region_mappings={"region_to_region_id": {}},
+                input_file_template="base_{region_id}.h5",
+            ),
+            run=SimpleNamespace(region="test"),
+        ),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_postprocess.processed_output_hashes[
+        "households_asim_out"
+    ] == "hash-households_asim_out"
+    assert holder.activitysim_postprocess.processed_output_hashes[
+        "asim_input_households_csv_archived"
+    ] == "hash-asim_input_households_csv_archived"
+    assert holder.activitysim_postprocess.processed_output_hashes[
+        "asim_input_skims_zarr_archived"
+    ] == "hash-asim_input_skims_zarr_archived"
 
 
 def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):

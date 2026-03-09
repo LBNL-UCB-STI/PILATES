@@ -58,6 +58,24 @@ def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
 
 
+def _record_path(record: Any, workspace: "Workspace") -> Optional[Path]:
+    """
+    Resolve a RecordStore entry into an absolute filesystem path.
+    """
+    if record is None:
+        return None
+    get_absolute_path = getattr(record, "get_absolute_path", None)
+    if callable(get_absolute_path):
+        resolved = get_absolute_path(base_path=workspace.full_path)
+        if resolved:
+            return Path(resolved)
+    file_path = getattr(record, "file_path", None)
+    path = artifact_to_path(file_path if file_path is not None else record, workspace)
+    if path is None:
+        return None
+    return Path(path)
+
+
 def _asim_run_marker_filename(year: int, iteration: int) -> str:
     return f".pilates_asim_run_success_year_{year}_iter_{iteration}.json"
 
@@ -192,6 +210,7 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     households_table: Path
     persons_table: Path
     omx_skims: Optional[Path] = None
+    input_hashes: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_record_store(
@@ -212,14 +231,41 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         ActivitySimPreprocessOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
         values: Dict[str, Any] = {}
+        input_hashes: Dict[str, str] = {}
+        records_by_key = {
+            getattr(record, "short_name", None): record
+            for record in (record_store.all_records() if record_store is not None else [])
+        }
         for field_name, record_key in cls.record_keys.items():
-            path = artifact_to_path(mapping.get(record_key), workspace)
-            if path is not None:
-                values[field_name] = Path(path)
+            record = records_by_key.get(record_key)
+            if record is None:
+                continue
+            record_path = _record_path(record, workspace)
+            if record_path is not None:
+                values[field_name] = record_path
+            content_hash = getattr(record, "content_hash", None)
+            if content_hash:
+                input_hashes[record_key] = content_hash
         values["mutable_data_dir"] = Path(workspace.get_asim_mutable_data_dir())
+        values["input_hashes"] = input_hashes
         return cls(**values)
+
+    def to_record_store(self) -> RecordStore:
+        """
+        Convert outputs to a RecordStore with optional content hashes.
+        """
+        records = []
+        for short_name, path, description in self._iter_record_items():
+            records.append(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                    content_hash=self.input_hashes.get(short_name),
+                )
+            )
+        return RecordStore(recordList=records)
 
 
 @dataclass
@@ -239,10 +285,12 @@ class ActivitySimRunOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "output_dir"
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
-    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
+    dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs", "source_input_paths")
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
+    source_input_paths: Dict[str, Path] = field(default_factory=dict)
+    source_input_hashes: Dict[str, str] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -270,18 +318,19 @@ class ActivitySimRunOutputs(StepOutputsBase):
         ActivitySimRunOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
         raw_outputs: Dict[str, Path] = {}
         raw_output_hashes: Dict[str, str] = {}
-        for key, value in mapping.items():
-            path = artifact_to_path(value, workspace)
-            if path is None:
+        for record in record_store.all_records() if record_store is not None else []:
+            key = getattr(record, "short_name", None)
+            if not key:
                 continue
-            raw_outputs[key] = Path(path)
-            if hasattr(value, "content_hash"):
-                content_hash = getattr(value, "content_hash", None)
-                if content_hash:
-                    raw_output_hashes[key] = content_hash
+            record_path = _record_path(record, workspace)
+            if record_path is None:
+                continue
+            raw_outputs[key] = record_path
+            content_hash = getattr(record, "content_hash", None)
+            if content_hash:
+                raw_output_hashes[key] = content_hash
         return cls(
             output_dir=Path(workspace.get_asim_output_dir()),
             raw_outputs=raw_outputs,
@@ -303,6 +352,23 @@ class ActivitySimRunOutputs(StepOutputsBase):
                 )
             )
         return RecordStore(recordList=records)
+
+    def to_postprocess_record_store(self) -> RecordStore:
+        """
+        Convert outputs to a RecordStore and attach carried input metadata.
+        """
+        record_store = self.to_record_store()
+        setattr(
+            record_store,
+            "activitysim_source_input_paths",
+            {key: str(path) for key, path in self.source_input_paths.items()},
+        )
+        setattr(
+            record_store,
+            "activitysim_source_input_hashes",
+            dict(self.source_input_hashes),
+        )
+        return record_store
 
 
 @dataclass

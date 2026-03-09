@@ -791,6 +791,25 @@ def _recover_cached_outputs(
             materialize_from_archive=True,
         )
 
+    def _resolved_content_hash(
+        value: Any,
+        *,
+        key: str,
+        fallback_path: Any = None,
+    ) -> Optional[str]:
+        candidate = value if value is not None else fallback_path
+        artifact = resolve_artifact_from_value(
+            candidate,
+            key=key,
+            workspace=workspace,
+        )
+        content_hash = getattr(artifact, "content_hash", None) or getattr(
+            artifact, "hash", None
+        )
+        if content_hash:
+            return str(content_hash)
+        return None
+
     def _finalize_recovered_outputs(outputs: Any) -> Any:
         validate = getattr(outputs, "validate", None)
         if callable(validate):
@@ -809,6 +828,7 @@ def _recover_cached_outputs(
             ASIM_OMX_SKIMS: asim_dir / "skims.omx",
         }
         recovered_inputs: Dict[str, Path] = {}
+        recovered_hashes: Dict[str, str] = {}
         for key, path in candidates.items():
             cached_value = _resolve_cached_value(key)
             cached_path = _existing_path(cached_value)
@@ -817,6 +837,13 @@ def _recover_cached_outputs(
             resolved_candidate = _existing_path_str(path)
             if resolved_candidate:
                 recovered_inputs[key] = Path(resolved_candidate)
+                content_hash = _resolved_content_hash(
+                    cached_value,
+                    key=key,
+                    fallback_path=resolved_candidate,
+                )
+                if content_hash:
+                    recovered_hashes[key] = content_hash
         if not {
             ASIM_LAND_USE_IN,
             ASIM_HOUSEHOLDS_IN,
@@ -830,11 +857,15 @@ def _recover_cached_outputs(
                 households_table=recovered_inputs[ASIM_HOUSEHOLDS_IN],
                 persons_table=recovered_inputs[ASIM_PERSONS_IN],
                 omx_skims=recovered_inputs.get(ASIM_OMX_SKIMS),
+                input_hashes=recovered_hashes,
             )
         )
     elif step_name == "activitysim_run":
         asim_output_dir = Path(workspace.get_asim_output_dir())
         raw_outputs: Dict[str, Path] = {}
+        raw_output_hashes: Dict[str, str] = {}
+        source_input_paths: Dict[str, Path] = {}
+        source_input_hashes: Dict[str, str] = {}
         final_pipeline = Path(
             _existing_path_str(asim_output_dir / "final_pipeline")
             or (asim_output_dir / "final_pipeline")
@@ -846,7 +877,15 @@ def _recover_cached_outputs(
             for child in final_pipeline.iterdir():
                 fpath = child / "final.parquet"
                 if fpath.is_file():
-                    raw_outputs[f"{child.name}_asim_out_temp"] = fpath
+                    short_name = f"{child.name}_asim_out_temp"
+                    raw_outputs[short_name] = fpath
+                    content_hash = _resolved_content_hash(
+                        _resolve_cached_value(short_name),
+                        key=short_name,
+                        fallback_path=fpath,
+                    )
+                    if content_hash:
+                        raw_output_hashes[short_name] = content_hash
         elif final_pipeline.exists() and not allow_final_pipeline:
             logger.warning(
                 "Skipping ActivitySim final_pipeline cache recovery for year %s iteration %s "
@@ -863,13 +902,50 @@ def _recover_cached_outputs(
             )
             if iter_dir.exists():
                 for fpath in iter_dir.glob("*.parquet"):
-                    raw_outputs[f"{fpath.stem}_asim_out_temp"] = fpath
+                    short_name = f"{fpath.stem}_asim_out_temp"
+                    raw_outputs[short_name] = fpath
+                    content_hash = _resolved_content_hash(
+                        _resolve_cached_value(short_name),
+                        key=short_name,
+                        fallback_path=fpath,
+                    )
+                    if content_hash:
+                        raw_output_hashes[short_name] = content_hash
         if not raw_outputs:
             return None
+
+        upstream_preprocess = outputs_holder.activitysim_preprocess
+        if upstream_preprocess is not None:
+            carried_hashes = getattr(upstream_preprocess, "input_hashes", {}) or {}
+            iter_items = getattr(upstream_preprocess, "_iter_record_items", None)
+            if callable(iter_items):
+                for short_name, path, _description in iter_items():
+                    source_input_paths[short_name] = Path(path)
+                    content_hash = carried_hashes.get(short_name)
+                    if content_hash:
+                        source_input_hashes[short_name] = str(content_hash)
+
+        zarr_candidate = Path(
+            _existing_path_str(asim_output_dir / "cache" / "skims.zarr")
+            or (asim_output_dir / "cache" / "skims.zarr")
+        )
+        if zarr_candidate.exists():
+            source_input_paths[ZARR_SKIMS] = zarr_candidate
+            content_hash = _resolved_content_hash(
+                _resolve_cached_value(ZARR_SKIMS),
+                key=ZARR_SKIMS,
+                fallback_path=zarr_candidate,
+            )
+            if content_hash:
+                source_input_hashes[ZARR_SKIMS] = content_hash
+
         return _finalize_recovered_outputs(
             ActivitySimRunOutputs(
                 output_dir=asim_output_dir,
                 raw_outputs=raw_outputs,
+                raw_output_hashes=raw_output_hashes,
+                source_input_paths=source_input_paths,
+                source_input_hashes=source_input_hashes,
             )
         )
     elif step_name == "activitysim_postprocess":
@@ -881,6 +957,7 @@ def _recover_cached_outputs(
             or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
         )
         processed_outputs: Dict[str, Path] = {}
+        processed_output_hashes: Dict[str, str] = {}
         if iter_dir.exists():
             required_outputs = {
                 "persons_asim_out",
@@ -896,6 +973,13 @@ def _recover_cached_outputs(
             for fpath in iter_dir.glob("*.parquet"):
                 short_name = normalize_asim_output_key(fpath.stem)
                 processed_outputs[short_name] = fpath
+                content_hash = _resolved_content_hash(
+                    _resolve_cached_value(short_name),
+                    key=short_name,
+                    fallback_path=fpath,
+                )
+                if content_hash:
+                    processed_output_hashes[short_name] = content_hash
         else:
             return None
 
@@ -916,9 +1000,25 @@ def _recover_cached_outputs(
                 fpath = inputs_dir / fname
                 if fpath.exists():
                     processed_outputs[short_name] = fpath
+                    content_hash = _resolved_content_hash(
+                        _resolve_cached_value(short_name),
+                        key=short_name,
+                        fallback_path=fpath,
+                    )
+                    if content_hash:
+                        processed_output_hashes[short_name] = content_hash
             zarr_path = inputs_dir / "skims.zarr"
             if zarr_path.exists():
                 processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
+                content_hash = _resolved_content_hash(
+                    _resolve_cached_value("asim_input_skims_zarr_archived"),
+                    key="asim_input_skims_zarr_archived",
+                    fallback_path=zarr_path,
+                )
+                if content_hash:
+                    processed_output_hashes["asim_input_skims_zarr_archived"] = (
+                        content_hash
+                    )
 
         usim_path = None
         if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
@@ -949,6 +1049,7 @@ def _recover_cached_outputs(
                 usim_datastore_h5=Path(usim_existing) if usim_existing else None,
                 asim_output_dir=asim_output_dir,
                 processed_outputs=processed_outputs,
+                processed_output_hashes=processed_output_hashes,
                 usim_datastore_key=(
                     f"usim_input_{state.forecast_year}" if usim_existing else None
                 ),
