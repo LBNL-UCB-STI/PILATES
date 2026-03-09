@@ -57,6 +57,7 @@ from pilates.workflows.input_resolution import (
     resolve_preferred_step_input,
     resolved_value_for_key,
 )
+from pilates.workflows.outputs_base import iter_step_output_items
 
 logger = logging.getLogger(__name__)
 
@@ -122,25 +123,29 @@ def make_activitysim_compile_step(
             raise RuntimeError(
                 "ActivitySim compile must run after activitysim_preprocess"
             )
-        input_store = upstream.to_record_store()
         omx_record = None
-        if input_store:
-            for record in input_store.all_records():
-                if getattr(record, "short_name", None) == ASIM_OMX_SKIMS:
-                    omx_record = record
-                    break
-        if omx_record is not None:
-            input_store = RecordStore(recordList=[omx_record])
-        else:
-            input_store = RecordStore()
-        if omx_record is not None:
-            omx_path = omx_record.get_absolute_path(base_path=workspace.full_path)
-            if omx_path and os.path.exists(omx_path):
-                cr.log_input(
-                    omx_path,
-                    key=ASIM_OMX_SKIMS,
-                    description="ActivitySim compile input skims (OMX)",
-                )
+        omx_path = None
+        for short_name, path, description in iter_step_output_items(upstream):
+            if short_name != ASIM_OMX_SKIMS:
+                continue
+            omx_record = FileRecord(
+                file_path=str(path),
+                short_name=short_name,
+                description=description,
+            )
+            omx_path = artifact_to_path(path, workspace) or str(path)
+            break
+        input_store = (
+            RecordStore(recordList=[omx_record])
+            if omx_record is not None
+            else RecordStore()
+        )
+        if omx_path and os.path.exists(omx_path):
+            cr.log_input(
+                omx_path,
+                key=ASIM_OMX_SKIMS,
+                description="ActivitySim compile input skims (OMX)",
+            )
         compile_outputs = compile_runner.run(input_store, workspace)
 
         zarr_record = None
@@ -482,7 +487,7 @@ def make_activitysim_run_step(
                 **meta,
             )
 
-        extra_inputs = RecordStore()
+        extra_input_records = []
         zarr_value = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -499,7 +504,7 @@ def make_activitysim_run_step(
             if os.path.exists(candidate):
                 zarr_path = candidate
         if zarr_path and os.path.exists(zarr_path):
-            extra_inputs.add_record(
+            extra_input_records.append(
                 FileRecord(
                     file_path=zarr_path,
                     short_name=ZARR_SKIMS,
@@ -514,7 +519,7 @@ def make_activitysim_run_step(
                 ),
                 coupler=coupler,
             )
-        return {"extra_inputs": extra_inputs}
+        return {"extra_inputs": RecordStore(recordList=extra_input_records)}
 
     def _log_outputs(
         outputs: ActivitySimRunOutputs,

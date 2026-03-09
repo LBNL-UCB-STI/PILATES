@@ -892,9 +892,14 @@ def _restart_required_local_artifacts(
         }
     )
 
+    current_stage = getattr(state, "current_major_stage", None)
     region = getattr(getattr(settings, "run", None), "region", None)
     urbansim_cfg = getattr(settings, "urbansim", None)
-    if region and urbansim_cfg is not None:
+    requires_urbansim_run_locals = current_stage in {
+        None,
+        WorkflowState.Stage.land_use,
+    }
+    if requires_urbansim_run_locals and region and urbansim_cfg is not None:
         region_id = (
             getattr(urbansim_cfg, "region_mappings", {})
             .get("region_to_region_id", {})
@@ -952,7 +957,6 @@ def _restart_required_local_artifacts(
             )
 
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    current_stage = getattr(state, "current_major_stage", None)
     requires_activitysim_locals = (
         getattr(model_cfg, "activity_demand", None) == "activitysim"
         and (

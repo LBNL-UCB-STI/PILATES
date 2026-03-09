@@ -20,6 +20,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -116,7 +117,7 @@ def run_land_use_stage(
     if upstream_preprocess is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
 
-    run_inputs = upstream_preprocess.to_record_store().to_mapping()
+    run_inputs = step_output_mapping(upstream_preprocess)
     for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5):
         value = usim_inputs.get(key)
         if value is not None:

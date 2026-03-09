@@ -65,6 +65,29 @@ class _CompileRunner:
         return RecordStore(recordList=records)
 
 
+class _IterOnlyPreprocessOutputs:
+    def __init__(
+        self,
+        *,
+        land_use: Path,
+        households: Path,
+        persons: Path,
+        omx_skims: Path,
+    ) -> None:
+        self._items = (
+            ("land_use", land_use, "ActivitySim land use input table"),
+            ("households", households, "ActivitySim households input table"),
+            ("persons", persons, "ActivitySim persons input table"),
+            ("omx_skims", omx_skims, "ActivitySim OMX skims input"),
+        )
+
+    def _iter_record_items(self):
+        return iter(self._items)
+
+    def to_record_store(self) -> RecordStore:
+        raise AssertionError("compile step should not call to_record_store()")
+
+
 def _settings(*, persist_sharrow_cache: bool) -> SimpleNamespace:
     return SimpleNamespace(
         activitysim=SimpleNamespace(
@@ -145,6 +168,72 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
     extra_inputs = captured["extra_inputs"]
     assert isinstance(extra_inputs, RecordStore)
     assert extra_inputs.to_mapping().get(ZARR_SKIMS) == str(zarr_path)
+
+
+def test_activitysim_compile_reads_omx_from_iter_record_items_only(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asim_output_dir = tmp_path / "asim_output"
+    asim_output_dir.mkdir(parents=True)
+    zarr_path = asim_output_dir / "cache" / "skims.zarr"
+    zarr_path.parent.mkdir(parents=True)
+    zarr_path.write_text("dummy-zarr")
+
+    asim_mutable_dir = tmp_path / "asim_mutable"
+    asim_mutable_dir.mkdir(parents=True)
+    land_use = asim_mutable_dir / "land_use.csv"
+    households = asim_mutable_dir / "households.csv"
+    persons = asim_mutable_dir / "persons.csv"
+    omx_skims = asim_mutable_dir / "skims.omx"
+    for path in (land_use, households, persons, omx_skims):
+        path.write_text("dummy")
+
+    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    coupler = _DummyCoupler()
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_preprocess = _IterOnlyPreprocessOutputs(
+        land_use=land_use,
+        households=households,
+        persons=persons,
+        omx_skims=omx_skims,
+    )
+
+    captured: dict = {}
+
+    class _CaptureCompileRunner:
+        def run(self, input_store: RecordStore, workspace: _DummyWorkspace) -> RecordStore:
+            captured["inputs"] = input_store.to_mapping()
+            return RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path=str(zarr_path),
+                        short_name=ZARR_SKIMS,
+                        description="Compiled ActivitySim skims (Zarr)",
+                    )
+                ]
+            )
+
+    def _get_runner(self, model_name, state=None, major_stage=None):
+        if model_name != "activitysim_compile":
+            raise AssertionError(f"Unexpected model_name: {model_name}")
+        return _CaptureCompileRunner()
+
+    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
+
+    compile_step = activitysim_steps.make_activitysim_compile_step(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+    )
+    compile_step(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        expected_outputs={ZARR_SKIMS: str(zarr_path)},
+    )
+
+    assert captured["inputs"] == {"omx_skims": str(omx_skims)}
 
 
 def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None:

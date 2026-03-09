@@ -224,12 +224,9 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
     }
     for path in activity_outputs.values():
         _write_file(path)
-    activity_demand_outputs = RecordStore(
-        recordList=[
-            FileRecord(file_path=str(path), short_name=short_name)
-            for short_name, path in activity_outputs.items()
-        ]
-    )
+    activity_demand_outputs = {
+        short_name: str(path) for short_name, path in activity_outputs.items()
+    }
 
     original_get_runner = ModelFactory.get_runner
     original_get_postprocessor = ModelFactory.get_postprocessor

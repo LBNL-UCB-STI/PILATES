@@ -22,7 +22,7 @@ from typing import (
     get_origin,
 )
 
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
@@ -129,6 +129,68 @@ def serialize_step_outputs(outputs: Any) -> Dict[str, Any]:
     """
     data = asdict(outputs)
     return _serialize_value(data)
+
+
+def iter_step_output_items(outputs: Any) -> Tuple[Tuple[str, Any, str], ...]:
+    """
+    Return direct typed-output artifact items without round-tripping through RecordStore.
+
+    Parameters
+    ----------
+    outputs : Any
+        Step outputs object exposing ``_iter_record_items()``.
+
+    Returns
+    -------
+    tuple[tuple[str, Any, str], ...]
+        Ordered ``(key, path, description)`` items.
+    """
+    iter_items = getattr(outputs, "_iter_record_items", None)
+    if not callable(iter_items):
+        raise TypeError(
+            f"{outputs.__class__.__name__} must implement _iter_record_items() "
+            "for shared workflow artifact publication."
+        )
+    return tuple(iter_items())
+
+
+def step_output_mapping(outputs: Any) -> Dict[str, str]:
+    """
+    Build a key -> path mapping directly from typed outputs.
+
+    Parameters
+    ----------
+    outputs : Any
+        Step outputs object exposing ``_iter_record_items()``.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of output key to filesystem path string.
+    """
+    mapping: Dict[str, str] = {}
+    for key, path, _ in iter_step_output_items(outputs):
+        sanitized_key = sanitize_artifact_key(key)
+        if sanitized_key is None:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
+                key,
+            )
+            continue
+        if sanitized_key != key:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
+                key,
+                sanitized_key,
+            )
+        if sanitized_key in mapping:
+            logger.warning(
+                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
+                sanitized_key,
+            )
+            continue
+        mapping[sanitized_key] = str(path)
+    return mapping
 
 
 def _is_optional_path_type(field_type: Any) -> bool:

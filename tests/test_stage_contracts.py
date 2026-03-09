@@ -528,11 +528,12 @@ def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_pa
     ):
         if any(step.name == "urbansim_preprocess" for step in steps):
             outputs_holder.urbansim_preprocess = SimpleNamespace(
-                to_record_store=lambda: RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(geoid_to_zone_path),
-                            short_name="geoid_to_zone",
+                _iter_record_items=lambda: iter(
+                    [
+                        (
+                            "geoid_to_zone",
+                            geoid_to_zone_path,
+                            "UrbanSim preprocess output: geoid_to_zone",
                         )
                     ]
                 )
@@ -1015,26 +1016,19 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     state.current_sub_stage = state.Stage.traffic_assignment
     state.current_inner_iter = 0
 
-    asim_outputs = RecordStore(
-        recordList=[
-            FileRecord(file_path=str(tmp_path / "beam_plans_out.parquet"), short_name="beam_plans_out"),
-            FileRecord(file_path=str(tmp_path / "households_asim_out.parquet"), short_name="households_asim_out"),
-            FileRecord(file_path=str(tmp_path / "persons_asim_out.parquet"), short_name="persons_asim_out"),
-        ]
-    )
+    asim_outputs = {
+        "beam_plans_out": str(tmp_path / "beam_plans_out.parquet"),
+        "households_asim_out": str(tmp_path / "households_asim_out.parquet"),
+        "persons_asim_out": str(tmp_path / "persons_asim_out.parquet"),
+    }
     zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
     _write_file(zarr_path)
     coupler.set(ZARR_SKIMS, str(zarr_path))
     linkstats_history_path = tmp_path / "linkstats_parquet_2018_0.parquet"
     _write_file(linkstats_history_path)
-    previous_beam_outputs = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(linkstats_history_path),
-                short_name="linkstats_parquet_2018_0",
-            )
-        ]
-    )
+    previous_beam_outputs = {
+        "linkstats_parquet_2018_0": str(linkstats_history_path)
+    }
 
     class _BeamPreprocessorNoWarmstart:
         def preprocess(self, workspace, previous_records=RecordStore()):
@@ -1185,7 +1179,7 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
         inputs=TrafficAssignmentPhaseInputs(
             year=state.forecast_year,
             iteration=0,
-            activity_demand_outputs=RecordStore(),
+            activity_demand_outputs={},
             previous_beam_outputs=None,
         ),
         outputs_holder=outputs_holder,

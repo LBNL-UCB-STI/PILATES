@@ -3,12 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.workflows.orchestration import _update_coupler_from_outputs
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps import shared as shared_steps
@@ -18,11 +22,30 @@ from pilates.workflows.steps.shared import _build_required_input_store, _execute
 class _TrackingOutputs:
     def __init__(self, store: RecordStore) -> None:
         self._store = store
-        self.to_record_store_calls = 0
+        self.iter_record_item_calls = 0
+
+    def _iter_record_items(self):
+        self.iter_record_item_calls += 1
+        for record in self._store.all_records():
+            yield record.short_name, Path(record.file_path), record.description
+
+
+class _LegacyOnlyOutputs:
+    def __init__(self, store: RecordStore) -> None:
+        self._store = store
 
     def to_record_store(self) -> RecordStore:
-        self.to_record_store_calls += 1
         return self._store
+
+
+class _DuplicateKeyOutputs:
+    def __init__(self, first: Path, second: Path) -> None:
+        self.first = first
+        self.second = second
+
+    def _iter_record_items(self):
+        yield "linkstats", self.first, "canonical linkstats"
+        yield "linkstats", self.second, "duplicate linkstats"
 
 
 class _ResolvedInputs:
@@ -51,36 +74,36 @@ def _store_with_record(path: Path, key: str) -> RecordStore:
     )
 
 
-def test_update_coupler_from_outputs_uses_record_store_bridge(
+def test_update_coupler_from_outputs_uses_direct_typed_output_mapping(
     monkeypatch, tmp_path: Path
 ) -> None:
     store = _store_with_record(tmp_path / "artifact.txt", "artifact_a")
     outputs = _TrackingOutputs(store)
     captured = {}
 
-    def _fake_bridge(record_store, *, coupler, workspace) -> None:
-        captured["record_store"] = record_store
+    def _fake_publish(mapping, *, coupler, workspace) -> None:
+        captured["mapping"] = mapping
         captured["coupler"] = coupler
         captured["workspace"] = workspace
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration._update_coupler_from_record_store",
-        _fake_bridge,
+        "pilates.workflows.orchestration._update_coupler_from_mapping",
+        _fake_publish,
     )
 
     coupler = object()
     workspace = object()
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
 
-    assert outputs.to_record_store_calls == 1
+    assert outputs.iter_record_item_calls == 1
     assert captured == {
-        "record_store": store,
+        "mapping": store.to_mapping(),
         "coupler": coupler,
         "workspace": workspace,
     }
 
 
-def test_build_required_input_store_consumes_typed_outputs_via_to_record_store(
+def test_build_required_input_store_materializes_direct_typed_output_items(
     tmp_path: Path,
 ) -> None:
     holder = StepOutputsHolder()
@@ -96,11 +119,29 @@ def test_build_required_input_store_consumes_typed_outputs_via_to_record_store(
         warn_missing_coupler_inputs=False,
     )
 
-    assert upstream.to_record_store_calls == 1
-    assert input_store is store
+    assert upstream.iter_record_item_calls == 1
+    assert input_store.to_mapping() == store.to_mapping()
 
 
-def test_execute_run_routes_upstream_typed_outputs_through_to_record_store(
+def test_build_required_input_store_rejects_outputs_without_iter_record_items(
+    tmp_path: Path,
+) -> None:
+    holder = StepOutputsHolder()
+    holder.activitysim_preprocess = _LegacyOnlyOutputs(
+        _store_with_record(tmp_path / "legacy-input.txt", "input_a")
+    )
+
+    with pytest.raises(TypeError, match="_iter_record_items"):
+        _build_required_input_store(
+            outputs_holder=holder,
+            upstream_attr="activitysim_preprocess",
+            missing_message="ActivitySim preprocess must complete first",
+            context="activitysim_run",
+            warn_missing_coupler_inputs=False,
+        )
+
+
+def test_execute_run_materializes_runner_inputs_from_typed_output_items(
     monkeypatch, tmp_path: Path
 ) -> None:
     holder = StepOutputsHolder()
@@ -122,12 +163,10 @@ def test_execute_run_routes_upstream_typed_outputs_through_to_record_store(
     workspace = object()
     result = _execute_run(runner, workspace, holder, context="activitysim_run")
 
-    assert upstream.to_record_store_calls == 1
-    assert captured == {
-        "runner": runner,
-        "input_store": store,
-        "workspace": workspace,
-    }
+    assert upstream.iter_record_item_calls == 1
+    assert captured["runner"] is runner
+    assert captured["workspace"] is workspace
+    assert captured["input_store"].to_mapping() == store.to_mapping()
     assert result is runner_outputs
 
 
@@ -218,7 +257,46 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
         outputs_holder_year=outputs_holder,
     )
 
-    assert upstream.to_record_store_calls == 1
+    assert upstream.iter_record_item_calls == 1
     assert workflow_call_count["count"] == 2
-    assert resolution_calls[1]["explicit_inputs"] == preprocess_store.to_mapping()
+    assert resolution_calls[1]["explicit_inputs"] == {
+        **preprocess_store.to_mapping(),
+        USIM_DATASTORE_BASE_H5: str(usim_base),
+        USIM_DATASTORE_CURRENT_H5: str(usim_current),
+    }
     assert result[USIM_DATASTORE_CURRENT_H5] == str(usim_current)
+
+
+def test_step_output_mapping_matches_real_output_record_store_mapping(
+    tmp_path: Path,
+) -> None:
+    beam_plans = tmp_path / "beam_plans.parquet"
+    households = tmp_path / "households.parquet"
+    persons = tmp_path / "persons.parquet"
+    for path in (beam_plans, households, persons):
+        path.write_text(path.name, encoding="utf-8")
+
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=tmp_path,
+        processed_outputs={
+            "beam_plans_asim_out": beam_plans,
+            "households_asim_out": households,
+            "persons_asim_out": persons,
+        },
+    )
+
+    assert step_output_mapping(outputs) == outputs.to_record_store().to_mapping()
+
+
+def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -> None:
+    first = tmp_path / "linkstats-first.parquet"
+    second = tmp_path / "linkstats-second.parquet"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        mapping = step_output_mapping(_DuplicateKeyOutputs(first, second))
+
+    assert mapping == {"linkstats": str(first)}
+    assert "Duplicate typed-output artifact key 'linkstats'" in caplog.text

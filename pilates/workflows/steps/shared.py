@@ -258,6 +258,7 @@ from pilates.workflows.step_exec import (
 from pilates.workflows.outputs_base import (
     ValidationContext,
     declared_outputs_for_step_outputs_class,
+    iter_step_output_items,
 )
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -1392,7 +1393,16 @@ def _build_required_input_store(
     upstream = getattr(outputs_holder, upstream_attr, None)
     if upstream is None:
         raise RuntimeError(missing_message)
-    input_store = upstream.to_record_store()
+    input_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(path),
+                short_name=short_name,
+                description=description,
+            )
+            for short_name, path, description in iter_step_output_items(upstream)
+        ]
+    )
     if extra_inputs is not None:
         input_store += extra_inputs
     if warn_missing_coupler_inputs:
@@ -1487,13 +1497,13 @@ def _execute_beam_preprocess(
     *,
     coupler: Optional[CouplerProtocol] = None,
     context: str = "beam_preprocess",
-    activity_demand_outputs: Optional[RecordStore] = None,
-    previous_beam_outputs: Optional[RecordStore] = None,
+    activity_demand_outputs: Optional[Mapping[str, Any]] = None,
+    previous_beam_outputs: Optional[Mapping[str, Any]] = None,
     beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> RecordStore:
     """
-    Execute the BEAM preprocessor with upstream RecordStore inputs.
+    Execute the BEAM preprocessor with upstream artifact mappings.
 
     BEAM preprocess builds the runnable scenario inputs by combining
     ActivitySim demand outputs with warm-start data and optional ATLAS
@@ -1507,10 +1517,10 @@ def _execute_beam_preprocess(
         Workspace used to resolve paths.
     outputs_holder : StepOutputsHolder
         Holder for upstream outputs (unused).
-    activity_demand_outputs : RecordStore, optional
-        ActivitySim postprocess outputs.
-    previous_beam_outputs : RecordStore, optional
-        Previous BEAM outputs for warm starts.
+    activity_demand_outputs : mapping, optional
+        ActivitySim postprocess outputs keyed by artifact short name.
+    previous_beam_outputs : mapping, optional
+        Previous BEAM outputs for warm starts keyed by artifact short name.
 
     Returns
     -------
@@ -1518,10 +1528,25 @@ def _execute_beam_preprocess(
         Preprocessor outputs.
     """
     combined = RecordStore()
-    if activity_demand_outputs is not None:
-        combined += activity_demand_outputs
-    if previous_beam_outputs is not None:
-        combined += previous_beam_outputs
+    for artifact_mapping, description_prefix in (
+        (activity_demand_outputs, "BEAM preprocess activity-demand input"),
+        (previous_beam_outputs, "BEAM preprocess warm-start input"),
+    ):
+        if not artifact_mapping:
+            continue
+        for key, value in artifact_mapping.items():
+            path = artifact_to_path(value, workspace)
+            if path is None and isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+            if not path:
+                continue
+            combined.add_record(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=key,
+                    description=f"{description_prefix}: {key}",
+                )
+            )
     if beam_preprocess_inputs:
         # Bridge orchestration-level fallback inputs into the legacy BEAM
         # preprocessor contract, which expects ActivitySim-style short names.
@@ -1635,7 +1660,7 @@ def _execute_beam_full_skim(
     *,
     coupler: Optional[CouplerProtocol] = None,
     context: str = "beam_full_skim_run",
-    previous_beam_outputs: Optional[RecordStore] = None,
+    previous_beam_outputs: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -1644,13 +1669,31 @@ def _execute_beam_full_skim(
     The full-skim runner consumes canonical BEAM inputs plus optional
     previous BEAM outputs (for linkstats warm-start selection).
     """
+    extra_inputs = None
+    if previous_beam_outputs:
+        records = []
+        for key, value in previous_beam_outputs.items():
+            path = artifact_to_path(value, workspace)
+            if path is None and isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+            if not path:
+                continue
+            records.append(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=key,
+                    description=f"BEAM full-skim warm-start input: {key}",
+                )
+            )
+        extra_inputs = RecordStore(recordList=records)
+
     input_store = _build_required_input_store(
         outputs_holder=outputs_holder,
         upstream_attr="beam_preprocess",
         missing_message="BEAM preprocess must complete first",
         context=context,
         coupler=coupler,
-        extra_inputs=previous_beam_outputs,
+        extra_inputs=extra_inputs,
     )
     return run_runner(runner, input_store, workspace)
 

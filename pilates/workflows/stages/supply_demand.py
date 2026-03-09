@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.io import locate_beam_file
@@ -30,6 +29,7 @@ from pilates.workflows.orchestration import (
     run_workflow,
     run_manifested_steps,
 )
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.step_io import build_outputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -94,12 +94,12 @@ class ActivityDemandPhaseOutputs:
 
     Parameters
     ----------
-    activity_demand_outputs : Optional[RecordStore]
-        RecordStore containing ActivitySim outputs needed downstream
+    activity_demand_outputs : Optional[dict[str, str]]
+        Mapping containing ActivitySim outputs needed downstream
         (e.g., households, persons, plans). None if not produced.
     """
 
-    activity_demand_outputs: Optional[RecordStore]
+    activity_demand_outputs: Optional[Dict[str, str]]
 
 
 @dataclass
@@ -113,16 +113,16 @@ class TrafficAssignmentPhaseInputs:
         Forecast year being simulated.
     iteration : int
         Supply-demand iteration index for the year.
-    activity_demand_outputs : Optional[RecordStore]
+    activity_demand_outputs : Optional[dict[str, str]]
         ActivitySim outputs used to seed BEAM inputs for this iteration.
-    previous_beam_outputs : Optional[RecordStore]
+    previous_beam_outputs : Optional[dict[str, str]]
         Prior BEAM outputs (e.g., linkstats) used for warm-starting.
     """
 
     year: int
     iteration: int
-    activity_demand_outputs: Optional[RecordStore]
-    previous_beam_outputs: Optional[RecordStore]
+    activity_demand_outputs: Optional[Dict[str, str]]
+    previous_beam_outputs: Optional[Dict[str, str]]
 
 
 @dataclass
@@ -132,12 +132,12 @@ class TrafficAssignmentPhaseOutputs:
 
     Parameters
     ----------
-    previous_beam_outputs : Optional[RecordStore]
+    previous_beam_outputs : Optional[dict[str, str]]
         Combined BEAM run + postprocess outputs for warm-starting the
         next iteration, if available.
     """
 
-    previous_beam_outputs: Optional[RecordStore]
+    previous_beam_outputs: Optional[Dict[str, str]]
 
 
 def _run_supply_demand_manifested_steps(
@@ -335,7 +335,7 @@ def _run_activity_demand_phase(
     Returns
     -------
     ActivityDemandPhaseOutputs
-        RecordStore of ActivitySim outputs for downstream BEAM inputs.
+        Mapping of ActivitySim outputs for downstream BEAM inputs.
     """
     formatted_print("ACTIVITY DEMAND MODEL")
 
@@ -501,7 +501,7 @@ def _run_activity_demand_phase(
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
-        compile_store_inputs = upstream.to_record_store().to_mapping()
+        compile_store_inputs = step_output_mapping(upstream)
         compile_explicit_inputs: Dict[str, Any] = {}
         if ASIM_OMX_SKIMS in compile_store_inputs:
             compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
@@ -680,7 +680,7 @@ def _run_activity_demand_phase(
 
     postprocess_outputs = outputs_holder.activitysim_postprocess
     activity_demand_outputs = (
-        postprocess_outputs.to_record_store()
+        step_output_mapping(postprocess_outputs)
         if postprocess_outputs is not None
         else None
     )
@@ -708,8 +708,8 @@ def _collect_previous_beam_outputs(
     workspace: Workspace,
     state: WorkflowState,
     iteration: int,
-    previous_beam_outputs: Optional[RecordStore],
-) -> Optional[RecordStore]:
+    previous_beam_outputs: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
     """
     Resolve previous BEAM outputs for warm-starting.
 
@@ -723,23 +723,15 @@ def _collect_previous_beam_outputs(
     if not callable(get_value):
         return None
 
-    promoted_store = RecordStore()
+    promoted_outputs: Dict[str, str] = {}
     for key in (LINKSTATS, BEAM_PLANS_OUT):
         value = get_value(key)
         if value is None:
             continue
         path = artifact_to_path(value, workspace)
         if path and os.path.exists(path):
-            promoted_store.add_record(
-                FileRecord(
-                    file_path=path,
-                    short_name=key,
-                    description=f"Promoted BEAM output: {key}",
-                    year=state.forecast_year,
-                    iteration=iteration,
-                )
-            )
-    return promoted_store if promoted_store.all_records() else None
+            promoted_outputs[key] = path
+    return promoted_outputs or None
 
 
 def _collect_beam_preprocess_inputs(
@@ -748,8 +740,8 @@ def _collect_beam_preprocess_inputs(
     workspace: Workspace,
     state: WorkflowState,
     iteration: int,
-    activity_demand_outputs: Optional[RecordStore],
-    previous_beam_outputs: Optional[RecordStore],
+    activity_demand_outputs: Optional[Dict[str, str]],
+    previous_beam_outputs: Optional[Dict[str, str]],
 ) -> Dict[str, Any]:
     """
     Build preprocess inputs for BEAM from available upstream sources.
@@ -770,7 +762,7 @@ def _collect_beam_preprocess_inputs(
             "linkstats",
             "persons_asim_out",
         }
-        for key, value in activity_demand_outputs.to_mapping().items():
+        for key, value in activity_demand_outputs.items():
             if key in asim_input_keys:
                 beam_preprocess_inputs[key] = value
     elif settings.run.models.activity_demand is None:
@@ -794,13 +786,12 @@ def _collect_beam_preprocess_inputs(
         )
 
     if previous_beam_outputs is not None:
-        for key, value in previous_beam_outputs.to_mapping().items():
+        for key, value in previous_beam_outputs.items():
             if key.startswith("linkstats"):
                 beam_preprocess_inputs[key] = value
 
     if previous_beam_outputs is None or not any(
-        key.startswith("linkstats")
-        for key in previous_beam_outputs.to_mapping().keys()
+        key.startswith("linkstats") for key in previous_beam_outputs.keys()
     ):
         warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
         if warmstart_path:
@@ -833,7 +824,7 @@ def _collect_beam_preprocess_inputs(
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
-    activity_demand_outputs: Optional[RecordStore],
+    activity_demand_outputs: Optional[Dict[str, str]],
 ) -> list[str]:
     """
     Derive BEAM run input keys from preprocess outputs and warm-start signals.
@@ -930,7 +921,7 @@ def _run_beam_steps(
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[RecordStore]:
+) -> Optional[Dict[str, str]]:
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
     """
@@ -987,7 +978,7 @@ def _run_beam_steps(
         beam_postprocess_resolution = resolve_step_inputs(
             keys=beam_postprocess_input_keys,
             coupler=coupler,
-            explicit_inputs=upstream_run.to_record_store().to_mapping(),
+            explicit_inputs=step_output_mapping(upstream_run),
         )
 
     _run_supply_demand_workflow(
@@ -1026,11 +1017,13 @@ def _run_beam_steps(
     if outputs_holder.beam_run is None and outputs_holder.beam_postprocess is None:
         return None
 
-    combined_beam_outputs = RecordStore()
+    combined_beam_outputs: Dict[str, str] = {}
     if outputs_holder.beam_run is not None:
-        combined_beam_outputs += outputs_holder.beam_run.to_record_store()
+        combined_beam_outputs.update(step_output_mapping(outputs_holder.beam_run))
     if outputs_holder.beam_postprocess is not None:
-        combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
+        combined_beam_outputs.update(
+            step_output_mapping(outputs_holder.beam_postprocess)
+        )
     return combined_beam_outputs
 
 
@@ -1044,9 +1037,9 @@ def _run_beam_full_skim_step(
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    previous_beam_outputs: Optional[RecordStore],
+    previous_beam_outputs: Optional[Dict[str, str]],
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[RecordStore]:
+) -> Optional[Dict[str, str]]:
     """
     Execute dedicated BEAM full-skim step and return its outputs.
     """
@@ -1079,7 +1072,7 @@ def _run_beam_full_skim_step(
 
     if outputs_holder.beam_full_skim is None:
         return None
-    return outputs_holder.beam_full_skim.to_record_store()
+    return step_output_mapping(outputs_holder.beam_full_skim)
 
 
 def _run_traffic_assignment_phase(
@@ -1204,8 +1197,8 @@ def _run_traffic_assignment_phase(
             )
             if full_skim_outputs is not None:
                 if combined_beam_outputs is None:
-                    combined_beam_outputs = RecordStore()
-                combined_beam_outputs += full_skim_outputs
+                    combined_beam_outputs = {}
+                combined_beam_outputs.update(full_skim_outputs)
 
     state.complete_step(
         state.Stage.supply_demand_loop,
@@ -1292,7 +1285,7 @@ def run_supply_demand_stage(
       state to the next iteration.
     """
     total_iters = settings.run.supply_demand_iters
-    previous_beam_outputs: Optional[RecordStore] = None
+    previous_beam_outputs: Optional[Dict[str, str]] = None
 
     for i in range(state.iteration, total_iters):
         state.iteration = i

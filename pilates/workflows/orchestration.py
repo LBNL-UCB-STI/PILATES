@@ -40,6 +40,7 @@ from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
+    step_output_mapping,
     serialize_step_outputs,
 )
 from pilates.workflows.step_runner import common_runtime_kwargs
@@ -872,7 +873,7 @@ def _recover_cached_outputs(
     if callable(validate):
         validate()
     outputs_holder.set_attribute(step_name, outputs)
-    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
+    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
     return outputs
 
 
@@ -882,22 +883,21 @@ def _update_coupler_from_outputs(
     coupler: CouplerProtocol,
     workspace: Any,
 ) -> None:
-    to_record_store = getattr(outputs, "to_record_store", None)
-    if not callable(to_record_store):
-        return
-    record_store = to_record_store()
-    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
+    _update_coupler_from_mapping(
+        step_output_mapping(outputs),
+        coupler=coupler,
+        workspace=workspace,
+    )
 
 
-def _update_coupler_from_record_store(
-    record_store: RecordStore,
+def _update_coupler_from_mapping(
+    mapping: Mapping[str, Any],
     *,
     coupler: CouplerProtocol,
     workspace: Any,
 ) -> None:
-    if record_store is None:
+    if not mapping:
         return
-    mapping = record_store.to_mapping()
     for key, value in mapping.items():
         canonical_key = resolve_artifact_key(key)
         resolved = resolve_artifact_from_value(
@@ -922,6 +922,21 @@ def _update_coupler_from_record_store(
             artifact=artifact,
             fallback=path,
         )
+
+
+def _update_coupler_from_record_store(
+    record_store: RecordStore,
+    *,
+    coupler: CouplerProtocol,
+    workspace: Any,
+) -> None:
+    if record_store is None:
+        return
+    _update_coupler_from_mapping(
+        record_store.to_mapping(),
+        coupler=coupler,
+        workspace=workspace,
+    )
 
 
 def _restore_outputs_from_manifest(

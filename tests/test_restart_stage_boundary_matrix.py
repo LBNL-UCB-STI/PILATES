@@ -451,11 +451,12 @@ def test_restart_land_use_boundary_preserves_required_datastores(
     def _fake_run_workflow(*, steps, outputs_holder, **_kwargs):
         if any(step.name == "urbansim_preprocess" for step in steps):
             outputs_holder.urbansim_preprocess = SimpleNamespace(
-                to_record_store=lambda: RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(geoid_to_zone_path),
-                            short_name="geoid_to_zone",
+                _iter_record_items=lambda: iter(
+                    [
+                        (
+                            "geoid_to_zone",
+                            geoid_to_zone_path,
+                            "UrbanSim preprocess output: geoid_to_zone",
                         )
                     ]
                 )
