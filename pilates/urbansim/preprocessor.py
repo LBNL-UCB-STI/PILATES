@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Tuple, Optional, TYPE_CHECKING, Dict, Any
 import os
 import shutil
@@ -11,6 +12,7 @@ import numpy as np
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.path_utils import find_project_root
 
 if TYPE_CHECKING:
@@ -38,6 +40,38 @@ skim_dtypes = {
     "BOARDS": float,
     "DEBUG_TEXT": str,
 }
+
+_OPTIONAL_URBANSIM_INPUT_FILENAMES = (
+    ("schools_2010.csv", "schools"),
+    ("blocks_school_districts_2010.csv", "school_districts"),
+)
+
+
+def _mutable_urbansim_input_paths(
+    settings: PilatesConfig,
+    workspace: "Workspace",
+) -> Dict[str, Path]:
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+
+    prepared_inputs: Dict[str, Path] = {}
+    candidate_paths = {
+        "usim_datastore_h5": mutable_dir
+        / settings.urbansim.input_file_template.format(region_id=region_id),
+        "omx_skims": mutable_dir / f"skims_mpo_{region_id}.omx",
+        "hh_size": mutable_dir / f"hsize_ct_{region_id}.csv",
+        "income_rates": mutable_dir / f"income_rates_{region_id}.csv",
+        "relmap": mutable_dir / f"relmap_{region_id}.csv",
+        "geoid_to_zone": mutable_dir / "geoid_to_zone.csv",
+    }
+    for filename, key in _OPTIONAL_URBANSIM_INPUT_FILENAMES:
+        candidate_paths[key] = mutable_dir / filename
+
+    for key, path in candidate_paths.items():
+        if path.exists():
+            prepared_inputs[key] = path
+    return prepared_inputs
 
 
 def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspace):
@@ -372,7 +406,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
-    ) -> RecordStore:
+    ) -> UrbanSimPreprocessOutputs:
         """
         Preprocess UrbanSim data, including copying necessary skims.
         """
@@ -383,9 +417,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
         os.makedirs(usim_mutable_data_dir, exist_ok=True)
 
-        input_records = workspace.input_data.get("urbansim", RecordStore())
-
-        processed_records = RecordStore()
+        updated_skims_path: Optional[Path] = None
 
         try:
             # Generate the block-to-zone mapping for UrbanSim
@@ -406,13 +438,6 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 .rename_axis("GEOID")
                 .to_csv(geoid_to_zone_path)
             )
-
-            mapping_output_rec = FileRecord(
-                file_path=geoid_to_zone_path,
-                description="Block to zone mapping for UrbanSim input",
-                short_name="geoid_to_zone",
-            )
-            processed_records.add_record(mapping_output_rec)
 
             # If not the first iteration, check if BEAM is enabled and copy updated skims
             if (
@@ -455,26 +480,21 @@ class UrbansimPreprocessor(GenericPreprocessor):
                             f"Copying skims from {source_skims_path} to {dest_skims_path}"
                         )
                         shutil.copy(source_skims_path, dest_skims_path)
-
-                        skims_output_rec = FileRecord(
-                            file_path=dest_skims_path,
-                            description="Copied updated skims for UrbanSim consumption",
-                            short_name="usim_skims_input_updated",
-                        )
-                        if skims_output_rec:
-                            processed_records.add_record(skims_output_rec)
+                        updated_skims_path = Path(dest_skims_path)
                     else:
                         logger.warning(
                             f"Skims file not found at source: {source_skims_path}"
                         )
 
-            # Pass through any existing input records
-            for record in input_records.all_records():
-                if record.file_path and os.path.exists(record.file_path):
-                    processed_records.add_record(record)
-
         except Exception as e:
             logger.error(f"Error during UrbanSim preprocessing: {e}")
             raise
 
-        return processed_records
+        prepared_inputs = _mutable_urbansim_input_paths(settings, workspace)
+        if updated_skims_path is not None and updated_skims_path.exists():
+            prepared_inputs["usim_skims_input_updated"] = updated_skims_path
+
+        return UrbanSimPreprocessOutputs(
+            usim_mutable_data_dir=Path(usim_mutable_data_dir),
+            prepared_inputs=prepared_inputs,
+        )

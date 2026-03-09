@@ -61,6 +61,8 @@ def test_create_next_iter_usim_data_enqueues_restart_h5s(monkeypatch, tmp_path):
     )
 
     assert records is not None
+    assert f"usim_input_archive_{forecast_year}" in records
+    assert f"usim_input_merged_{forecast_year}" in records
     keys = {call["key"] for call in calls}
     assert f"usim_year_output_h5_{forecast_year}" in keys
     assert f"usim_input_archive_{forecast_year}" in keys

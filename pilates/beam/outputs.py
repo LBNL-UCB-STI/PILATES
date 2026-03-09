@@ -149,6 +149,63 @@ class BeamRunOutputs(StepOutputsBase):
             return None
         return best_key, best_path
 
+    @staticmethod
+    def _publication_rank(
+        short_name: str,
+        prefix: str,
+    ) -> Optional[Tuple[int, int]]:
+        if short_name == prefix:
+            return (0, 0)
+        marker = f"{prefix}_"
+        if not short_name.startswith(marker):
+            return None
+        tail = short_name[len(marker) :]
+        parts = tail.split("_")
+        if len(parts) < 2 or parts[-1].startswith("sub"):
+            return None
+        try:
+            year = int(parts[-2])
+            iteration = int(parts[-1])
+        except ValueError:
+            return None
+        return (year, iteration)
+
+    def _latest_publication_output_for_prefix(
+        self, prefix: str
+    ) -> Optional[Tuple[str, Path]]:
+        best_key: Optional[str] = None
+        best_path: Optional[Path] = None
+        best_rank: Optional[Tuple[int, int]] = None
+        for short_name, path in self.raw_outputs.items():
+            rank = self._publication_rank(short_name, prefix)
+            if rank is None:
+                continue
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_key = short_name
+                best_path = path
+        if best_key is None or best_path is None:
+            return None
+        return best_key, best_path
+
+    def promoted_linkstats_for_publication(self) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(LINKSTATS)
+
+    def promoted_plans_for_publication(self) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(BEAM_PLANS_OUT)
+
+    def iter_linkstats_parquet_outputs(self) -> Iterable[Tuple[str, Path]]:
+        for key, path in self.raw_outputs.items():
+            if key.startswith("linkstats_parquet_"):
+                yield key, path
+
+    def iter_unmodified_phys_sim_outputs(self) -> Iterable[Tuple[str, Path]]:
+        for key, path in self.raw_outputs.items():
+            if key.startswith(
+                "linkstats_unmodified_phys_sim_iter_parquet_"
+            ) or key.startswith("linkstats_unmodified_parquet__"):
+                yield key, path
+
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
         Yield BEAM raw output records.

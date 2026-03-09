@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import glob
+from pathlib import Path
 from typing import Tuple, Optional, TYPE_CHECKING, List, Dict, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
@@ -241,6 +243,133 @@ def _resolve_atlas_h5_table_key(
     return year_key
 
 
+def _resolve_atlas_static_sources(
+    settings,
+) -> Tuple[str, str]:
+    source_dir = get_setting(
+        settings, "atlas.host_input_folder", "pilates/atlas/atlas_input"
+    )
+    project_root = find_project_root(start_path=os.path.dirname(__file__))
+    if not project_root:
+        project_root = os.path.realpath(os.getcwd())
+        logger.warning(
+            "[NOT IDEAL] Could not locate PILATES project root via markers; "
+            "falling back to cwd='%s'.",
+            project_root,
+        )
+
+    if not os.path.isabs(source_dir):
+        source_dir = os.path.join(project_root, source_dir)
+    source_dir = os.path.realpath(source_dir)
+
+    default_source_dir = os.path.realpath(
+        os.path.join(project_root, "pilates/atlas/atlas_input")
+    )
+    return source_dir, default_source_dir
+
+
+def _stage_atlas_static_inputs(
+    *,
+    settings,
+    output_dir: str,
+) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+    source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
+    source_dirs = [source_dir]
+    if default_source_dir not in source_dirs:
+        source_dirs.append(default_source_dir)
+
+    scenario = get_setting(settings, "atlas.scenario")
+    adscen = get_setting(settings, "atlas.adscen")
+    scenario_key = str(scenario).lower() if scenario else ""
+    if scenario and scenario_key not in {"baseline", "ess_cons", "zev_mandate"}:
+        logger.warning(
+            "[AtlasPreprocessor] Unknown atlas.scenario=%s; using deterministic static input fallback.",
+            scenario,
+        )
+    if adscen and scenario and adscen != scenario:
+        logger.warning(
+            "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
+            "using scenario for input selection.",
+            adscen,
+            scenario,
+        )
+
+    required_relpaths = atlas_static_input_relpaths(settings)
+    logger.info(
+        "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
+        "(primary=%s fallback=%s)",
+        source_dir,
+        default_source_dir,
+    )
+
+    staged_paths: Dict[str, Path] = {}
+    metadata_by_key: Dict[str, Dict[str, object]] = {}
+    missing_required_relpaths: List[str] = []
+    fallback_copy_count = 0
+
+    for relpath in required_relpaths:
+        normalized_relpath = relpath.replace("\\", "/")
+        source_path = None
+        source_base = None
+        for base_dir in source_dirs:
+            candidate = os.path.realpath(os.path.join(base_dir, normalized_relpath))
+            if os.path.exists(candidate):
+                source_path = candidate
+                source_base = base_dir
+                break
+
+        if source_path is None:
+            missing_required_relpaths.append(normalized_relpath)
+            continue
+
+        if source_base is not None and source_base != source_dir:
+            fallback_copy_count += 1
+            logger.warning(
+                "[AtlasPreprocessor] Required file missing in primary source, "
+                "using fallback: %s",
+                normalized_relpath,
+            )
+
+        dest_path = os.path.realpath(os.path.join(output_dir, normalized_relpath))
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        shutil.copy(source_path, dest_path)
+
+        rel_no_ext = os.path.splitext(normalized_relpath)[0]
+        rel_key = rel_no_ext
+        short_name = sanitize_artifact_key(rel_key) or rel_key
+        staged_paths[short_name] = Path(dest_path)
+        metadata_by_key[short_name] = _atlas_static_input_metadata(
+            relpath=normalized_relpath,
+            settings=settings,
+            source_origin=(
+                "fallback"
+                if source_base is not None and source_base != source_dir
+                else "primary"
+            ),
+            source_path=source_path,
+        )
+
+    if missing_required_relpaths:
+        preview = ", ".join(sorted(missing_required_relpaths)[:8])
+        raise RuntimeError(
+            "Missing required ATLAS static input files "
+            f"(count={len(missing_required_relpaths)}). "
+            f"Preview: {preview}"
+        )
+
+    if fallback_copy_count:
+        logger.warning(
+            "[AtlasPreprocessor] Copied %s files via fallback source.",
+            fallback_copy_count,
+        )
+
+    logger.info(
+        "[AtlasPreprocessor] Finished copying %s static ATLAS inputs.",
+        len(staged_paths),
+    )
+    return staged_paths, metadata_by_key
+
+
 class AtlasPreprocessor(GenericPreprocessor):
     """
     ATLAS-specific preprocessor that consolidates all preprocessing steps for the ATLAS vehicle ownership model.
@@ -307,139 +436,37 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         Copy ATLAS input files from the production directory to the run's mutable input directory.
         """
+        staged_paths, metadata_by_key = _stage_atlas_static_inputs(
+            settings=settings,
+            output_dir=output_dir,
+        )
         input_records = []
         output_records = []
-        source_dir = get_setting(
-            settings, "atlas.host_input_folder", "pilates/atlas/atlas_input"
-        )
-        project_root = find_project_root(start_path=os.path.dirname(__file__))
-        if not project_root:
-            project_root = os.path.realpath(os.getcwd())
-            logger.warning(
-                "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                "falling back to cwd='%s'.",
-                project_root,
-            )
-
-        if not os.path.isabs(source_dir):
-            source_dir = os.path.join(project_root, source_dir)
-        source_dir = os.path.realpath(source_dir)
-
-        default_source_dir = os.path.realpath(
-            os.path.join(project_root, "pilates/atlas/atlas_input")
-        )
-
-        source_dirs = [source_dir]
-        if default_source_dir not in source_dirs:
-            source_dirs.append(default_source_dir)
-
-        scenario = get_setting(settings, "atlas.scenario")
-        adscen = get_setting(settings, "atlas.adscen")
-        scenario_key = str(scenario).lower() if scenario else ""
-        if scenario and scenario_key not in {"baseline", "ess_cons", "zev_mandate"}:
-            logger.warning(
-                "[AtlasPreprocessor] Unknown atlas.scenario=%s; using deterministic static input fallback.",
-                scenario,
-            )
-        if adscen and scenario and adscen != scenario:
-            logger.warning(
-                "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
-                "using scenario for input selection.",
-                adscen,
-                scenario,
-            )
-        required_relpaths = atlas_static_input_relpaths(settings)
-        logger.info(
-            "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
-            "(primary=%s fallback=%s)",
-            source_dir,
-            default_source_dir,
-        )
-        missing_required_relpaths: List[str] = []
-        fallback_copy_count = 0
-
-        for relpath in required_relpaths:
-            normalized_relpath = relpath.replace("\\", "/")
-            source_path = None
-            source_base = None
-            for base_dir in source_dirs:
-                candidate = os.path.realpath(os.path.join(base_dir, normalized_relpath))
-                if os.path.exists(candidate):
-                    source_path = candidate
-                    source_base = base_dir
-                    break
-
-            if source_path is None:
-                missing_required_relpaths.append(normalized_relpath)
-                continue
-
-            if source_base is not None and source_base != source_dir:
-                fallback_copy_count += 1
-                logger.warning(
-                    "[AtlasPreprocessor] Required file missing in primary source, "
-                    "using fallback: %s",
-                    normalized_relpath,
-                )
-
-            dest_path = os.path.join(output_dir, normalized_relpath)
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            shutil.copy(source_path, dest_path)
-
-            rel_no_ext = os.path.splitext(normalized_relpath)[0]
-            rel_key = rel_no_ext
-            short_name = sanitize_artifact_key(rel_key) or rel_key
-            filename = os.path.basename(normalized_relpath)
-
-            input_meta = _atlas_static_input_metadata(
-                relpath=normalized_relpath,
-                settings=settings,
-                source_origin=(
-                    "fallback" if source_base is not None and source_base != source_dir else "primary"
-                ),
-                source_path=source_path,
-            )
+        for short_name, dest_path in staged_paths.items():
+            source_path = metadata_by_key[short_name]["atlas_source_path"]
+            filename = os.path.basename(str(dest_path))
             input_records.append(
                 FileRecord(
-                    file_path=source_path,
+                    file_path=str(source_path),
                     description=f"ATLAS input file: {filename}",
                     short_name=short_name,
-                    metadata=input_meta,
+                    metadata=metadata_by_key[short_name],
                 )
             )
             output_records.append(
                 FileRecord(
-                    file_path=dest_path,
+                    file_path=str(dest_path),
                     description=f"Mutable ATLAS input file: {filename}",
                     short_name=short_name,
                 )
             )
-
-        if missing_required_relpaths:
-            preview = ", ".join(sorted(missing_required_relpaths)[:8])
-            raise RuntimeError(
-                "Missing required ATLAS static input files "
-                f"(count={len(missing_required_relpaths)}). "
-                f"Preview: {preview}"
-            )
-
-        if fallback_copy_count:
-            logger.warning(
-                "[AtlasPreprocessor] Copied %s files via fallback source.",
-                fallback_copy_count,
-            )
-
-        logger.info(
-            f"[AtlasPreprocessor] Finished copying {len(output_records)} files."
-        )
-        return RecordStore(recordList=input_records), RecordStore(
-            recordList=output_records
-        )
+        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
 
     def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
-    ) -> RecordStore:
+    ) -> AtlasPreprocessOutputs:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
         and formatting them as ATLAS inputs. Handles provenance tracking.
@@ -451,6 +478,10 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
+        prepared_inputs, prepared_input_meta = _stage_atlas_static_inputs(
+            settings=settings,
+            output_dir=workspace.get_atlas_mutable_input_dir(),
+        )
 
         # --- Ensure global ATLAS input files are present for every year ---
         # Source for global files (e.g., cpi.csv, RData/Rdat files)
@@ -550,43 +581,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             "year{}".format(self.state.year),
         )
 
-        # --- Record all input files before processing ---
-        input_records: List[FileRecord] = []
-
-        # Record UrbanSim HDF5 as input
-        h5_file_record = None
-        if os.path.exists(urbansim_output):
-            logger.info(
-                f"[AtlasPreprocessor] Recording UrbanSim HDF5 container as input: {urbansim_output}"
-            )
-            tables_used = []
-            for year in (self.state.year, self.state.year - 1):
-                if year < self.state.start_year:
-                    continue
-                year_prefix = "" if year == self.state.start_year else f"/{year}"
-                tables_used.extend(
-                    [
-                        f"{year_prefix}/households",
-                        f"{year_prefix}/blocks",
-                        f"{year_prefix}/persons",
-                        f"{year_prefix}/residential_units",
-                        f"{year_prefix}/jobs",
-                    ]
-                )
-                if year != self.state.start_year:
-                    tables_used.append(f"{year_prefix}/graveyard")
-            h5_file_record = FileRecord(
-                file_path=urbansim_output,
-                description="UrbanSim output HDF5 container for Atlas input preparation",
-                short_name="usim_h5_container",
-                h5_tables_used=tables_used or None,
-            )
-            input_records.append(h5_file_record)
-        else:
-            logger.warning(
-                f"[AtlasPreprocessor] UrbanSim output file not found: {urbansim_output}"
-            )
-
         # Record BEAM skims as input if needed
         beamac = settings.atlas.beamac
         if beamac > 0:
@@ -598,13 +592,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 logger.info(
                     f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}"
                 )
-                input_records.append(
-                    FileRecord(
-                        file_path=expected_beam_skims_path,
-                        description="BEAM skims for Atlas accessibility calculation",
-                        short_name="beam_skims_input",
-                    )
-                )
+                prepared_inputs["beam_skims_input"] = Path(expected_beam_skims_path)
             else:
                 logger.warning(
                     f"[AtlasPreprocessor] BEAM skims file not found: {expected_beam_skims_path}"
@@ -623,20 +611,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                         logger.info(
                             f"[AtlasPreprocessor] Recording accessibility .RData file: {rdata_file}"
                         )
-                        input_records.append(
-                            FileRecord(
-                                file_path=rdata_file,
-                                description="ATLAS accessibility data (RData)",
-                                short_name="atlas_rdata_accessibility",
-                            )
-                        )
+                        prepared_inputs["atlas_rdata_accessibility"] = Path(rdata_file)
 
         # --- Write ATLAS input CSVs and record as outputs ---
-        output_records = []
-        if not h5_file_record:
-            logger.error(
-                "[AtlasPreprocessor] Cannot process HDF5 tables, container record not found."
-            )
+        if not os.path.exists(urbansim_output):
+            logger.error("[AtlasPreprocessor] UrbanSim input H5 was not found.")
             raise RuntimeError(
                 "ATLAS preprocess cannot continue: UrbanSim input H5 was not found "
                 f"for year {self.state.year} (resolved path: {urbansim_output})"
@@ -682,15 +661,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                         expected_index_name=expected_index_name,
                         output_csv_path=output_csv_path,
                     )
-
-                    output_records.append(
-                        FileRecord(
-                            file_path=output_csv_path,
-                            year=self.state.year,
-                            description=output_description,
-                            short_name=output_short_name,
-                        )
-                    )
+                    prepared_inputs[output_short_name] = Path(output_csv_path)
                 except KeyError:
                     if required:
                         missing_required_tables.append(table_name_in_h5)
@@ -809,16 +780,14 @@ class AtlasPreprocessor(GenericPreprocessor):
                 atlas_input_path, self.state.forecast_year
             )
             if os.path.exists(accessibility_csv):
-                output_records.append(
-                    FileRecord(
-                        file_path=accessibility_csv,
-                        description="ATLAS accessibility tract-level CSV",
-                        short_name="atlas_accessibility_csv",
-                    )
-                )
+                prepared_inputs["atlas_accessibility_csv"] = Path(accessibility_csv)
 
         logger.info("[AtlasPreprocessor] ATLAS preprocessing complete.")
-        return RecordStore(recordList=output_records)
+        return AtlasPreprocessOutputs(
+            atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
+            prepared_inputs=prepared_inputs,
+            prepared_input_meta=prepared_input_meta,
+        )
 
 
 def compute_accessibility(

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Cross-cutting workflow invariant tests.
 
@@ -14,17 +12,22 @@ The tests avoid running heavy model components and instead focus on the
 orchestration contracts that must stay stable across refactors.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
 
-from pilates.beam.outputs import BeamRunOutputs
+from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
 from pilates.workflows import steps
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
@@ -176,6 +179,102 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     assert meta["facet"]["artifact_family"] == "linkstats_unmodified_phys_sim_iter_parquet"
     assert meta["facet"]["phys_sim_iteration"] == 3
     assert meta["facet"]["beam_sub_iteration"] == 0
+
+
+def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_recordstore(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    def _fake_make_generic_step_function(**kwargs):
+        captured["output_logger"] = kwargs["output_logger"]
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_beam,
+        "_make_generic_step_function",
+        _fake_make_generic_step_function,
+    )
+
+    steps.make_beam_postprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    output_logger = captured["output_logger"]
+    log_and_set_calls = []
+    log_only_calls = []
+
+    def _fake_log_and_set_output(*, key, path, description, coupler, **meta):
+        log_and_set_calls.append((key, path, description, meta))
+
+    def _fake_log_output_only(*, key, path, description, **meta):
+        log_only_calls.append((key, path, description, meta))
+
+    monkeypatch.setattr(steps_beam, "log_and_set_output", _fake_log_and_set_output)
+    monkeypatch.setattr(steps_beam, "log_output_only", _fake_log_output_only)
+
+    zarr_skims = tmp_path / "skims.zarr"
+    zarr_skims.write_text("zarr", encoding="utf-8")
+    linkstats_iter = tmp_path / "linkstats.csv.gz"
+    linkstats_iter.write_text("linkstats", encoding="utf-8")
+    linkstats_sub = tmp_path / "linkstats_sub.parquet"
+    linkstats_sub.write_text("linkstats-sub", encoding="utf-8")
+    phys_sim = tmp_path / "phys_sim.parquet"
+    phys_sim.write_text("phys", encoding="utf-8")
+    plans_iter = tmp_path / "plans.xml.gz"
+    plans_iter.write_text("plans", encoding="utf-8")
+    split_event = tmp_path / "event.parquet"
+    split_event.write_text("event", encoding="utf-8")
+    split_links = tmp_path / "links.parquet"
+    split_links.write_text("links", encoding="utf-8")
+
+    upstream = BeamRunOutputs(
+        beam_output_dir=tmp_path,
+        raw_outputs={
+            "linkstats_2018_0": linkstats_iter,
+            "linkstats_parquet_2018_0_sub1": linkstats_sub,
+            "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3": phys_sim,
+            "beam_plans_out_2018_0": plans_iter,
+        },
+    )
+    outputs = BeamPostprocessOutputs(
+        zarr_skims=zarr_skims,
+        final_skims_omx=None,
+        split_events={"events_parquet_2018_0_type_PathTraversal": split_event},
+        split_event_links={"path_traversal_links_2018_0": split_links},
+    )
+
+    output_logger(
+        outputs,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(beam_run=upstream),
+    )
+
+    by_key = {
+        key: (path, description, meta)
+        for key, path, description, meta in log_and_set_calls
+    }
+    assert by_key["zarr_skims"][0] == str(zarr_skims)
+    assert by_key[LINKSTATS][0] == str(linkstats_iter)
+    assert by_key[LINKSTATS_WARMSTART][0] == str(linkstats_iter)
+    assert by_key[BEAM_PLANS_OUT][0] == str(plans_iter)
+    assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][0] == str(
+        phys_sim
+    )
+    assert "linkstats_parquet_2018_0_sub1" not in by_key
+    assert by_key[LINKSTATS][2]["facet"]["artifact_family"] == "linkstats"
+    assert by_key[LINKSTATS][2]["facet"]["year"] == 2018
+    assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][2][
+        "facet"
+    ]["phys_sim_iteration"] == 3
+
+    log_only_keys = {key for key, _path, _description, _meta in log_only_calls}
+    assert "linkstats_parquet_2018_0_sub1" in log_only_keys
+    assert "events_parquet_2018_0_type_PathTraversal" in log_only_keys
+    assert "path_traversal_links_2018_0" in log_only_keys
 
 
 class _ManifestWorkspace:

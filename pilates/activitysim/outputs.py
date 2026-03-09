@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING, Union
 import json
+import re
 
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
@@ -319,6 +320,8 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         Mapping of short_name to postprocessed output path.
     processed_output_hashes : dict
         Mapping of short_name to known content hashes for copied outputs.
+    usim_datastore_key : str, optional
+        Canonical coupler key for the next-iteration UrbanSim input datastore.
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
@@ -332,11 +335,29 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     asim_output_dir: Optional[Path] = None
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
     processed_output_hashes: Dict[str, str] = field(default_factory=dict)
+    usim_datastore_key: Optional[str] = None
+
+    def _resolved_usim_datastore_key(self) -> Optional[str]:
+        if self.usim_datastore_key:
+            return self.usim_datastore_key
+        if self.usim_datastore_h5 is None:
+            return None
+        match = re.search(r"(\d{4})", self.usim_datastore_h5.name)
+        if match:
+            return f"usim_input_{match.group(1)}"
+        return None
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
         Yield postprocessed output records.
         """
+        usim_key = self._resolved_usim_datastore_key()
+        if usim_key is not None and self.usim_datastore_h5 is not None:
+            yield (
+                usim_key,
+                self.usim_datastore_h5,
+                "New UrbanSim input data for next iteration",
+            )
         for key, path in self.processed_outputs.items():
             yield key, path, f"ActivitySim output file: {key}"
 
@@ -360,6 +381,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
             Parsed outputs.
         """
         usim_path = None
+        usim_key = None
         processed_outputs: Dict[str, Path] = {}
         processed_output_hashes: Dict[str, str] = {}
         allowed_outputs = set(ASIM_OUTPUT_KEY_MAP.values()) | set(
@@ -369,6 +391,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
             for record in record_store.all_records():
                 short_name = getattr(record, "short_name", "") or ""
                 if short_name.startswith("usim_input_"):
+                    usim_key = short_name
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
                 normalized_name = normalize_asim_output_key(short_name)
@@ -386,4 +409,5 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
             asim_output_dir=Path(workspace.get_asim_output_dir()),
             processed_outputs=processed_outputs,
             processed_output_hashes=processed_output_hashes,
+            usim_datastore_key=usim_key,
         )

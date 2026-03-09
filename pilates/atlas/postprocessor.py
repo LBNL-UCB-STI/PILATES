@@ -1,12 +1,13 @@
 from typing import Optional, Dict, Any
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import enqueue_archive_copy
 from workflow_state import WorkflowState
@@ -155,21 +156,21 @@ class AtlasPostprocessor(GenericPostprocessor):
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
+    ) -> AtlasPostprocessOutputs:
         """
         Postprocess ATLAS outputs: update UrbanSim HDF5 with new vehicle ownership,
         and add vehicleTypeId to ATLAS vehicle outputs. Handles provenance tracking.
 
         Args:
-            raw_outputs (RecordStore): The raw outputs from the ATLAS model run.
+            raw_outputs (AtlasRunOutputs): The raw outputs from the ATLAS model run.
             workspace (Workspace): The workspace object for path management.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: A RecordStore containing records for the generated output files.
+            AtlasPostprocessOutputs: Typed outputs for the generated files.
         """
         logger.info(
             "[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s",
@@ -178,7 +179,8 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         settings = self.state.full_settings
         output_year = self.state.forecast_year
-        output_records = []
+        output_paths: Dict[str, Path] = {}
+        updated_usim_h5: Optional[Path] = None
 
         # --- HDF5 Update and Provenance ---
         usim_h5_path = workspace.get_usim_mutable_data_dir()
@@ -191,13 +193,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
 
         if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
-            # Define the table to be updated. TODO: Check table names and fall back to /year/households
-            table_name = (
-                "households"
-                if self.state.is_start_year()
-                else f"/{output_year}/households"
-            )
-
             # Perform the update
             self.atlas_update_h5_vehicle(
                 settings, output_year, usim_h5_file, atlas_hh_file
@@ -205,16 +200,8 @@ class AtlasPostprocessor(GenericPostprocessor):
             logger.info(
                 "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
             )
-
-            output_records.append(
-                FileRecord(
-                    file_path=usim_h5_file,
-                    year=output_year,
-                    description="UrbanSim HDF5 updated with ATLAS vehicle ownership",
-                    short_name=USIM_H5_UPDATED,
-                    h5_tables_used=[table_name],
-                )
-            )
+            updated_usim_h5 = Path(usim_h5_file)
+            output_paths[USIM_H5_UPDATED] = Path(usim_h5_file)
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh_file = os.path.join(
@@ -233,13 +220,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
             if os.path.exists(atlas_veh2_file):
-                atlas_veh2_output_record = FileRecord(
-                    file_path=atlas_veh2_file,
-                    year=output_year,
-                    description="ATLAS vehicles2 CSV with vehicleTypeId",
-                    short_name="atlas_vehicles2_output",
-                )
-                output_records.append(atlas_veh2_output_record)
+                output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
 
         # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
         atlas_input_root = workspace.get_atlas_mutable_input_dir()
@@ -259,7 +240,11 @@ class AtlasPostprocessor(GenericPostprocessor):
                     path=os.path.join(base_dir, filename),
                 )
 
-        return RecordStore(recordList=output_records)
+        return AtlasPostprocessOutputs(
+            atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+            usim_datastore_h5=updated_usim_h5,
+            processed_outputs=output_paths,
+        )
 
     def atlas_update_h5_vehicle(
         self,

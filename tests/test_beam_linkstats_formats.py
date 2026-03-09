@@ -22,6 +22,48 @@ def test_beam_run_outputs_promotes_parquet_linkstats_to_canonical_key(tmp_path):
     assert by_key["beam_plans_out"] == plans_path
 
 
+def test_beam_run_outputs_publication_selection_skips_sub_iteration_linkstats(tmp_path):
+    base_linkstats = tmp_path / "it.2.linkstats.csv.gz"
+    sub_linkstats = tmp_path / "it.2.sub.linkstats.parquet"
+    for path in (base_linkstats, sub_linkstats):
+        path.write_text("stub")
+
+    outputs = BeamRunOutputs(
+        beam_output_dir=tmp_path,
+        raw_outputs={
+            "linkstats_2018_0": base_linkstats,
+            "linkstats_parquet_2018_0_sub1": sub_linkstats,
+        },
+    )
+
+    selected = outputs.promoted_linkstats_for_publication()
+
+    assert selected == ("linkstats_2018_0", base_linkstats)
+
+
+def test_beam_run_outputs_publication_selection_prefers_latest_non_sub_iteration_plans(
+    tmp_path,
+):
+    plans_iter0 = tmp_path / "it.0.plans.xml.gz"
+    plans_iter1 = tmp_path / "it.1.plans.xml.gz"
+    plans_sub = tmp_path / "it.1.sub.plans.xml.gz"
+    for path in (plans_iter0, plans_iter1, plans_sub):
+        path.write_text("stub")
+
+    outputs = BeamRunOutputs(
+        beam_output_dir=tmp_path,
+        raw_outputs={
+            "beam_plans_out_2018_0": plans_iter0,
+            "beam_plans_out_2018_1": plans_iter1,
+            "beam_plans_out_2018_1_sub1": plans_sub,
+        },
+    )
+
+    selected = outputs.promoted_plans_for_publication()
+
+    assert selected == ("beam_plans_out_2018_1", plans_iter1)
+
+
 def test_select_latest_linkstats_path_accepts_parquet_and_csv_keys(tmp_path):
     beam_output_root = tmp_path / "beam_output"
     beam_input_root = tmp_path / "beam_input"

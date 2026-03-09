@@ -1,8 +1,7 @@
 from types import SimpleNamespace
 
-from pilates.generic.records import RecordStore
 from pilates.atlas import postprocessor as atlas_postprocessor
-from pilates.atlas.outputs import AtlasPostprocessOutputs
+from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 
@@ -10,14 +9,14 @@ from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_generic_step_function(**kwargs):
+    def _fake_make_typed_step_function(**kwargs):
         captured["output_logger"] = kwargs["output_logger"]
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_make_typed_step_function",
+        _fake_make_typed_step_function,
     )
 
     steps.make_atlas_postprocess_step(
@@ -82,14 +81,14 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_generic_step_function(**kwargs):
+    def _fake_make_typed_step_function(**kwargs):
         captured["input_logger"] = kwargs["input_logger"]
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_generic_step_function",
-        _fake_make_generic_step_function,
+        "_make_typed_step_function",
+        _fake_make_typed_step_function,
     )
 
     steps.make_atlas_postprocess_step(
@@ -184,7 +183,10 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
     postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
     monkeypatch.setattr(postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: None)
 
-    postprocessor._postprocess(RecordStore(), workspace)
+    postprocessor._postprocess(
+        AtlasRunOutputs(atlas_output_dir=atlas_output_dir, raw_outputs={}),
+        workspace,
+    )
 
     assert any(
         call["key"] == "atlas_input_year_dir_2023"

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
+from pilates.generic.model_factory import ModelFactory
+from pilates.utils import consist_runtime as cr
+from pilates.workflows.outputs_base import StepOutputsBase
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -21,16 +24,15 @@ from .shared import (
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
+    ValidationContext,
     WorkflowState,
     _atlas_artifact_facet_meta,
-    _execute_atlas_postprocess,
-    _execute_atlas_run,
-    _execute_preprocess,
-    _execute_urbansim_postprocess,
-    _execute_urbansim_run,
+    _decorate_step_with_consist,
+    _declared_outputs_from_class,
     _log_named_h5_tables,
     _log_step_records,
-    _make_generic_step_function,
+    _schema_outputs_from_class,
+    _upstream_outputs_view,
     _urbansim_output_facet_meta,
     log_and_set_output,
     log_input_only,
@@ -38,6 +40,146 @@ from .shared import (
     logger,
     warm_start_activities,
 )
+
+StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _make_typed_step_function(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    model_name: str,
+    phase: str,
+    outputs_class: Type[StepOutputsT],
+    component_getter: Callable[[ModelFactory, WorkflowState], Any],
+    component_executor: Callable[..., StepOutputsT],
+    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
+    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
+    output_logger: Optional[Callable[..., None]] = None,
+) -> Callable[..., None]:
+    @cr.require_runtime_kwargs("settings", "state", "workspace")
+    def _step_func(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        **kwargs: Any,
+    ) -> None:
+        logger.debug("Starting %s %s step", model_name, phase)
+        factory = ModelFactory()
+        component = component_getter(factory, state)
+
+        extra_kwargs: Dict[str, Any] = {}
+        if input_logger is not None:
+            extra_kwargs = (
+                input_logger(settings, state, workspace, outputs_holder) or {}
+            )
+
+        step_outputs = component_executor(
+            component,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context=f"{model_name}_{phase}",
+            **extra_kwargs,
+            **kwargs,
+        )
+        if not isinstance(step_outputs, outputs_class):
+            raise TypeError(
+                f"{model_name}_{phase} must return {outputs_class.__name__}, "
+                f"got {type(step_outputs).__name__}"
+            )
+
+        validation_context = ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name=f"{model_name}_{phase}",
+            upstream_outputs=_upstream_outputs_view(
+                outputs_holder, current_step_name=f"{model_name}_{phase}"
+            ),
+        )
+        step_outputs.validate(context=validation_context)
+        outputs_holder_setter(outputs_holder, step_outputs)
+
+        if output_logger is not None:
+            output_logger(step_outputs, settings, state, workspace, outputs_holder)
+
+        logger.info("%s %s completed successfully", model_name, phase)
+
+    return _decorate_step_with_consist(
+        step_func=_step_func,
+        step_model=f"{model_name}_{phase}",
+        description=f"{model_name} {phase} workflow step",
+        schema_outputs=_schema_outputs_from_class(outputs_class),
+        outputs=_declared_outputs_from_class(outputs_class),
+        tags=[model_name, phase],
+    )
+
+
+def _execute_urbansim_preprocess_typed(
+    preprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> UrbanSimPreprocessOutputs:
+    return preprocessor.preprocess(workspace)
+
+
+def _execute_urbansim_run_typed(
+    runner: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> UrbanSimRunOutputs:
+    upstream = outputs_holder.urbansim_preprocess
+    if upstream is None:
+        raise RuntimeError("UrbanSim preprocess must complete first")
+    return runner.run(upstream, workspace)
+
+
+def _execute_urbansim_postprocess_typed(
+    postprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> UrbanSimPostprocessOutputs:
+    upstream = outputs_holder.urbansim_run
+    if upstream is None:
+        raise RuntimeError("UrbanSim run must complete first")
+    return postprocessor.postprocess(upstream, workspace)
+
+
+def _execute_atlas_preprocess_typed(
+    preprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> AtlasPreprocessOutputs:
+    return preprocessor.preprocess(workspace)
+
+
+def _execute_atlas_run_typed(
+    runner: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> AtlasRunOutputs:
+    upstream = outputs_holder.atlas_preprocess
+    if upstream is None:
+        raise RuntimeError("ATLAS preprocess must complete first")
+    return runner.run(upstream, workspace)
+
+
+def _execute_atlas_postprocess_typed(
+    postprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> AtlasPostprocessOutputs:
+    upstream = outputs_holder.atlas_run
+    if upstream is None:
+        raise RuntimeError("ATLAS run must complete first")
+    return postprocessor.postprocess(upstream, workspace)
 
 def make_urbansim_preprocess_step(
     *,
@@ -113,7 +255,7 @@ def make_urbansim_preprocess_step(
                 ),
             )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -122,7 +264,7 @@ def make_urbansim_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_execute_preprocess,
+        component_executor=_execute_urbansim_preprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_preprocess", outputs
         ),
@@ -178,7 +320,7 @@ def make_urbansim_run_step(
                 ),
             )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -187,7 +329,7 @@ def make_urbansim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_execute_urbansim_run,
+        component_executor=_execute_urbansim_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_run", outputs
         ),
@@ -256,7 +398,7 @@ def make_urbansim_postprocess_step(
                 ),
             )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -265,7 +407,7 @@ def make_urbansim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "urbansim", state, WorkflowState.Stage.land_use
         ),
-        component_executor=_execute_urbansim_postprocess,
+        component_executor=_execute_urbansim_postprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_postprocess", outputs
         ),
@@ -304,19 +446,23 @@ def make_atlas_preprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         run_scenario = getattr(getattr(settings, "atlas", None), "scenario", None)
+        prepared_meta = getattr(outputs, "prepared_input_meta", {})
         _log_step_records(
             record_items=outputs._iter_record_items(),
             log_fn=log_output_only,
             profile_schema_suffixes=(".csv", ".parquet"),
-            extra_meta_fn=lambda key, _path, _description: _atlas_artifact_facet_meta(
-                key,
-                run_scenario=run_scenario,
-                forecast_year=state.forecast_year,
-                artifact_family="atlas_preprocess_output",
-            ),
+            extra_meta_fn=lambda key, _path, _description: {
+                **prepared_meta.get(key, {}),
+                **_atlas_artifact_facet_meta(
+                    key,
+                    run_scenario=run_scenario,
+                    forecast_year=state.forecast_year,
+                    artifact_family="atlas_preprocess_output",
+                ),
+            },
         )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -325,7 +471,7 @@ def make_atlas_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_execute_preprocess,
+        component_executor=_execute_atlas_preprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_preprocess", outputs
         ),
@@ -366,16 +512,20 @@ def make_atlas_run_step(
         if upstream is None:
             raise RuntimeError("ATLAS preprocess must complete first")
         run_scenario = getattr(getattr(settings, "atlas", None), "scenario", None)
+        prepared_meta = getattr(upstream, "prepared_input_meta", {})
         _log_step_records(
             record_items=upstream._iter_record_items(),
             log_fn=log_input_only,
             profile_schema_suffixes=(".csv", ".parquet"),
-            extra_meta_fn=lambda key, _path, _description: _atlas_artifact_facet_meta(
-                key,
-                run_scenario=run_scenario,
-                forecast_year=state.forecast_year,
-                artifact_family="atlas_run_input",
-            ),
+            extra_meta_fn=lambda key, _path, _description: {
+                **prepared_meta.get(key, {}),
+                **_atlas_artifact_facet_meta(
+                    key,
+                    run_scenario=run_scenario,
+                    forecast_year=state.forecast_year,
+                    artifact_family="atlas_run_input",
+                ),
+            },
         )
         return {}
 
@@ -392,7 +542,7 @@ def make_atlas_run_step(
             profile_schema_suffixes=(".csv", ".parquet"),
         )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -401,7 +551,7 @@ def make_atlas_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_execute_atlas_run,
+        component_executor=_execute_atlas_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_run", outputs
         ),
@@ -529,7 +679,7 @@ def make_atlas_postprocess_step(
                 },
             )
 
-    return _make_generic_step_function(
+    return _make_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -538,7 +688,7 @@ def make_atlas_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "atlas", state, WorkflowState.Stage.vehicle_ownership_model
         ),
-        component_executor=_execute_atlas_postprocess,
+        component_executor=_execute_atlas_postprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_postprocess", outputs
         ),

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from pilates.config.models import PilatesConfig
+from pilates.workflows.artifact_keys import LINKSTATS, LINKSTATS_WARMSTART
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -17,7 +18,6 @@ from .shared import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
     CouplerProtocol,
-    RecordStore,
     StepOutputsHolder,
     WorkflowState,
     _beam_log_facet_meta,
@@ -34,8 +34,136 @@ from .shared import (
     log_and_set_input,
     log_and_set_output,
     log_output_only,
-    update_coupler_from_beam_outputs,
 )
+
+
+def _is_beam_sub_iteration_key(short_name: Optional[str]) -> bool:
+    return bool(short_name and ("_sub" in short_name or "__beam_sub_iter" in short_name))
+
+
+def _beam_linkstats_publication_meta(
+    short_name: Optional[str],
+    *,
+    family: str,
+) -> Dict[str, Any]:
+    if not short_name:
+        return {}
+    for prefix in ("linkstats_parquet_", "linkstats_"):
+        if not short_name.startswith(prefix):
+            continue
+        tail = short_name[len(prefix) :]
+        parts = tail.split("_")
+        if len(parts) < 2:
+            continue
+        try:
+            year = int(parts[0])
+            iteration = int(parts[1])
+        except ValueError:
+            continue
+        facet: Dict[str, Any] = {
+            "artifact_family": family,
+            "year": year,
+            "iteration": iteration,
+        }
+        if len(parts) > 2 and parts[2].startswith("sub"):
+            try:
+                facet["beam_sub_iteration"] = int(parts[2][3:])
+            except ValueError:
+                continue
+        return {
+            "facet": facet,
+            "facet_schema_version": "v1",
+            "facet_index": True,
+        }
+    return {}
+
+
+def _publish_beam_run_outputs(
+    *,
+    outputs: BeamRunOutputs,
+    coupler: CouplerProtocol,
+) -> None:
+    promoted_linkstats = outputs.promoted_linkstats_for_publication()
+    if promoted_linkstats is not None:
+        source_key, path = promoted_linkstats
+        linkstats_meta = _beam_linkstats_publication_meta(
+            source_key,
+            family="linkstats",
+        )
+        log_and_set_output(
+            key=LINKSTATS,
+            path=str(path),
+            description="BEAM linkstats output for downstream runs",
+            coupler=coupler,
+            profile_file_schema=True,
+            **linkstats_meta,
+        )
+        log_and_set_output(
+            key=LINKSTATS_WARMSTART,
+            path=str(path),
+            description="BEAM warm-start linkstats for downstream runs",
+            coupler=coupler,
+            profile_file_schema=True,
+            **linkstats_meta,
+        )
+
+    for short_name, path in outputs.iter_linkstats_parquet_outputs():
+        linkstats_meta = _beam_log_facet_meta(short_name)
+        if _is_beam_sub_iteration_key(short_name):
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description="BEAM linkstats parquet output for downstream runs",
+                profile_file_schema=True,
+                **linkstats_meta,
+            )
+            continue
+        log_and_set_output(
+            key=short_name,
+            path=str(path),
+            description="BEAM linkstats parquet output for downstream runs",
+            coupler=coupler,
+            profile_file_schema=True,
+            **linkstats_meta,
+        )
+
+    for short_name, path in outputs.iter_unmodified_phys_sim_outputs():
+        record_meta = _beam_log_facet_meta(short_name)
+        if _is_beam_sub_iteration_key(short_name):
+            log_output_only(
+                key=short_name,
+                path=str(path),
+                description=(
+                    "BEAM unmodified linkstats parquet output for phys sim "
+                    "sub-iteration"
+                ),
+                profile_file_schema=True,
+                **record_meta,
+            )
+            continue
+        log_and_set_output(
+            key=short_name,
+            path=str(path),
+            description=(
+                "BEAM unmodified linkstats parquet output for phys sim "
+                "sub-iteration"
+            ),
+            coupler=coupler,
+            profile_file_schema=True,
+            **record_meta,
+        )
+
+    promoted_plans = outputs.promoted_plans_for_publication()
+    if promoted_plans is not None:
+        _, path = promoted_plans
+        log_and_set_output(
+            key=BEAM_PLANS_OUT,
+            path=str(path),
+            description="BEAM plans output for downstream runs",
+            coupler=coupler,
+            profile_file_schema=True,
+        )
+
 
 def make_beam_preprocess_step(
     *,
@@ -329,10 +457,7 @@ def make_beam_postprocess_step(
         upstream = holder.beam_run
         if upstream is None:
             return
-        combined_outputs = RecordStore()
-        combined_outputs += upstream.to_record_store()
-        combined_outputs += outputs.to_record_store()
-        update_coupler_from_beam_outputs(combined_outputs, coupler, workspace)
+        _publish_beam_run_outputs(outputs=upstream, coupler=coupler)
 
     return _make_generic_step_function(
         coupler=coupler,
