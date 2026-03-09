@@ -20,7 +20,6 @@ if "geopandas" not in sys.modules:
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.atlas.outputs import AtlasRunOutputs
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -68,15 +67,9 @@ class _ActivitySimWorkspace:
 
 
 class _VehicleOwnershipWorkspace:
-    def __init__(
-        self,
-        root: Path,
-        *,
-        atlas_input_data: RecordStore | None = None,
-    ) -> None:
+    def __init__(self, root: Path) -> None:
         self.root = root
         self.full_path = str(root)
-        self.input_data = {"atlas": atlas_input_data} if atlas_input_data else {}
 
     def get_usim_mutable_data_dir(self) -> str:
         return str(self.root / "urbansim" / "data")
@@ -375,22 +368,13 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
         assert step.inputs[USIM_DATASTORE_BASE_H5] == str(forecast_h5)
 
 
-def test_vehicle_ownership_stage_uses_workspace_static_registry_without_gap_fill(
+def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
     tmp_path, monkeypatch
 ):
     settings = _vehicle_ownership_settings()
-    workspace_static = _write_file(tmp_path / "atlas-static" / "psid_names.Rdat")
     fallback_static = _write_file(tmp_path / "atlas-fallback" / "modeaccessibility.csv")
-    atlas_input_data = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(workspace_static),
-                short_name="psid_names",
-                description="workspace atlas static",
-            )
-        ]
-    )
-    workspace = _VehicleOwnershipWorkspace(tmp_path, atlas_input_data=atlas_input_data)
+    fallback_psid = _write_file(tmp_path / "atlas-fallback" / "psid_names.Rdat")
+    workspace = _VehicleOwnershipWorkspace(tmp_path)
     current_h5 = _write_file(
         Path(workspace.get_usim_mutable_data_dir()) / "custom_current.h5",
         contents="current",
@@ -458,7 +442,7 @@ def test_vehicle_ownership_stage_uses_workspace_static_registry_without_gap_fill
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
-            "psid_names": str(tmp_path / "fallback-should-not-win.Rdat"),
+            "psid_names": str(fallback_psid),
             "modeaccessibility": str(fallback_static),
         },
     )
@@ -466,11 +450,11 @@ def test_vehicle_ownership_stage_uses_workspace_static_registry_without_gap_fill
     atlas_run_inputs = captured_run_inputs[2020]
     assert atlas_run_inputs[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
     assert atlas_run_inputs[USIM_DATASTORE_BASE_H5] == str(current_h5)
-    assert atlas_run_inputs["psid_names"] == str(workspace_static)
-    assert "modeaccessibility" not in atlas_run_inputs
+    assert atlas_run_inputs["psid_names"] == str(fallback_psid)
+    assert atlas_run_inputs["modeaccessibility"] == str(fallback_static)
 
 
-def test_vehicle_ownership_stage_uses_static_fallback_when_workspace_registry_missing(
+def test_vehicle_ownership_stage_uses_static_fallback_inputs(
     tmp_path, monkeypatch
 ):
     settings = _vehicle_ownership_settings()

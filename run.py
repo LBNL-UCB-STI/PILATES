@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence, cast
 
 from pilates.workspace import Workspace
-from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.generic.records import sanitize_artifact_key
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -505,53 +505,6 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
             key = _atlas_static_input_key(relpath)
             inputs.setdefault(key, path)
     return inputs
-
-
-def _restore_restart_workspace_atlas_registry(
-    *,
-    settings: Any,
-    workspace: Workspace,
-) -> int:
-    """
-    Rebuild the in-memory ATLAS static-input registry from local mutable inputs.
-
-    On restart, ``workspace.input_data`` starts empty even if the local ATLAS
-    input tree was rehydrated successfully. Reconstruct the registry so stage
-    code can keep using the same authoritative input-source contract.
-    """
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
-        return 0
-
-    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
-    if not os.path.exists(atlas_input_dir):
-        return 0
-
-    records = []
-    for normalized_relpath, short_name, local_path in _iter_existing_atlas_static_inputs(
-        settings, atlas_input_dir
-    ):
-        metadata = {}
-        if local_path.lower().endswith(".csv"):
-            metadata["profile_file_schema"] = True
-        metadata["atlas_static_input"] = True
-        metadata["atlas_relpath"] = normalized_relpath
-        metadata["atlas_source_origin"] = "restart_local"
-        metadata["atlas_source_path"] = os.path.realpath(local_path)
-        records.append(
-            FileRecord(
-                file_path=local_path,
-                short_name=short_name,
-                description=f"Restart-local ATLAS static input: {os.path.basename(local_path)}",
-                metadata=metadata,
-            )
-        )
-
-    if not records:
-        return 0
-
-    workspace.input_data["atlas"] = RecordStore(recordList=records)
-    return len(records)
 
 
 def _read_mount_table() -> Dict[str, str]:
@@ -1740,15 +1693,6 @@ def main():
                             restart_missing_artifacts_after_rehydrate
                         )
                     )
-        restored_atlas_records = _restore_restart_workspace_atlas_registry(
-            settings=settings,
-            workspace=workspace,
-        )
-        if restored_atlas_records:
-            logger.info(
-                "Restored ATLAS restart registry from local mutable inputs: records=%s",
-                restored_atlas_records,
-            )
     if is_restart_run:
         _run_resume_doctor_diagnostics(
             state=state,

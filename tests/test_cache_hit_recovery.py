@@ -5,14 +5,17 @@ import yaml
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     BEAM_PLANS_OUT,
+    BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
+    USIM_INPUT_MERGED_PREFIX,
 )
 from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
 from pilates.workflows.orchestration import run_manifested_steps
@@ -46,6 +49,15 @@ class DummyWorkspace:
 
     def get_beam_output_dir(self) -> str:
         return str(self._root / "beam" / "output")
+
+    def get_usim_mutable_data_dir(self) -> str:
+        return str(self._root / "urbansim" / "data")
+
+    def get_atlas_mutable_input_dir(self) -> str:
+        return str(self._root / "atlas" / "input")
+
+    def get_atlas_output_dir(self) -> str:
+        return str(self._root / "atlas" / "output")
 
 
 class DummyCoupler:
@@ -182,6 +194,12 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     def _noop_step(**_kwargs):
         raise AssertionError("step function should not execute on cache hit")
     _noop_step.__consist_step__ = object()
+    _noop_step.__pilates_output_replayer__ = (
+        lambda outputs, settings, state, workspace, holder: coupler.set(
+            "replayed_cache_outputs",
+            str(outputs.households_table),
+        )
+    )
 
     holder = StepOutputsHolder()
     scenario = DummyScenario(cache_hit=True)
@@ -214,6 +232,9 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     assert holder.activitysim_preprocess is not None
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     holder.activitysim_preprocess.validate()
+    assert coupler.get("replayed_cache_outputs") == str(
+        holder.activitysim_preprocess.households_table
+    )
     manifest = yaml.safe_load(manifest_path.read_text())
     assert manifest["activitysim_preprocess"]["cache_hit"]
 
@@ -269,3 +290,203 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
     assert holder.beam_run.raw_outputs["events_parquet_2018_0"] == events_path
     assert coupler.get("events_parquet_2018_0") is not None
     assert coupler.get("linkstats_parquet_2018_0") is not None
+
+
+def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    usim_output = Path(workspace.get_usim_mutable_data_dir()) / "usim_output.h5"
+    _write_file(usim_output)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "usim-run-id"
+            return {USIM_FORECAST_OUTPUT: str(usim_output)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="urbansim_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        run_id="usim-run-id",
+    )
+
+    assert outputs is not None
+    assert holder.urbansim_run is not None
+    assert holder.urbansim_run.usim_datastore_h5 == usim_output
+    assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
+    assert coupler.get(USIM_FORECAST_OUTPUT) is not None
+
+
+def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    merged_path = (
+        Path(workspace.get_usim_mutable_data_dir()) / "usim_input_merged_2018.h5"
+    )
+    archived_path = (
+        Path(workspace.get_usim_mutable_data_dir()) / "usim_input_archive_2018.h5"
+    )
+    for path in (merged_path, archived_path):
+        _write_file(path)
+
+    merged_key = f"{USIM_INPUT_MERGED_PREFIX}2018"
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "usim-post-id"
+            return {
+                merged_key: str(merged_path),
+                "usim_input_archive_2018": str(archived_path),
+            }
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="urbansim_postprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        run_id="usim-post-id",
+    )
+
+    assert outputs is not None
+    assert holder.urbansim_postprocess is not None
+    assert holder.urbansim_postprocess.usim_datastore_h5 == merged_path
+    assert holder.urbansim_postprocess.processed_outputs[merged_key] == merged_path
+    assert coupler.get(merged_key) is not None
+
+
+def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    householdv_path = Path(workspace.get_atlas_output_dir()) / "householdv_2018.csv"
+    vehicles_path = Path(workspace.get_atlas_output_dir()) / "vehicles_2018.csv"
+    for path in (householdv_path, vehicles_path):
+        _write_file(path)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "atlas-run-id"
+            return {
+                "householdv_2018": str(householdv_path),
+                "vehicles_2018": str(vehicles_path),
+            }
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="atlas_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        run_id="atlas-run-id",
+    )
+
+    assert outputs is not None
+    assert holder.atlas_run is not None
+    assert holder.atlas_run.raw_outputs["householdv_2018"] == householdv_path
+    assert holder.atlas_run.raw_outputs["vehicles_2018"] == vehicles_path
+    assert coupler.get("householdv_2018") is not None
+
+
+def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    updated_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_2018.h5"
+    vehicles2 = Path(workspace.get_atlas_output_dir()) / "vehicles2_2018.csv"
+    for path in (updated_h5, vehicles2):
+        _write_file(path)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "atlas-post-id"
+            return {
+                USIM_H5_UPDATED: str(updated_h5),
+                "atlas_vehicles2_output": str(vehicles2),
+            }
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="atlas_postprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        run_id="atlas-post-id",
+    )
+
+    assert outputs is not None
+    assert holder.atlas_postprocess is not None
+    assert holder.atlas_postprocess.usim_datastore_h5 == updated_h5
+    assert holder.atlas_postprocess.processed_outputs[USIM_H5_UPDATED] == updated_h5
+    assert holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"] == vehicles2
+    assert coupler.get(USIM_H5_UPDATED) is not None
+
+
+def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    full_skims = Path(workspace.get_beam_output_dir()) / "full-skims.omx"
+    _write_file(full_skims)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "beam-skim-id"
+            return {BEAM_FULL_SKIMS: str(full_skims)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="beam_full_skim",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        run_id="beam-skim-id",
+    )
+
+    assert outputs is not None
+    assert holder.beam_full_skim is not None
+    assert holder.beam_full_skim.full_skims == full_skims
+    assert coupler.get(BEAM_FULL_SKIMS) is not None

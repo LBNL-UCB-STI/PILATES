@@ -251,13 +251,9 @@ def run_vehicle_ownership_stage(
             keys=atlas_preprocess_inputs.keys(),
             explicit_inputs=atlas_preprocess_inputs,
         )
-        atlas_run_inputs: Dict[str, Any] = {}
-        atlas_static_inputs = workspace.input_data.get("atlas")
-        if atlas_static_inputs is not None:
-            for key, value in atlas_static_inputs.to_mapping().items():
-                atlas_run_inputs.setdefault(key, value)
-        else:
-            atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
+        atlas_run_inputs: Dict[str, Any] = dict(
+            build_atlas_static_inputs_fallback(workspace)
+        )
 
         atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
         atlas_interval_end_year = atlas_year

@@ -3,12 +3,18 @@ from types import SimpleNamespace
 
 import yaml
 
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+    write_asim_run_marker,
+)
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    USIM_DATASTORE_BASE_H5,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -49,6 +55,12 @@ class DummyWorkspace:
 
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._root / "activitysim" / "data")
+
+    def get_asim_output_dir(self) -> str:
+        return str(self._root / "activitysim" / "output")
+
+    def get_usim_mutable_data_dir(self) -> str:
+        return str(self._root / "urbansim" / "data")
 
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._root / "beam" / "input")
@@ -366,6 +378,263 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
             object(),
         ),
         step_inputs=step_inputs,
+        manifest_outputs=manifest_outputs,
+    )
+
+    assert len(fresh_result["scenario"].calls) == 1
+    assert len(cache_result["scenario"].calls) == 1
+    assert manifest_result["scenario"].calls == []
+    assert cache_result["snapshot"] == fresh_snapshot
+    assert manifest_result["snapshot"] == fresh_snapshot
+
+
+def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifest(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    final_pipeline = asim_output_dir / "final_pipeline"
+    households = final_pipeline / "households" / "final.parquet"
+    persons = final_pipeline / "persons" / "final.parquet"
+    beam_plans = final_pipeline / "beam_plans" / "final.parquet"
+    for path in (households, persons, beam_plans):
+        _write_file(path)
+    write_asim_run_marker(asim_output_dir, year=2018, iteration=0)
+
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2018, iteration=0)
+    coupler_keys = [
+        "households_asim_out_temp",
+        "persons_asim_out_temp",
+        "beam_plans_asim_out_temp",
+    ]
+
+    fresh_holder = StepOutputsHolder()
+    fresh_coupler = DummyCoupler()
+    fresh_outputs = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={
+            "households_asim_out_temp": households,
+            "persons_asim_out_temp": persons,
+            "beam_plans_asim_out_temp": beam_plans,
+        },
+    )
+
+    def _fresh_step(**_runtime_kwargs):
+        fresh_holder.set_attribute("activitysim_run", fresh_outputs)
+        _update_coupler_from_outputs(
+            fresh_outputs,
+            coupler=fresh_coupler,
+            workspace=workspace,
+        )
+
+    _fresh_step.__consist_step__ = object()
+
+    fresh_result = _run_step_mode(
+        step_name="activitysim_run",
+        mode_label="fresh",
+        step_func=_fresh_step,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder=fresh_holder,
+        coupler=fresh_coupler,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_preprocess",
+            object(),
+        ),
+    )
+    fresh_snapshot = fresh_result["snapshot"]
+
+    def _should_not_run(**_runtime_kwargs):
+        raise AssertionError("cache-hit and manifest paths should not execute the step")
+
+    _should_not_run.__consist_step__ = object()
+
+    cache_result = _run_step_mode(
+        step_name="activitysim_run",
+        mode_label="cache",
+        step_func=_should_not_run,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_preprocess",
+            object(),
+        ),
+        cache_hit=True,
+    )
+
+    manifest_outputs = _recover_cached_outputs(
+        step_name="activitysim_run",
+        outputs_holder=StepOutputsHolder(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs=None,
+    )
+    assert manifest_outputs is not None
+    manifest_result = _run_step_mode(
+        step_name="activitysim_run",
+        mode_label="manifest",
+        step_func=_should_not_run,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_preprocess",
+            object(),
+        ),
+        manifest_outputs=manifest_outputs,
+    )
+
+    assert len(fresh_result["scenario"].calls) == 1
+    assert len(cache_result["scenario"].calls) == 1
+    assert manifest_result["scenario"].calls == []
+    assert cache_result["snapshot"] == fresh_snapshot
+    assert manifest_result["snapshot"] == fresh_snapshot
+
+
+def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and_manifest(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = asim_output_dir / "year-2018-iteration-0"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    beam_plans = iter_dir / "beam_plans.parquet"
+    for path in (households, persons, beam_plans):
+        _write_file(path)
+
+    inputs_dir = asim_output_dir / "inputs-year-2018-iteration-0"
+    archived_households = inputs_dir / "households.csv"
+    archived_persons = inputs_dir / "persons.csv"
+    archived_land_use = inputs_dir / "land_use.csv"
+    archived_skims = inputs_dir / "skims.omx"
+    archived_zarr = inputs_dir / "skims.zarr"
+    for path in (
+        archived_households,
+        archived_persons,
+        archived_land_use,
+        archived_skims,
+        archived_zarr,
+    ):
+        _write_file(path)
+
+    usim_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_2018.h5"
+    _write_file(usim_h5)
+
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(region_id="000", region_mappings={"region_to_region_id": {}}),
+        run=SimpleNamespace(region="test"),
+    )
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
+    coupler_keys = [
+        "households_asim_out",
+        "persons_asim_out",
+        "beam_plans_asim_out",
+        "asim_input_households_csv_archived",
+        "asim_input_persons_csv_archived",
+        "asim_input_land_use_csv_archived",
+        "asim_input_skims_omx_archived",
+        "asim_input_skims_zarr_archived",
+        "usim_input_2018",
+    ]
+
+    fresh_holder = StepOutputsHolder()
+    fresh_coupler = DummyCoupler()
+    fresh_outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=usim_h5,
+        asim_output_dir=asim_output_dir,
+        processed_outputs={
+            "households_asim_out": households,
+            "persons_asim_out": persons,
+            "beam_plans_asim_out": beam_plans,
+            "asim_input_households_csv_archived": archived_households,
+            "asim_input_persons_csv_archived": archived_persons,
+            "asim_input_land_use_csv_archived": archived_land_use,
+            "asim_input_skims_omx_archived": archived_skims,
+            "asim_input_skims_zarr_archived": archived_zarr,
+        },
+        usim_datastore_key="usim_input_2018",
+    )
+
+    def _fresh_step(**_runtime_kwargs):
+        fresh_holder.set_attribute("activitysim_postprocess", fresh_outputs)
+        _update_coupler_from_outputs(
+            fresh_outputs,
+            coupler=fresh_coupler,
+            workspace=workspace,
+        )
+
+    _fresh_step.__consist_step__ = object()
+
+    fresh_result = _run_step_mode(
+        step_name="activitysim_postprocess",
+        mode_label="fresh",
+        step_func=_fresh_step,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder=fresh_holder,
+        coupler=fresh_coupler,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_run",
+            object(),
+        ),
+    )
+    fresh_snapshot = fresh_result["snapshot"]
+
+    def _should_not_run(**_runtime_kwargs):
+        raise AssertionError("cache-hit and manifest paths should not execute the step")
+
+    _should_not_run.__consist_step__ = object()
+
+    cache_result = _run_step_mode(
+        step_name="activitysim_postprocess",
+        mode_label="cache",
+        step_func=_should_not_run,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_run",
+            object(),
+        ),
+        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
+        cache_hit=True,
+    )
+
+    manifest_outputs = _recover_cached_outputs(
+        step_name="activitysim_postprocess",
+        outputs_holder=StepOutputsHolder(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
+    )
+    assert manifest_outputs is not None
+    manifest_result = _run_step_mode(
+        step_name="activitysim_postprocess",
+        mode_label="manifest",
+        step_func=_should_not_run,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder_seed=lambda holder: holder.set_attribute(
+            "activitysim_run",
+            object(),
+        ),
+        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
         manifest_outputs=manifest_outputs,
     )
 

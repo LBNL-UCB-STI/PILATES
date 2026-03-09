@@ -535,35 +535,6 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
 
 
-def test_restore_restart_workspace_atlas_registry_rebuilds_expected_keys(tmp_path):
-    settings = _restart_settings()
-    workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
-
-    atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
-    (atlas_input_dir / "psid_names.Rdat").parent.mkdir(parents=True, exist_ok=True)
-    (atlas_input_dir / "psid_names.Rdat").write_text("psid", encoding="utf-8")
-    (
-        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
-    ).parent.mkdir(parents=True, exist_ok=True)
-    (
-        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
-    ).write_text("used", encoding="utf-8")
-
-    restored = run_module._restore_restart_workspace_atlas_registry(
-        settings=settings,
-        workspace=workspace,
-    )
-
-    assert restored >= 2
-    atlas_store = workspace.input_data["atlas"]
-    mapping = atlas_store.to_mapping()
-    assert mapping["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
-    assert (
-        mapping["adopt/baseline/used_vehicles_2017"]
-        == str(atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv")
-    )
-
-
 def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_path):
     settings = _restart_settings()
     workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)

@@ -10,30 +10,57 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Se
 
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
-    record_store_to_outputs,
     resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+    has_asim_run_marker,
+    normalize_asim_output_key,
+)
+from pilates.atlas.outputs import (
+    AtlasPostprocessOutputs,
+    AtlasPreprocessOutputs,
+    AtlasRunOutputs,
+)
+from pilates.beam.outputs import (
+    BeamFullSkimOutputs,
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
+from pilates.urbansim.outputs import (
+    UrbanSimPostprocessOutputs,
+    UrbanSimPreprocessOutputs,
+    UrbanSimRunOutputs,
+)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    FINAL_SKIMS_OMX,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
+    USIM_INPUT_MERGED_PREFIX,
+    ZARR_SKIMS,
 )
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
@@ -282,6 +309,12 @@ def run_manifested_steps(
         **(runtime_kwargs_extra or {}),
     )
 
+    def _publish_recovered_outputs(step_func: Callable[..., Any], outputs: Any) -> None:
+        replayer = getattr(step_func, "__pilates_output_replayer__", None)
+        if callable(replayer):
+            replayer(outputs, settings, state, workspace, outputs_holder)
+        _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+
     for raw_step in steps:
         spec = raw_step
         if spec.name in manifest:
@@ -292,9 +325,7 @@ def run_manifested_steps(
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
             if outputs is not None:
-                _update_coupler_from_outputs(
-                    outputs, coupler=coupler, workspace=workspace
-                )
+                _publish_recovered_outputs(spec.step_func, outputs)
             continue
 
         validate_step_ready(spec.name, outputs_holder)
@@ -319,7 +350,10 @@ def run_manifested_steps(
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
                 run_id=getattr(getattr(result, "run", None), "id", None),
+                publish_outputs=False,
             )
+            if outputs is not None:
+                _publish_recovered_outputs(spec.step_func, outputs)
         if outputs is None and getattr(result, "cache_hit", False):
             logger.warning(
                 "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
@@ -341,7 +375,10 @@ def run_manifested_steps(
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
                     run_id=getattr(getattr(result, "run", None), "id", None),
+                    publish_outputs=False,
                 )
+                if outputs is not None:
+                    _publish_recovered_outputs(spec.step_func, outputs)
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
         manifest[spec.name] = {
@@ -533,6 +570,7 @@ def _recover_cached_outputs(
     step_inputs: Optional[Mapping[str, Any]] = None,
     cached_outputs: Optional[Mapping[str, Any]] = None,
     run_id: Optional[str] = None,
+    publish_outputs: bool = True,
 ) -> Optional[Any]:
     """
     Best-effort output recovery for cache hits that skip step execution.
@@ -568,10 +606,7 @@ def _recover_cached_outputs(
             _cached_run_outputs_by_key[canonical_key] = value
         return _cached_run_outputs_by_key
 
-    def _recover_from_cached_artifacts() -> Optional[RecordStore]:
-        output_class = STEP_OUTPUTS_CLASSES.get(step_name)
-        if output_class is None:
-            return None
+    def _recovered_cached_paths() -> Dict[str, Path]:
         merged: Dict[str, Any] = {}
         if cached_outputs:
             for raw_key, value in cached_outputs.items():
@@ -582,23 +617,91 @@ def _recover_cached_outputs(
                 merged[resolve_artifact_key(local_key)] = value
         for key, value in _cached_run_outputs().items():
             merged[key] = value
-        if not merged:
-            return None
-        record_store = RecordStore()
+        recovered_paths: Dict[str, Path] = {}
         for key, value in merged.items():
             path = _existing_path(value)
             if path is None:
                 continue
-            record_store.add_record(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key,
-                    description=f"Recovered cached output: {key}",
-                )
-            )
-        if not record_store.all_records():
+            recovered_paths[key] = Path(path)
+        return recovered_paths
+
+    def _recover_from_cached_artifacts() -> Optional[Any]:
+        recovered_paths = _recovered_cached_paths()
+        if not recovered_paths:
             return None
-        return record_store
+        if step_name == "beam_run":
+            return BeamRunOutputs(
+                beam_output_dir=Path(workspace.get_beam_output_dir()),
+                raw_outputs=recovered_paths,
+            )
+        if step_name == "beam_postprocess":
+            return BeamPostprocessOutputs(
+                zarr_skims=recovered_paths.get(ZARR_SKIMS),
+                final_skims_omx=recovered_paths.get(FINAL_SKIMS_OMX),
+                split_events={
+                    key: path
+                    for key, path in recovered_paths.items()
+                    if key.startswith("events_parquet_") and "_type_" in key
+                },
+                split_event_links={
+                    key: path
+                    for key, path in recovered_paths.items()
+                    if key.startswith("path_traversal_links_")
+                },
+            )
+        if step_name == "beam_full_skim":
+            full_skims = recovered_paths.get(BEAM_FULL_SKIMS)
+            if full_skims is None:
+                return None
+            return BeamFullSkimOutputs(full_skims=full_skims)
+        if step_name == "urbansim_preprocess":
+            return UrbanSimPreprocessOutputs(
+                usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+                prepared_inputs=recovered_paths,
+            )
+        if step_name == "urbansim_run":
+            usim_datastore_h5 = recovered_paths.get(USIM_FORECAST_OUTPUT) or recovered_paths.get(
+                USIM_DATASTORE_H5
+            )
+            if usim_datastore_h5 is None:
+                return None
+            return UrbanSimRunOutputs(
+                usim_datastore_h5=usim_datastore_h5,
+                raw_outputs=recovered_paths,
+            )
+        if step_name == "urbansim_postprocess":
+            usim_datastore_h5 = next(
+                (
+                    path
+                    for key, path in recovered_paths.items()
+                    if key.startswith(USIM_INPUT_MERGED_PREFIX)
+                ),
+                None,
+            ) or recovered_paths.get(USIM_DATASTORE_H5)
+            if usim_datastore_h5 is None:
+                return None
+            return UrbanSimPostprocessOutputs(
+                usim_datastore_h5=usim_datastore_h5,
+                processed_outputs=recovered_paths,
+            )
+        if step_name == "atlas_preprocess":
+            return AtlasPreprocessOutputs(
+                atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
+                prepared_inputs=recovered_paths,
+            )
+        if step_name == "atlas_run":
+            return AtlasRunOutputs(
+                atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+                raw_outputs=recovered_paths,
+            )
+        if step_name == "atlas_postprocess":
+            return AtlasPostprocessOutputs(
+                atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+                usim_datastore_h5=recovered_paths.get(USIM_H5_UPDATED)
+                or recovered_paths.get(USIM_DATASTORE_H5),
+                processed_outputs=recovered_paths,
+            )
+        return None
 
     def _resolve_cached_value(key: str) -> Any:
         if cached_outputs:
@@ -631,6 +734,15 @@ def _recover_cached_outputs(
             materialize_from_archive=True,
         )
 
+    def _finalize_recovered_outputs(outputs: Any) -> Any:
+        validate = getattr(outputs, "validate", None)
+        if callable(validate):
+            validate()
+        outputs_holder.set_attribute(step_name, outputs)
+        if publish_outputs:
+            _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+        return outputs
+
     if step_name == "activitysim_preprocess":
         asim_dir = Path(workspace.get_asim_mutable_data_dir())
         candidates = {
@@ -639,7 +751,7 @@ def _recover_cached_outputs(
             ASIM_LAND_USE_IN: asim_dir / "land_use.csv",
             ASIM_OMX_SKIMS: asim_dir / "skims.omx",
         }
-        record_store = RecordStore()
+        recovered_inputs: Dict[str, Path] = {}
         for key, path in candidates.items():
             cached_value = _resolve_cached_value(key)
             cached_path = _existing_path(cached_value)
@@ -647,19 +759,25 @@ def _recover_cached_outputs(
                 path = Path(cached_path)
             resolved_candidate = _existing_path_str(path)
             if resolved_candidate:
-                path = Path(resolved_candidate)
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(path),
-                        short_name=key,
-                        description=f"Recovered ActivitySim input: {path.name}",
-                    )
-                )
-        if not record_store.all_records():
+                recovered_inputs[key] = Path(resolved_candidate)
+        if not {
+            ASIM_LAND_USE_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+        }.issubset(recovered_inputs):
             return None
+        return _finalize_recovered_outputs(
+            ActivitySimPreprocessOutputs(
+                mutable_data_dir=asim_dir,
+                land_use_table=recovered_inputs[ASIM_LAND_USE_IN],
+                households_table=recovered_inputs[ASIM_HOUSEHOLDS_IN],
+                persons_table=recovered_inputs[ASIM_PERSONS_IN],
+                omx_skims=recovered_inputs.get(ASIM_OMX_SKIMS),
+            )
+        )
     elif step_name == "activitysim_run":
-        record_store = RecordStore()
         asim_output_dir = Path(workspace.get_asim_output_dir())
+        raw_outputs: Dict[str, Path] = {}
         final_pipeline = Path(
             _existing_path_str(asim_output_dir / "final_pipeline")
             or (asim_output_dir / "final_pipeline")
@@ -671,21 +789,15 @@ def _recover_cached_outputs(
             for child in final_pipeline.iterdir():
                 fpath = child / "final.parquet"
                 if fpath.is_file():
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=f"{child.name}_asim_out_temp",
-                            description=f"ActivitySim raw output: {child.name}",
-                        )
-                    )
+                    raw_outputs[f"{child.name}_asim_out_temp"] = fpath
         elif final_pipeline.exists() and not allow_final_pipeline:
             logger.warning(
                 "Skipping ActivitySim final_pipeline cache recovery for year %s iteration %s "
                 "because success marker is missing.",
                 state.year,
                 state.iteration,
-            )
-        if not record_store.all_records():
+        )
+        if not raw_outputs:
             iter_dir = Path(
                 _existing_path_str(
                     asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
@@ -694,17 +806,16 @@ def _recover_cached_outputs(
             )
             if iter_dir.exists():
                 for fpath in iter_dir.glob("*.parquet"):
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=f"{fpath.stem}_asim_out_temp",
-                            description=f"ActivitySim raw output: {fpath.stem}",
-                        )
-                    )
-        if not record_store.all_records():
+                    raw_outputs[f"{fpath.stem}_asim_out_temp"] = fpath
+        if not raw_outputs:
             return None
+        return _finalize_recovered_outputs(
+            ActivitySimRunOutputs(
+                output_dir=asim_output_dir,
+                raw_outputs=raw_outputs,
+            )
+        )
     elif step_name == "activitysim_postprocess":
-        record_store = RecordStore()
         asim_output_dir = Path(workspace.get_asim_output_dir())
         iter_dir = Path(
             _existing_path_str(
@@ -712,6 +823,7 @@ def _recover_cached_outputs(
             )
             or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
         )
+        processed_outputs: Dict[str, Path] = {}
         if iter_dir.exists():
             required_outputs = {
                 "persons_asim_out",
@@ -726,13 +838,7 @@ def _recover_cached_outputs(
                 return None
             for fpath in iter_dir.glob("*.parquet"):
                 short_name = normalize_asim_output_key(fpath.stem)
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(fpath),
-                        short_name=short_name,
-                        description=f"ActivitySim output file: {fpath.stem}",
-                    )
-                )
+                processed_outputs[short_name] = fpath
         else:
             return None
 
@@ -752,22 +858,10 @@ def _recover_cached_outputs(
             for fname, short_name in archived_inputs.items():
                 fpath = inputs_dir / fname
                 if fpath.exists():
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=short_name,
-                            description=f"Archived ActivitySim input: {fname}",
-                        )
-                    )
+                    processed_outputs[short_name] = fpath
             zarr_path = inputs_dir / "skims.zarr"
             if zarr_path.exists():
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(zarr_path),
-                        short_name="asim_input_skims_zarr_archived",
-                        description="Archived ActivitySim input: skims.zarr (snapshot)",
-                    )
-                )
+                processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
 
         usim_path = None
         if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
@@ -791,18 +885,20 @@ def _recover_cached_outputs(
                     settings.urbansim.input_file_template.format(region_id=region_id),
                 )
         usim_existing = _existing_path_str(usim_path)
-        if usim_existing:
-            record_store.add_record(
-                FileRecord(
-                    file_path=str(usim_existing),
-                    short_name=f"usim_input_{state.forecast_year}",
-                    description="New UrbanSim input data for next iteration",
-                )
-            )
-        if not record_store.all_records():
+        if not processed_outputs and not usim_existing:
             return None
+        return _finalize_recovered_outputs(
+            ActivitySimPostprocessOutputs(
+                usim_datastore_h5=Path(usim_existing) if usim_existing else None,
+                asim_output_dir=asim_output_dir,
+                processed_outputs=processed_outputs,
+                usim_datastore_key=(
+                    f"usim_input_{state.forecast_year}" if usim_existing else None
+                ),
+            )
+        )
     elif step_name == "beam_preprocess":
-        record_store = RecordStore()
+        prepared_inputs: Dict[str, Path] = {}
         has_warmstart = False
         if step_inputs:
             allowed_keys = {
@@ -818,13 +914,7 @@ def _recover_cached_outputs(
                 if path:
                     if key == LINKSTATS_WARMSTART:
                         has_warmstart = True
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(path),
-                            short_name=key,
-                            description=f"Recovered BEAM preprocess input: {key}",
-                        )
-                    )
+                    prepared_inputs[key] = Path(path)
         if step_inputs and not has_warmstart:
             # If we have any linkstats-like input, recover a warmstart alias.
             candidate_keys = []
@@ -846,35 +936,22 @@ def _recover_cached_outputs(
             for key in candidate_keys:
                 path = _existing_path(step_inputs.get(key))
                 if path:
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(path),
-                            short_name=LINKSTATS_WARMSTART,
-                            description=(
-                                "Recovered BEAM preprocess warmstart from cached "
-                                f"input {key}"
-                            ),
-                        )
-                    )
+                    prepared_inputs[LINKSTATS_WARMSTART] = Path(path)
                     has_warmstart = True
                     break
-        if not record_store.all_records():
+        if not prepared_inputs:
             return None
+        return _finalize_recovered_outputs(
+            BeamPreprocessOutputs(
+                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+                prepared_inputs=prepared_inputs,
+            )
+        )
     else:
-        record_store = _recover_from_cached_artifacts()
-        if record_store is None:
+        outputs = _recover_from_cached_artifacts()
+        if outputs is None:
             return None
-
-    output_class = STEP_OUTPUTS_CLASSES.get(step_name)
-    if output_class is None:
-        return None
-    outputs = record_store_to_outputs(record_store, output_class, workspace)
-    validate = getattr(outputs, "validate", None)
-    if callable(validate):
-        validate()
-    outputs_holder.set_attribute(step_name, outputs)
-    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
-    return outputs
+        return _finalize_recovered_outputs(outputs)
 
 
 def _update_coupler_from_outputs(
@@ -922,21 +999,6 @@ def _update_coupler_from_mapping(
             artifact=artifact,
             fallback=path,
         )
-
-
-def _update_coupler_from_record_store(
-    record_store: RecordStore,
-    *,
-    coupler: CouplerProtocol,
-    workspace: Any,
-) -> None:
-    if record_store is None:
-        return
-    _update_coupler_from_mapping(
-        record_store.to_mapping(),
-        coupler=coupler,
-        workspace=workspace,
-    )
 
 
 def _restore_outputs_from_manifest(

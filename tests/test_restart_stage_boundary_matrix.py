@@ -22,7 +22,6 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-import run as run_module
 from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
@@ -490,7 +489,7 @@ def test_restart_land_use_boundary_preserves_required_datastores(
     assert usim_inputs[USIM_DATASTORE_CURRENT_H5] == restart_stage_env["usim_input_path"]
 
 
-def test_restart_vehicle_ownership_boundary_uses_rebuilt_atlas_registry(
+def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     restart_stage_env, monkeypatch
 ):
     from pilates.workflows.stages import vehicle_ownership as vehicle_ownership_stage
@@ -499,11 +498,6 @@ def test_restart_vehicle_ownership_boundary_uses_rebuilt_atlas_registry(
         restart_stage_env["atlas_input_dir"] / "psid_names.Rdat",
         "psid",
     )
-    restored = run_module._restore_restart_workspace_atlas_registry(
-        settings=restart_stage_env["settings"],
-        workspace=restart_stage_env["workspace"],
-    )
-    assert restored >= 1
 
     restart_stage_env["state"].current_major_stage = (
         restart_stage_env["state"].Stage.vehicle_ownership_model
@@ -571,7 +565,7 @@ def test_restart_vehicle_ownership_boundary_uses_rebuilt_atlas_registry(
         coupler=restart_stage_env["coupler"],
         year=restart_stage_env["state"].forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
-            "psid_names": str(Path("fallback-should-not-win.Rdat"))
+            "psid_names": str(atlas_static_path)
         },
     )
 
