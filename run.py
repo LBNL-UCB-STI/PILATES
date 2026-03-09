@@ -19,7 +19,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence
+from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence, cast
 
 from pilates.workspace import Workspace
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
@@ -55,6 +55,7 @@ from pilates.utils.restart_bundle import (
 from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
@@ -439,7 +440,7 @@ def _filter_schema_steps_for_enabled_models(
     return filtered
 
 
-def _get_consist_schemas() -> Optional[list[type]]:
+def _get_consist_schemas() -> Optional[list[type[Any]]]:
     try:
         from pilates.database.schema.registry import get_consist_schemas
 
@@ -570,11 +571,12 @@ def _mount_for_path(path: str, mounts: Dict[str, str]) -> str:
 
 
 def _format_bytes(value: int) -> str:
+    size = float(value)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-        if value < 1024:
-            return f"{value:.1f}{unit}"
-        value /= 1024.0
-    return f"{value:.1f}EiB"
+        if size < 1024:
+            return f"{size:.1f}{unit}"
+        size /= 1024.0
+    return f"{size:.1f}EiB"
 
 
 def _log_local_storage_info() -> None:
@@ -1891,7 +1893,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.land_use):
                     usim_inputs = run_land_use_stage(
-                        scenario=tagged_scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1909,7 +1911,7 @@ def main():
                         f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
                     )
                     run_vehicle_ownership_stage(
-                        scenario=tagged_scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1924,7 +1926,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
-                        scenario=tagged_scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -1946,7 +1948,7 @@ def main():
                 if state.should_run(WorkflowState.Stage.postprocessing):
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
-                        scenario=tagged_scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,

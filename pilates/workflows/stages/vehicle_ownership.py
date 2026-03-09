@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Callable, Dict, Mapping, Union, Any, Optional
+from typing import Callable, Dict, Mapping, Union, Any, Optional, cast
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -225,15 +225,15 @@ def run_vehicle_ownership_stage(
 
         step_inputs, step_input_descriptions = build_atlas_inputs(
             settings,
-            atlas_state,
+            cast(WorkflowState, atlas_state),
             workspace,
             atlas_year,
             coupler,
             atlas_usim_datastore_h5_path,
         )
-        log_inputs(step_inputs, step_input_descriptions)
+        log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
         step_inputs = merge_model_expected_inputs(
-            "atlas", step_inputs, settings, atlas_state, workspace
+            "atlas", step_inputs, settings, cast(WorkflowState, atlas_state), workspace
         )
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path

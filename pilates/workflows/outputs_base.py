@@ -195,20 +195,22 @@ def deserialize_step_outputs(
         Reconstructed StepOutputs instance.
     """
     kwargs: Dict[str, Any] = {}
-    for field in fields(output_class):
-        if field.name not in data:
+    for output_field in fields(output_class):
+        if output_field.name not in data:
             continue
-        value = data[field.name]
+        value = data[output_field.name]
         if value is None:
-            kwargs[field.name] = None
+            kwargs[output_field.name] = None
             continue
-        if field.type is Path or _is_optional_path_type(field.type):
-            kwargs[field.name] = Path(value)
+        if output_field.type is Path or _is_optional_path_type(output_field.type):
+            kwargs[output_field.name] = Path(value)
             continue
-        if _is_dict_path_type(field.type):
-            kwargs[field.name] = {key: Path(val) for key, val in value.items()}
+        if _is_dict_path_type(output_field.type):
+            kwargs[output_field.name] = {
+                key: Path(val) for key, val in value.items()
+            }
             continue
-        kwargs[field.name] = value
+        kwargs[output_field.name] = value
     return output_class(**kwargs)
 
 

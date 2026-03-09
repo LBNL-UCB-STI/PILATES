@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Union
+from typing import Dict, Optional, Union, cast
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -73,7 +73,7 @@ def run_land_use_stage(
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(
         settings, state, workspace, year
     )
-    log_inputs(usim_inputs, usim_input_descriptions)
+    log_inputs(usim_inputs, cast(Dict[str, Optional[str]], usim_input_descriptions))
     usim_inputs = merge_model_expected_inputs(
         "urbansim", usim_inputs, settings, state, workspace
     )
@@ -210,4 +210,4 @@ def run_land_use_stage(
     )
     flush_archive_queue(timeout=300, fail_on_timeout=True)
 
-    return usim_inputs
+    return dict(usim_inputs)

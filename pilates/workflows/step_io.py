@@ -286,4 +286,6 @@ def build_outputs(
     expected = expected_outputs_for(
         model_name, settings, state, workspace, components=components
     )
-    return merge_expected_outputs({}, expected, prefer_expected=prefer_expected)
+    return dict(
+        merge_expected_outputs({}, expected, prefer_expected=prefer_expected)
+    )

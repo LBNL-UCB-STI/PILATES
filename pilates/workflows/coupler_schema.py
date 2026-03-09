@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 from consist.utils import collect_step_schema
 
 from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.config.models import PilatesConfig
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.coupler_namespace import namespaced_alias_for_key
 
@@ -108,8 +109,10 @@ for model_name, key_map in _NAMESPACED_INIT_KEYS.items():
             PILATES_COUPLER_SCHEMA[namespaced_key] = description
 
 
-def _atlas_static_key_map(settings: Optional[Any]) -> Dict[str, str]:
+def _atlas_static_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
     keys: Dict[str, str] = {}
+    if settings is None:
+        return keys
     for relpath in atlas_static_input_relpaths(settings):
         rel_no_ext, _ = os.path.splitext(relpath)
         key = rel_no_ext.replace("\\", "/")
@@ -121,7 +124,7 @@ def _atlas_static_key_map(settings: Optional[Any]) -> Dict[str, str]:
 
 def build_coupler_schema(
     steps: Iterable[Callable[..., Any]],
-    settings: Optional[Any] = None,
+    settings: Optional[PilatesConfig] = None,
     include_extras: bool = True,
 ) -> Dict[str, str]:
     """

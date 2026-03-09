@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 import warnings
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
@@ -69,8 +69,8 @@ class StepRef:
     load_inputs: Optional[bool] = None
     required_outputs: Optional[Sequence[str]] = None
     required_outputs_rationale: Optional[str] = None
-    output_missing: Optional[str] = None
-    output_mismatch: Optional[str] = None
+    output_missing: Optional[Literal["warn", "error", "ignore"]] = None
+    output_mismatch: Optional[Literal["warn", "error", "ignore"]] = None
     model: Optional[str] = None
     year: Optional[int] = None
     iteration: Optional[int] = None
@@ -406,9 +406,10 @@ def run_workflow(
             default_iteration=iteration,
         )
         coupler_keys = None
-        if hasattr(coupler, "keys"):
+        coupler_keys_fn = getattr(coupler, "keys", None)
+        if callable(coupler_keys_fn):
             try:
-                coupler_keys = list(coupler.keys())
+                coupler_keys = list(coupler_keys_fn())
             except TypeError:
                 coupler_keys = None
         logger.debug(
@@ -473,11 +474,14 @@ def run_workflow(
 
         if coupler_keys is not None:
             try:
+                current_coupler_keys_fn = getattr(coupler, "keys", None)
+                if not callable(current_coupler_keys_fn):
+                    raise TypeError
                 logger.debug(
                     "[%s] Coupler keys after %s: %s",
                     stage_name,
                     spec.name,
-                    list(coupler.keys()),
+                    list(current_coupler_keys_fn()),
                 )
             except TypeError:
                 logger.debug(
