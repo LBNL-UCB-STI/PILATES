@@ -215,7 +215,6 @@ class Model:
     ):
         self.model_name = model_name
         self.state = state
-        self.major_stage = major_stage  # new
 
     def update_state(self, state: "WorkflowState"):
         self.state = state

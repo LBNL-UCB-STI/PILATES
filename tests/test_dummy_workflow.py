@@ -223,7 +223,6 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year
@@ -362,7 +361,6 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year

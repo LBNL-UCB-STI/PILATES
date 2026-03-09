@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 class Preprocessor(Protocol):
     """Protocol for preprocessors that emit a RecordStore."""
 
-    def preprocess(self, workspace: Workspace) -> RecordStore:
+    def preprocess(
+        self,
+        workspace: Workspace,
+        previous_records: RecordStore = RecordStore(),
+    ) -> RecordStore:
         """Run preprocessing for the given workspace."""
 
 
@@ -30,12 +34,19 @@ class Postprocessor(Protocol):
     """Protocol for postprocessors that emit a RecordStore."""
 
     def postprocess(
-        self, raw_outputs: RecordStore, workspace: Workspace
+        self,
+        raw_outputs: RecordStore,
+        workspace: Workspace,
+        model_run_hash: str | None = None,
     ) -> RecordStore:
         """Postprocess model outputs."""
 
 
-def run_preprocessor(preprocessor: Preprocessor, workspace: Workspace) -> RecordStore:
+def run_preprocessor(
+    preprocessor: Preprocessor,
+    workspace: Workspace,
+    previous_records: RecordStore = RecordStore(),
+) -> RecordStore:
     """
     Execute a preprocessor and return its RecordStore outputs.
 
@@ -45,13 +56,15 @@ def run_preprocessor(preprocessor: Preprocessor, workspace: Workspace) -> Record
         Component providing a ``preprocess`` method.
     workspace : Workspace
         Workspace used to resolve inputs/outputs.
+    previous_records : RecordStore, optional
+        Prior step outputs that should be forwarded into preprocessing.
 
     Returns
     -------
     RecordStore
         Record store of preprocessor outputs.
     """
-    return preprocessor.preprocess(workspace)
+    return preprocessor.preprocess(workspace, previous_records)
 
 
 def run_runner(
@@ -83,6 +96,7 @@ def run_postprocessor(
     postprocessor: Postprocessor,
     raw_outputs: RecordStore,
     workspace: Workspace,
+    model_run_hash: str | None = None,
 ) -> RecordStore:
     """
     Execute a postprocessor and return its RecordStore outputs.
@@ -95,13 +109,15 @@ def run_postprocessor(
         Raw outputs from a runner.
     workspace : Workspace
         Workspace used to resolve inputs/outputs.
+    model_run_hash : str | None, optional
+        Runner hash to forward into postprocessing for output provenance.
 
     Returns
     -------
     RecordStore
         Record store of postprocessed outputs.
     """
-    return postprocessor.postprocess(raw_outputs, workspace)
+    return postprocessor.postprocess(raw_outputs, workspace, model_run_hash)
 
 
 def warm_start_activities(

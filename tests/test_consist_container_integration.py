@@ -6,7 +6,6 @@ fallback behavior when Consist is disabled or unavailable.
 """
 
 import pytest
-import shlex
 from unittest.mock import Mock, MagicMock, patch
 
 from pilates.generic.runner import GenericRunner

@@ -6,7 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
-from typing import TYPE_CHECKING, Optional, List, Union, Dict, Any
+from typing import Optional, List, Union, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -37,17 +37,6 @@ class GenericRunner(ABC, Model):
         super().__init__(model_name, state, major_stage)  # new
         self.required_input_files = []
         self.required_output_files = []
-
-    def setup_container_cache_dirs(self, settings: PilatesConfig):
-        """
-        Deprecated: Consist backends handle cache directory setup internally.
-        Kept for backward compatibility with subclasses.
-        """
-        pass
-
-    def check_required_input_files(self, inputStore: RecordStore) -> bool:
-        # TODO: Implement a check for required input files. Requires Record.simple_name
-        return True
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):

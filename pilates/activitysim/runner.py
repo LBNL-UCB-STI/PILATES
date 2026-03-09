@@ -473,8 +473,6 @@ class ActivitysimRunner(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
-        # self.setup_container_cache_dirs(settings) # Handled by Consist
-
         # Get from your config
         # Create shared cache and tmp inside the run workspace
         shared_cache_dir = os.path.join(workspace.full_path, "shared_cache")
