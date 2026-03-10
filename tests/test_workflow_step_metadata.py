@@ -17,6 +17,7 @@ from pilates.workflows.steps import (
     make_activitysim_compile_step,
     make_beam_postprocess_step,
     make_activitysim_preprocess_step,
+    make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
 
@@ -400,6 +401,20 @@ def test_build_coupler_schema_collects_step_metadata_and_extras():
 
     assert ASIM_HOUSEHOLDS_IN in schema
     assert "urbansim/usim_datastore_h5" in schema
+
+
+def test_build_coupler_schema_declares_urbansim_geoid_to_zone_output():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    preprocess_step = make_urbansim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    schema = build_coupler_schema([preprocess_step], settings=SimpleNamespace())
+
+    assert "geoid_to_zone" in schema
 
 
 def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(

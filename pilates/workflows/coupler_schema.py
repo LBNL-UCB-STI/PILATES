@@ -78,6 +78,7 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "hh_size": "UrbanSim household size input CSV.",
     "income_rates": "UrbanSim income rates input CSV.",
     "relmap": "UrbanSim relationship map input CSV.",
+    "geoid_to_zone": "UrbanSim block-to-zone mapping CSV prepared during preprocess.",
     "schools": "UrbanSim schools input CSV.",
     "school_districts": "UrbanSim school districts input CSV.",
     "canonical_zones": "Canonical zones file copied into ActivitySim workspace.",
