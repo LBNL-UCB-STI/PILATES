@@ -196,7 +196,6 @@ from typing import (
     Iterable,
     Mapping,
     Optional,
-    Protocol,
     Sequence,
     Set,
     TYPE_CHECKING,
@@ -207,19 +206,17 @@ from typing import (
 import h5py
 from consist import define_step
 
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.beam_warmstart import (
     find_last_run_output_plans as find_last_run_output_plans,
 )
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import CouplerProtocol  # noqa: F401
 from pilates.utils.coupler_helpers import (
-    artifact_to_path,
+    artifact_to_path,  # noqa: F401
     log_and_set_input as log_and_set_input,
     log_and_set_output as log_and_set_output,
     log_input_only as log_input_only,
     log_output_only as log_output_only,
-    record_store_to_outputs,
     resolve_artifact_from_value as resolve_artifact_from_value,
     update_coupler_from_beam_outputs as update_coupler_from_beam_outputs,
 )
@@ -245,7 +242,6 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.step_exec import warm_start_activities as warm_start_activities
 from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
-    iter_step_output_items,
 )
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -277,7 +273,6 @@ from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
-    from pilates.generic.records import RecordStore
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -769,27 +764,6 @@ OutputLogger = Callable[
 ]
 
 
-class _PreprocessorExecutor(Protocol):
-    def preprocess(
-        self,
-        workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
-    ) -> RecordStore: ...
-
-
-class _RunnerExecutor(Protocol):
-    def run(self, input_store: RecordStore, workspace: "Workspace") -> RecordStore: ...
-
-
-class _PostprocessorExecutor(Protocol):
-    def postprocess(
-        self,
-        raw_outputs: RecordStore,
-        workspace: "Workspace",
-        model_run_hash: Optional[str] = None,
-    ) -> RecordStore: ...
-
-
 @dataclass
 class StepOutputsHolder:
     """
@@ -1189,66 +1163,3 @@ def _decorate_step_with_consist(
     if outputs:
         kwargs["outputs"] = outputs
     return define_step(**kwargs)(step_func)
-
-
-def _execute_preprocess(
-    preprocessor: _PreprocessorExecutor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute a preprocessor using only the workspace.
-
-    This phase typically prepares model-specific inputs (copying, formatting,
-    or deriving tables) in the mutable workspace for the runner.
-
-    Parameters
-    ----------
-    preprocessor : object
-        Preprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder for upstream outputs (unused).
-
-    Returns
-    -------
-    RecordStore
-        Preprocessor outputs.
-    """
-    return preprocessor.preprocess(workspace)
-
-
-def _execute_preprocess_typed(
-    preprocessor: _PreprocessorExecutor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    outputs_class: Type[StepOutputsT],
-    **kwargs: Any,
-) -> StepOutputsT:
-    record_store = _execute_preprocess(
-        preprocessor,
-        workspace,
-        outputs_holder,
-        **kwargs,
-    )
-    return _typed_outputs_from_record_store(
-        record_store=record_store,
-        outputs_class=outputs_class,
-        workspace=workspace,
-    )
-
-
-def _typed_outputs_from_record_store(
-    *,
-    record_store: RecordStore,
-    outputs_class: Type[StepOutputsT],
-    workspace: "Workspace",
-) -> StepOutputsT:
-    return record_store_to_outputs(
-        record_store=record_store,
-        output_class=outputs_class,
-        workspace=workspace,
-    )
