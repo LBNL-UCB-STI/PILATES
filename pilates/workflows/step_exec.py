@@ -1,5 +1,5 @@
 import logging
-from typing import Protocol
+from typing import Optional, Protocol
 
 from pilates.activitysim import postprocessor as asim_post
 from pilates.config.models import PilatesConfig
@@ -18,7 +18,7 @@ class Preprocessor(Protocol):
     def preprocess(
         self,
         workspace: Workspace,
-        previous_records: RecordStore = RecordStore(),
+        previous_records: Optional[RecordStore] = None,
     ) -> RecordStore:
         """Run preprocessing for the given workspace."""
 

@@ -397,21 +397,21 @@ def restart_stage_env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ModelFactory,
         "get_preprocessor",
-        lambda self, model_name, state=None, major_stage=None: DummyPreprocessor(
+        lambda self, model_name, state=None, *_args, **_kwargs: DummyPreprocessor(
             model_name, record_builder
         ),
     )
     monkeypatch.setattr(
         ModelFactory,
         "get_runner",
-        lambda self, model_name, state=None, major_stage=None: DummyRunner(
+        lambda self, model_name, state=None, *_args, **_kwargs: DummyRunner(
             model_name, record_builder
         ),
     )
     monkeypatch.setattr(
         ModelFactory,
         "get_postprocessor",
-        lambda self, model_name, state=None, major_stage=None: DummyPostprocessor(
+        lambda self, model_name, state=None, *_args, **_kwargs: DummyPostprocessor(
             model_name, record_builder
         ),
     )

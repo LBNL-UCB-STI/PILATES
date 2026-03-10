@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -11,7 +11,6 @@ class Model:
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
         self.model_name = model_name
         self.state = state

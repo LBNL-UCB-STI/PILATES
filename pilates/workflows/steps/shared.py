@@ -317,6 +317,45 @@ def _warn_missing_coupler_inputs(
         )
 
 
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    """Extract a content hash from an artifact-like mapping value."""
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
+
+
+def _append_artifact_mapping_records(
+    *,
+    record_store: RecordStore,
+    artifact_mapping: Optional[Mapping[str, Any]],
+    workspace: Optional["Workspace"],
+    description_prefix: str,
+    key_aliases: Optional[Mapping[str, str]] = None,
+) -> None:
+    """Materialize artifact-like mapping values into a ``RecordStore``."""
+    if not artifact_mapping:
+        return
+    aliases = key_aliases or {}
+    for key, value in artifact_mapping.items():
+        path = artifact_to_path(value, workspace)
+        if path is None and isinstance(value, (str, os.PathLike)):
+            path = os.fspath(value)
+        if not path:
+            continue
+        record_store.add_record(
+            FileRecord(
+                file_path=str(path),
+                short_name=aliases.get(key, key),
+                description=f"{description_prefix}: {key}",
+                content_hash=_artifact_content_hash(value),
+            )
+        )
+
+
 def _log_step_records(
     *,
     record_items: Any,
@@ -1229,7 +1268,9 @@ def _build_required_input_store(
     missing_message: str,
     context: str,
     coupler: Optional[CouplerProtocol] = None,
-    extra_inputs: Optional[RecordStore] = None,
+    workspace: Optional["Workspace"] = None,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+    extra_input_description_prefix: str = "Executor extra input",
     warn_missing_coupler_inputs: bool = True,
 ) -> RecordStore:
     """
@@ -1247,8 +1288,12 @@ def _build_required_input_store(
         Context label for warning logs.
     coupler : CouplerProtocol, optional
         Coupler used for missing-input key warning checks.
-    extra_inputs : RecordStore, optional
-        Additional records merged into the upstream input store.
+    workspace : Workspace, optional
+        Workspace used to resolve artifact-like extra inputs into paths.
+    extra_inputs : mapping, optional
+        Additional artifact-like inputs merged into the upstream input store.
+    extra_input_description_prefix : str, default "Executor extra input"
+        Description prefix for extra inputs materialized at the executor boundary.
     warn_missing_coupler_inputs : bool, default True
         Whether to emit warnings for RecordStore keys not present in coupler.
 
@@ -1285,7 +1330,12 @@ def _build_required_input_store(
         ]
     )
     if extra_inputs is not None:
-        input_store += extra_inputs
+        _append_artifact_mapping_records(
+            record_store=input_store,
+            artifact_mapping=extra_inputs,
+            workspace=workspace,
+            description_prefix=extra_input_description_prefix,
+        )
     if warn_missing_coupler_inputs:
         _warn_missing_coupler_inputs(coupler, input_store, context)
     return input_store
@@ -1298,7 +1348,7 @@ def _execute_run(
     *,
     coupler: Optional[CouplerProtocol] = None,
     context: str = "runner",
-    extra_inputs: Optional[RecordStore] = None,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -1315,8 +1365,8 @@ def _execute_run(
         Workspace used to resolve paths.
     outputs_holder : StepOutputsHolder
         Holder with preprocess outputs.
-    extra_inputs : RecordStore, optional
-        Additional inputs to merge into the runner input store.
+    extra_inputs : mapping, optional
+        Additional artifact-like inputs to merge into the runner input store.
 
     Returns
     -------
@@ -1329,6 +1379,7 @@ def _execute_run(
         missing_message="ActivitySim preprocess must complete first",
         context=context,
         coupler=coupler,
+        workspace=workspace,
         extra_inputs=extra_inputs,
     )
     return runner.run(input_store, workspace)
@@ -1417,47 +1468,32 @@ def _execute_beam_preprocess(
         Preprocessor outputs.
     """
     combined = RecordStore()
-    for artifact_mapping, description_prefix in (
-        (activity_demand_outputs, "BEAM preprocess activity-demand input"),
-        (previous_beam_outputs, "BEAM preprocess warm-start input"),
-    ):
-        if not artifact_mapping:
-            continue
-        for key, value in artifact_mapping.items():
-            path = artifact_to_path(value, workspace)
-            if path is None and isinstance(value, (str, os.PathLike)):
-                path = os.fspath(value)
-            if not path:
-                continue
-            combined.add_record(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key,
-                    description=f"{description_prefix}: {key}",
-                )
-            )
-    if beam_preprocess_inputs:
-        # Bridge orchestration-level fallback inputs into the legacy BEAM
-        # preprocessor contract, which expects ActivitySim-style short names.
-        key_aliases = {
+    _append_artifact_mapping_records(
+        record_store=combined,
+        artifact_mapping=activity_demand_outputs,
+        workspace=workspace,
+        description_prefix="BEAM preprocess activity-demand input",
+    )
+    _append_artifact_mapping_records(
+        record_store=combined,
+        artifact_mapping=previous_beam_outputs,
+        workspace=workspace,
+        description_prefix="BEAM preprocess warm-start input",
+    )
+    # Bridge orchestration-level fallback inputs into the legacy BEAM
+    # preprocessor contract, which expects ActivitySim-style short names.
+    _append_artifact_mapping_records(
+        record_store=combined,
+        artifact_mapping=beam_preprocess_inputs,
+        workspace=workspace,
+        description_prefix="BEAM preprocess provided input",
+        key_aliases={
             BEAM_PLANS_IN: "beam_plans",
             BEAM_HOUSEHOLDS_IN: "households",
             BEAM_PERSONS_IN: "persons",
             LINKSTATS_WARMSTART: "linkstats",
-        }
-        for key, value in beam_preprocess_inputs.items():
-            path = artifact_to_path(value, workspace)
-            if path is None and isinstance(value, (str, os.PathLike)):
-                path = os.fspath(value)
-            if not path:
-                continue
-            combined.add_record(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key_aliases.get(key, key),
-                    description=f"BEAM preprocess provided input: {key}",
-                )
-            )
+        },
+    )
     _warn_missing_coupler_inputs(coupler, combined, context)
     return preprocessor.preprocess(workspace, combined)
 
@@ -1469,7 +1505,7 @@ def _execute_beam_run(
     *,
     coupler: Optional[CouplerProtocol] = None,
     context: str = "beam_run",
-    extra_inputs: Optional[RecordStore] = None,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
     **kwargs: Any,
 ) -> RecordStore:
     """
@@ -1486,8 +1522,8 @@ def _execute_beam_run(
         Workspace used to resolve paths.
     outputs_holder : StepOutputsHolder
         Holder with preprocess outputs.
-    extra_inputs : RecordStore, optional
-        Additional inputs (e.g., zarr skims).
+    extra_inputs : mapping, optional
+        Additional artifact-like inputs (e.g., zarr skims).
 
     Returns
     -------
@@ -1500,6 +1536,7 @@ def _execute_beam_run(
         missing_message="BEAM preprocess must complete first",
         context=context,
         coupler=coupler,
+        workspace=workspace,
         extra_inputs=extra_inputs,
     )
     return runner.run(input_store, workspace)
@@ -1558,31 +1595,15 @@ def _execute_beam_full_skim(
     The full-skim runner consumes canonical BEAM inputs plus optional
     previous BEAM outputs (for linkstats warm-start selection).
     """
-    extra_inputs = None
-    if previous_beam_outputs:
-        records = []
-        for key, value in previous_beam_outputs.items():
-            path = artifact_to_path(value, workspace)
-            if path is None and isinstance(value, (str, os.PathLike)):
-                path = os.fspath(value)
-            if not path:
-                continue
-            records.append(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key,
-                    description=f"BEAM full-skim warm-start input: {key}",
-                )
-            )
-        extra_inputs = RecordStore(recordList=records)
-
     input_store = _build_required_input_store(
         outputs_holder=outputs_holder,
         upstream_attr="beam_preprocess",
         missing_message="BEAM preprocess must complete first",
         context=context,
         coupler=coupler,
-        extra_inputs=extra_inputs,
+        workspace=workspace,
+        extra_inputs=previous_beam_outputs,
+        extra_input_description_prefix="BEAM full-skim warm-start input",
     )
     return runner.run(input_store, workspace)
 

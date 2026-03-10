@@ -13,21 +13,21 @@ from pilates.generic.runner import GenericRunner
 def test_model_factory_returns_correct_classes():
     mf = ModelFactory()
     # Verify that known model keys return the proper classes
-    runner = mf.get_runner("activitysim", None, None)
+    runner = mf.get_runner("activitysim", None)
     assert runner.__class__.__name__ == "ActivitysimRunner"
 
     mock_state = SimpleNamespace(full_settings=SimpleNamespace())
-    pre = mf.get_preprocessor("beam", mock_state, None)
+    pre = mf.get_preprocessor("beam", mock_state)
     assert pre.__class__.__name__ == "BeamPreprocessor"
 
-    post = mf.get_postprocessor("urbansim", None, None)
+    post = mf.get_postprocessor("urbansim", None)
     assert post.__class__.__name__ == "UrbansimPostprocessor"
 
 
 def test_model_factory_unknown_model_raises():
     mf = ModelFactory()
     with pytest.raises(KeyError):
-        mf.get_runner("nonexistent_model", None, None)
+        mf.get_runner("nonexistent_model", None)
 
 
 # ----------------------------------------------------------------------
@@ -184,6 +184,31 @@ def test_generic_preprocessor_sets_stage_and_forwards_record_store():
         "previous_records": previous_records,
     }
     assert result is previous_records
+
+
+def test_generic_preprocessor_defaults_previous_records_to_new_store():
+    state = _StageTrackingState()
+    workspace = object()
+    captured = {}
+
+    class _GenericPreprocessor(GenericPreprocessor):
+        def copy_data_to_mutable_location(self, settings, output_dir):
+            return RecordStore(), RecordStore()
+
+        def _preprocess(self, workspace_arg, previous_records_arg):
+            captured["workspace"] = workspace_arg
+            captured["previous_records"] = previous_records_arg
+            return previous_records_arg
+
+    preprocessor = _GenericPreprocessor("dummy", state)
+    first = preprocessor.preprocess(workspace)
+    second = preprocessor.preprocess(workspace)
+
+    assert state.sub_stages == ["preprocessor", "preprocessor"]
+    assert captured["workspace"] is workspace
+    assert isinstance(first, RecordStore)
+    assert isinstance(second, RecordStore)
+    assert first is not second
 
 
 def test_generic_postprocessor_sets_stage_and_forwards_model_run_hash():

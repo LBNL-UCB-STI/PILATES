@@ -123,9 +123,8 @@ class ActivitysimCompileRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_files = [
             ASIM_OMX_SKIMS,
             "asim_geoms",
@@ -305,9 +304,8 @@ class ActivitysimRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_files = [
             ASIM_PERSONS_IN,
             ASIM_HOUSEHOLDS_IN,

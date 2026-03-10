@@ -213,12 +213,10 @@ def make_activitysim_compile_step(
         expected_outputs: Dict[str, Any],
     ) -> None:
         factory = ModelFactory()
-        from workflow_state import WorkflowState as _WorkflowState
 
         compile_runner = factory.get_runner(
             "activitysim_compile",
             state,
-            major_stage=_WorkflowState.Stage.activity_demand,
         )
 
         upstream = outputs_holder.activitysim_preprocess
@@ -530,7 +528,7 @@ def make_activitysim_preprocess_step(
         phase="preprocess",
         outputs_class=ActivitySimPreprocessOutputs,
         component_getter=lambda factory, state: factory.get_preprocessor(
-            "activitysim", state, WorkflowState.Stage.activity_demand
+            "activitysim", state
         ),
         component_executor=_execute_preprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -592,7 +590,7 @@ def make_activitysim_run_step(
                 **meta,
             )
 
-        extra_input_records = []
+        extra_inputs: Dict[str, str] = {}
         compile_input_hashes.clear()
         zarr_value = None
         get_value = getattr(coupler, "get", None)
@@ -613,13 +611,7 @@ def make_activitysim_run_step(
             if os.path.exists(candidate):
                 zarr_path = candidate
         if zarr_path and os.path.exists(zarr_path):
-            extra_input_records.append(
-                FileRecord(
-                    file_path=zarr_path,
-                    short_name=ZARR_SKIMS,
-                    description="Compiled ActivitySim skims (Zarr)",
-                )
-            )
+            extra_inputs[ZARR_SKIMS] = zarr_path
             log_and_set_input(
                 key=ZARR_SKIMS,
                 path=zarr_path,
@@ -628,7 +620,7 @@ def make_activitysim_run_step(
                 ),
                 coupler=coupler,
             )
-        return {"extra_inputs": RecordStore(recordList=extra_input_records)}
+        return {"extra_inputs": extra_inputs}
 
     def _log_outputs(
         outputs: ActivitySimRunOutputs,
@@ -684,7 +676,7 @@ def make_activitysim_run_step(
         phase="run",
         outputs_class=ActivitySimRunOutputs,
         component_getter=lambda factory, state: factory.get_runner(
-            "activitysim", state, WorkflowState.Stage.activity_demand
+            "activitysim", state
         ),
         component_executor=_execute_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -862,8 +854,6 @@ def make_activitysim_postprocess_step(
             raise RuntimeError("ActivitySim run must complete first")
         if hasattr(upstream, "to_postprocess_record_store"):
             raw_outputs = upstream.to_postprocess_record_store()
-        elif hasattr(upstream, "to_record_store"):
-            raw_outputs = upstream.to_record_store()
         else:
             raw_outputs = RecordStore(
                 recordList=[
@@ -884,7 +874,7 @@ def make_activitysim_postprocess_step(
         phase="postprocess",
         outputs_class=ActivitySimPostprocessOutputs,
         component_getter=lambda factory, state: factory.get_postprocessor(
-            "activitysim", state, WorkflowState.Stage.activity_demand
+            "activitysim", state
         ),
         component_executor=_execute_activitysim_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(

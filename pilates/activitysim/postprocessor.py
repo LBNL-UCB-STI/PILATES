@@ -683,9 +683,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
 
     def _postprocess(
         self,

@@ -139,8 +139,11 @@ class DummyModelAPreprocessor(GenericPreprocessor):
         return input_records, output_records
 
     def _preprocess(
-        self, workspace: DummyWorkspace, previous_records: RecordStore = RecordStore()
+        self,
+        workspace: DummyWorkspace,
+        previous_records: RecordStore | None = None,
     ) -> RecordStore:
+        previous_records = previous_records or RecordStore()
         csv_record = get_record_by_short_name(previous_records, "data.csv")
         h5_record = get_record_by_short_name(previous_records, "data.h5")
         if not csv_record or not h5_record:
@@ -288,8 +291,11 @@ class DummyModelBPreprocessor(GenericPreprocessor):
         return RecordStore(), RecordStore()
 
     def _preprocess(
-        self, workspace: DummyWorkspace, previous_records: RecordStore = RecordStore()
+        self,
+        workspace: DummyWorkspace,
+        previous_records: RecordStore | None = None,
     ) -> RecordStore:
+        previous_records = previous_records or RecordStore()
         csv_record = get_record_by_short_name(
             previous_records, f"model_a_final_output_{self.state.current_year}.csv"
         )

@@ -14,6 +14,7 @@ from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
 
 if TYPE_CHECKING:
+    from workflow_state import WorkflowState
     from pilates.generic.postprocessor import GenericPostprocessor
     from pilates.generic.preprocessor import GenericPreprocessor
     from pilates.generic.runner import GenericRunner
@@ -57,37 +58,27 @@ class ModelFactory:
         self,
         model_name,
         state: "WorkflowState" = None,
-        major_stage: "WorkflowState.Stage" = None,
     ) -> "GenericRunner":
-        return self._registry[model_name.lower()]["runner"](
-            model_name, state, major_stage
-        )
+        return self._registry[model_name.lower()]["runner"](model_name, state)
 
     def get_preprocessor(
         self,
         model_name,
         state: "WorkflowState" = None,
-        major_stage: "WorkflowState.Stage" = None,
     ) -> "GenericPreprocessor":
-        return self._registry[model_name.lower()]["preprocessor"](
-            model_name, state, major_stage
-        )
+        return self._registry[model_name.lower()]["preprocessor"](model_name, state)
 
     def get_postprocessor(
         self,
         model_name,
         state: "WorkflowState" = None,
-        major_stage: "WorkflowState.Stage" = None,
     ) -> "GenericPostprocessor":
-        return self._registry[model_name.lower()]["postprocessor"](
-            model_name, state, major_stage
-        )
+        return self._registry[model_name.lower()]["postprocessor"](model_name, state)
 
     def get_components(
         self,
         model_name: str,
         state: "WorkflowState" = None,
-        major_stage: "WorkflowState.Stage" = None,
     ) -> Tuple["GenericPreprocessor", "GenericRunner", "GenericPostprocessor"]:
         """
         Return preprocessor, runner, and postprocessor instances for a model.
@@ -98,9 +89,6 @@ class ModelFactory:
             Model key registered in the factory (e.g., "urbansim").
         state : WorkflowState, optional
             Workflow state to pass through to component constructors.
-        major_stage : WorkflowState.Stage, optional
-            Workflow stage for component constructors.
-
         Returns
         -------
         tuple
@@ -111,7 +99,7 @@ class ModelFactory:
         This mirrors the standard PILATES component pattern in one call to reduce
         boilerplate when orchestrating steps.
         """
-        preprocessor = self.get_preprocessor(model_name, state, major_stage)
-        runner = self.get_runner(model_name, state, major_stage)
-        postprocessor = self.get_postprocessor(model_name, state, major_stage)
+        preprocessor = self.get_preprocessor(model_name, state)
+        runner = self.get_runner(model_name, state)
+        postprocessor = self.get_postprocessor(model_name, state)
         return preprocessor, runner, postprocessor

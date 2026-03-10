@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
 )
-from pilates.generic.records import RecordStore
+from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows import steps
 from pilates.workflows.steps import activitysim as steps_activitysim
 
@@ -138,6 +140,63 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     assert "zarr_skims" in keys
     assert "usim_datastore_h5" in keys
     assert "usim_forecast_output" in keys
+
+
+def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
+    monkeypatch, tmp_path
+) -> None:
+    class _LegacyOnlyRunOutputs:
+        def to_record_store(self) -> RecordStore:
+            return RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path=str(tmp_path / "raw.parquet"),
+                        short_name="households_asim_out_temp",
+                    )
+                ]
+            )
+
+    fake_postprocessor = SimpleNamespace(postprocess=lambda *_args, **_kwargs: RecordStore())
+    monkeypatch.setattr(
+        steps_activitysim.ModelFactory,
+        "get_postprocessor",
+        lambda self, *args, **kwargs: fake_postprocessor,
+    )
+
+    asim_input_dir = tmp_path / "asim" / "data"
+    asim_output_dir = tmp_path / "asim" / "output"
+    usim_data_dir = tmp_path / "urbansim" / "data"
+    asim_input_dir.mkdir(parents=True)
+    (asim_output_dir / "cache").mkdir(parents=True)
+    usim_data_dir.mkdir(parents=True)
+
+    workspace = SimpleNamespace(
+        get_asim_mutable_data_dir=lambda: str(asim_input_dir),
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_usim_mutable_data_dir=lambda: str(usim_data_dir),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        urbansim=SimpleNamespace(
+            input_file_template="model_data_{region_id}.h5",
+            output_file_template="model_data_{year}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "06197001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        forecast_year=2023,
+        iteration=0,
+        is_enabled=lambda stage: False,
+        Stage=SimpleNamespace(land_use="land_use"),
+    )
+
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(activitysim_run=_LegacyOnlyRunOutputs()),
+    )
+
+    with pytest.raises(TypeError, match="_iter_record_items"):
+        step_fn(settings=settings, state=state, workspace=workspace)
 
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:

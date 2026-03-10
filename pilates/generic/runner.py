@@ -32,9 +32,8 @@ class GenericRunner(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, major_stage)  # new
+        super().__init__(model_name, state)
         self.required_input_files = []
         self.required_output_files = []
 

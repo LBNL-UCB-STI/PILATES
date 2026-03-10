@@ -331,7 +331,7 @@ def make_beam_preprocess_step(
         phase="preprocess",
         outputs_class=BeamPreprocessOutputs,
         component_getter=lambda factory, state: factory.get_preprocessor(
-            "beam", state, WorkflowState.Stage.traffic_assignment
+            "beam", state
         ),
         component_executor=_execute_beam_preprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -469,7 +469,7 @@ def make_beam_run_step(
         phase="run",
         outputs_class=BeamRunOutputs,
         component_getter=lambda factory, state: factory.get_runner(
-            "beam", state, WorkflowState.Stage.traffic_assignment
+            "beam", state
         ),
         component_executor=_execute_beam_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -548,7 +548,7 @@ def make_beam_postprocess_step(
         phase="postprocess",
         outputs_class=BeamPostprocessOutputs,
         component_getter=lambda factory, state: factory.get_postprocessor(
-            "beam", state, WorkflowState.Stage.traffic_assignment
+            "beam", state
         ),
         component_executor=_execute_beam_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -592,7 +592,7 @@ def make_beam_full_skim_step(
         phase="skim",
         outputs_class=BeamFullSkimOutputs,
         component_getter=lambda factory, state: factory.get_runner(
-            "beam_full_skim", state, WorkflowState.Stage.traffic_assignment
+            "beam_full_skim", state
         ),
         component_executor=_execute_beam_full_skim,
         outputs_holder_setter=lambda holder, outputs: setattr(

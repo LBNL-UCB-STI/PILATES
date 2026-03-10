@@ -162,7 +162,7 @@ class DummyPreprocessor:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def preprocess(self, workspace, previous_records=RecordStore()):
+    def preprocess(self, workspace, previous_records=None):
         return self._record_builder(self.model_name, "preprocess")
 
 
@@ -445,13 +445,13 @@ def stage_env(tmp_path, monkeypatch):
 
     from pilates.generic.model_factory import ModelFactory
 
-    def _make_preprocessor(self, model_name, state=None, major_stage=None):
+    def _make_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         return DummyPreprocessor(model_name, record_builder)
 
-    def _make_runner(self, model_name, state=None, major_stage=None):
+    def _make_runner(self, model_name, state=None, *_args, **_kwargs):
         return DummyRunner(model_name, record_builder)
 
-    def _make_postprocessor(self, model_name, state=None, major_stage=None):
+    def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         return DummyPostprocessor(model_name, record_builder)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _make_preprocessor)
@@ -1061,7 +1061,7 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     }
 
     class _BeamPreprocessorNoWarmstart:
-        def preprocess(self, workspace, previous_records=RecordStore()):
+        def preprocess(self, workspace, previous_records=None):
             beam_dir = Path(workspace.get_beam_mutable_data_dir())
             plans = beam_dir / "plans.csv"
             households = beam_dir / "households.csv"
@@ -1078,10 +1078,10 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
 
     original_get_preprocessor = ModelFactory.get_preprocessor
 
-    def _patched_get_preprocessor(self, model_name, state=None, major_stage=None):
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
             return _BeamPreprocessorNoWarmstart()
-        return original_get_preprocessor(self, model_name, state, major_stage)
+        return original_get_preprocessor(self, model_name, state)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
 
@@ -1143,7 +1143,7 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     coupler.set(ZARR_SKIMS, str(zarr_path))
 
     class _BeamPreprocessorNoWarmstart:
-        def preprocess(self, workspace, previous_records=RecordStore()):
+        def preprocess(self, workspace, previous_records=None):
             beam_dir = Path(workspace.get_beam_mutable_data_dir())
             plans = beam_dir / "plans.csv"
             households = beam_dir / "households.csv"
@@ -1181,15 +1181,15 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     original_get_preprocessor = ModelFactory.get_preprocessor
     original_get_runner = ModelFactory.get_runner
 
-    def _patched_get_preprocessor(self, model_name, state=None, major_stage=None):
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
             return _BeamPreprocessorNoWarmstart()
-        return original_get_preprocessor(self, model_name, state, major_stage)
+        return original_get_preprocessor(self, model_name, state)
 
-    def _patched_get_runner(self, model_name, state=None, major_stage=None):
+    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
             return _BeamRunnerWithSubIterationOutputs()
-        return original_get_runner(self, model_name, state, major_stage)
+        return original_get_runner(self, model_name, state)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)

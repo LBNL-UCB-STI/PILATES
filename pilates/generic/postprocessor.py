@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from pilates.generic.model import Model
 from pilates.generic.records import RecordStore
@@ -18,9 +18,8 @@ class GenericPostprocessor(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_data: list[str] = []
 
     def postprocess(

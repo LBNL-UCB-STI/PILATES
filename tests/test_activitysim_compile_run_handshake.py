@@ -130,7 +130,7 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
     compile_runner = _CompileRunner(zarr_path)
     run_runner = object()
 
-    def _get_runner(self, model_name, state=None, major_stage=None):
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim_compile":
             return compile_runner
         if model_name == "activitysim":
@@ -169,8 +169,7 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
 
     assert captured["runner"] is run_runner
     extra_inputs = captured["extra_inputs"]
-    assert isinstance(extra_inputs, RecordStore)
-    assert extra_inputs.to_mapping().get(ZARR_SKIMS) == str(zarr_path)
+    assert extra_inputs == {ZARR_SKIMS: str(zarr_path)}
 
 
 def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
@@ -210,7 +209,7 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
         },
     )
 
-    def _get_runner(self, model_name, state=None, major_stage=None):
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim":
             raise AssertionError(f"Unexpected model_name: {model_name}")
         return object()
@@ -302,7 +301,7 @@ def test_activitysim_compile_reads_omx_from_iter_record_items_only(
                 ]
             )
 
-    def _get_runner(self, model_name, state=None, major_stage=None):
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim_compile":
             raise AssertionError(f"Unexpected model_name: {model_name}")
         return _CaptureCompileRunner()
@@ -388,7 +387,7 @@ def test_activitysim_compile_logs_cache_output_when_gate_on(
 
     compile_runner = _CompileRunner(zarr_path, cache_dir)
 
-    def _get_runner(self, model_name, state=None, major_stage=None):
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim_compile":
             raise AssertionError(f"Unexpected model_name: {model_name}")
         return compile_runner
@@ -454,7 +453,7 @@ def test_activitysim_compile_does_not_log_cache_output_when_gate_off(
 
     compile_runner = _CompileRunner(zarr_path, cache_dir)
 
-    def _get_runner(self, model_name, state=None, major_stage=None):
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim_compile":
             raise AssertionError(f"Unexpected model_name: {model_name}")
         return compile_runner

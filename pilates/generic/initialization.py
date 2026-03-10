@@ -360,8 +360,12 @@ class Initialization(Model):
                                 )
                             ]
                         )
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
+                        _accumulate_copy_result(
+                            result=(rec_in, rec_out),
+                            model_name="activitysim",
+                            initialization_records_in=initialization_records_in,
+                            initialization_records_out=initialization_records_out,
+                        )
                     else:
                         logger.warning(
                             "Canonical zone source file not found at %s, skipping copy.",

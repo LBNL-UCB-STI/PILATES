@@ -39,7 +39,13 @@ import pandas as pd
 import yaml
 
 from pilates.config import load_config
+from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.urbansim.outputs import (
+    UrbanSimPostprocessOutputs,
+    UrbanSimPreprocessOutputs,
+    UrbanSimRunOutputs,
+)
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.provenance_report import write_provenance_report
@@ -134,9 +140,18 @@ class DummyPreprocessor:
         self._state = state
 
     def preprocess(self, workspace, previous_records=RecordStore()):
-        return self._record_builder(
+        outputs = self._record_builder(
             self.model_name, "preprocess", state=self._state, workspace=workspace
         )
+        if self.model_name == "urbansim" and isinstance(outputs, RecordStore):
+            return UrbanSimPreprocessOutputs(
+                usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+                prepared_inputs={
+                    record.short_name: Path(record.file_path)
+                    for record in outputs.all_records()
+                },
+            )
+        return outputs
 
 
 class DummyRunner:
@@ -148,9 +163,18 @@ class DummyRunner:
         self._state = state
 
     def run(self, input_store, workspace):
-        return self._record_builder(
+        outputs = self._record_builder(
             self.model_name, "run", state=self._state, workspace=workspace
         )
+        if self.model_name == "atlas" and isinstance(outputs, RecordStore):
+            return AtlasRunOutputs(
+                atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+                raw_outputs={
+                    record.short_name: Path(record.file_path)
+                    for record in outputs.all_records()
+                },
+            )
+        return outputs
 
 
 class DummyPostprocessor:
@@ -567,6 +591,15 @@ def golden_stub_env(tmp_path, monkeypatch):
         - ``postprocess`` emits finalized artifacts consumed by downstream stages.
         """
         if phase == "preprocess":
+            if model_name == "urbansim":
+                assert workspace is not None
+                return UrbanSimPreprocessOutputs(
+                    usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+                    prepared_inputs={
+                        USIM_DATASTORE_BASE_H5: usim_input_path,
+                        USIM_DATASTORE_CURRENT_H5: usim_input_path,
+                    },
+                )
             if model_name == "activitysim":
                 return RecordStore(
                     recordList=[
@@ -588,10 +621,11 @@ def golden_stub_env(tmp_path, monkeypatch):
             return RecordStore()
         if phase == "run":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(usim_output_path), short_name=USIM_FORECAST_OUTPUT)
-                    ]
+                return UrbanSimRunOutputs(
+                    usim_datastore_h5=usim_output_path,
+                    raw_outputs={
+                        USIM_FORECAST_OUTPUT: usim_output_path,
+                    },
                 )
             if model_name == "activitysim_compile":
                 return RecordStore(
@@ -655,28 +689,21 @@ def golden_stub_env(tmp_path, monkeypatch):
                     }
                 ).to_csv(veh_path, index=False)
 
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(hhv_path),
-                            short_name=f"householdv_{output_year}",
-                        ),
-                        FileRecord(
-                            file_path=str(veh_path),
-                            short_name=f"vehicles_{output_year}",
-                        ),
-                    ]
+                return AtlasRunOutputs(
+                    atlas_output_dir=atlas_output_dir,
+                    raw_outputs={
+                        f"householdv_{output_year}": hhv_path,
+                        f"vehicles_{output_year}": veh_path,
+                    },
                 )
             return RecordStore()
         if phase == "postprocess":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(usim_merged_path),
-                            short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-                        )
-                    ]
+                return UrbanSimPostprocessOutputs(
+                    usim_datastore_h5=usim_merged_path,
+                    processed_outputs={
+                        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}": usim_merged_path,
+                    },
                 )
             if model_name == "activitysim":
                 assert state is not None
@@ -713,17 +740,17 @@ def golden_stub_env(tmp_path, monkeypatch):
     from pilates.atlas.preprocessor import AtlasPreprocessor
     from pilates.atlas.postprocessor import AtlasPostprocessor
 
-    def _make_preprocessor(self, model_name, state=None, major_stage=None):
+    def _make_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "atlas":
-            return AtlasPreprocessor(model_name, state, major_stage)
+            return AtlasPreprocessor(model_name, state)
         return DummyPreprocessor(model_name, record_builder, state=state)
 
-    def _make_runner(self, model_name, state=None, major_stage=None):
+    def _make_runner(self, model_name, state=None, *_args, **_kwargs):
         return DummyRunner(model_name, record_builder, state=state)
 
-    def _make_postprocessor(self, model_name, state=None, major_stage=None):
+    def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "atlas":
-            return AtlasPostprocessor(model_name, state, major_stage)
+            return AtlasPostprocessor(model_name, state)
         return DummyPostprocessor(model_name, record_builder, state=state)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _make_preprocessor)

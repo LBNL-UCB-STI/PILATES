@@ -150,15 +150,15 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             )
             return RecordStore(recordList=records)
 
-    def _patched_get_runner(self, model_name, state=None, major_stage=None):
+    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim":
             return _ActivitySimRunner()
-        return original_get_runner(self, model_name, state, major_stage)
+        return original_get_runner(self, model_name, state)
 
-    def _patched_get_postprocessor(self, model_name, state=None, major_stage=None):
+    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim":
             return _ActivitySimPostprocessor()
-        return original_get_postprocessor(self, model_name, state, major_stage)
+        return original_get_postprocessor(self, model_name, state)
 
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
@@ -260,15 +260,15 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
                 ]
             )
 
-    def _patched_get_runner(self, model_name, state=None, major_stage=None):
+    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
             return _BeamRunner()
-        return original_get_runner(self, model_name, state, major_stage)
+        return original_get_runner(self, model_name, state)
 
-    def _patched_get_postprocessor(self, model_name, state=None, major_stage=None):
+    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
             return _BeamPostprocessor()
-        return original_get_postprocessor(self, model_name, state, major_stage)
+        return original_get_postprocessor(self, model_name, state)
 
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)

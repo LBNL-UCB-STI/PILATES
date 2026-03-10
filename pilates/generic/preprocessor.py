@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -19,9 +19,8 @@ class GenericPreprocessor(ABC, Model):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_data: list[str] = []
 
     @abstractmethod
@@ -36,11 +35,14 @@ class GenericPreprocessor(ABC, Model):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
+        previous_records: Optional[RecordStore] = None,
     ) -> RecordStore:
         """Run preprocessing using upstream ``RecordStore`` inputs."""
         self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(workspace, previous_records)
+        return self._preprocess(
+            workspace,
+            previous_records if previous_records is not None else RecordStore(),
+        )
 
     @abstractmethod
     def _preprocess(

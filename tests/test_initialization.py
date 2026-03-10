@@ -41,7 +41,7 @@ class DummyPreprocessor:
 class DummyModelFactory:
     """ModelFactory stub that returns DummyPreprocessor for any model."""
 
-    def get_preprocessor(self, model_name, state, major_stage=None):
+    def get_preprocessor(self, model_name, state, **_kwargs):
         return DummyPreprocessor()
 
 
@@ -224,7 +224,7 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
             self.input_path = input_path
             self.output_path = output_path
 
-        def get_preprocessor(self, model_name, state, major_stage=None):
+        def get_preprocessor(self, model_name, state, **_kwargs):
             return DummyLoggingPreprocessor(self.input_path, self.output_path)
 
     input_path = tmp_path / "source.txt"
@@ -315,3 +315,52 @@ def test_build_bootstrap_artifact_summary_counts_records_by_model():
     assert summary["input_records_total"] == 1
     assert summary["output_records_total"] == 2
     assert summary["copied_records_total"] == 3
+
+
+def test_initialization_summary_counts_canonical_zones_under_activitysim(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", DummyModelFactory
+    )
+
+    workspace = DummyWorkspace()
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    workspace.beam_mutable_dir = str(tmp_path / "beam")
+    workspace.usim_mutable_dir = str(tmp_path / "usim")
+    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
+    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
+
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones_path.write_text("{}")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="beam",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use="urbansim",
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            skims=SimpleNamespace(zone_type="block_group"),
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(zones_path),
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key",
+                )
+            ),
+        ),
+    )
+
+    init = Initialization("init", None)
+    copied_records = init.run(settings, workspace)
+    summary = build_bootstrap_artifact_summary(workspace, copied_records)
+
+    assert summary["input_records_by_model"]["activitysim"] >= 1
+    assert summary["output_records_by_model"]["activitysim"] >= 1
+    assert "activitysim" in summary["models"]

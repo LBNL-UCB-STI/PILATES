@@ -269,7 +269,7 @@ def make_urbansim_preprocess_step(
         phase="preprocess",
         outputs_class=UrbanSimPreprocessOutputs,
         component_getter=lambda factory, state: factory.get_preprocessor(
-            "urbansim", state, WorkflowState.Stage.land_use
+            "urbansim", state
         ),
         component_executor=_execute_urbansim_preprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -334,7 +334,7 @@ def make_urbansim_run_step(
         phase="run",
         outputs_class=UrbanSimRunOutputs,
         component_getter=lambda factory, state: factory.get_runner(
-            "urbansim", state, WorkflowState.Stage.land_use
+            "urbansim", state
         ),
         component_executor=_execute_urbansim_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -412,7 +412,7 @@ def make_urbansim_postprocess_step(
         phase="postprocess",
         outputs_class=UrbanSimPostprocessOutputs,
         component_getter=lambda factory, state: factory.get_postprocessor(
-            "urbansim", state, WorkflowState.Stage.land_use
+            "urbansim", state
         ),
         component_executor=_execute_urbansim_postprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -476,7 +476,7 @@ def make_atlas_preprocess_step(
         phase="preprocess",
         outputs_class=AtlasPreprocessOutputs,
         component_getter=lambda factory, state: factory.get_preprocessor(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
+            "atlas", state
         ),
         component_executor=_execute_atlas_preprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -556,7 +556,7 @@ def make_atlas_run_step(
         phase="run",
         outputs_class=AtlasRunOutputs,
         component_getter=lambda factory, state: factory.get_runner(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
+            "atlas", state
         ),
         component_executor=_execute_atlas_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
@@ -693,7 +693,7 @@ def make_atlas_postprocess_step(
         phase="postprocess",
         outputs_class=AtlasPostprocessOutputs,
         component_getter=lambda factory, state: factory.get_postprocessor(
-            "atlas", state, WorkflowState.Stage.vehicle_ownership_model
+            "atlas", state
         ),
         component_executor=_execute_atlas_postprocess_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
