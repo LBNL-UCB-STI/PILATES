@@ -3,30 +3,20 @@ import logging
 import re
 import atexit
 import fnmatch
-import re
 import queue
 import shutil
 import threading
 import time
-from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Type, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Union
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.artifact_key_migrations import (
-    canonicalize_artifact_mapping,
-    resolve_artifact_key,
-)
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
-    BEAM_PLANS_OUT,
-    FINAL_SKIMS_OMX,
-    LINKSTATS,
-    LINKSTATS_WARMSTART,
-    ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,7 +308,6 @@ def stop_archive_worker(timeout: Optional[float] = None) -> None:
 atexit.register(stop_archive_worker)
 
 if TYPE_CHECKING:
-    from pilates.generic.records import RecordStore
     from pilates.workspace import Workspace
 
 
@@ -584,152 +573,6 @@ def log_coupler_value(
         path,
         container_uri,
         db_hit,
-    )
-
-
-def update_coupler_from_beam_outputs(
-    output_store: Optional["RecordStore"],
-    coupler: CouplerProtocol,
-    workspace: "Workspace",
-) -> None:
-    """
-    Log and propagate BEAM output artifacts into the workflow coupler.
-
-    Parameters
-    ----------
-    output_store : RecordStore
-        Output store from BEAM run + postprocess outputs.
-    coupler : CouplerProtocol
-        Consist coupler or compatible interface.
-    workspace : Workspace
-        Workspace used to resolve output paths.
-    """
-    if not output_store:
-        return
-    linkstats_record = None
-    beam_plans_record = None
-    linkstats_parquet_records = []
-    linkstats_unmodified_phys_sim_records = []
-    for record in output_store.all_records():
-        if record.short_name == ZARR_SKIMS:
-            zarr_path = artifact_to_path(record.file_path, workspace)
-            if zarr_path and os.path.exists(zarr_path):
-                log_and_set_output(
-                    key=ZARR_SKIMS,
-                    path=zarr_path,
-                    description="Zarr skims updated with BEAM outputs",
-                    coupler=coupler,
-                )
-        elif record.short_name == FINAL_SKIMS_OMX:
-            omx_path = artifact_to_path(record.file_path, workspace)
-            if omx_path and os.path.exists(omx_path):
-                log_and_set_output(
-                    key=FINAL_SKIMS_OMX,
-                    path=omx_path,
-                    description="Final skims OMX for downstream models",
-                    coupler=coupler,
-                )
-        elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
-            linkstats_parquet_records.append(record)
-        elif _is_linkstats_unmodified_phys_sim_key(getattr(record, "short_name", None)):
-            linkstats_unmodified_phys_sim_records.append(record)
-        elif (
-            record.short_name
-            and record.short_name.startswith(LINKSTATS)
-            and not record.short_name.startswith("linkstats_unmodified")
-        ):
-            linkstats_record = _select_beam_output_record(
-                linkstats_record, record, LINKSTATS
-            )
-        elif record.short_name and record.short_name.startswith(BEAM_PLANS_OUT):
-            beam_plans_record = _select_beam_output_record(
-                beam_plans_record, record, BEAM_PLANS_OUT
-            )
-
-    _log_and_set_beam_record(
-        linkstats_record,
-        key=LINKSTATS,
-        description="BEAM linkstats output for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
-        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
-    )
-    _log_and_set_beam_record(
-        linkstats_record,
-        key=LINKSTATS_WARMSTART,
-        description="BEAM warm-start linkstats for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
-        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
-    )
-    for record in linkstats_parquet_records:
-        linkstats_meta = _beam_linkstats_facet_meta(
-            record.short_name, family="linkstats_parquet"
-        )
-        if _is_sub_iteration_key(record.short_name):
-            _log_beam_record_only(
-                record,
-                key=record.short_name,
-                description="BEAM linkstats parquet output for downstream runs",
-                workspace=workspace,
-                profile_file_schema=True,
-                **linkstats_meta,
-            )
-        else:
-            _log_and_set_beam_record(
-                record,
-                key=record.short_name,
-                description="BEAM linkstats parquet output for downstream runs",
-                coupler=coupler,
-                workspace=workspace,
-                profile_file_schema=True,
-                **linkstats_meta,
-            )
-    for record in linkstats_unmodified_phys_sim_records:
-        record_meta = dict(getattr(record, "metadata", None) or {})
-        facets = record_meta.get("facet")
-        if facets is None:
-            facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
-        log_meta = {
-            "facet_schema_version": record_meta.get(
-                "facet_schema_version", "v1"
-            ),
-            "facet_index": bool(record_meta.get("facet_index", True)),
-        }
-        if facets:
-            log_meta["facet"] = facets
-        if _is_sub_iteration_key(record.short_name):
-            _log_beam_record_only(
-                record,
-                key=record.short_name,
-                description=(
-                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
-                ),
-                workspace=workspace,
-                profile_file_schema=True,
-                **log_meta,
-            )
-        else:
-            _log_and_set_beam_record(
-                record,
-                key=record.short_name,
-                description=(
-                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
-                ),
-                coupler=coupler,
-                workspace=workspace,
-                profile_file_schema=True,
-                **log_meta,
-            )
-    _log_and_set_beam_record(
-        beam_plans_record,
-        key=BEAM_PLANS_OUT,
-        description="BEAM plans output for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
     )
 
 
@@ -1131,10 +974,8 @@ def _log_with_optional_h5_container(
         if requested_filter is None:
             table_filter = base_filter
         else:
-            table_filter = (
-                lambda table_name: base_filter(table_name)
-                and requested_filter(table_name)
-            )
+            def table_filter(table_name: str) -> bool:
+                return base_filter(table_name) and requested_filter(table_name)
         return cr.log_h5_container(
             path,
             key=key,
@@ -1270,44 +1111,3 @@ def log_input_only(
         description=description,
         meta=meta,
     )
-
-
-def record_store_to_outputs(
-    record_store: "RecordStore",
-    output_class: Type[Any],
-    workspace: "Workspace",
-) -> Any:
-    """
-    Convert a RecordStore into a typed StepOutputs dataclass.
-
-    Parameters
-    ----------
-    record_store : RecordStore
-        RecordStore returned by a component execution.
-    output_class : type
-        Dataclass type to instantiate.
-    workspace : Workspace
-        Workspace used to resolve relative paths.
-    """
-    if hasattr(output_class, "from_record_store"):
-        return output_class.from_record_store(record_store, workspace)
-    if not is_dataclass(output_class):
-        raise TypeError(
-            "output_class must be a dataclass or implement from_record_store"
-        )
-
-    mapping = record_store.to_mapping() if record_store is not None else {}
-    mapping = canonicalize_artifact_mapping(mapping)
-    record_keys = getattr(output_class, "record_keys", {}) or {}
-    values: Dict[str, Any] = {}
-
-    for field in fields(output_class):
-        key = record_keys.get(field.name, field.name)
-        if key not in mapping:
-            continue
-        path = artifact_to_path(mapping[key], workspace)
-        if path is None:
-            continue
-        values[field.name] = Path(path)
-
-    return output_class(**values)

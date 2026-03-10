@@ -218,7 +218,6 @@ from pilates.utils.coupler_helpers import (
     log_input_only as log_input_only,
     log_output_only as log_output_only,
     resolve_artifact_from_value as resolve_artifact_from_value,
-    update_coupler_from_beam_outputs as update_coupler_from_beam_outputs,
 )
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN as ASIM_HOUSEHOLDS_IN,

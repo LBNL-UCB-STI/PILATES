@@ -4,6 +4,7 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
+from pathlib import Path
 from typing import Optional, List, Tuple, Union, Dict, TYPE_CHECKING
 
 import numpy as np
@@ -20,6 +21,7 @@ from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
     load_canonical_zones,
@@ -2023,7 +2025,26 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             workspace,
             previous_records if previous_records is not None else RecordStore(),
         )
-        return ActivitySimPreprocessOutputs.from_record_store(record_store, workspace)
+        records_by_key = {
+            getattr(record, "short_name", None): record
+            for record in (record_store.all_records() if record_store is not None else [])
+        }
+        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
+            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
+        }
+        input_hashes: Dict[str, str] = {}
+        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+            record = records_by_key.get(record_key)
+            if record is None:
+                continue
+            record_path = artifact_to_path(getattr(record, "file_path", None), workspace)
+            if record_path is not None:
+                output_values[field_name] = Path(record_path)
+            content_hash = getattr(record, "content_hash", None)
+            if content_hash:
+                input_hashes[record_key] = content_hash
+        output_values["input_hashes"] = input_hashes
+        return ActivitySimPreprocessOutputs(**output_values)
 
     def _preprocess(
         self,

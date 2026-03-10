@@ -140,6 +140,9 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         for short_name, _path, _description in preprocess_outputs._iter_record_items()
     }
     assert {ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_OMX_SKIMS} <= preprocess_keys
+    assert preprocess_outputs.input_hashes[ASIM_LAND_USE_IN] == "hash_land_use"
+    assert preprocess_outputs.input_hashes[ASIM_HOUSEHOLDS_IN] == "hash_households_in"
+    assert preprocess_outputs.input_hashes[ASIM_PERSONS_IN] == "hash_persons_in"
 
     staged_omx = Path(workspace.get_asim_mutable_data_dir()) / "skims.omx"
     assert staged_omx.exists()

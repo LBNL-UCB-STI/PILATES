@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,11 +12,12 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.generic.model_factory import ModelFactory
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import FileRecord, RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -151,6 +153,81 @@ def test_warm_start_activities_forwards_model_specific_payload(monkeypatch) -> N
     assert captured["runner_input_data"] is preprocess_outputs
     assert captured["runner_workspace"] is workspace
     assert captured["update_call"] == (settings, state, workspace, None)
+
+
+def test_activitysim_preprocess_public_method_no_longer_depends_on_bridge_helper(
+    monkeypatch, tmp_path: Path
+) -> None:
+    state = _StageTrackingState()
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim-data"),
+    )
+    previous_records = RecordStore()
+
+    land_use = tmp_path / "asim-data" / "land_use.csv"
+    households = tmp_path / "asim-data" / "households.csv"
+    persons = tmp_path / "asim-data" / "persons.csv"
+    land_use.parent.mkdir(parents=True)
+    for path in (land_use, households, persons):
+        path.write_text("csv", encoding="utf-8")
+
+    record_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=os.path.relpath(land_use, tmp_path),
+                short_name="land_use_asim_in",
+                content_hash="land-use-hash",
+            ),
+            FileRecord(
+                file_path=os.path.relpath(households, tmp_path),
+                short_name="households_asim_in",
+                content_hash="households-hash",
+            ),
+            FileRecord(
+                file_path=os.path.relpath(persons, tmp_path),
+                short_name="persons_asim_in",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        ActivitySimPreprocessOutputs,
+        "from_record_store",
+        classmethod(
+            lambda cls, *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("bridge helper should not be used")
+            )
+        ),
+    )
+
+    class _Preprocessor:
+        def __init__(self, model_name, workflow_state) -> None:
+            self.model_name = model_name
+            self.state = workflow_state
+
+        preprocess = ActivitysimPreprocessor.preprocess
+
+        def _preprocess(self, workspace_arg, previous_records_arg):
+            assert workspace_arg is workspace
+            assert previous_records_arg is previous_records
+            return record_store
+
+    outputs = _Preprocessor("activitysim_preprocess", state).preprocess(
+        workspace, previous_records
+    )
+
+    assert outputs == ActivitySimPreprocessOutputs(
+        mutable_data_dir=land_use.parent,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+        input_hashes={
+            "land_use_asim_in": "land-use-hash",
+            "households_asim_in": "households-hash",
+        },
+    )
+    assert state.sub_stages == ["preprocessor"]
 
 
 def test_activitysim_compile_step_does_not_fallback_to_workspace_cache_path(
