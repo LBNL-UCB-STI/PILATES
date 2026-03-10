@@ -594,4 +594,4 @@ def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
     step = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
     meta = step.__consist_step__
 
-    assert meta.outputs == ["final_skims_omx", "zarr_skims"]
+    assert meta.outputs == ["zarr_skims"]

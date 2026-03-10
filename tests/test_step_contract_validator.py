@@ -27,7 +27,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
-    FINAL_SKIMS_OMX,
     LINKSTATS,
     ZARR_SKIMS,
 )
@@ -214,7 +213,7 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
     expected = {
         "beam_preprocess": (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
         "beam_run": (LINKSTATS, BEAM_PLANS_OUT),
-        "beam_postprocess": (FINAL_SKIMS_OMX, ZARR_SKIMS),
+        "beam_postprocess": (ZARR_SKIMS,),
         "beam_full_skim": (BEAM_FULL_SKIMS,),
     }
 

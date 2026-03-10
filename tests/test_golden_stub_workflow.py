@@ -574,8 +574,10 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     promoted_linkstats = Path(workspace.get_beam_output_dir()) / "promoted_linkstats.csv.gz"
     promoted_plans = Path(workspace.get_beam_output_dir()) / "promoted_plans.parquet"
+    final_skims_omx = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
     _write_file(promoted_linkstats)
     _write_file(promoted_plans)
+    _write_file(final_skims_omx)
 
     def record_builder(
         model_name,
@@ -726,7 +728,10 @@ def golden_stub_env(tmp_path, monkeypatch):
                     processed_outputs=processed_outputs,
                 )
             if model_name == "beam":
-                return BeamPostprocessOutputs(zarr_skims=zarr_path)
+                return BeamPostprocessOutputs(
+                    zarr_skims=zarr_path,
+                    final_skims_omx=final_skims_omx,
+                )
             return RecordStore()
         return RecordStore()
 

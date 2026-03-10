@@ -300,7 +300,8 @@ class BeamPostprocessOutputs(StepOutputsBase):
     Attributes
     ----------
     zarr_skims : Path, optional
-        Zarr skims updated by BEAM.
+        Zarr skims updated by BEAM. This is the canonical required
+        postprocess output for the currently supported BEAM integration.
     final_skims_omx : Path, optional
         Final OMX skims for downstream models. When present, it is treated as
         the primary output to log.
@@ -311,11 +312,9 @@ class BeamPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (FINAL_SKIMS_OMX, ZARR_SKIMS)
-    optional_path_fields: ClassVar[Tuple[str, ...]] = (
-        "zarr_skims",
-        "final_skims_omx",
-    )
+    declared_outputs: ClassVar[Tuple[str, ...]] = (ZARR_SKIMS,)
+    required_path_fields: ClassVar[Tuple[str, ...]] = ("zarr_skims",)
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("final_skims_omx",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("split_events", "split_event_links")
 
     zarr_skims: Optional[Path] = None

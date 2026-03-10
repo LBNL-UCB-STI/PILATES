@@ -421,8 +421,11 @@ def _recover_beam_postprocess_outputs(
     )
     if not recovered_paths:
         return None
+    zarr_skims = recovered_paths.get("zarr_skims")
+    if zarr_skims is None:
+        return None
     return BeamPostprocessOutputs(
-        zarr_skims=recovered_paths.get("zarr_skims"),
+        zarr_skims=zarr_skims,
         final_skims_omx=recovered_paths.get("final_skims_omx"),
         split_events={
             key: path

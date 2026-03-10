@@ -20,7 +20,8 @@ from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
-from tests.test_golden_stub_workflow import golden_stub_env
+
+pytest_plugins = ("tests.test_golden_stub_workflow",)
 
 
 def _write_file(path: Path, content: str = "x\n") -> None:

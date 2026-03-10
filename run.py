@@ -56,6 +56,8 @@ from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.runtime import bootstrap as bootstrap_runtime
+from pilates.runtime import restart as restart_runtime
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
@@ -611,8 +613,7 @@ def _log_local_storage_info() -> None:
 
 
 def _is_bootstrap_cache_enabled(settings: Any) -> bool:
-    run_cfg = getattr(settings, "run", None)
-    return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
+    return bootstrap_runtime.is_bootstrap_cache_enabled(settings)
 
 
 def _build_bootstrap_manifest_reference(
@@ -620,12 +621,10 @@ def _build_bootstrap_manifest_reference(
     probe_run_id: Optional[str] = None,
     materialization_run_id: Optional[str] = None,
 ) -> Dict[str, str]:
-    reference: Dict[str, str] = {}
-    if probe_run_id:
-        reference["probe_run_id"] = probe_run_id
-    if materialization_run_id:
-        reference["materialization_run_id"] = materialization_run_id
-    return reference
+    return bootstrap_runtime.build_bootstrap_manifest_reference(
+        probe_run_id=probe_run_id,
+        materialization_run_id=materialization_run_id,
+    )
 
 
 def _archive_bootstrap_restart_artifacts(
@@ -633,53 +632,13 @@ def _archive_bootstrap_restart_artifacts(
     settings: Any,
     workspace: Workspace,
 ) -> None:
-    """
-    Durably archive bootstrap-created local runtime state needed for restart.
-
-    This is intentionally narrow and correctness-oriented. These paths are part
-    of the mutable runtime contract that restart preflight expects to be
-    restorable from the archive run tree.
-    """
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    if (
-        run_cfg is not None
-        and getattr(run_cfg, "region", None)
-        and urbansim_cfg is not None
-    ):
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        if os.path.isdir(usim_data_dir):
-            enqueue_archive_copy(
-                key="urbansim_bootstrap_data_root",
-                path=usim_data_dir,
-            )
-        usim_base_path = os.path.join(
-            usim_data_dir,
-            get_usim_datastore_fname(settings, io="input"),
-        )
-        if os.path.exists(usim_base_path):
-            enqueue_archive_copy(
-                key="bootstrap_usim_datastore_base_h5",
-                path=usim_base_path,
-            )
-
-    if getattr(model_cfg, "activity_demand", None) == "activitysim":
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-
-        if os.path.isdir(asim_data_dir):
-            enqueue_archive_copy(
-                key="activitysim_bootstrap_data_root",
-                path=asim_data_dir,
-            )
-        if os.path.isdir(asim_configs_dir):
-            enqueue_archive_copy(
-                key="activitysim_bootstrap_configs_root",
-                path=asim_configs_dir,
-            )
-
-    flush_archive_queue(timeout=300, fail_on_timeout=True)
+    bootstrap_runtime.archive_bootstrap_restart_artifacts(
+        settings=settings,
+        workspace=workspace,
+        enqueue_archive_copy_fn=enqueue_archive_copy,
+        flush_archive_queue_fn=flush_archive_queue,
+        get_usim_datastore_fname_fn=get_usim_datastore_fname,
+    )
 
 
 def run_bootstrap_phase(
@@ -691,156 +650,27 @@ def run_bootstrap_phase(
     scenario_id: str,
     seed: Optional[int],
 ) -> Dict[str, Any]:
-    """
-    Execute initialization in a dedicated pre-scenario bootstrap phase.
-
-    Phase 1 behavior:
-    - probe cache via tracker.run(...) before scenario starts;
-    - if cache hit, force one overwrite run to materialize workspace safely;
-    - return cache status plus lightweight artifact summary metadata.
-    """
-    staged_artifact_summary: Dict[str, Any] = {}
-
-    def _execute_initialization() -> None:
-        nonlocal staged_artifact_summary
-        init_model = Initialization("initialization", state)
-        copied_records = init_model.run(settings, workspace)
-        staged_artifact_summary = build_bootstrap_artifact_summary(
-            workspace,
-            copied_records,
-        )
-
-    def _finalize_bootstrap_result(
-        *,
-        cache_hit: bool,
-        probe_run_id: Optional[str],
-        materialization_run_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        nonlocal staged_artifact_summary
-        if not staged_artifact_summary:
-            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-        _archive_bootstrap_restart_artifacts(
-            settings=settings,
-            workspace=workspace,
-        )
-        return {
-            "bootstrap_cache_hit": cache_hit,
-            "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": _build_bootstrap_manifest_reference(
-                probe_run_id=probe_run_id,
-                materialization_run_id=materialization_run_id,
-            ),
-        }
-
-    run_kwargs: Dict[str, Any] = {
-        "fn": _execute_initialization,
-        "name": "bootstrap_initialization",
-        "model": "initialization",
-        "year": state.start_year,
-        "iteration": 0,
-        "phase": "bootstrap",
-        "stage": "bootstrap",
-        **build_step_consist_kwargs(
-            "initialization",
-            settings,
-            workspace_path=workspace.full_path,
-        ),
-    }
-    run_kwargs["tags"] = _merge_tag_list(
-        run_kwargs.get("tags"),
-        [
-            "bootstrap",
-            "init",
-            f"scenario_id:{scenario_id}",
-            "model:initialization",
-            f"year:{state.start_year}",
-            "iteration:0",
-        ]
-        + ([f"seed:{seed}"] if seed is not None else []),
-    )
-    run_kwargs["facet"] = _merge_epoch_facet(
-        existing=run_kwargs.get("facet"),
+    return bootstrap_runtime.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
         scenario_id=scenario_id,
         seed=seed,
-        model="initialization",
-        year=state.start_year,
-        iteration=0,
-    )
-
-    if not _is_bootstrap_cache_enabled(settings):
-        logger.info("Bootstrap cache disabled; running initialization once.")
-        run_result = tracker.run(
-            **run_kwargs,
-            cache_options=CacheOptions(cache_mode="off"),
-        )
-        return _finalize_bootstrap_result(
-            cache_hit=False,
-            probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
-        )
-
-    probe_result = tracker.run(**run_kwargs)
-    probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
-    cache_hit = bool(getattr(probe_result, "cache_hit", False))
-
-    if cache_hit:
-        logger.info(
-            "BOOTSTRAP CACHE HIT. Running Phase 1 materialization pass to keep workspace safe."
-        )
-        materialized_result = tracker.run(
-            **run_kwargs,
-            cache_options=CacheOptions(cache_mode="overwrite"),
-        )
-        return _finalize_bootstrap_result(
-            cache_hit=True,
-            probe_run_id=probe_run_id,
-            materialization_run_id=getattr(
-                getattr(materialized_result, "run", None), "id", None
-            ),
-        )
-
-    logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
-    return _finalize_bootstrap_result(
-        cache_hit=False,
-        probe_run_id=probe_run_id,
+        initialization_cls=Initialization,
+        build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
+        build_step_consist_kwargs_fn=build_step_consist_kwargs,
+        merge_tag_list_fn=_merge_tag_list,
+        merge_epoch_facet_fn=_merge_epoch_facet,
+        archive_bootstrap_restart_artifacts_fn=_archive_bootstrap_restart_artifacts,
+        cache_options_cls=CacheOptions,
     )
 
 
 def _assert_bootstrap_output_invariant(
     bootstrap_result: Optional[Dict[str, Any]],
 ) -> None:
-    """
-    Ensure bootstrap produced a non-empty artifact summary before state mutation.
-    """
-    summary = (
-        bootstrap_result.get("staged_artifact_summary")
-        if isinstance(bootstrap_result, dict)
-        else None
-    )
-    copied_total = (
-        summary.get("copied_records_total") if isinstance(summary, dict) else None
-    )
-    if isinstance(copied_total, int) and copied_total > 0:
-        return
-
-    diagnostics = {
-        "bootstrap_result_type": type(bootstrap_result).__name__,
-        "bootstrap_cache_hit": (
-            bootstrap_result.get("bootstrap_cache_hit")
-            if isinstance(bootstrap_result, dict)
-            else None
-        ),
-        "manifest_reference": (
-            bootstrap_result.get("manifest_reference")
-            if isinstance(bootstrap_result, dict)
-            else None
-        ),
-        "staged_artifact_summary": summary,
-    }
-    raise RuntimeError(
-        "Bootstrap initialization invariant failed: expected "
-        "'staged_artifact_summary.copied_records_total' > 0 before setting "
-        f"data_initialized=True. diagnostics={diagnostics}"
-    )
+    bootstrap_runtime.assert_bootstrap_output_invariant(bootstrap_result)
 
 
 def _restart_required_local_artifacts(
@@ -849,170 +679,15 @@ def _restart_required_local_artifacts(
     state: WorkflowState,
     workspace: Workspace,
 ) -> List[Dict[str, str]]:
-    """
-    Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
-
-    These checks intentionally focus on common restart failures on ephemeral local
-    storage (UrbanSim base datastore and ActivitySim mutable inputs).
-    """
-    required: List[Dict[str, str]] = []
-
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    usim_base_fname = get_usim_datastore_fname(settings, io="input")
-    required.append(
-        {
-            "key": "usim_datastore_base_h5",
-            "path": os.path.join(usim_data_dir, usim_base_fname),
-            "reason": "UrbanSim base datastore required for downstream restart inputs",
-        }
+    return restart_runtime.restart_required_local_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        get_usim_datastore_fname_fn=get_usim_datastore_fname,
+        required_asim_config_dirs_fn=required_asim_config_dirs,
+        atlas_static_input_relpaths_fn=atlas_static_input_relpaths,
+        workflow_stage=WorkflowState.Stage,
     )
-
-    current_stage = getattr(state, "current_major_stage", None)
-    region = getattr(getattr(settings, "run", None), "region", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    requires_urbansim_run_locals = current_stage in {
-        None,
-        WorkflowState.Stage.land_use,
-    }
-    if requires_urbansim_run_locals and region and urbansim_cfg is not None:
-        region_id = (
-            getattr(urbansim_cfg, "region_mappings", {})
-            .get("region_to_region_id", {})
-            .get(region)
-        )
-        if region_id:
-            required.extend(
-                [
-                    {
-                        "key": "omx_skims",
-                        "path": os.path.join(
-                            usim_data_dir,
-                            f"skims_mpo_{region_id}.omx",
-                        ),
-                        "reason": "UrbanSim run requires mutable OMX skims in the local workspace",
-                    },
-                    {
-                        "key": "hh_size",
-                        "path": os.path.join(
-                            usim_data_dir,
-                            f"hsize_ct_{region_id}.csv",
-                        ),
-                        "reason": "UrbanSim run requires household-size lookup data in the local workspace",
-                    },
-                    {
-                        "key": "income_rates",
-                        "path": os.path.join(
-                            usim_data_dir,
-                            f"income_rates_{region_id}.csv",
-                        ),
-                        "reason": "UrbanSim run requires income-rate lookup data in the local workspace",
-                    },
-                    {
-                        "key": "relmap",
-                        "path": os.path.join(
-                            usim_data_dir,
-                            f"relmap_{region_id}.csv",
-                        ),
-                        "reason": "UrbanSim run requires relationship-mapping data in the local workspace",
-                    },
-                    {
-                        "key": "schools",
-                        "path": os.path.join(usim_data_dir, "schools_2010.csv"),
-                        "reason": "UrbanSim run requires schools lookup data in the local workspace",
-                    },
-                    {
-                        "key": "school_districts",
-                        "path": os.path.join(
-                            usim_data_dir,
-                            "blocks_school_districts_2010.csv",
-                        ),
-                        "reason": "UrbanSim run requires school-district lookup data in the local workspace",
-                    },
-                ]
-            )
-
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    requires_activitysim_locals = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and (
-            current_stage is None
-            or current_stage
-            in {
-                WorkflowState.Stage.supply_demand_loop,
-                WorkflowState.Stage.activity_demand,
-                WorkflowState.Stage.activity_demand_directly_from_land_use,
-            }
-        )
-    )
-    if requires_activitysim_locals:
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        for filename in ("households.csv", "persons.csv", "land_use.csv"):
-            required.append(
-                {
-                    "key": f"activitysim_input_{filename}",
-                    "path": os.path.join(asim_data_dir, filename),
-                    "reason": "ActivitySim mutable input required on restart",
-                }
-            )
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-        main_configs_dir = (
-            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-            or "configs"
-        )
-        for dirname in required_asim_config_dirs(main_configs_dir):
-            required.append(
-                {
-                    "key": f"activitysim_config_settings_yaml_{dirname}",
-                    "path": os.path.join(asim_configs_dir, dirname, "settings.yaml"),
-                    "reason": (
-                        "ActivitySim mutable config tree required on restart "
-                        f"(config_dir={dirname})"
-                    ),
-                }
-            )
-
-    requires_activitysim_zarr = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and bool(getattr(state, "asim_compiled", False))
-        and current_stage
-        in {
-            WorkflowState.Stage.supply_demand_loop,
-            WorkflowState.Stage.activity_demand,
-            WorkflowState.Stage.activity_demand_directly_from_land_use,
-            WorkflowState.Stage.traffic_assignment,
-        }
-    )
-    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    if requires_activitysim_zarr and callable(get_asim_output_dir):
-        required.append(
-            {
-                "key": "zarr_skims",
-                "path": os.path.join(
-                    get_asim_output_dir(),
-                    "cache",
-                    "skims.zarr",
-                ),
-                "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
-            }
-        )
-
-    requires_atlas_locals = (
-        getattr(model_cfg, "vehicle_ownership", None) == "atlas"
-        and current_stage == WorkflowState.Stage.vehicle_ownership_model
-    )
-    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
-    if requires_atlas_locals and callable(get_atlas_input_dir):
-        atlas_input_dir = get_atlas_input_dir()
-        for relpath in atlas_static_input_relpaths(settings):
-            required.append(
-                {
-                    "key": f"atlas_static::{relpath}",
-                    "path": os.path.join(atlas_input_dir, relpath),
-                    "reason": "ATLAS static input required during vehicle ownership restart",
-                }
-            )
-
-    return required
 
 
 def _find_missing_restart_local_artifacts(
@@ -1021,57 +696,31 @@ def _find_missing_restart_local_artifacts(
     state: WorkflowState,
     workspace: Workspace,
 ) -> List[Dict[str, str]]:
-    missing: List[Dict[str, str]] = []
-    for artifact in _restart_required_local_artifacts(
-        settings=settings, state=state, workspace=workspace
-    ):
-        path = os.path.realpath(artifact["path"])
-        if not os.path.exists(path):
-            missing.append(
-                {
-                    "key": artifact["key"],
-                    "path": path,
-                    "reason": artifact["reason"],
-                }
-            )
-    return missing
+    return restart_runtime.find_missing_restart_local_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        restart_required_local_artifacts_fn=_restart_required_local_artifacts,
+    )
 
 
 def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
-    if not artifacts:
-        return "none"
-    return ", ".join(
-        f"{item.get('key')}:{item.get('path')}" for item in artifacts
-    )
+    return restart_runtime.format_missing_artifact_summary(artifacts)
 
 
 def _resolve_restart_rehydrate_mode(settings: Any) -> str:
-    run_cfg = getattr(settings, "run", None)
-    raw = getattr(run_cfg, "restart_rehydrate_mode", "bundle")
-    mode = str(raw).strip().lower() if raw is not None else "bundle"
-    if mode in {"bundle", "full", "off"}:
-        return mode
-    logger.warning(
-        "Unknown run.restart_rehydrate_mode=%r; defaulting to 'bundle'.",
-        raw,
-    )
-    return "bundle"
+    return restart_runtime.resolve_restart_rehydrate_mode(settings)
 
 
 def _is_restart_strict(settings: Any) -> bool:
-    run_cfg = getattr(settings, "run", None)
-    return bool(getattr(run_cfg, "restart_strict", False))
+    return restart_runtime.is_restart_strict(settings)
 
 
 def _read_archive_run_state_year(state_path: str) -> Optional[int]:
-    if not state_path:
-        return None
-    try:
-        year, *_ = WorkflowState.read_current_stage(state_path)
-    except Exception as exc:
-        logger.warning("Failed reading archive run_state year from %s: %s", state_path, exc)
-        return None
-    return _coerce_int(year)
+    return restart_runtime.read_archive_run_state_year(
+        state_path,
+        read_current_stage_fn=WorkflowState.read_current_stage,
+    )
 
 
 def _enforce_resume_rewind_guardrail(
@@ -1080,22 +729,12 @@ def _enforce_resume_rewind_guardrail(
     archive_state_path: str,
     allow_rewind_resume: bool,
 ) -> None:
-    resume_year = _coerce_int(getattr(state, "current_year", None))
-    archive_year = _read_archive_run_state_year(archive_state_path)
-    if resume_year is None or archive_year is None:
-        return
-    if resume_year >= archive_year:
-        return
-
-    message = (
-        "Refusing rewind resume: requested resume year "
-        f"{resume_year} is lower than archive run_state year {archive_year} "
-        f"(archive={os.path.realpath(archive_state_path)})."
+    restart_runtime.enforce_resume_rewind_guardrail(
+        state=state,
+        archive_state_path=archive_state_path,
+        allow_rewind_resume=allow_rewind_resume,
+        read_archive_run_state_year_fn=_read_archive_run_state_year,
     )
-    if allow_rewind_resume:
-        logger.warning("%s Proceeding because --allow-rewind-resume was set.", message)
-        return
-    raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
 def _map_local_path_to_archive(
@@ -1104,16 +743,11 @@ def _map_local_path_to_archive(
     local_run_dir: str,
     archive_run_dir: str,
 ) -> Optional[str]:
-    local_abs = os.path.realpath(local_path)
-    local_root = os.path.realpath(local_run_dir)
-    archive_root = os.path.realpath(archive_run_dir)
-    try:
-        if os.path.commonpath([local_abs, local_root]) != local_root:
-            return None
-    except ValueError:
-        return None
-    rel = os.path.relpath(local_abs, local_root)
-    return os.path.join(archive_root, rel)
+    return restart_runtime.map_local_path_to_archive(
+        local_path=local_path,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
 
 
 def _copy_archive_entry_preserve_existing(
@@ -1121,37 +755,10 @@ def _copy_archive_entry_preserve_existing(
     archive_path: str,
     local_path: str,
 ) -> Tuple[int, int]:
-    """
-    Copy an archive entry to local without overwriting existing files.
-
-    Returns
-    -------
-    tuple(int, int)
-        Number of copied files and number of skipped existing files.
-    """
-    copied = 0
-    skipped_existing = 0
-
-    if os.path.isdir(archive_path):
-        for root, _, files in os.walk(archive_path):
-            rel_root = os.path.relpath(root, archive_path)
-            dest_root = local_path if rel_root == "." else os.path.join(local_path, rel_root)
-            os.makedirs(dest_root, exist_ok=True)
-            for filename in files:
-                src = os.path.join(root, filename)
-                dest = os.path.join(dest_root, filename)
-                if os.path.exists(dest):
-                    skipped_existing += 1
-                    continue
-                shutil.copy2(src, dest)
-                copied += 1
-        return copied, skipped_existing
-
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    if os.path.exists(local_path):
-        return 0, 1
-    shutil.copy2(archive_path, local_path)
-    return 1, 0
+    return restart_runtime.copy_archive_entry_preserve_existing(
+        archive_path=archive_path,
+        local_path=local_path,
+    )
 
 
 def _rehydrate_missing_local_artifacts_from_archive(
@@ -1160,90 +767,13 @@ def _rehydrate_missing_local_artifacts_from_archive(
     local_run_dir: str,
     archive_run_dir: str,
 ) -> Dict[str, int]:
-    """
-    Rehydrate missing restart artifacts from archive into node-local workspace.
-
-    This is idempotent: existing local files are preserved and never overwritten.
-    """
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    for artifact in missing_artifacts:
-        local_path = os.path.realpath(artifact["path"])
-        key = artifact.get("key", "unknown")
-        kind = artifact.get("kind", "file")
-
-        if os.path.exists(local_path) and not (kind == "dir" and os.path.isdir(local_path)):
-            summary["skipped_existing"] += 1
-            logger.info(
-                "[RestartRehydrate] Skip existing local artifact key=%s path=%s",
-                key,
-                local_path,
-            )
-            continue
-
-        archive_path = _map_local_path_to_archive(
-            local_path=local_path,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
-        if archive_path is None:
-            summary["skipped_unmapped"] += 1
-            logger.warning(
-                "[RestartRehydrate] Cannot map local path to archive key=%s path=%s",
-                key,
-                local_path,
-            )
-            continue
-        archive_path = os.path.realpath(archive_path)
-        if not os.path.exists(archive_path):
-            summary["skipped_missing_archive"] += 1
-            logger.warning(
-                "[RestartRehydrate] Archive source missing key=%s archive_path=%s",
-                key,
-                archive_path,
-            )
-            continue
-
-        try:
-            copied, skipped_existing = _copy_archive_entry_preserve_existing(
-                archive_path=archive_path,
-                local_path=local_path,
-            )
-            summary["copied"] += copied
-            summary["skipped_existing"] += skipped_existing
-            logger.info(
-                "[RestartRehydrate] key=%s copied=%s skipped_existing=%s source=%s dest=%s",
-                key,
-                copied,
-                skipped_existing,
-                archive_path,
-                local_path,
-            )
-        except Exception as exc:
-            summary["copy_errors"] += 1
-            logger.warning(
-                "[RestartRehydrate] Failed copy key=%s source=%s dest=%s error=%s",
-                key,
-                archive_path,
-                local_path,
-                exc,
-            )
-
-    logger.info(
-        "[RestartRehydrate] Summary copied=%s skipped_existing=%s "
-        "skipped_missing_archive=%s skipped_unmapped=%s copy_errors=%s",
-        summary["copied"],
-        summary["skipped_existing"],
-        summary["skipped_missing_archive"],
-        summary["skipped_unmapped"],
-        summary["copy_errors"],
+    return restart_runtime.rehydrate_missing_local_artifacts_from_archive(
+        missing_artifacts=missing_artifacts,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        map_local_path_to_archive_fn=_map_local_path_to_archive,
+        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
     )
-    return summary
 
 
 def _rehydrate_full_local_run_from_archive(
@@ -1251,38 +781,11 @@ def _rehydrate_full_local_run_from_archive(
     local_run_dir: str,
     archive_run_dir: str,
 ) -> Dict[str, int]:
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    archive_root = os.path.realpath(archive_run_dir)
-    if not os.path.exists(archive_root):
-        summary["skipped_missing_archive"] = 1
-        logger.warning(
-            "[RestartRehydrate] Full mode archive root missing: %s",
-            archive_root,
-        )
-        return summary
-
-    try:
-        copied, skipped_existing = _copy_archive_entry_preserve_existing(
-            archive_path=archive_root,
-            local_path=os.path.realpath(local_run_dir),
-        )
-        summary["copied"] = copied
-        summary["skipped_existing"] = skipped_existing
-    except Exception as exc:
-        summary["copy_errors"] = 1
-        logger.warning(
-            "[RestartRehydrate] Full mode copy failed source=%s dest=%s error=%s",
-            archive_root,
-            os.path.realpath(local_run_dir),
-            exc,
-        )
-    return summary
+    return restart_runtime.rehydrate_full_local_run_from_archive(
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
+    )
 
 
 def _rehydrate_bundle_local_artifacts_from_archive(
@@ -1291,25 +794,12 @@ def _rehydrate_bundle_local_artifacts_from_archive(
     local_run_dir: str,
     archive_run_dir: str,
 ) -> Dict[str, int]:
-    bundle_artifacts = manifest_entries_to_local_artifacts(
-        manifest=bundle_manifest,
-        local_run_dir=local_run_dir,
-    )
-    if not bundle_artifacts:
-        logger.warning(
-            "[RestartRehydrate] Bundle mode found no manifest artifacts to hydrate."
-        )
-        return {
-            "copied": 0,
-            "skipped_existing": 0,
-            "skipped_missing_archive": 0,
-            "skipped_unmapped": 0,
-            "copy_errors": 0,
-        }
-    return _rehydrate_missing_local_artifacts_from_archive(
-        missing_artifacts=bundle_artifacts,
+    return restart_runtime.rehydrate_bundle_local_artifacts_from_archive(
+        bundle_manifest=bundle_manifest,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
+        manifest_entries_to_local_artifacts_fn=manifest_entries_to_local_artifacts,
+        rehydrate_missing_local_artifacts_fn=_rehydrate_missing_local_artifacts_from_archive,
     )
 
 
@@ -1319,14 +809,7 @@ def _log_resume_doctor_check(
     ok: bool,
     detail: str,
 ) -> None:
-    status = "ok" if ok else "missing"
-    log_fn = logger.info if ok else logger.warning
-    log_fn(
-        "[ResumeDoctor] check=%s status=%s %s",
-        check,
-        status,
-        detail,
-    )
+    restart_runtime.log_resume_doctor_check(check=check, ok=ok, detail=detail)
 
 
 def _run_resume_doctor_diagnostics(
@@ -1341,143 +824,22 @@ def _run_resume_doctor_diagnostics(
     restart_missing_artifacts_initial: List[Dict[str, str]],
     restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
 ) -> None:
-    """
-    Emit startup restart diagnostics for restart readiness.
-
-    This function is logging-only and intentionally does not mutate behavior.
-    """
-    degraded_checks: List[str] = []
-
-    def record(check: str, ok: bool, detail: str, *, required: bool = True) -> None:
-        _log_resume_doctor_check(check=check, ok=ok, detail=detail)
-        if required and not ok:
-            degraded_checks.append(check)
-
-    logger.info(
-        "[ResumeDoctor] start year=%s iteration=%s local_run_dir=%s archive_run_dir=%s",
-        state.current_year,
-        state.current_inner_iter,
-        local_run_dir,
-        archive_run_dir,
+    restart_runtime.run_resume_doctor_diagnostics(
+        state=state,
+        workspace=workspace,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        archive_state_path=archive_state_path,
+        local_state_path=local_state_path,
+        local_consist_db_path=local_consist_db_path,
+        restart_missing_artifacts_initial=restart_missing_artifacts_initial,
+        restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+        snapshot_latest_dir_fn=snapshot_latest_dir,
+        build_manifest_path_fn=build_manifest_path,
+        map_local_path_to_archive_fn=_map_local_path_to_archive,
+        format_missing_artifact_summary_fn=_format_missing_artifact_summary,
+        log_resume_doctor_check_fn=_log_resume_doctor_check,
     )
-
-    archive_state_real = os.path.realpath(archive_state_path)
-    local_state_real = os.path.realpath(local_state_path)
-    record(
-        "archive_run_state",
-        os.path.exists(archive_state_real),
-        f"path={archive_state_real}",
-    )
-    record(
-        "local_run_state_mirror",
-        os.path.exists(local_state_real),
-        f"path={local_state_real}",
-    )
-
-    if local_consist_db_path:
-        local_consist_db_real = os.path.realpath(local_consist_db_path)
-        record(
-            "local_consist_db",
-            os.path.exists(local_consist_db_real),
-            f"path={local_consist_db_real}",
-        )
-        latest_snapshot_db = (
-            snapshot_latest_dir(archive_run_dir) / Path(local_consist_db_real).name
-        )
-        latest_snapshot_real = os.path.realpath(str(latest_snapshot_db))
-        record(
-            "archive_latest_consist_db_snapshot",
-            os.path.exists(latest_snapshot_real),
-            f"path={latest_snapshot_real}",
-        )
-    else:
-        record(
-            "local_consist_db",
-            True,
-            "path=none reason=disabled_or_unconfigured",
-            required=False,
-        )
-        record(
-            "archive_latest_consist_db_snapshot",
-            True,
-            "path=none reason=disabled_or_unconfigured",
-            required=False,
-        )
-
-    if state.data_initialized:
-        missing_summary = _format_missing_artifact_summary(
-            restart_missing_artifacts_after_rehydrate
-        )
-        record(
-            "required_restart_local_artifacts",
-            not restart_missing_artifacts_after_rehydrate,
-            "data_initialized=true "
-            f"initial_missing={len(restart_missing_artifacts_initial)} "
-            f"remaining_missing={len(restart_missing_artifacts_after_rehydrate)} "
-            f"missing={missing_summary}",
-        )
-    else:
-        record(
-            "required_restart_local_artifacts",
-            True,
-            "data_initialized=false reason=bootstrap_required",
-            required=False,
-        )
-
-    year = state.current_year
-    iteration = state.current_inner_iter
-    local_manifest_path: Optional[Path] = None
-    try:
-        local_manifest_path = build_manifest_path(
-            workspace=workspace,
-            year=int(year),
-            iteration=int(iteration),
-        )
-    except Exception as exc:
-        record(
-            "supply_demand_manifest_local",
-            False,
-            f"year={year} iteration={iteration} error={exc}",
-        )
-        record(
-            "supply_demand_manifest_archive_mapped",
-            False,
-            f"year={year} iteration={iteration} error=local_manifest_path_unavailable",
-        )
-
-    if local_manifest_path is not None:
-        local_manifest_real = os.path.realpath(str(local_manifest_path))
-        record(
-            "supply_demand_manifest_local",
-            os.path.exists(local_manifest_real),
-            f"year={year} iteration={iteration} path={local_manifest_real}",
-        )
-        archive_manifest_path = _map_local_path_to_archive(
-            local_path=local_manifest_real,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
-        if archive_manifest_path is None:
-            record(
-                "supply_demand_manifest_archive_mapped",
-                False,
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path=unmapped",
-            )
-        else:
-            archive_manifest_real = os.path.realpath(archive_manifest_path)
-            record(
-                "supply_demand_manifest_archive_mapped",
-                os.path.exists(archive_manifest_real),
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path={archive_manifest_real}",
-            )
-
-    if degraded_checks:
-        logger.warning(
-            "[ResumeDoctor] summary status=degraded reason=missing_checks:%s",
-            ",".join(degraded_checks),
-        )
-    else:
-        logger.info("[ResumeDoctor] summary status=ready reason=all_checks_ok")
 
 
 def main():
