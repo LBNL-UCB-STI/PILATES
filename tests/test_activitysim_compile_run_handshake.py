@@ -13,7 +13,6 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
-from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -623,9 +622,10 @@ def test_activitysim_run_stages_external_zarr_input_into_runtime_cache(
 
     captured = {}
 
-    def _fake_run(store, _workspace):
-        captured["store"] = store
-        return RecordStore()
+    def _fake_run(inputs, _workspace, *, extra_inputs=None):
+        captured["inputs"] = inputs
+        captured["extra_inputs"] = dict(extra_inputs or {})
+        return ActivitySimRunOutputs(output_dir=asim_output_dir)
 
     monkeypatch.setattr(runner, "_run", _fake_run)
 
@@ -638,4 +638,5 @@ def test_activitysim_run_stages_external_zarr_input_into_runtime_cache(
     staged_zarr = asim_output_dir / "cache" / "skims.zarr"
     assert staged_zarr.is_dir()
     assert (staged_zarr / ".zarray").read_text() == "{}"
-    assert captured["store"].to_mapping()[ZARR_SKIMS] == str(staged_zarr)
+    assert captured["inputs"] is preprocess_outputs
+    assert captured["extra_inputs"][ZARR_SKIMS] == str(staged_zarr)

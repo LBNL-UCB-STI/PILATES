@@ -7,6 +7,7 @@ import pytest
 
 from pilates.activitysim.outputs import (
     ActivitySimCompileOutputs,
+    ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
@@ -255,7 +256,7 @@ def test_activitysim_compile_step_rejects_wrong_upstream_type(tmp_path: Path) ->
         )
 
 
-def test_activitysim_postprocess_uses_metadata_aware_record_store(
+def test_activitysim_postprocess_forwards_typed_run_outputs(
     tmp_path: Path,
 ) -> None:
     raw_output_path = tmp_path / "output" / "households.parquet"
@@ -292,7 +293,10 @@ def test_activitysim_postprocess_uses_metadata_aware_record_store(
             captured["raw_outputs"] = raw_outputs
             captured["workspace"] = workspace_arg
             captured["model_run_hash"] = model_run_hash
-            return RecordStore()
+            return ActivitySimPostprocessOutputs(
+                usim_datastore_h5=None,
+                asim_output_dir=tmp_path / "output",
+            )
 
     postprocessor = _InspectingPostprocessor("activitysim_postprocess", state)
     outputs = postprocessor.postprocess(

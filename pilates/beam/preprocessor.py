@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
 import re
 
@@ -484,7 +485,16 @@ class BeamPreprocessor(GenericPreprocessor):
             beam_preprocess_inputs=beam_preprocess_inputs,
         )
         record_store = self._preprocess(workspace, input_store)
-        return BeamPreprocessOutputs.from_record_store(record_store, workspace)
+        prepared_inputs: Dict[str, Path] = {}
+        for key, value in record_store.to_mapping().items():
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            prepared_inputs[key] = Path(path)
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+            prepared_inputs=prepared_inputs,
+        )
 
     def copy_data_to_mutable_location(
         self, settings: PilatesConfig, output_dir: str

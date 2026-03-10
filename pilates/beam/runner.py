@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 from typing import List, Optional, Dict, Any, Mapping
 
@@ -588,15 +589,31 @@ class BeamRunner(GenericRunner):
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = inputs.to_record_store()
+        input_store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in inputs._iter_record_items()
+            ]
+        )
         _append_artifact_mapping_records(
             input_store,
             extra_inputs,
             description_prefix="BEAM run extra input",
         )
-        return BeamRunOutputs.from_record_store(
-            self._run(input_store, workspace),
-            workspace,
+        output_store = self._run(input_store, workspace)
+        raw_outputs: Dict[str, Path] = {}
+        for key, value in output_store.to_mapping().items():
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            raw_outputs[key] = Path(path)
+        return BeamRunOutputs(
+            beam_output_dir=Path(workspace.get_beam_output_dir()),
+            raw_outputs=raw_outputs,
         )
 
 
@@ -779,12 +796,25 @@ class BeamFullSkimRunner(GenericRunner):
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
-        input_store = inputs.to_record_store()
+        input_store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in inputs._iter_record_items()
+            ]
+        )
         _append_artifact_mapping_records(
             input_store,
             previous_beam_outputs,
             description_prefix="BEAM full-skim warm-start input",
         )
-        return BeamFullSkimOutputs.from_record_store(
-            self._run(input_store, workspace), workspace
+        output_store = self._run(input_store, workspace)
+        full_skims_path = artifact_to_path(
+            output_store.to_mapping().get(BEAM_FULL_SKIMS), workspace
         )
+        if full_skims_path is None:
+            raise ValueError("Missing beam_full_skims in run outputs.")
+        return BeamFullSkimOutputs(full_skims=Path(full_skims_path))

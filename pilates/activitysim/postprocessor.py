@@ -1,6 +1,7 @@
 import logging
 import re
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import zipfile
@@ -10,7 +11,7 @@ from typing import Tuple, Optional, Dict, Any
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivitySimRunOutputs
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
@@ -698,15 +699,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 "ActivitysimPostprocessor.postprocess expects ActivitySimRunOutputs"
             )
         self.state.set_sub_stage_progress("postprocessor")
-        output_store = self._postprocess(raw_outputs, workspace, model_run_hash)
-        return ActivitySimPostprocessOutputs.from_record_store(output_store, workspace)
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     def _postprocess(
         self,
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
+    ) -> ActivitySimPostprocessOutputs:
         """
         Consolidates all postprocessing steps for ActivitySim.
         This involves taking the raw outputs from the ActivitySim run,
@@ -719,7 +719,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: Postprocessed output data.
+            ActivitySimPostprocessOutputs: Postprocessed output data.
         """
         settings = self.state.full_settings
         year = self.state.year
@@ -752,7 +752,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if not os.path.exists(os.path.abspath(inputs_folder_path)):
             os.makedirs(inputs_folder_path, exist_ok=True)
 
-        processed_records = []
+        processed_outputs: Dict[str, str] = {}
+        processed_output_hashes: Dict[str, str] = {}
+        usim_datastore_h5: Optional[str] = None
+        usim_datastore_key: Optional[str] = None
 
         def _build_content_hash_map() -> Dict[str, str]:
             hash_map: Dict[str, str] = {}
@@ -797,16 +800,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 shutil.copy(source_path, target_path)
                 content_hash = _resolve_content_hash(source_path)
 
-                processed_records.append(
-                    FileRecord(
-                        file_path=target_path,
-                        year=self.state.current_year,
-                        description=f"Archived ActivitySim input: {input_file}",
-                        short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
-                        iteration=self.state.current_inner_iter,
-                        content_hash=content_hash,
-                    )
-                )
+                archived_key = f"asim_input_{input_file.replace('.', '_')}_archived"
+                processed_outputs[archived_key] = target_path
+                if content_hash:
+                    processed_output_hashes[archived_key] = content_hash
                 logger.info(f"Archived ActivitySim input: {input_file}")
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
@@ -828,16 +825,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 shutil.copy2(zarr_source_path, zarr_target_path)
             content_hash = _resolve_content_hash(zarr_source_path)
 
-            processed_records.append(
-                FileRecord(
-                    file_path=zarr_target_path,
-                    year=self.state.current_year,
-                    description="Archived ActivitySim input: skims.zarr (snapshot)",
-                    short_name="asim_input_skims_zarr_archived",
-                    iteration=self.state.current_inner_iter,
-                    content_hash=content_hash,
-                )
-            )
+            processed_outputs["asim_input_skims_zarr_archived"] = zarr_target_path
+            if content_hash:
+                processed_output_hashes["asim_input_skims_zarr_archived"] = content_hash
             logger.info("Archived ActivitySim input: skims.zarr")
         else:
             logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
@@ -879,7 +869,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
             )
             if usim_record:
-                processed_records.append(usim_record)
+                usim_datastore_h5 = next_usim_input_path
+                usim_datastore_key = getattr(usim_record, "short_name", None)
 
         # Record raw outputs as inputs to this post-processing run
         for short_name, path in raw_outputs.raw_outputs.items():
@@ -900,17 +891,16 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 continue
             shutil.move(source, target)
             content_hash = _resolve_content_hash(source)
-            processed_records.append(
-                FileRecord(
-                    file_path=target,
-                    year=self.state.forecast_year,
-                    description=f"ActivitySim output file: {clean_name}",
-                    short_name=output_key,
-                    iteration=self.state.current_inner_iter,
-                    content_hash=content_hash,
-                )
-            )
+            processed_outputs[output_key] = target
+            if content_hash:
+                processed_output_hashes[output_key] = content_hash
 
-        # Return a new RecordStore with the paths to the newly created/processed files.
-        processed_store = RecordStore(recordList=processed_records)
-        return processed_store
+        return ActivitySimPostprocessOutputs(
+            usim_datastore_h5=Path(usim_datastore_h5) if usim_datastore_h5 else None,
+            asim_output_dir=Path(workspace.get_asim_output_dir()),
+            processed_outputs={
+                key: Path(path) for key, path in processed_outputs.items()
+            },
+            processed_output_hashes=processed_output_hashes,
+            usim_datastore_key=usim_datastore_key,
+        )

@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import time
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 
 import numpy as np
@@ -22,6 +23,7 @@ except Exception:
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -3867,7 +3869,37 @@ class BeamPostprocessor(GenericPostprocessor):
         if not isinstance(raw_outputs, BeamRunOutputs):
             raise TypeError("BeamPostprocessor.postprocess expects BeamRunOutputs")
         self.state.set_sub_stage_progress("postprocessor")
-        return BeamPostprocessOutputs.from_record_store(
-            self._postprocess(raw_outputs.to_record_store(), workspace, model_run_hash),
-            workspace,
+        input_store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in raw_outputs._iter_record_items()
+            ]
+        )
+        output_store = self._postprocess(input_store, workspace, model_run_hash)
+        mapping = output_store.to_mapping()
+
+        zarr_path = artifact_to_path(mapping.get("zarr_skims"), workspace)
+        final_omx_path = artifact_to_path(mapping.get("final_skims_omx"), workspace)
+
+        split_events: Dict[str, Path] = {}
+        split_event_links: Dict[str, Path] = {}
+        for key, value in mapping.items():
+            if key.startswith("events_parquet_") and "_type_" in key:
+                path = artifact_to_path(value, workspace)
+                if path is not None:
+                    split_events[key] = Path(path)
+            elif key.startswith("path_traversal_links_"):
+                path = artifact_to_path(value, workspace)
+                if path is not None:
+                    split_event_links[key] = Path(path)
+
+        return BeamPostprocessOutputs(
+            zarr_skims=Path(zarr_path) if zarr_path is not None else None,
+            final_skims_omx=Path(final_omx_path) if final_omx_path is not None else None,
+            split_events=split_events,
+            split_event_links=split_event_links,
         )
