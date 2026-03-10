@@ -85,6 +85,25 @@ def _infer_phase(step_name: str) -> Optional[str]:
     return step_name.rsplit("_", 1)[-1] or None
 
 
+def _resolved_step_epoch_identity(
+    *,
+    step: StepRef,
+    state: Any,
+    default_iteration: int,
+) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    model_name = step.model
+    if model_name is None:
+        step_meta = getattr(step.step_func, "__consist_step__", None)
+        raw_model = getattr(step_meta, "model", None)
+        if raw_model is not None:
+            model_name = str(raw_model)
+    year = step.year
+    if year is None:
+        year = getattr(state, "year", None)
+    iteration = step.iteration if step.iteration is not None else default_iteration
+    return model_name, year, iteration
+
+
 def _build_step_run_kwargs(
     *,
     step: StepRef,
@@ -401,6 +420,11 @@ def run_manifested_steps(
 
     for raw_step in steps:
         spec = raw_step
+        model_name, resolved_year, resolved_iteration = _resolved_step_epoch_identity(
+            step=spec,
+            state=state,
+            default_iteration=iteration,
+        )
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
             outputs = outputs_holder.get_attribute(spec.name)
@@ -417,6 +441,14 @@ def run_manifested_steps(
                     workspace=workspace,
                     coupler=coupler,
                     outputs_holder=outputs_holder,
+                )
+            remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
+            if callable(remember_restored_run_id):
+                remember_restored_run_id(
+                    model_name=model_name,
+                    year=resolved_year,
+                    iteration=resolved_iteration,
+                    run_id=manifest.get(spec.name, {}).get("run_id"),
                 )
             continue
 
@@ -474,6 +506,7 @@ def run_manifested_steps(
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
             "cache_hit": bool(getattr(result, "cache_hit", False)),
+            "run_id": getattr(getattr(result, "run", None), "id", None),
             "outputs": serialize_step_outputs(outputs),
         }
         save_step_manifest(manifest, manifest_config.path)

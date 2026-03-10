@@ -311,7 +311,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (LINKSTATS, BEAM_PLANS_OUT)
+    declared_outputs: ClassVar[Tuple[str, ...]] = (FINAL_SKIMS_OMX, ZARR_SKIMS)
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "zarr_skims",
         "final_skims_omx",

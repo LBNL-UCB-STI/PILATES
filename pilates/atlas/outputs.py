@@ -64,6 +64,15 @@ class AtlasRunOutputs(StepOutputsBase):
         for key, path in self.raw_outputs.items():
             yield key, path, f"ATLAS raw output: {key}"
 
+    def validate(self, context: Optional[Any] = None) -> None:
+        super().validate(context)
+        has_households = any(key.startswith("householdv_") for key in self.raw_outputs)
+        has_vehicles = any(key.startswith("vehicles_") for key in self.raw_outputs)
+        if not has_households or not has_vehicles:
+            raise AssertionError(
+                "AtlasRunOutputs must include current-year householdv_* and vehicles_* outputs."
+            )
+
 
 @dataclass
 class AtlasPostprocessOutputs(StepOutputsBase):
@@ -94,3 +103,14 @@ class AtlasPostprocessOutputs(StepOutputsBase):
         """
         for key, path in self.processed_outputs.items():
             yield key, path, f"ATLAS postprocess output: {key}"
+
+    def validate(self, context: Optional[Any] = None) -> None:
+        super().validate(context)
+        if self.usim_datastore_h5 is None:
+            raise AssertionError(
+                "AtlasPostprocessOutputs must include the updated UrbanSim datastore H5."
+            )
+        if "atlas_vehicles2_output" not in self.processed_outputs:
+            raise AssertionError(
+                "AtlasPostprocessOutputs must include atlas_vehicles2_output."
+            )

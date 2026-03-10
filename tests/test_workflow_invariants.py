@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from consist import define_step
+import run as run_module
 import yaml
 
 from pilates.activitysim.outputs import (
@@ -415,6 +417,69 @@ def test_manifest_restore_skips_run_and_rehydrates_coupler(tmp_path):
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     assert coupler.get(ASIM_PERSONS_IN) is not None
     assert coupler.get(ASIM_LAND_USE_IN) is not None
+
+
+def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
+    workspace = _ManifestWorkspace(tmp_path)
+    run_path = tmp_path / "run" / "households.parquet"
+    _write_file(run_path)
+    manifest_path = tmp_path / "manifest_lineage.yaml"
+    manifest = {
+        "activitysim_run": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "run_id": "asim-restored-run",
+            "outputs": serialize_step_outputs(
+                ActivitySimRunOutputs(
+                    output_dir=tmp_path / "run",
+                    raw_outputs={"households_asim_out_temp": run_path},
+                )
+            ),
+        }
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    @define_step(model="activitysim_run")
+    def _manifest_step(settings, state, workspace):
+        raise AssertionError("manifest restore should skip execution")
+
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                cache_hit=False, run=SimpleNamespace(id="beam-live-run")
+            )
+
+    underlying = _UnderlyingScenario()
+    proxy = run_module._EpochTaggingScenarioProxy(
+        underlying,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    state = SimpleNamespace(year=2030, forecast_year=2030, iteration=1)
+
+    run_manifested_steps(
+        stage_name="activity_demand_run",
+        steps=[StepRef(name="activitysim_run", step_func=_manifest_step)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=proxy,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2030_i1",
+        iteration=1,
+    )
+
+    proxy.run(model="beam_run", year=2030, iteration=1)
+
+    assert underlying.calls[0]["parent_run_id"] == "asim-restored-run"
 
 
 def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):

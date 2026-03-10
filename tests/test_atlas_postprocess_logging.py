@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.workflows import steps
@@ -181,7 +183,9 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
     )
 
     postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
-    monkeypatch.setattr(postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: True
+    )
 
     postprocessor._postprocess(
         AtlasRunOutputs(
@@ -204,3 +208,47 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
         and str(call["path"]).endswith("vehicles_output.RData")
         for call in calls
     )
+
+
+def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
+    usim_dir = tmp_path / "urbansim" / "data"
+    atlas_output_dir = tmp_path / "atlas" / "atlas_output"
+    usim_dir.mkdir(parents=True)
+    atlas_output_dir.mkdir(parents=True)
+
+    usim_h5 = usim_dir / "model_data_2023.h5"
+    usim_h5.write_text("h5")
+    hh_csv = atlas_output_dir / "householdv_2023.csv"
+    veh_csv = atlas_output_dir / "vehicles_2023.csv"
+    hh_csv.write_text("household_id,nvehicles\n1,1\n")
+    veh_csv.write_text("bodytype,pred_power,modelyear\nsedan,gas,2020\n")
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(
+            urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
+        ),
+        forecast_year=2023,
+        current_year=2023,
+        is_start_year=lambda: False,
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(usim_dir),
+        get_atlas_output_dir=lambda: str(atlas_output_dir),
+        get_atlas_mutable_input_dir=lambda: str(tmp_path / "atlas" / "atlas_input"),
+    )
+    postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
+    monkeypatch.setattr(
+        postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: False
+    )
+
+    with pytest.raises(RuntimeError, match="failed to update UrbanSim HDF5"):
+        postprocessor._postprocess(
+            AtlasRunOutputs(
+                atlas_output_dir=atlas_output_dir,
+                raw_outputs={
+                    "householdv_2023": hh_csv,
+                    "vehicles_2023": veh_csv,
+                },
+            ),
+            workspace,
+        )

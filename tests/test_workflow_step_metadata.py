@@ -15,6 +15,7 @@ from pilates.workflows.orchestration import StepRef, WorkflowStage
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
+    make_beam_postprocess_step,
     make_activitysim_preprocess_step,
     make_urbansim_run_step,
 )
@@ -532,6 +533,24 @@ def test_epoch_tagging_proxy_sets_activitysim_parent_to_previous_beam_iteration(
     assert activitysim_call["parent_run_id"] == "beam-2030-i0"
 
 
+def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar():
+    scenario = _FakeEpochTaggingScenario(
+        run_ids=["beam-2030-i0", "beam-fullskim-2030-i0", "asim-2030-i1"]
+    )
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(model="beam_run", year=2030, iteration=0)
+    proxy.run(model="beam_full_skim", year=2030, iteration=0)
+    proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    activitysim_call = scenario.calls[2]
+    assert activitysim_call["parent_run_id"] == "beam-2030-i0"
+
+
 @pytest.mark.parametrize(
     ("model", "year", "iteration"),
     [
@@ -551,3 +570,13 @@ def test_epoch_tagging_proxy_missing_parent_does_not_raise(model, year, iteratio
 
     call = scenario.calls[0]
     assert "parent_run_id" not in call
+
+
+def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    step = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    assert meta.outputs == ["final_skims_omx", "zarr_skims"]

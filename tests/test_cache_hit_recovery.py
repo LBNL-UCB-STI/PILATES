@@ -710,6 +710,45 @@ def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypat
     assert coupler.get("householdv_2018") is None
 
 
+def test_recover_atlas_run_outputs_requires_canonical_current_year_files(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    householdv_path = Path(workspace.get_atlas_output_dir()) / "householdv_2018.csv"
+    _write_file(householdv_path)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "atlas-run-id"
+            return {"householdv_2018": str(householdv_path)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    holder.atlas_preprocess = object()
+    step_func = make_atlas_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
+        step_name="atlas_run",
+        step_func=step_func,
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs=None,
+        run_id="atlas-run-id",
+        publish_outputs=True,
+    )
+
+    assert outputs is None
+    assert holder.atlas_run is None
+
+
 def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     tmp_path, monkeypatch
 ):
@@ -764,6 +803,50 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     assert coupler.get(USIM_H5_UPDATED) is None
 
 
+def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    updated_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_2018.h5"
+    _write_file(updated_h5)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "atlas-post-id"
+            return {USIM_H5_UPDATED: str(updated_h5)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    holder.atlas_run = object()
+    step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
+        step_name="atlas_postprocess",
+        step_func=step_func,
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=2017,
+            forecast_year=2018,
+            iteration=0,
+            is_start_year=lambda: False,
+        ),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs=None,
+        run_id="atlas-post-id",
+        publish_outputs=True,
+    )
+
+    assert outputs is None
+    assert holder.atlas_postprocess is None
+
+
 def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
     workspace = DummyWorkspace(tmp_path)
     full_skims = Path(workspace.get_beam_output_dir()) / "full-skims.omx"
@@ -795,6 +878,53 @@ def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monk
     assert holder.beam_full_skim is not None
     assert holder.beam_full_skim.full_skims == full_skims
     assert coupler.get(BEAM_FULL_SKIMS) is not None
+
+
+def test_recover_activitysim_postprocess_outputs_without_urbansim_settings(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = asim_dir / "year-2017-iteration-0"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    plans = iter_dir / "beam_plans.parquet"
+    for path in (households, persons, plans):
+        _write_file(path)
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    step_func = make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
+        step_name="activitysim_postprocess",
+        step_func=step_func,
+        holder=holder,
+        workspace=workspace,
+        coupler=coupler,
+        settings=SimpleNamespace(urbansim=None),
+        state=SimpleNamespace(
+            year=2017,
+            forecast_year=2018,
+            iteration=0,
+            is_start_year=lambda: False,
+        ),
+        cached_outputs={
+            "households_asim_out": str(households),
+            "persons_asim_out": str(persons),
+            "beam_plans_asim_out": str(plans),
+        },
+    )
+
+    assert outputs is not None
+    assert holder.activitysim_postprocess is not None
+    assert (
+        holder.activitysim_postprocess.processed_outputs["households_asim_out"]
+        == households
+    )
+    assert holder.activitysim_postprocess.processed_outputs["persons_asim_out"] == persons
+    assert (
+        holder.activitysim_postprocess.processed_outputs["beam_plans_asim_out"]
+        == plans
+    )
+    assert holder.activitysim_postprocess.usim_datastore_h5 is None
 
 
 def test_run_workflow_cache_hit_uses_output_replayer(tmp_path):

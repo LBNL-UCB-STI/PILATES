@@ -574,24 +574,24 @@ def _recover_activitysim_postprocess_outputs(
                 processed_output_hashes[short_name] = content_hash
 
     usim_path = None
-    if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
-        usim_path = _existing_artifact_path(step_inputs[USIM_DATASTORE_BASE_H5], workspace)
+    if step_inputs and USIM_H5_UPDATED in step_inputs:
+        usim_path = _existing_artifact_path(step_inputs[USIM_H5_UPDATED], workspace)
     if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
         usim_path = _existing_artifact_path(
             step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
         )
+    if not usim_path and step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
+        usim_path = _existing_artifact_path(
+            step_inputs[USIM_DATASTORE_BASE_H5], workspace
+        )
     if not usim_path:
         urbansim_settings = settings.urbansim
-        if urbansim_settings is None:
-            return None
-        region_id = urbansim_settings.region_id
-        if not region_id:
-            region_map = urbansim_settings.region_mappings.get("region_to_region_id", {})
-            region_id = region_map.get(settings.run.region)
-        if region_id:
+        if urbansim_settings is not None:
             usim_path = os.path.join(
                 workspace.get_usim_mutable_data_dir(),
-                urbansim_settings.input_file_template.format(region_id=region_id),
+                urbansim_settings.output_file_template.format(
+                    year=state.forecast_year
+                ),
             )
     usim_existing = _existing_local_path(usim_path, workspace)
     if not processed_outputs and not usim_existing:

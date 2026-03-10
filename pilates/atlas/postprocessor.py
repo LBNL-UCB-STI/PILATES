@@ -204,9 +204,13 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
         # Perform the update
-        self.atlas_update_h5_vehicle(
+        update_succeeded = self.atlas_update_h5_vehicle(
             settings, output_year, usim_h5_file, str(atlas_hh_path)
         )
+        if not update_succeeded:
+            raise RuntimeError(
+                "ATLAS postprocess failed to update UrbanSim HDF5 with vehicle ownership"
+            )
         logger.info(
             "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
         )
@@ -272,7 +276,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         output_year: int,
         h5_file_path: str,
         household_v_csv_path: str,
-    ):
+    ) -> bool:
         """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
 
         Reads vehicle ownership data from the given CSV file and updates the 'cars'
@@ -288,7 +292,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             logger.error(
                 f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
             )
-            return
+            return False
 
         logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
 
@@ -320,7 +324,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 olddf = h5[key]
             except KeyError:
                 logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
-                return
+                return False
 
             olddf.index = olddf.index.astype(int)
             olddf = olddf.reindex(df.index.astype(int))
@@ -329,6 +333,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 logger.error(
                     "ATLAS household_id mismatch found - NOT updating h5 datastore"
                 )
+                return False
             else:
                 olddf["cars"] = df["cars"].values
                 olddf["hh_cars"] = df["hh_cars"].values
@@ -338,3 +343,4 @@ class AtlasPostprocessor(GenericPostprocessor):
                         olddf[col] = olddf[col].astype(str)
                 h5[key] = olddf
                 logger.info(f"ATLAS update h5 datastore table {key} - done")
+                return True

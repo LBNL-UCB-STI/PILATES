@@ -263,8 +263,26 @@ class _EpochTaggingScenarioProxy:
             self._activitysim_step_ids[key] = run_id
             if model_norm in {"activitysim", "activitysim_run"}:
                 self._activitysim_run_ids[key] = run_id
-        elif model_norm in {"beam", "beam_run", "beam_full_skim"}:
+        elif model_norm in {"beam", "beam_run"}:
             self._beam_run_ids[key] = run_id
+
+    def remember_restored_run_id(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+        run_id: Optional[str],
+    ) -> None:
+        """
+        Seed parent-linkage state from manifest-restored steps.
+        """
+        self._remember_run_id(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+            run_id=run_id,
+        )
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         if len(args) > 2:

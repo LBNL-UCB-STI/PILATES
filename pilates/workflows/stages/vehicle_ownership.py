@@ -360,11 +360,6 @@ def run_vehicle_ownership_stage(
             upstream_run = outputs_holder_atlas.atlas_run
             if upstream_run is None:
                 raise RuntimeError("ATLAS run must complete before postprocess")
-            postprocess_input_keys = [
-                short_name for short_name, _, _ in upstream_run._iter_record_items()
-            ]
-            if not postprocess_input_keys:
-                postprocess_input_keys = None
 
             postprocess_steps = [
                 StepRef(
@@ -373,7 +368,6 @@ def run_vehicle_ownership_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder_atlas,
                     ),
-                    input_keys=postprocess_input_keys,
                 )
             ]
             run_workflow(

@@ -251,13 +251,20 @@ def _recover_atlas_run_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[AtlasRunOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
+    del settings, coupler, outputs_holder, step_inputs
     recovered_paths = _recovered_cached_paths(
         cached_outputs=cached_outputs,
         run_id=run_id,
         workspace=workspace,
     )
-    if not recovered_paths:
+    output_year = getattr(state, "forecast_year", None)
+    if output_year is None:
+        return None
+    required_keys = (
+        f"householdv_{output_year}",
+        f"vehicles_{output_year}",
+    )
+    if any(key not in recovered_paths for key in required_keys):
         return None
     return AtlasRunOutputs(
         atlas_output_dir=Path(workspace.get_atlas_output_dir()),
@@ -282,6 +289,8 @@ def _recover_atlas_postprocess_outputs(
         run_id=run_id,
         workspace=workspace,
     )
+    if "atlas_vehicles2_output" not in recovered_paths:
+        return None
     usim_datastore_h5 = recovered_paths.get(USIM_H5_UPDATED) or recovered_paths.get(
         USIM_DATASTORE_H5
     )

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Narrative tests for startup workflow step contract validation.
 
@@ -17,6 +15,8 @@ This file intentionally mutates one layer at a time to show what class of
 integration drift is caught and what the expected startup failure looks like.
 """
 
+from __future__ import annotations
+
 import re
 import pytest
 from consist import define_step
@@ -27,7 +27,9 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    FINAL_SKIMS_OMX,
     LINKSTATS,
+    ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
@@ -195,7 +197,7 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
     expected = {
         "beam_preprocess": (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
         "beam_run": (LINKSTATS, BEAM_PLANS_OUT),
-        "beam_postprocess": (LINKSTATS, BEAM_PLANS_OUT),
+        "beam_postprocess": (FINAL_SKIMS_OMX, ZARR_SKIMS),
         "beam_full_skim": (BEAM_FULL_SKIMS,),
     }
 

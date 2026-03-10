@@ -249,11 +249,17 @@ def stage_env(tmp_path, monkeypatch):
     beam_persons_path = beam_dir / "persons.csv"
     beam_linkstats_path = beam_dir / "linkstats.csv.gz"
     beam_full_skims_path = beam_out_dir / "skimsODFull.csv.gz"
+    atlas_householdv_path = atlas_output_dir / f"householdv_{state.forecast_year}.csv"
+    atlas_vehicles_path = atlas_output_dir / f"vehicles_{state.forecast_year}.csv"
+    atlas_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
     _write_file(beam_plans_path)
     _write_file(beam_households_path)
     _write_file(beam_persons_path)
     _write_file(beam_linkstats_path)
     _write_file(beam_full_skims_path)
+    _write_file(atlas_householdv_path)
+    _write_file(atlas_vehicles_path)
+    _write_file(atlas_vehicles2_path)
 
     def record_builder(model_name, phase):
         if phase == "preprocess":
@@ -297,7 +303,10 @@ def stage_env(tmp_path, monkeypatch):
             if model_name == "atlas":
                 return AtlasRunOutputs(
                     atlas_output_dir=Path(workspace.get_atlas_output_dir()),
-                    raw_outputs={},
+                    raw_outputs={
+                        f"householdv_{state.forecast_year}": atlas_householdv_path,
+                        f"vehicles_{state.forecast_year}": atlas_vehicles_path,
+                    },
                 )
             if model_name == "activitysim":
                 return ActivitySimRunOutputs(
@@ -336,7 +345,9 @@ def stage_env(tmp_path, monkeypatch):
                 return AtlasPostprocessOutputs(
                     atlas_output_dir=Path(workspace.get_atlas_output_dir()),
                     usim_datastore_h5=Path(usim_input_path),
-                    processed_outputs={},
+                    processed_outputs={
+                        "atlas_vehicles2_output": atlas_vehicles2_path,
+                    },
                 )
             if model_name == "activitysim":
                 return ActivitySimPostprocessOutputs(
