@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
 
+import pandas as pd
+
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
@@ -46,6 +48,51 @@ from .shared import (
 )
 
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _root_h5_table_keys(
+    path: str,
+    *,
+    key_prefix: str,
+    key_suffix: str,
+) -> Dict[str, str]:
+    """
+    Build artifact keys for root-level HDF5 tables in ``path``.
+
+    UrbanSim merged/archived datastores expose the next-iteration tables at the
+    HDF5 root (e.g. ``/households``). We log those tables individually so
+    Consist can profile the concrete schema of the tables the postprocessor
+    reads and writes.
+    """
+    try:
+        with pd.HDFStore(path, mode="r") as store:
+            keys = sorted(store.keys())
+    except (OSError, FileNotFoundError, ValueError):
+        logger.debug("Skipping HDF5 table enumeration for unreadable file %s", path)
+        return {}
+
+    table_keys: Dict[str, str] = {}
+    for table_path in keys:
+        normalized_path = (
+            str(table_path) if str(table_path).startswith("/") else f"/{table_path}"
+        )
+        if normalized_path.strip("/").count("/") != 0:
+            continue
+        table_name = normalized_path.split("/")[-1]
+        table_keys[normalized_path] = f"{key_prefix}{table_name}{key_suffix}"
+    return table_keys
+
+
+def _root_h5_table_descriptions(path: str, *, action: str) -> Dict[str, str]:
+    descriptions: Dict[str, str] = {}
+    for table_path in _root_h5_table_keys(
+        path,
+        key_prefix="unused_",
+        key_suffix="_unused",
+    ):
+        table_name = table_path.split("/")[-1]
+        descriptions[table_path] = f"UrbanSim {table_name} table {action}"
+    return descriptions
 
 
 def _make_typed_step_function(
@@ -603,6 +650,21 @@ def make_urbansim_postprocess_step(
                         short_name, forecast_year=forecast_year
                     ),
                 )
+                archive_table_keys = _root_h5_table_keys(
+                    str(path),
+                    key_prefix="urbansim_postprocess_usim_",
+                    key_suffix="_table_archived",
+                )
+                if archive_table_keys:
+                    _log_named_h5_tables(
+                        path=str(path),
+                        direction="output",
+                        table_keys=archive_table_keys,
+                        description_by_table=_root_h5_table_descriptions(
+                            str(path),
+                            action="archived by UrbanSim postprocess",
+                        ),
+                    )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
@@ -619,6 +681,21 @@ def make_urbansim_postprocess_step(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
+            merged_table_keys = _root_h5_table_keys(
+                str(outputs.usim_datastore_h5),
+                key_prefix="urbansim_postprocess_usim_",
+                key_suffix="_table_updated",
+            )
+            if merged_table_keys:
+                _log_named_h5_tables(
+                    path=str(outputs.usim_datastore_h5),
+                    direction="output",
+                    table_keys=merged_table_keys,
+                    description_by_table=_root_h5_table_descriptions(
+                        str(outputs.usim_datastore_h5),
+                        action="prepared for the next iteration by UrbanSim postprocess",
+                    ),
+                )
 
     return _make_typed_step_function(
         coupler=coupler,
