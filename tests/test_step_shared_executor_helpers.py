@@ -329,6 +329,32 @@ def test_execute_beam_preprocess_keeps_earlier_duplicate_key_canonical(
     assert str(fallback_path) in mapping.values()
 
 
+def test_execute_beam_preprocess_keeps_previous_outputs_from_overwriting_canonical(
+    tmp_path: Path,
+) -> None:
+    canonical_path = tmp_path / "canonical.parquet"
+    canonical_path.write_text("canonical", encoding="utf-8")
+    previous_path = tmp_path / "previous.parquet"
+    previous_path.write_text("previous", encoding="utf-8")
+
+    class _Preprocessor:
+        def preprocess(self, workspace, previous_records=None):
+            return previous_records
+
+    result = _execute_beam_preprocess(
+        preprocessor=_Preprocessor(),
+        workspace=type("Workspace", (), {"full_path": str(tmp_path)})(),
+        outputs_holder=StepOutputsHolder(),
+        activity_demand_outputs={"beam_plans": canonical_path},
+        previous_beam_outputs={"beam_plans": previous_path},
+        beam_preprocess_inputs=None,
+    )
+
+    mapping = result.to_mapping()
+    assert mapping["beam_plans"] == str(canonical_path)
+    assert str(previous_path) in mapping.values()
+
+
 def test_execute_beam_preprocess_omits_missing_optional_inputs(tmp_path: Path) -> None:
     captured = {}
 

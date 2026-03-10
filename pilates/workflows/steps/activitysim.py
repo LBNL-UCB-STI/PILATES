@@ -46,6 +46,7 @@ from .shared import (
     _decorate_step_with_consist,
     _declared_outputs_from_class,
     _execute_preprocess,
+    _execute_postprocess,
     _execute_run,
     _log_named_h5_tables,
     _log_step_records,
@@ -843,30 +844,6 @@ def make_activitysim_postprocess_step(
                 },
             )
 
-    def _execute_activitysim_postprocess(
-        postprocessor: Any,
-        workspace: Workspace,
-        outputs_holder: StepOutputsHolder,
-        **kwargs: Any,
-    ) -> RecordStore:
-        upstream = outputs_holder.activitysim_run
-        if upstream is None:
-            raise RuntimeError("ActivitySim run must complete first")
-        if hasattr(upstream, "to_postprocess_record_store"):
-            raw_outputs = upstream.to_postprocess_record_store()
-        else:
-            raw_outputs = RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(path),
-                        short_name=short_name,
-                        description=description,
-                    )
-                    for short_name, path, description in iter_step_output_items(upstream)
-                ]
-            )
-        return postprocessor.postprocess(raw_outputs, workspace)
-
     return _make_activitysim_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
@@ -876,7 +853,7 @@ def make_activitysim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "activitysim", state
         ),
-        component_executor=_execute_activitysim_postprocess,
+        component_executor=_execute_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_postprocess", outputs
         ),
