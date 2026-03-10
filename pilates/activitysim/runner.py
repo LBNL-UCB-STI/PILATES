@@ -391,24 +391,36 @@ class ActivitysimRunner(GenericRunner):
         if settings.activitysim.file_format == "parquet":
             if persist_sharrow_cache_enabled(settings):
                 additional_args.append("--persist-sharrow-cache")
+            data_dirs = []
+            output_dirs = []
+            main_config_dirs = []
+            mp_config_dirs = []
+            compile_config_dirs = []
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
-                    additional_args.append("-d")
-                    additional_args.append(d["bind"])
+                    data_dirs.append(d["bind"])
                 elif "output" in d["bind"]:
-                    additional_args.append("-o")
-                    additional_args.append(d["bind"])
+                    output_dirs.append(d["bind"])
                 elif "configs_mp" in d["bind"]:
-                    if not compile:
-                        additional_args.append("-c")
-                        additional_args.append(d["bind"])
+                    mp_config_dirs.append(d["bind"])
                 elif "compile" in d["bind"]:
-                    if compile:
-                        additional_args.append("-c")
-                        additional_args.append(d["bind"])
+                    compile_config_dirs.append(d["bind"])
                 elif "configs" in d["bind"]:
-                    additional_args.append("-c")
-                    additional_args.append(d["bind"])
+                    main_config_dirs.append(d["bind"])
+            for bind in data_dirs:
+                additional_args.extend(["-d", bind])
+            for bind in output_dirs:
+                additional_args.extend(["-o", bind])
+            if compile:
+                for bind in compile_config_dirs:
+                    additional_args.extend(["-c", bind])
+                for bind in main_config_dirs:
+                    additional_args.extend(["-c", bind])
+            else:
+                for bind in main_config_dirs:
+                    additional_args.extend(["-c", bind])
+                for bind in mp_config_dirs:
+                    additional_args.extend(["-c", bind])
         return additional_args
 
     @staticmethod

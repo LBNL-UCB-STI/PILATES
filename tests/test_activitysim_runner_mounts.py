@@ -56,4 +56,7 @@ def test_activitysim_run_args_include_configs_mp():
 
     args = ActivitysimRunner.get_asim_additional_args(settings, vols, False)
 
-    assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp" in args
+    main_idx = args.index("/activitysim/activitysim/examples/prototype_mtc_clean/configs")
+    mp_idx = args.index("/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp")
+
+    assert main_idx < mp_idx
