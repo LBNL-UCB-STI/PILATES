@@ -27,6 +27,7 @@ from pilates.workflows.orchestration import run_manifested_steps, run_workflow
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.steps import (
     StepOutputsHolder,
+    make_activitysim_preprocess_step,
     make_atlas_postprocess_step,
     make_beam_postprocess_step,
     make_urbansim_run_step,
@@ -756,6 +757,45 @@ def test_run_workflow_cache_hit_uses_output_replayer(tmp_path):
     assert coupler.get("non_manifest_replay") == str(
         holder.activitysim_preprocess.households_table
     )
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
+
+
+def test_run_workflow_cache_hit_prefers_step_local_recoverer(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_cached_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy orchestration recovery should not run")
+        ),
+    )
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(cache_hit=True)
+
+    run_workflow(
+        stage_name="activity_demand_preprocess",
+        steps=[StepRef(name="activitysim_preprocess", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.activitysim_preprocess is not None
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
 
 

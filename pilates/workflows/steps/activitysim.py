@@ -3,13 +3,16 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Type, TypeVar, cast
+from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar, cast
 
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
+from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
+from pilates.utils.coupler_helpers import artifact_to_existing_path, resolve_existing_path
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -134,6 +137,7 @@ def _make_activitysim_typed_step_function(
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
+    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
 ) -> Callable[..., None]:
     @cr.require_runtime_kwargs("settings", "state", "workspace")
     def _step_func(
@@ -192,6 +196,8 @@ def _make_activitysim_typed_step_function(
                 outputs, settings, state, workspace, holder
             ),
         )
+    if output_recoverer is not None:
+        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
 
     return _decorate_step_with_consist(
         step_func=_step_func,
@@ -200,6 +206,402 @@ def _make_activitysim_typed_step_function(
         schema_outputs=_schema_outputs_from_class(outputs_class),
         outputs=_declared_outputs_from_class(outputs_class),
         tags=[model_name, phase],
+    )
+
+
+def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
+    if not run_id:
+        return {}
+    tracker = cr.current_tracker()
+    if tracker is None:
+        return {}
+    get_run_outputs = getattr(tracker, "get_run_outputs", None)
+    if not callable(get_run_outputs):
+        return {}
+    try:
+        run_outputs = get_run_outputs(run_id) or {}
+    except Exception:
+        logger.debug(
+            "Failed loading cached run outputs for run_id=%s",
+            run_id,
+            exc_info=True,
+        )
+        return {}
+
+    resolved: Dict[str, Any] = {}
+    for raw_key, value in run_outputs.items():
+        if value is None:
+            continue
+        raw_key_str = str(raw_key)
+        local_key = raw_key_str.split("/", 1)[-1]
+        resolved[resolve_artifact_key(local_key)] = value
+    return resolved
+
+
+def _resolve_cached_value(
+    *,
+    key: str,
+    coupler: CouplerProtocol,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Any:
+    if cached_outputs:
+        for raw_key, value in cached_outputs.items():
+            if value is None:
+                continue
+            raw_key_str = str(raw_key)
+            local_key = raw_key_str.split("/", 1)[-1]
+            if resolve_artifact_key(local_key) == key:
+                return value
+    run_outputs = _resolve_cached_run_outputs(run_id)
+    if key in run_outputs:
+        return run_outputs[key]
+    get_value = getattr(coupler, "get", None)
+    if callable(get_value):
+        return get_value(key)
+    return None
+
+
+def _existing_artifact_path(value: Any, workspace: Workspace) -> Optional[str]:
+    return artifact_to_existing_path(
+        value,
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
+
+
+def _existing_local_path(path: Any, workspace: Workspace) -> Optional[str]:
+    if path is None:
+        return None
+    return resolve_existing_path(
+        str(path),
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
+
+
+def _resolved_content_hash(
+    *,
+    value: Any,
+    key: str,
+    workspace: Workspace,
+    fallback_path: Any = None,
+) -> Optional[str]:
+    candidate = value if value is not None else fallback_path
+    artifact = resolve_artifact_from_value(
+        candidate,
+        key=key,
+        workspace=workspace,
+    )
+    return _artifact_content_hash(artifact)
+
+
+def _recover_activitysim_preprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[ActivitySimPreprocessOutputs]:
+    del settings, state, outputs_holder, step_inputs
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    candidates = {
+        ASIM_HOUSEHOLDS_IN: asim_dir / "households.csv",
+        ASIM_PERSONS_IN: asim_dir / "persons.csv",
+        ASIM_LAND_USE_IN: asim_dir / "land_use.csv",
+        ASIM_OMX_SKIMS: asim_dir / "skims.omx",
+    }
+    recovered_inputs: Dict[str, Path] = {}
+    recovered_hashes: Dict[str, str] = {}
+    for key, path in candidates.items():
+        cached_value = _resolve_cached_value(
+            key=key,
+            coupler=coupler,
+            cached_outputs=cached_outputs,
+            run_id=run_id,
+        )
+        cached_path = _existing_artifact_path(cached_value, workspace)
+        if cached_path:
+            path = Path(cached_path)
+        resolved_candidate = _existing_local_path(path, workspace)
+        if resolved_candidate:
+            recovered_inputs[key] = Path(resolved_candidate)
+            content_hash = _resolved_content_hash(
+                value=cached_value,
+                key=key,
+                workspace=workspace,
+                fallback_path=resolved_candidate,
+            )
+            if content_hash:
+                recovered_hashes[key] = content_hash
+    if not {
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+    }.issubset(recovered_inputs):
+        return None
+    return ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=recovered_inputs[ASIM_LAND_USE_IN],
+        households_table=recovered_inputs[ASIM_HOUSEHOLDS_IN],
+        persons_table=recovered_inputs[ASIM_PERSONS_IN],
+        omx_skims=recovered_inputs.get(ASIM_OMX_SKIMS),
+        input_hashes=recovered_hashes,
+    )
+
+
+def _recover_activitysim_run_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[ActivitySimRunOutputs]:
+    del settings, step_inputs
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    raw_outputs: Dict[str, Path] = {}
+    raw_output_hashes: Dict[str, str] = {}
+    source_input_paths: Dict[str, Path] = {}
+    source_input_hashes: Dict[str, str] = {}
+
+    final_pipeline = Path(
+        _existing_local_path(asim_output_dir / "final_pipeline", workspace)
+        or (asim_output_dir / "final_pipeline")
+    )
+    allow_final_pipeline = has_asim_run_marker(
+        asim_output_dir, state.year, state.iteration
+    )
+    if final_pipeline.exists() and allow_final_pipeline:
+        for child in final_pipeline.iterdir():
+            fpath = child / "final.parquet"
+            if fpath.is_file():
+                short_name = f"{child.name}_asim_out_temp"
+                raw_outputs[short_name] = fpath
+                content_hash = _resolved_content_hash(
+                    value=_resolve_cached_value(
+                        key=short_name,
+                        coupler=coupler,
+                        cached_outputs=cached_outputs,
+                        run_id=run_id,
+                    ),
+                    key=short_name,
+                    workspace=workspace,
+                    fallback_path=fpath,
+                )
+                if content_hash:
+                    raw_output_hashes[short_name] = content_hash
+    elif final_pipeline.exists() and not allow_final_pipeline:
+        logger.warning(
+            "Skipping ActivitySim final_pipeline cache recovery for year %s iteration %s because success marker is missing.",
+            state.year,
+            state.iteration,
+        )
+
+    if not raw_outputs:
+        iter_dir = Path(
+            _existing_local_path(
+                asim_output_dir / f"year-{state.year}-iteration-{state.iteration}",
+                workspace,
+            )
+            or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
+        )
+        if iter_dir.exists():
+            for fpath in iter_dir.glob("*.parquet"):
+                short_name = f"{fpath.stem}_asim_out_temp"
+                raw_outputs[short_name] = fpath
+                content_hash = _resolved_content_hash(
+                    value=_resolve_cached_value(
+                        key=short_name,
+                        coupler=coupler,
+                        cached_outputs=cached_outputs,
+                        run_id=run_id,
+                    ),
+                    key=short_name,
+                    workspace=workspace,
+                    fallback_path=fpath,
+                )
+                if content_hash:
+                    raw_output_hashes[short_name] = content_hash
+    if not raw_outputs:
+        return None
+
+    upstream_preprocess = outputs_holder.activitysim_preprocess
+    if upstream_preprocess is not None:
+        carried_hashes = getattr(upstream_preprocess, "input_hashes", {}) or {}
+        for short_name, path, _description in upstream_preprocess._iter_record_items():
+            source_input_paths[short_name] = Path(path)
+            content_hash = carried_hashes.get(short_name)
+            if content_hash:
+                source_input_hashes[short_name] = str(content_hash)
+
+    zarr_candidate = Path(
+        _existing_local_path(asim_output_dir / "cache" / "skims.zarr", workspace)
+        or (asim_output_dir / "cache" / "skims.zarr")
+    )
+    if zarr_candidate.exists():
+        source_input_paths[ZARR_SKIMS] = zarr_candidate
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=ZARR_SKIMS,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=ZARR_SKIMS,
+            workspace=workspace,
+            fallback_path=zarr_candidate,
+        )
+        if content_hash:
+            source_input_hashes[ZARR_SKIMS] = content_hash
+
+    return ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs=raw_outputs,
+        raw_output_hashes=raw_output_hashes,
+        source_input_paths=source_input_paths,
+        source_input_hashes=source_input_hashes,
+    )
+
+
+def _recover_activitysim_postprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[ActivitySimPostprocessOutputs]:
+    del outputs_holder
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = Path(
+        _existing_local_path(
+            asim_output_dir / f"year-{state.year}-iteration-{state.iteration}",
+            workspace,
+        )
+        or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
+    )
+    processed_outputs: Dict[str, Path] = {}
+    processed_output_hashes: Dict[str, str] = {}
+    if iter_dir.exists():
+        required_outputs = {
+            "persons_asim_out",
+            "households_asim_out",
+            "beam_plans_asim_out",
+        }
+        available_outputs = {
+            normalize_asim_output_key(path.stem)
+            for path in iter_dir.glob("*.parquet")
+        }
+        if not required_outputs.issubset(available_outputs):
+            return None
+        for fpath in iter_dir.glob("*.parquet"):
+            short_name = normalize_asim_output_key(fpath.stem)
+            processed_outputs[short_name] = fpath
+            content_hash = _resolved_content_hash(
+                value=_resolve_cached_value(
+                    key=short_name,
+                    coupler=coupler,
+                    cached_outputs=cached_outputs,
+                    run_id=run_id,
+                ),
+                key=short_name,
+                workspace=workspace,
+                fallback_path=fpath,
+            )
+            if content_hash:
+                processed_output_hashes[short_name] = content_hash
+    else:
+        return None
+
+    inputs_dir = Path(
+        _existing_local_path(
+            asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}",
+            workspace,
+        )
+        or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
+    )
+    if inputs_dir.exists():
+        archived_inputs = {
+            "households.csv": "asim_input_households_csv_archived",
+            "persons.csv": "asim_input_persons_csv_archived",
+            "land_use.csv": "asim_input_land_use_csv_archived",
+            "skims.omx": "asim_input_skims_omx_archived",
+        }
+        for fname, short_name in archived_inputs.items():
+            fpath = inputs_dir / fname
+            if fpath.exists():
+                processed_outputs[short_name] = fpath
+                content_hash = _resolved_content_hash(
+                    value=_resolve_cached_value(
+                        key=short_name,
+                        coupler=coupler,
+                        cached_outputs=cached_outputs,
+                        run_id=run_id,
+                    ),
+                    key=short_name,
+                    workspace=workspace,
+                    fallback_path=fpath,
+                )
+                if content_hash:
+                    processed_output_hashes[short_name] = content_hash
+        zarr_path = inputs_dir / "skims.zarr"
+        if zarr_path.exists():
+            short_name = "asim_input_skims_zarr_archived"
+            processed_outputs[short_name] = zarr_path
+            content_hash = _resolved_content_hash(
+                value=_resolve_cached_value(
+                    key=short_name,
+                    coupler=coupler,
+                    cached_outputs=cached_outputs,
+                    run_id=run_id,
+                ),
+                key=short_name,
+                workspace=workspace,
+                fallback_path=zarr_path,
+            )
+            if content_hash:
+                processed_output_hashes[short_name] = content_hash
+
+    usim_path = None
+    if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
+        usim_path = _existing_artifact_path(step_inputs[USIM_DATASTORE_BASE_H5], workspace)
+    if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
+        usim_path = _existing_artifact_path(
+            step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
+        )
+    if not usim_path:
+        urbansim_settings = settings.urbansim
+        if urbansim_settings is None:
+            return None
+        region_id = urbansim_settings.region_id
+        if not region_id:
+            region_map = urbansim_settings.region_mappings.get("region_to_region_id", {})
+            region_id = region_map.get(settings.run.region)
+        if region_id:
+            usim_path = os.path.join(
+                workspace.get_usim_mutable_data_dir(),
+                urbansim_settings.input_file_template.format(region_id=region_id),
+            )
+    usim_existing = _existing_local_path(usim_path, workspace)
+    if not processed_outputs and not usim_existing:
+        return None
+    return ActivitySimPostprocessOutputs(
+        usim_datastore_h5=Path(usim_existing) if usim_existing else None,
+        asim_output_dir=asim_output_dir,
+        processed_outputs=processed_outputs,
+        processed_output_hashes=processed_output_hashes,
+        usim_datastore_key=f"usim_input_{state.forecast_year}" if usim_existing else None,
     )
 
 
@@ -571,6 +973,7 @@ def make_activitysim_preprocess_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_activitysim_preprocess_outputs,
     )
 
 
@@ -724,6 +1127,7 @@ def make_activitysim_run_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_activitysim_run_outputs,
     )
 
 
@@ -908,4 +1312,5 @@ def make_activitysim_postprocess_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_activitysim_postprocess_outputs,
     )
