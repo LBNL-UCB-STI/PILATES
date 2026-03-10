@@ -7,7 +7,11 @@ from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.artifact_keys import LINKSTATS, LINKSTATS_WARMSTART
+from pilates.workflows.artifact_keys import (
+    BEAM_CONFIG_FILE,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+)
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
@@ -36,10 +40,37 @@ from .shared import (
     find_last_run_output_plans,
     log_and_set_input,
     log_and_set_output,
+    log_input_only,
     log_output_only,
 )
 
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _primary_beam_config_path(
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Path:
+    return (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    )
+
+
+def _require_primary_beam_config(
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Path:
+    config_path = _primary_beam_config_path(settings, workspace)
+    if not config_path.exists():
+        raise FileNotFoundError(
+            "BEAM primary config file is missing: "
+            f"{config_path}. Expected from settings.beam.config="
+            f"{settings.beam.config!r} under the mutable BEAM input dir for "
+            f"region {settings.run.region!r}."
+        )
+    return config_path
 
 
 def _is_beam_sub_iteration_key(short_name: Optional[str]) -> bool:
@@ -493,6 +524,15 @@ def make_beam_preprocess_step(
     This step focuses on generating BEAM inputs and canonicalizing BEAM config.
     """
 
+    def _log_inputs(
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> Dict[str, Any]:
+        _require_primary_beam_config(settings, workspace)
+        return {}
+
     def _log_outputs(
         outputs: BeamPreprocessOutputs,
         settings: PilatesConfig,
@@ -559,6 +599,7 @@ def make_beam_preprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
+        input_logger=_log_inputs,
         output_logger=_log_outputs,
     )
 
@@ -597,6 +638,13 @@ def make_beam_run_step(
         if upstream is None:
             raise RuntimeError("BEAM preprocess must complete first")
 
+        config_path = _require_primary_beam_config(settings, workspace)
+        log_input_only(
+            key=BEAM_CONFIG_FILE,
+            path=str(config_path),
+            description="BEAM config file consumed by the BEAM run",
+        )
+
         tracker = cr.current_tracker()
         if tracker is not None:
             _log_beam_r5_osm_input(
@@ -611,8 +659,6 @@ def make_beam_run_step(
                 description=description,
                 coupler=coupler,
             )
-
-        from pathlib import Path
 
         output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
         plans_path, experienced_path = find_last_run_output_plans(output_root, "year-")

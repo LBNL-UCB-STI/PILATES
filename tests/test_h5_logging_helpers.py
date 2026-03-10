@@ -1,4 +1,5 @@
 import types
+from types import SimpleNamespace
 
 import h5py
 
@@ -153,3 +154,39 @@ def test_log_named_h5_tables_logs_root_datasets_when_present(monkeypatch, tmp_pa
     assert len(calls) == 1
     assert calls[0][1] == "usim_households_root"
     assert calls[0][2] == "/households"
+
+
+def test_log_beam_r5_osm_input_skips_when_config_cache_tables_missing(monkeypatch):
+    session_opened = {"value": False}
+
+    class _UnexpectedSession:
+        def __init__(self, *_args, **_kwargs):
+            session_opened["value"] = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Inspector:
+        def has_table(self, table_name, schema=None):
+            return False
+
+    monkeypatch.setattr(cr, "current_run", lambda: SimpleNamespace(id="beam-run-1"))
+    monkeypatch.setattr(steps_shared, "inspect", lambda _engine: _Inspector())
+
+    import sqlmodel
+
+    monkeypatch.setattr(sqlmodel, "Session", _UnexpectedSession)
+
+    steps_shared._log_beam_r5_osm_input(
+        tracker=SimpleNamespace(db=SimpleNamespace(engine=object())),
+        settings=SimpleNamespace(
+            beam=SimpleNamespace(config="seattle-pilates.conf"),
+            run=SimpleNamespace(region="seattle"),
+        ),
+        workspace=SimpleNamespace(get_beam_mutable_data_dir=lambda: "/tmp/beam"),
+    )
+
+    assert session_opened["value"] is False

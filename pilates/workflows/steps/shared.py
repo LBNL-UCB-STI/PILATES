@@ -206,6 +206,7 @@ from typing import (
 
 import h5py
 from consist import define_step
+from sqlalchemy import inspect
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.beam_warmstart import (
@@ -650,6 +651,22 @@ def _log_beam_r5_osm_input(
         return
 
     try:
+        inspector = inspect(tracker.db.engine)
+        required_tables = (
+            "beam_config_cache",
+            "beam_config_ingest_run_link",
+        )
+        missing_tables = [
+            table_name
+            for table_name in required_tables
+            if not inspector.has_table(table_name, schema="global_tables")
+        ]
+        if missing_tables:
+            logger.debug(
+                "Skipping BEAM OSM config logging; missing Consist tables: %s",
+                ", ".join(missing_tables),
+            )
+            return
         with Session(tracker.db.engine) as session:
             ingest_join = cast(
                 Any,
