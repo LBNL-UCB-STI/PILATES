@@ -250,6 +250,11 @@ def make_activitysim_compile_step(
         workspace: Workspace,
         expected_outputs: Dict[str, Any],
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim compile."
+            )
         factory = ModelFactory()
 
         compile_runner = cast(
@@ -292,7 +297,7 @@ def make_activitysim_compile_step(
                 coupler=coupler,
                 **_activitysim_output_facet_meta(
                     ZARR_SKIMS,
-                    year=state.forecast_year,
+                    year=forecast_year,
                     iteration=state.iteration,
                 ),
             )
@@ -315,7 +320,7 @@ def make_activitysim_compile_step(
                     coupler=coupler,
                     **_activitysim_output_facet_meta(
                         ASIM_SHARROW_CACHE_DIR,
-                        year=state.forecast_year,
+                        year=forecast_year,
                         iteration=state.iteration,
                     ),
                 )
@@ -659,6 +664,11 @@ def make_activitysim_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim run logging."
+            )
         upstream = holder.activitysim_preprocess
         if upstream is not None:
             carried_hashes = getattr(upstream, "input_hashes", {}) or {}
@@ -691,12 +701,13 @@ def make_activitysim_run_step(
                 description=description,
                 **_activitysim_output_facet_meta(
                     short_name,
-                    year=state.forecast_year,
+                    year=forecast_year,
                     iteration=state.iteration,
                 ),
             )
-            if artifact is not None and getattr(artifact, "hash", None):
-                outputs.raw_output_hashes[short_name] = artifact.hash
+            content_hash = _artifact_content_hash(artifact)
+            if content_hash:
+                outputs.raw_output_hashes[short_name] = content_hash
 
     return _make_activitysim_typed_step_function(
         coupler=coupler,
@@ -746,6 +757,11 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim postprocess."
+            )
         asim_input_dir = workspace.get_asim_mutable_data_dir()
         asim_output_dir = workspace.get_asim_output_dir()
         asim_input_sources = [
@@ -803,7 +819,7 @@ def make_activitysim_postprocess_step(
             forecast_store_path = os.path.join(
                 usim_data_dir,
                 get_usim_datastore_fname(
-                    settings, io="output", year=state.forecast_year
+                    settings, io="output", year=forecast_year
                 ),
             )
             if os.path.exists(forecast_store_path):
@@ -824,10 +840,15 @@ def make_activitysim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim postprocess logging."
+            )
         def _extra_meta(short_name: str, _path: str, _description: str) -> Dict[str, Any]:
             meta: Dict[str, Any] = _activitysim_output_facet_meta(
                 short_name,
-                year=state.forecast_year,
+                year=forecast_year,
                 iteration=state.iteration,
             )
             content_hash = outputs.processed_output_hashes.get(short_name)
@@ -852,7 +873,7 @@ def make_activitysim_postprocess_step(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
-                    f"UrbanSim datastore updated by ActivitySim for year {state.forecast_year}"
+                    f"UrbanSim datastore updated by ActivitySim for year {forecast_year}"
                 ),
                 coupler=coupler,
                 profile_file_schema=True,

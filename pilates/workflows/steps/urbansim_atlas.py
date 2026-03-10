@@ -234,7 +234,12 @@ def make_urbansim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
-        if state.is_start_year() and settings.activitysim.warm_start_activities:
+        activitysim_settings = settings.activitysim
+        if (
+            state.is_start_year()
+            and activitysim_settings is not None
+            and activitysim_settings.warm_start_activities
+        ):
             logger.info("[Main] Running warm start activities for ActivitySim.")
             warm_start_activities(settings, state, workspace)
         return {}
@@ -246,6 +251,14 @@ def make_urbansim_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        urbansim_settings = settings.urbansim
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before UrbanSim preprocess logging."
+            )
+        if urbansim_settings is None:
+            raise RuntimeError("UrbanSim config is required for UrbanSim preprocess logging.")
         for short_name, path, description in outputs._iter_record_items():
             log_and_set_output(
                 key=short_name,
@@ -253,12 +266,12 @@ def make_urbansim_preprocess_step(
                 description=description,
                 coupler=coupler,
                 **_urbansim_output_facet_meta(
-                    short_name, forecast_year=state.forecast_year
+                    short_name, forecast_year=forecast_year
                 ),
             )
         usim_data_dir = outputs.usim_mutable_data_dir
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=settings.urbansim.region_mappings["region_to_region_id"][
+        usim_input_fname = urbansim_settings.input_file_template.format(
+            region_id=urbansim_settings.region_mappings["region_to_region_id"][
                 settings.run.region
             ]
         )
@@ -273,7 +286,7 @@ def make_urbansim_preprocess_step(
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_BASE_H5, forecast_year=state.forecast_year
+                    USIM_DATASTORE_BASE_H5, forecast_year=forecast_year
                 ),
             )
 
@@ -326,19 +339,24 @@ def make_urbansim_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before UrbanSim run logging."
+            )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
-                    f"UrbanSim datastore output for year {state.forecast_year}"
+                    f"UrbanSim datastore output for year {forecast_year}"
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                    USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
 
@@ -390,6 +408,11 @@ def make_urbansim_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before UrbanSim postprocess logging."
+            )
         for short_name, path, description in outputs._iter_record_items():
             if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
                 log_output_only(
@@ -400,7 +423,7 @@ def make_urbansim_postprocess_step(
                     h5_container=True,
                     hash_tables="if_unchanged",
                     **_urbansim_output_facet_meta(
-                        short_name, forecast_year=state.forecast_year
+                        short_name, forecast_year=forecast_year
                     ),
                 )
         if outputs.usim_datastore_h5 is not None:
@@ -409,14 +432,14 @@ def make_urbansim_postprocess_step(
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     "UrbanSim datastore prepared for next iteration "
-                    f"(year {state.forecast_year})"
+                    f"(year {forecast_year})"
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                    USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
 
@@ -467,6 +490,11 @@ def make_atlas_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ATLAS preprocess logging."
+            )
         run_scenario = getattr(getattr(settings, "atlas", None), "scenario", None)
         prepared_meta = getattr(outputs, "prepared_input_meta", {})
         _log_step_records(
@@ -478,7 +506,7 @@ def make_atlas_preprocess_step(
                 **_atlas_artifact_facet_meta(
                     key,
                     run_scenario=run_scenario,
-                    forecast_year=state.forecast_year,
+                    forecast_year=forecast_year,
                     artifact_family="atlas_preprocess_output",
                 ),
             },
@@ -530,6 +558,11 @@ def make_atlas_run_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ATLAS run logging."
+            )
         upstream = holder.atlas_preprocess
         if upstream is None:
             raise RuntimeError("ATLAS preprocess must complete first")
@@ -544,7 +577,7 @@ def make_atlas_run_step(
                 **_atlas_artifact_facet_meta(
                     key,
                     run_scenario=run_scenario,
-                    forecast_year=state.forecast_year,
+                    forecast_year=forecast_year,
                     artifact_family="atlas_run_input",
                 ),
             },
@@ -611,10 +644,18 @@ def make_atlas_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> Dict[str, Any]:
+        forecast_year = state.forecast_year
+        urbansim_settings = settings.urbansim
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ATLAS postprocess."
+            )
+        if urbansim_settings is None:
+            raise RuntimeError("UrbanSim config is required for ATLAS postprocess logging.")
         usim_output_path = os.path.join(
             workspace.get_usim_mutable_data_dir(),
-            settings.urbansim.output_file_template.format(
-                year=state.forecast_year
+            urbansim_settings.output_file_template.format(
+                year=forecast_year
             ),
         )
         if os.path.exists(usim_output_path):
@@ -623,19 +664,19 @@ def make_atlas_postprocess_step(
                 path=usim_output_path,
                 description=(
                     "UrbanSim datastore consumed by ATLAS postprocess "
-                    f"for year {state.forecast_year}"
+                    f"for year {forecast_year}"
                 ),
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                    USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
             households_table_path = (
                 "/households"
                 if state.is_start_year()
-                else f"/{state.forecast_year}/households"
+                else f"/{forecast_year}/households"
             )
             _log_named_h5_tables(
                 path=usim_output_path,
@@ -658,6 +699,11 @@ def make_atlas_postprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
+        forecast_year = state.forecast_year
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ATLAS postprocess logging."
+            )
         _log_step_records(
             record_items=(
                 (short_name, path, description)
@@ -673,20 +719,20 @@ def make_atlas_postprocess_step(
                 path=str(outputs.usim_datastore_h5),
                 description=(
                     "UrbanSim datastore updated by ATLAS for year "
-                    f"{state.forecast_year}"
+                    f"{forecast_year}"
                 ),
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=state.forecast_year
+                    USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
             households_table_path = (
                 "/households"
                 if state.is_start_year()
-                else f"/{state.forecast_year}/households"
+                else f"/{forecast_year}/households"
             )
             _log_named_h5_tables(
                 path=str(outputs.usim_datastore_h5),

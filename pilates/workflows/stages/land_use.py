@@ -69,7 +69,7 @@ def run_land_use_stage(
     Dict[str, Union[str, PathLike]]
         Updated UrbanSim input mapping, including the latest datastore path.
     """
-    formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
+    formatted_print(f"LAND USE MODEL FOR YEAR {year}")
 
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(
         settings, state, workspace, year
@@ -201,12 +201,16 @@ def run_land_use_stage(
         key=USIM_DATASTORE_CURRENT_H5,
         path=usim_inputs.get(USIM_DATASTORE_CURRENT_H5),
     )
+    urbansim_settings = settings.urbansim
+    if urbansim_settings is None:
+        raise RuntimeError("UrbanSim config is required for the land use stage.")
+
     usim_forecast_output_path = os.path.join(
         workspace.get_usim_mutable_data_dir(),
-        settings.urbansim.output_file_template.format(year=state.forecast_year),
+        urbansim_settings.output_file_template.format(year=year),
     )
     enqueue_archive_copy(
-        key=f"usim_year_output_h5_{state.forecast_year}",
+        key=f"usim_year_output_h5_{year}",
         path=usim_forecast_output_path,
     )
     flush_archive_queue(timeout=300, fail_on_timeout=True)

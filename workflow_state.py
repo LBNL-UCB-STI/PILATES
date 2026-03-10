@@ -60,7 +60,7 @@ class WorkflowState:
         self.run_info_path = run_info_path  # new
         self.data_initialized = data_initialized
 
-        self.forecast_year = None
+        self.forecast_year: int | None = None
         self.file_loc = file_loc
         self.mirror_file_loc: Optional[str] = None
 
@@ -565,8 +565,13 @@ class WorkflowState:
         # Handle major stage completion
         elif completed_major is not None:
             if self.current_major_stage != completed_major:
+                current_major_name = (
+                    self.current_major_stage.name
+                    if self.current_major_stage is not None
+                    else "None"
+                )
                 logger.error(
-                    f"Completed major stage {completed_major.name} but current major stage is {self.current_major_stage.name}. State inconsistency."
+                    f"Completed major stage {completed_major.name} but current major stage is {current_major_name}. State inconsistency."
                 )
                 # Attempt to recover by advancing major stage from current state
                 self._advance_to_next_major_stage()

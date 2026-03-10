@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
@@ -203,10 +204,13 @@ def _run_supply_demand_workflow(
 def _find_initial_linkstats_warmstart(
     settings: PilatesConfig, workspace: Workspace
 ) -> Optional[str]:
+    beam_settings = settings.beam
+    if beam_settings is None:
+        return None
     base_dir = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         settings.run.region,
-        settings.beam.router_directory,
+        beam_settings.router_directory,
     )
     candidates = [
         os.path.join(base_dir, "init.linkstats.parquet"),
@@ -694,10 +698,13 @@ def _find_input_scenario_dir(
     filename: str,
     filetype: str = "parquet",
 ) -> str:
+    beam_settings = settings.beam
+    if beam_settings is None:
+        raise RuntimeError("BEAM config is required for traffic-assignment inputs.")
     scenario_dir = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         settings.run.region,
-        settings.beam.scenario_folder,
+        beam_settings.scenario_folder,
     )
     return locate_beam_file(scenario_dir, filename, filetype)
 
@@ -753,6 +760,11 @@ def _collect_beam_preprocess_inputs(
     4) ATLAS vehicles2 (iteration 0 only, when vehicle ownership is enabled)
     """
     beam_preprocess_inputs: Dict[str, Any] = {}
+    forecast_year = state.forecast_year
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before building BEAM inputs."
+        )
 
     if activity_demand_outputs is not None:
         asim_input_keys = {
@@ -808,12 +820,12 @@ def _collect_beam_preprocess_inputs(
             atlas_output_dir = workspace.get_atlas_output_dir()
         atlas_vehicle_path = os.path.join(
             atlas_output_dir,
-            f"vehicles2_{state.forecast_year}.csv",
+            f"vehicles2_{forecast_year}.csv",
         )
         if not os.path.exists(atlas_vehicle_path):
             atlas_vehicle_path = os.path.join(
                 atlas_output_dir,
-                f"vehicles2_{state.forecast_year - 1}.csv",
+                f"vehicles2_{forecast_year - 1}.csv",
             )
         if os.path.exists(atlas_vehicle_path):
             beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_INPUT, atlas_vehicle_path)
@@ -892,7 +904,7 @@ def _run_beam_preprocess_step(
                     keys=beam_preprocess_inputs.keys(),
                     explicit_inputs=beam_preprocess_inputs,
                 ).stepref_inputs(),
-                year=state.forecast_year,
+                year=year,
             )
         ],
         scenario=scenario,
@@ -948,7 +960,7 @@ def _run_beam_steps(
                     outputs_holder=outputs_holder,
                 ),
                 input_keys=beam_run_input_keys,
-                year=state.forecast_year,
+                year=year,
             )
         ],
         scenario=scenario,
@@ -969,7 +981,7 @@ def _run_beam_steps(
         upstream_keys=[
             short_name for short_name, _, _ in upstream_run._iter_record_items()
         ],
-        year=state.forecast_year,
+        year=year,
         iteration=iteration,
         include_zarr_skims=include_zarr_skims,
     )
@@ -1000,7 +1012,7 @@ def _run_beam_steps(
                     if beam_postprocess_resolution is not None
                     else None
                 ),
-                year=state.forecast_year,
+                year=year,
             )
         ],
         scenario=scenario,
@@ -1293,7 +1305,7 @@ def run_supply_demand_stage(
         activity_demand_outputs = None
         outputs_holder = StepOutputsHolder()
         manifest_path = build_manifest_path(workspace, year, i)
-        manifest_config = ManifestConfig(path=manifest_path)
+        manifest_config = ManifestConfig(path=Path(manifest_path))
 
         # C1. ACTIVITY DEMAND
         if state.should_run(

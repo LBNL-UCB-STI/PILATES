@@ -201,6 +201,7 @@ from typing import (
     TYPE_CHECKING,
     Type,
     TypeVar,
+    cast,
 )
 
 import h5py
@@ -646,9 +647,16 @@ def _log_beam_r5_osm_input(
     run_id = getattr(current_run, "id", None) if current_run else None
     if not run_id or tracker.db is None:
         return
+    beam_settings = settings.beam
+    if beam_settings is None:
+        return
 
     try:
         with Session(tracker.db.engine) as session:
+            ingest_join = cast(
+                Any,
+                BeamConfigCache.content_hash == BeamConfigIngestRunLink.content_hash,
+            )
             base_stmt = (
                 select(
                     BeamConfigCache.value_str,
@@ -656,12 +664,11 @@ def _log_beam_r5_osm_input(
                 )
                 .join(
                     BeamConfigIngestRunLink,
-                    BeamConfigCache.content_hash
-                    == BeamConfigIngestRunLink.content_hash,
+                    ingest_join,
                 )
                 .where(BeamConfigIngestRunLink.run_id == run_id)
             )
-            config_name = settings.beam.config
+            config_name = beam_settings.config
             if config_name:
                 base_stmt = base_stmt.where(
                     BeamConfigIngestRunLink.config_name == config_name
@@ -688,6 +695,11 @@ def _log_beam_r5_osm_input(
                 osm_hash,
             )
             if osm_value == "/":
+                cache_join = cast(
+                    Any,
+                    BeamConfigCache.content_hash
+                    == BeamConfigIngestRunLink.content_hash,
+                )
                 all_osm_rows = session.exec(
                     select(
                         BeamConfigIngestRunLink.config_name,
@@ -696,8 +708,7 @@ def _log_beam_r5_osm_input(
                     )
                     .join(
                         BeamConfigCache,
-                        BeamConfigCache.content_hash
-                        == BeamConfigIngestRunLink.content_hash,
+                        cache_join,
                     )
                     .where(BeamConfigIngestRunLink.run_id == run_id)
                     .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
@@ -1140,7 +1151,7 @@ def _decorate_step_with_consist(
     step_func: Callable[..., Any],
     step_model: str,
     description: str,
-    schema_outputs: Optional[list[str]] = None,
+    schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:

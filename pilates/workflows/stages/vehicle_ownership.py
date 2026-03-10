@@ -45,10 +45,17 @@ def _atlas_sub_years(state: WorkflowState) -> list[int]:
     ATLAS advances in biannual increments. Keep years bounded to the parent
     interval and never overshoot ``state.forecast_year``.
     """
+    if state.year is None:
+        raise RuntimeError("WorkflowState.year must be set before running ATLAS.")
+    forecast_year = state.forecast_year
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before running ATLAS."
+        )
     years = [state.year]
-    if state.forecast_year <= state.year:
+    if forecast_year <= state.year:
         return years
-    years.extend(range(state.year + 2, state.forecast_year + 1, 2))
+    years.extend(range(state.year + 2, forecast_year + 1, 2))
     return years
 
 
@@ -89,9 +96,20 @@ def select_atlas_usim_input_path(
     else:
         usim_dir = workspace.get_usim_mutable_data_dir()
 
+    forecast_year = state.forecast_year
+    urbansim_settings = settings.urbansim
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before ATLAS input resolution."
+        )
+    if urbansim_settings is None:
+        raise RuntimeError(
+            "UrbanSim config is required for the vehicle ownership stage."
+        )
+
     forecast_output_path = os.path.join(
         usim_dir,
-        settings.urbansim.output_file_template.format(year=state.forecast_year),
+        urbansim_settings.output_file_template.format(year=forecast_year),
     )
 
     current_candidate = (
@@ -165,15 +183,26 @@ def run_vehicle_ownership_stage(
     else:
         urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
 
+    forecast_year = state.forecast_year
+    urbansim_settings = settings.urbansim
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before running vehicle ownership."
+        )
+    if urbansim_settings is None:
+        raise RuntimeError(
+            "UrbanSim config is required for the vehicle ownership stage."
+        )
+
     if state.is_start_year():
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_datastore_fname = settings.urbansim.input_file_template.format(
+        region_id = urbansim_settings.region_mappings["region_to_region_id"][region]
+        usim_datastore_fname = urbansim_settings.input_file_template.format(
             region_id=region_id
         )
     else:
-        usim_datastore_fname = settings.urbansim.output_file_template.format(
-            year=state.forecast_year
+        usim_datastore_fname = urbansim_settings.output_file_template.format(
+            year=forecast_year
         )
 
     usim_datastore_h5_default_path = os.path.join(

@@ -528,12 +528,15 @@ def make_beam_run_step(
                         "reuse_scope": "any_uri",
                     }
                 )
+                beam_network_schema: Any = None
                 try:
                     from pilates.database.schema.beam_schema import BeamNetworkFinal
                 except Exception:
-                    BeamNetworkFinal = None
-                if BeamNetworkFinal is not None:
-                    meta["schema"] = BeamNetworkFinal
+                    beam_network_schema = None
+                else:
+                    beam_network_schema = BeamNetworkFinal
+                if beam_network_schema is not None:
+                    meta["schema"] = beam_network_schema
             return meta
 
         _log_step_records(
