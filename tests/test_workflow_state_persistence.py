@@ -156,6 +156,46 @@ def test_state_resume_maps_supply_demand_substage_into_major_and_substage(tmp_pa
     assert not resumed.should_run(WorkflowState.Stage.land_use)
 
 
+def test_state_resume_resets_disabled_supply_demand_substage_to_first_enabled(tmp_path):
+    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+    settings.activity_demand_enabled = False
+    settings.traffic_assignment_enabled = True
+
+    state_path = settings.state_file_loc
+    with open(state_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {
+                "year": 2017,
+                "stage": "activity_demand",
+                "iteration": 0,
+                "asim_compiled": False,
+                "sub_stage_progress": "stale-progress",
+                "run_info_path": str(tmp_path / "run_state.yaml"),
+                "data_initialized": True,
+            },
+            handle,
+        )
+
+    resumed = WorkflowState.from_settings(settings)
+
+    assert resumed.current_major_stage == WorkflowState.Stage.supply_demand_loop
+    assert (
+        resumed.current_sub_stage
+        == WorkflowState.Stage.activity_demand_directly_from_land_use
+    )
+    assert resumed.sub_stage_progress is None
+    assert resumed.should_run(
+        WorkflowState.Stage.supply_demand_loop,
+        target_inner_iter=0,
+        target_sub_stage=WorkflowState.Stage.activity_demand_directly_from_land_use,
+    )
+    assert resumed.should_run(
+        WorkflowState.Stage.supply_demand_loop,
+        target_inner_iter=0,
+        target_sub_stage=WorkflowState.Stage.traffic_assignment,
+    )
+
+
 def test_state_write_mirrors_to_secondary_path(tmp_path):
     settings = _make_settings(tmp_path)
     state = WorkflowState.from_settings(settings)

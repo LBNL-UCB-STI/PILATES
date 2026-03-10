@@ -45,6 +45,7 @@ from pilates.workflows.outputs_base import (
 from pilates.workflows.step_runner import common_runtime_kwargs
 from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
+    shared as steps_shared,
     StepOutputsHolder,
     validate_step_ready,
     validate_workflow_step_contracts,
@@ -382,7 +383,11 @@ def run_manifested_steps(
     manifest = load_step_manifest(manifest_config.path) or {}
     stale_steps = _detect_stale_steps(manifest, outputs_holder, workspace)
     if stale_steps:
-        stale_steps = _expand_stale_manifest_steps(steps=steps, stale_steps=stale_steps)
+        stale_steps = _expand_stale_manifest_steps(
+            manifest_step_names=list(manifest.keys()),
+            steps=steps,
+            stale_steps=stale_steps,
+        )
         for step_name in stale_steps:
             manifest.pop(step_name, None)
         save_step_manifest(manifest, manifest_config.path)
@@ -650,28 +655,41 @@ def _detect_stale_steps(
 
 def _expand_stale_manifest_steps(
     *,
+    manifest_step_names: Sequence[str],
     steps: Sequence[StepRef],
     stale_steps: Set[str],
 ) -> Set[str]:
     """
     Invalidate later manifest entries after any stale upstream step.
 
-    ``run_manifested_steps`` executes an ordered stage-local step sequence. If
-    an upstream manifest entry is stale, keeping later entries would allow a
-    mixture of fresh upstream outputs with stale downstream artifacts from the
-    old manifest. To keep restore behavior correct and generic, invalidate the
-    stale step and every later step in the same sequence.
+    ``run_manifested_steps`` may reuse one manifest across multiple ordered
+    invocations in the same stage. If an upstream manifest entry is stale,
+    keeping later entries would allow a mixture of fresh upstream outputs with
+    stale downstream artifacts from the old manifest. To keep restore behavior
+    correct, invalidate the stale step and every later entry in the manifest
+    sequence, not just the current invocation slice.
     """
     if not stale_steps:
         return set()
 
+    scope = set(manifest_step_names)
+    scope.update(step.name for step in steps)
+
+    dependents: Dict[str, Set[str]] = {}
+    for step_name, spec in steps_shared.STEP_DEPENDENCIES.items():
+        for upstream in spec.get("depends_on", ()):
+            dependents.setdefault(str(upstream), set()).add(step_name)
+
     expanded: Set[str] = set()
-    invalidate_remaining = False
-    for step in steps:
-        if step.name in stale_steps:
-            invalidate_remaining = True
-        if invalidate_remaining:
-            expanded.add(step.name)
+    pending = [step_name for step_name in stale_steps if step_name in scope]
+    while pending:
+        step_name = pending.pop()
+        if step_name in expanded:
+            continue
+        expanded.add(step_name)
+        for dependent in sorted(dependents.get(step_name, ())):
+            if dependent in scope and dependent not in expanded:
+                pending.append(dependent)
     return expanded
 
 

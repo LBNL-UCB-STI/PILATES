@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import yaml
 
 from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
@@ -575,4 +576,156 @@ def test_stale_manifest_entry_invalidates_downstream_steps(tmp_path):
     refreshed_run_outputs = manifest["activitysim_run"]["outputs"]
     assert refreshed_run_outputs["raw_outputs"]["households_asim_out_temp"] == str(
         new_run_path
+    )
+
+
+def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tmp_path):
+    workspace = _ManifestWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+    old_run_path = tmp_path / "run-old" / "households.parquet"
+    new_run_path = tmp_path / "run-new" / "households.parquet"
+    old_post_path = tmp_path / "post-old" / "households.parquet"
+    new_post_path = tmp_path / "post-new" / "households.parquet"
+    usim_h5 = tmp_path / "post-new" / "usim_input_2018.h5"
+    for path in (old_run_path, new_run_path, old_post_path, new_post_path, usim_h5):
+        _write_file(path)
+
+    stale_preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        households_table=tmp_path / "missing_households.csv",
+        persons_table=asim_dir / "persons.csv",
+        land_use_table=asim_dir / "land_use.csv",
+    )
+    old_run_outputs = ActivitySimRunOutputs(
+        output_dir=tmp_path / "run-old",
+        raw_outputs={"households_asim_out_temp": old_run_path},
+    )
+    old_postprocess_outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=usim_h5,
+        asim_output_dir=tmp_path / "post-old",
+        processed_outputs={"households_asim_out": old_post_path},
+        usim_datastore_key="usim_input_2018",
+    )
+
+    manifest_path = tmp_path / "manifest_split_downstream_stale.yaml"
+    manifest = {
+        "activitysim_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(stale_preprocess_outputs),
+        },
+        "activitysim_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(old_run_outputs),
+        },
+        "activitysim_postprocess": {
+            "completed_at": "2026-01-01T00:10:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(old_postprocess_outputs),
+        },
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
+
+    def _rerun_preprocess(**_kwargs):
+        holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_dir,
+            households_table=asim_dir / "households.csv",
+            persons_table=asim_dir / "persons.csv",
+            land_use_table=asim_dir / "land_use.csv",
+        )
+
+    def _rerun_run(**_kwargs):
+        holder.activitysim_run = ActivitySimRunOutputs(
+            output_dir=tmp_path / "run-new",
+            raw_outputs={"households_asim_out_temp": new_run_path},
+        )
+
+    def _rerun_postprocess(**_kwargs):
+        holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+            usim_datastore_h5=usim_h5,
+            asim_output_dir=tmp_path / "post-new",
+            processed_outputs={"households_asim_out": new_post_path},
+            usim_datastore_key="usim_input_2018",
+        )
+
+    for fn, model in (
+        (_rerun_preprocess, "activitysim_preprocess"),
+        (_rerun_run, "activitysim_run"),
+        (_rerun_postprocess, "activitysim_postprocess"),
+    ):
+        fn.__consist_step__ = SimpleNamespace(model=model)
+
+    class _ExecutingManifestScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            kwargs["fn"]()
+            return SimpleNamespace(cache_hit=False)
+
+    preprocess_scenario = _ExecutingManifestScenario()
+    run_manifested_steps(
+        stage_name="activity_demand_preprocess",
+        steps=[StepRef(name="activitysim_preprocess", step_func=_rerun_preprocess)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=preprocess_scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_i0",
+        iteration=0,
+    )
+
+    assert [call["fn"].__name__ for call in preprocess_scenario.calls] == [
+        "_rerun_preprocess"
+    ]
+    pruned_manifest = yaml.safe_load(manifest_path.read_text())
+    assert "activitysim_run" not in pruned_manifest
+    assert "activitysim_postprocess" not in pruned_manifest
+
+    downstream_scenario = _ExecutingManifestScenario()
+    run_manifested_steps(
+        stage_name="activity_demand_run",
+        steps=[
+            StepRef(name="activitysim_run", step_func=_rerun_run),
+            StepRef(name="activitysim_postprocess", step_func=_rerun_postprocess),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=downstream_scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_i0",
+        iteration=0,
+    )
+
+    assert [call["fn"].__name__ for call in downstream_scenario.calls] == [
+        "_rerun_run",
+        "_rerun_postprocess",
+    ]
+    refreshed_manifest = yaml.safe_load(manifest_path.read_text())
+    assert (
+        refreshed_manifest["activitysim_run"]["outputs"]["raw_outputs"][
+            "households_asim_out_temp"
+        ]
+        == str(new_run_path)
+    )
+    assert (
+        refreshed_manifest["activitysim_postprocess"]["outputs"]["processed_outputs"][
+            "households_asim_out"
+        ]
+        == str(new_post_path)
     )

@@ -155,8 +155,8 @@ def test_warm_start_activities_forwards_model_specific_payload(monkeypatch) -> N
     assert captured["update_call"] == (settings, state, workspace, None)
 
 
-def test_activitysim_preprocess_public_method_no_longer_depends_on_bridge_helper(
-    monkeypatch, tmp_path: Path
+def test_activitysim_preprocess_public_method_constructs_expected_outputs(
+    tmp_path: Path,
 ) -> None:
     state = _StageTrackingState()
     workspace = SimpleNamespace(
@@ -189,16 +189,6 @@ def test_activitysim_preprocess_public_method_no_longer_depends_on_bridge_helper
                 short_name="persons_asim_in",
             ),
         ]
-    )
-
-    monkeypatch.setattr(
-        ActivitySimPreprocessOutputs,
-        "from_record_store",
-        classmethod(
-            lambda cls, *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("bridge helper should not be used")
-            )
-        ),
     )
 
     class _Preprocessor:

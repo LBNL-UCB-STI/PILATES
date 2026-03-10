@@ -298,6 +298,28 @@ class WorkflowState:
             out.current_sub_stage = None
             out.current_inner_iter = 0
 
+        if out.current_major_stage == out.Stage.supply_demand_loop:
+            if not out.loop_substages:
+                logger.info(
+                    "Persisted supply-demand loop state has no enabled substages; "
+                    "resetting to first enabled major stage."
+                )
+                out.current_major_stage = None
+                out.current_sub_stage = None
+                out.current_inner_iter = 0
+            elif (
+                out.current_sub_stage is not None
+                and out.current_sub_stage not in out.loop_substages
+            ):
+                logger.info(
+                    "Persisted supply-demand substage %s is disabled in current settings; "
+                    "resetting to first enabled substage %s.",
+                    out.current_sub_stage.name,
+                    out.loop_substages[0].name,
+                )
+                out.current_sub_stage = out.loop_substages[0]
+                out.sub_stage_progress = None
+
         if year:
             out.forecast_year = out._compute_forecast_year()
 

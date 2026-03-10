@@ -58,121 +58,14 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from tests.workflow_contract_harness import (
+    CouplerStub,
+    DummyPostprocessor,
+    DummyPreprocessor,
+    DummyRunner,
+    FakeScenario,
+)
 from workflow_state import WorkflowState
-
-
-class CouplerStub:
-    """Minimal in-memory coupler used by the stage boundary tests."""
-
-    def __init__(self) -> None:
-        self._values = {}
-
-    def get(self, key, default=None):
-        return self._values.get(key, default)
-
-    def set(self, key, value) -> None:
-        self._values[key] = value
-
-    def set_from_artifact(self, key, value) -> None:
-        self._values[key] = value
-
-    def require(self, key):
-        if key not in self._values:
-            raise KeyError(f"Coupler missing key={key!r}")
-        return self._values[key]
-
-
-class FakeScenario:
-    """
-    Scenario stub that records calls and enforces required coupler inputs.
-
-    This mirrors the contract we care about at restart boundaries: explicit
-    inputs are materialized into the coupler and ``input_keys`` must already be
-    resolvable by the time the step starts.
-    """
-
-    def __init__(self, coupler: CouplerStub) -> None:
-        self.coupler = coupler
-        self.calls = []
-
-    def run(self, **kwargs):
-        import inspect
-
-        inputs = kwargs.get("inputs") or {}
-        input_keys = kwargs.get("input_keys") or []
-        fn = kwargs["fn"]
-        model = kwargs.get("model")
-        if model is None:
-            step_meta = getattr(fn, "__consist_step__", None)
-            model = getattr(step_meta, "model", None)
-        self.calls.append(
-            {
-                "fn_name": getattr(fn, "__name__", "<unknown>"),
-                "model": model,
-                "inputs": dict(inputs),
-                "input_keys": list(input_keys),
-            }
-        )
-
-        for key, value in inputs.items():
-            self.coupler.set(key, value)
-        for key in input_keys:
-            self.coupler.require(key)
-
-        execution_options = kwargs.get("execution_options")
-        runtime_kwargs = kwargs.get("runtime_kwargs") or getattr(
-            execution_options, "runtime_kwargs", None
-        )
-        runtime_kwargs = dict(runtime_kwargs or {})
-        fn_kwargs = dict(runtime_kwargs)
-
-        sig = inspect.signature(fn)
-        accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in sig.parameters.values()
-        )
-        if accepts_kwargs:
-            fn_kwargs.update(inputs)
-            for key in input_keys:
-                fn_kwargs.setdefault(key, self.coupler.get(key))
-        else:
-            allowed = set(sig.parameters.keys())
-            for key, value in inputs.items():
-                if key in allowed:
-                    fn_kwargs[key] = value
-            for key in input_keys:
-                if key in allowed:
-                    fn_kwargs.setdefault(key, self.coupler.get(key))
-
-        fn(**fn_kwargs)
-        return {"status": "ok"}
-
-
-class DummyPreprocessor:
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def preprocess(self, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "preprocess")
-
-
-class DummyRunner:
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def run(self, input_store, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "run")
-
-
-class DummyPostprocessor:
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def postprocess(self, raw_outputs, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "postprocess")
 
 
 def _write_file(path: Path, content: str = "x") -> Path:

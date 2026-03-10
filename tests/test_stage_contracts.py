@@ -73,130 +73,14 @@ from pilates.workflows.stages.supply_demand import (
     TrafficAssignmentPhaseInputs,
 )
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from tests.workflow_contract_harness import (
+    CouplerStub,
+    DummyPostprocessor,
+    DummyPreprocessor,
+    DummyRunner,
+    FakeScenario,
+)
 from workflow_state import WorkflowState
-
-
-class CouplerStub:
-    """Minimal in-memory coupler implementation for stage contract tests."""
-
-    def __init__(self) -> None:
-        self._values = {}
-
-    def set(self, key, value) -> None:
-        self._values[key] = value
-
-    def set_from_artifact(self, key, value) -> None:
-        self._values[key] = value
-
-    def get(self, key, default=None):
-        return self._values.get(key, default)
-
-    def pop(self, key, default=None):
-        return self._values.pop(key, default)
-
-    def keys(self):
-        return list(self._values.keys())
-
-    def require(self, key):
-        if key not in self._values:
-            raise KeyError(f"Coupler missing key={key!r}")
-        return self._values[key]
-
-
-class FakeScenario:
-    """
-    Scenario stub that enforces coupler key requirements and records each call.
-
-    This mirrors the contract-level behavior we depend on in production:
-    ``inputs`` materialize concrete values, while ``input_keys`` must already
-    exist in the coupler.
-    """
-
-    def __init__(self, coupler: CouplerStub) -> None:
-        self.coupler = coupler
-        self.calls = []
-
-    def run(self, **kwargs):
-        import inspect
-
-        inputs = kwargs.get("inputs") or {}
-        input_keys = kwargs.get("input_keys") or []
-        fn = kwargs["fn"]
-        model = kwargs.get("model")
-        if model is None:
-            step_meta = getattr(fn, "__consist_step__", None)
-            model = getattr(step_meta, "model", None)
-        self.calls.append(
-            {
-                "fn_name": getattr(fn, "__name__", "<unknown>"),
-                "model": model,
-                "inputs": dict(inputs),
-                "input_keys": list(input_keys),
-            }
-        )
-        for key, value in inputs.items():
-            self.coupler.set(key, value)
-        for key in input_keys:
-            self.coupler.require(key)
-
-        execution_options = kwargs.get("execution_options")
-        runtime_kwargs = kwargs.get("runtime_kwargs") or getattr(
-            execution_options, "runtime_kwargs", None
-        )
-        runtime_kwargs = dict(runtime_kwargs or {})
-        fn_kwargs = dict(runtime_kwargs)
-        sig = inspect.signature(fn)
-        accepts_kwargs = any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in sig.parameters.values()
-        )
-        if accepts_kwargs:
-            fn_kwargs.update(inputs)
-            for key in input_keys:
-                fn_kwargs.setdefault(key, self.coupler.get(key))
-        else:
-            allowed = set(sig.parameters.keys())
-            for key, value in inputs.items():
-                if key in allowed:
-                    fn_kwargs[key] = value
-            for key in input_keys:
-                if key in allowed:
-                    fn_kwargs.setdefault(key, self.coupler.get(key))
-        fn(**fn_kwargs)
-        return {"status": "ok"}
-
-
-class DummyPreprocessor:
-    """Deterministic preprocessor stub backed by ``record_builder``."""
-
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def preprocess(self, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "preprocess")
-
-
-class DummyRunner:
-    """Deterministic runner stub backed by ``record_builder``."""
-
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def run(self, input_store, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "run")
-
-
-class DummyPostprocessor:
-    """Deterministic postprocessor stub backed by ``record_builder``."""
-
-    def __init__(self, model_name, record_builder):
-        self.model_name = model_name
-        self._record_builder = record_builder
-
-    def postprocess(self, raw_outputs, workspace, **_kwargs):
-        return self._record_builder(self.model_name, "postprocess")
 
 
 def _write_file(path: Path, content: str = "x") -> None:
