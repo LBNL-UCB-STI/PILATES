@@ -156,11 +156,17 @@ def _add_urbansim_candidates(
     local_run_dir: str,
     archive_run_dir: str,
 ) -> None:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "land_use", None) != "urbansim":
+        return
+
     get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
     if not callable(get_usim_dir):
         return
 
     usim_dir = get_usim_dir()
+    if not usim_dir:
+        return
     try:
         base_fname = get_usim_datastore_fname(settings, io="input")
     except Exception:
@@ -194,10 +200,14 @@ def _add_urbansim_candidates(
 def _add_atlas_year_dir_candidates(
     artifacts: List[Dict[str, Any]],
     *,
+    settings: Any,
     workspace: Any,
     local_run_dir: str,
     archive_run_dir: str,
 ) -> None:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return
     for getter_name, prefix in (
         ("get_atlas_mutable_input_dir", "atlas_input"),
         ("get_atlas_output_dir", "atlas_output"),
@@ -206,6 +216,8 @@ def _add_atlas_year_dir_candidates(
         if not callable(getter):
             continue
         local_base = getter()
+        if not local_base:
+            continue
         rel = _safe_relpath(local_base, local_run_dir)
         if not rel:
             continue
@@ -340,6 +352,7 @@ def build_restart_bundle_manifest(
     )
     _add_atlas_year_dir_candidates(
         artifacts,
+        settings=settings,
         workspace=workspace,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_root,
