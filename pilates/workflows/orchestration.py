@@ -162,6 +162,7 @@ def _build_step_run_kwargs(
             cache_mode=step.cache_mode,
             code_identity=code_identity,
         )
+
     def _normalize_output_keys(values: Any) -> Optional[list[str]]:
         if not isinstance(values, Sequence) or isinstance(values, str):
             return None
@@ -442,7 +443,9 @@ def run_manifested_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 )
-            remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
+            remember_restored_run_id = getattr(
+                scenario, "remember_restored_run_id", None
+            )
             if callable(remember_restored_run_id):
                 remember_restored_run_id(
                     model_name=model_name,
@@ -590,9 +593,8 @@ def run_workflow(
             )
 
         result = scenario.run(**run_kwargs)
-        if (
-            outputs_holder.get_attribute(spec.name) is None
-            and getattr(result, "cache_hit", False)
+        if outputs_holder.get_attribute(spec.name) is None and getattr(
+            result, "cache_hit", False
         ):
             _recover_step_outputs(
                 step_name=spec.name,
@@ -607,9 +609,8 @@ def run_workflow(
                 run_id=getattr(getattr(result, "run", None), "id", None),
                 publish_outputs=True,
             )
-        if (
-            outputs_holder.get_attribute(spec.name) is None
-            and getattr(result, "cache_hit", False)
+        if outputs_holder.get_attribute(spec.name) is None and getattr(
+            result, "cache_hit", False
         ):
             logger.warning(
                 "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
@@ -619,9 +620,8 @@ def run_workflow(
             rerun_kwargs = dict(run_kwargs)
             rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
             result = scenario.run(**rerun_kwargs)
-            if (
-                outputs_holder.get_attribute(spec.name) is None
-                and getattr(result, "cache_hit", False)
+            if outputs_holder.get_attribute(spec.name) is None and getattr(
+                result, "cache_hit", False
             ):
                 _recover_step_outputs(
                     step_name=spec.name,
@@ -957,10 +957,7 @@ def _update_coupler_from_mapping(
             continue
         artifact = (
             resolved
-            if (
-                hasattr(resolved, "container_uri")
-                or hasattr(resolved, "uri")
-            )
+            if (hasattr(resolved, "container_uri") or hasattr(resolved, "uri"))
             else None
         )
         set_coupler_from_artifact(

@@ -196,9 +196,9 @@ def _recover_urbansim_run_outputs(
         run_id=run_id,
         workspace=workspace,
     )
-    usim_datastore_h5 = recovered_paths.get(USIM_FORECAST_OUTPUT) or recovered_paths.get(
-        USIM_DATASTORE_H5
-    )
+    usim_datastore_h5 = recovered_paths.get(
+        USIM_FORECAST_OUTPUT
+    ) or recovered_paths.get(USIM_DATASTORE_H5)
     if usim_datastore_h5 is None:
         return None
     return UrbanSimRunOutputs(
@@ -323,8 +323,7 @@ def _execute_urbansim_run_typed(
         raise RuntimeError("UrbanSim preprocess must complete first")
     if not isinstance(upstream, UrbanSimPreprocessOutputs):
         raise TypeError(
-            "urbansim_run requires UrbanSimPreprocessOutputs from "
-            "urbansim_preprocess"
+            "urbansim_run requires UrbanSimPreprocessOutputs from urbansim_preprocess"
         )
     return runner.run(upstream, workspace)
 
@@ -383,6 +382,7 @@ def _execute_atlas_postprocess_typed(
         raise TypeError("atlas_postprocess requires AtlasRunOutputs from atlas_run")
     return postprocessor.postprocess(upstream, workspace)
 
+
 def make_urbansim_preprocess_step(
     *,
     coupler: CouplerProtocol,
@@ -438,16 +438,16 @@ def make_urbansim_preprocess_step(
                 "WorkflowState.forecast_year must be set before UrbanSim preprocess logging."
             )
         if urbansim_settings is None:
-            raise RuntimeError("UrbanSim config is required for UrbanSim preprocess logging.")
+            raise RuntimeError(
+                "UrbanSim config is required for UrbanSim preprocess logging."
+            )
         for short_name, path, description in outputs._iter_record_items():
             log_and_set_output(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
-                **_urbansim_output_facet_meta(
-                    short_name, forecast_year=forecast_year
-                ),
+                **_urbansim_output_facet_meta(short_name, forecast_year=forecast_year),
             )
         usim_data_dir = outputs.usim_mutable_data_dir
         usim_input_fname = urbansim_settings.input_file_template.format(
@@ -528,9 +528,7 @@ def make_urbansim_run_step(
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
-                description=(
-                    f"UrbanSim datastore output for year {forecast_year}"
-                ),
+                description=(f"UrbanSim datastore output for year {forecast_year}"),
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
@@ -546,9 +544,7 @@ def make_urbansim_run_step(
         model_name="urbansim",
         phase="run",
         outputs_class=UrbanSimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "urbansim", state
-        ),
+        component_getter=lambda factory, state: factory.get_runner("urbansim", state),
         component_executor=_execute_urbansim_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "urbansim_run", outputs
@@ -665,6 +661,7 @@ def make_atlas_preprocess_step(
     callable
         Step function for ATLAS preprocess.
     """
+
     def _log_outputs(
         outputs: AtlasPreprocessOutputs,
         settings: PilatesConfig,
@@ -734,6 +731,7 @@ def make_atlas_run_step(
     callable
         Step function for ATLAS run.
     """
+
     def _log_inputs(
         settings: PilatesConfig,
         state: WorkflowState,
@@ -785,9 +783,7 @@ def make_atlas_run_step(
         model_name="atlas",
         phase="run",
         outputs_class=AtlasRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "atlas", state
-        ),
+        component_getter=lambda factory, state: factory.get_runner("atlas", state),
         component_executor=_execute_atlas_run_typed,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "atlas_run", outputs
@@ -821,6 +817,7 @@ def make_atlas_postprocess_step(
     callable
         Step function for ATLAS postprocess.
     """
+
     def _log_inputs(
         settings: PilatesConfig,
         state: WorkflowState,
@@ -834,12 +831,12 @@ def make_atlas_postprocess_step(
                 "WorkflowState.forecast_year must be set before ATLAS postprocess."
             )
         if urbansim_settings is None:
-            raise RuntimeError("UrbanSim config is required for ATLAS postprocess logging.")
+            raise RuntimeError(
+                "UrbanSim config is required for ATLAS postprocess logging."
+            )
         usim_output_path = os.path.join(
             workspace.get_usim_mutable_data_dir(),
-            urbansim_settings.output_file_template.format(
-                year=forecast_year
-            ),
+            urbansim_settings.output_file_template.format(year=forecast_year),
         )
         if os.path.exists(usim_output_path):
             log_input_only(
@@ -901,8 +898,7 @@ def make_atlas_postprocess_step(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
-                    "UrbanSim datastore updated by ATLAS for year "
-                    f"{forecast_year}"
+                    f"UrbanSim datastore updated by ATLAS for year {forecast_year}"
                 ),
                 coupler=coupler,
                 profile_file_schema=True,

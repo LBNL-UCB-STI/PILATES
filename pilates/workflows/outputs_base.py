@@ -268,9 +268,7 @@ def deserialize_step_outputs(
             kwargs[output_field.name] = Path(value)
             continue
         if _is_dict_path_type(output_field.type):
-            kwargs[output_field.name] = {
-                key: Path(val) for key, val in value.items()
-            }
+            kwargs[output_field.name] = {key: Path(val) for key, val in value.items()}
             continue
         kwargs[output_field.name] = value
     return output_class(**kwargs)
@@ -461,6 +459,5 @@ class StepOutputsBase:
             raise AssertionError(
                 f"Semantic validation failed for step '{step_label}' "
                 f"({self.__class__.__name__}). "
-                "Fix the flagged output contract issue(s): "
-                + "; ".join(error_messages)
+                "Fix the flagged output contract issue(s): " + "; ".join(error_messages)
             )

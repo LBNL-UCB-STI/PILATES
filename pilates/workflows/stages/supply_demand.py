@@ -389,10 +389,7 @@ def _run_activity_demand_phase(
             "(explicit, coupler, or fallback), but none were available."
         )
 
-    if (
-        not preprocess_resolution.inputs
-        and not preprocess_resolution.input_keys
-    ):
+    if not preprocess_resolution.inputs and not preprocess_resolution.input_keys:
         # Keep existing behavior for provenance/cache identity compatibility:
         # require the canonical current datastore key when no concrete source
         # could be selected from the preferred chain.
@@ -485,9 +482,7 @@ def _run_activity_demand_phase(
         existing_cache_path = (
             _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
         )
-        if not existing_zarr_path or (
-            requires_numba_cache and not existing_cache_path
-        ):
+        if not existing_zarr_path or (requires_numba_cache and not existing_cache_path):
             missing_parts = []
             if not existing_zarr_path:
                 missing_parts.append("zarr_skims")
@@ -586,9 +581,7 @@ def _run_activity_demand_phase(
     asim_run_input_keys = [
         short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
     ]
-    asim_run_input_keys = [
-        key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS
-    ]
+    asim_run_input_keys = [key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS]
     asim_run_input_keys.append(ZARR_SKIMS)
 
     activitysim_postprocess_inputs: Dict[str, str] = {}
@@ -809,10 +802,7 @@ def _collect_beam_preprocess_inputs(
         if warmstart_path:
             beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
 
-    if (
-        getattr(settings, "vehicle_ownership_model_enabled", False)
-        and iteration == 0
-    ):
+    if getattr(settings, "vehicle_ownership_model_enabled", False) and iteration == 0:
         if state.run_info_path and os.path.exists(state.run_info_path):
             previous_run_dir = os.path.dirname(state.run_info_path)
             atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
@@ -875,7 +865,9 @@ def _restore_activity_demand_outputs_for_resume(
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
             usim_datastore_h5=None,
             asim_output_dir=None,
-            processed_outputs={key: Path(path) for key, path in restored_outputs.items()},
+            processed_outputs={
+                key: Path(path) for key, path in restored_outputs.items()
+            },
         )
     return restored_outputs or None
 
@@ -1348,7 +1340,7 @@ def run_supply_demand_stage(
 
     for i in range(state.iteration, total_iters):
         state.iteration = i
-        formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
+        formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
         activity_demand_outputs = None
         outputs_holder = StepOutputsHolder()
         manifest_path = build_manifest_path(workspace, year, i)

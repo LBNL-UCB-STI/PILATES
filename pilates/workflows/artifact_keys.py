@@ -127,4 +127,5 @@ class ArtifactKeys:
     def all(cls) -> List[str]:
         return list(cls.as_dict().values())
 
+
 __all__ = ["ARTIFACT_KEYS", "ArtifactKeys", *ARTIFACT_KEYS.keys()]

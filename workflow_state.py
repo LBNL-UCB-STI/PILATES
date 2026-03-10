@@ -45,7 +45,6 @@ class WorkflowState:
         run_info_path: Optional[str] = None,  # new
         data_initialized: bool = False,
     ):
-
         # Store basic simulation parameters
         self.start_year = start_year
         self.end_year = end_year

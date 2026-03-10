@@ -11,7 +11,10 @@ from pilates.activitysim.runner import (
     persist_sharrow_cache_enabled,
 )
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
-from pilates.utils.coupler_helpers import artifact_to_existing_path, resolve_existing_path
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    resolve_existing_path,
+)
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
@@ -500,8 +503,7 @@ def _recover_activitysim_postprocess_outputs(
             "beam_plans_asim_out",
         }
         available_outputs = {
-            normalize_asim_output_key(path.stem)
-            for path in iter_dir.glob("*.parquet")
+            normalize_asim_output_key(path.stem) for path in iter_dir.glob("*.parquet")
         }
         if not required_outputs.issubset(available_outputs):
             return None
@@ -589,9 +591,7 @@ def _recover_activitysim_postprocess_outputs(
         if urbansim_settings is not None:
             usim_path = os.path.join(
                 workspace.get_usim_mutable_data_dir(),
-                urbansim_settings.output_file_template.format(
-                    year=state.forecast_year
-                ),
+                urbansim_settings.output_file_template.format(year=state.forecast_year),
             )
     usim_existing = _existing_local_path(usim_path, workspace)
     if not processed_outputs and not usim_existing:
@@ -601,7 +601,9 @@ def _recover_activitysim_postprocess_outputs(
         asim_output_dir=asim_output_dir,
         processed_outputs=processed_outputs,
         processed_output_hashes=processed_output_hashes,
-        usim_datastore_key=f"usim_input_{state.forecast_year}" if usim_existing else None,
+        usim_datastore_key=f"usim_input_{state.forecast_year}"
+        if usim_existing
+        else None,
     )
 
 
@@ -716,8 +718,7 @@ def make_activitysim_compile_step(
                     key=ASIM_SHARROW_CACHE_DIR,
                     path=cache_path,
                     description=(
-                        "ActivitySim persisted compile cache directory "
-                        "(numba/sharrow)"
+                        "ActivitySim persisted compile cache directory (numba/sharrow)"
                     ),
                     coupler=coupler,
                     **_activitysim_output_facet_meta(
@@ -726,7 +727,11 @@ def make_activitysim_compile_step(
                         iteration=state.iteration,
                     ),
                 )
-            elif cache_path and os.path.exists(cache_path) and not os.path.isdir(cache_path):
+            elif (
+                cache_path
+                and os.path.exists(cache_path)
+                and not os.path.isdir(cache_path)
+            ):
                 logger.warning(
                     "ActivitySim compile cache output path is not a directory: %s",
                     cache_path,
@@ -1086,14 +1091,16 @@ def make_activitysim_run_step(
         runtime_zarr_path = os.path.join(
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
-        zarr_path = runtime_zarr_path if os.path.exists(runtime_zarr_path) else artifact_to_path(
-            zarr_value, workspace
+        zarr_path = (
+            runtime_zarr_path
+            if os.path.exists(runtime_zarr_path)
+            else artifact_to_path(zarr_value, workspace)
         )
         if zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
-            content_hash = _artifact_content_hash(zarr_value) or compile_input_hashes.get(
-                ZARR_SKIMS
-            )
+            content_hash = _artifact_content_hash(
+                zarr_value
+            ) or compile_input_hashes.get(ZARR_SKIMS)
             if content_hash:
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
 
@@ -1222,9 +1229,7 @@ def make_activitysim_postprocess_step(
 
             forecast_store_path = os.path.join(
                 usim_data_dir,
-                get_usim_datastore_fname(
-                    settings, io="output", year=forecast_year
-                ),
+                get_usim_datastore_fname(settings, io="output", year=forecast_year),
             )
             if os.path.exists(forecast_store_path):
                 log_input_only(
@@ -1249,7 +1254,10 @@ def make_activitysim_postprocess_step(
             raise RuntimeError(
                 "WorkflowState.forecast_year must be set before ActivitySim postprocess logging."
             )
-        def _extra_meta(short_name: str, _path: str, _description: str) -> Dict[str, Any]:
+
+        def _extra_meta(
+            short_name: str, _path: str, _description: str
+        ) -> Dict[str, Any]:
             meta: Dict[str, Any] = _activitysim_output_facet_meta(
                 short_name,
                 year=forecast_year,

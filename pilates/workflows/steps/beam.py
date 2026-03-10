@@ -43,7 +43,9 @@ StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
 def _is_beam_sub_iteration_key(short_name: Optional[str]) -> bool:
-    return bool(short_name and ("_sub" in short_name or "__beam_sub_iter" in short_name))
+    return bool(
+        short_name and ("_sub" in short_name or "__beam_sub_iter" in short_name)
+    )
 
 
 def _beam_linkstats_publication_meta(
@@ -150,8 +152,7 @@ def _publish_beam_run_outputs(
             key=short_name,
             path=str(path),
             description=(
-                "BEAM unmodified linkstats parquet output for phys sim "
-                "sub-iteration"
+                "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
             ),
             coupler=coupler,
             profile_file_schema=True,
@@ -200,9 +201,7 @@ def _execute_beam_run(
     if upstream is None:
         raise RuntimeError("BEAM preprocess must complete first")
     if not isinstance(upstream, BeamPreprocessOutputs):
-        raise TypeError(
-            "beam_run requires BeamPreprocessOutputs from beam_preprocess"
-        )
+        raise TypeError("beam_run requires BeamPreprocessOutputs from beam_preprocess")
     return runner.run(
         upstream,
         workspace,
@@ -270,9 +269,11 @@ def _make_beam_step_function(
         factory = ModelFactory()
         component = component_getter(factory, state)
 
-        extra_kwargs = dict(
-            input_logger(settings, state, workspace, outputs_holder) or {}
-        ) if input_logger is not None else {}
+        extra_kwargs = (
+            dict(input_logger(settings, state, workspace, outputs_holder) or {})
+            if input_logger is not None
+            else {}
+        )
         step_outputs = component_executor(
             component,
             workspace,
@@ -546,9 +547,7 @@ def make_beam_preprocess_step(
         model_name="beam",
         phase="preprocess",
         outputs_class=BeamPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "beam", state
-        ),
+        component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
             _execute_beam_preprocess(
                 component,
@@ -616,9 +615,7 @@ def make_beam_run_step(
         from pathlib import Path
 
         output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-        plans_path, experienced_path = find_last_run_output_plans(
-            output_root, "year-"
-        )
+        plans_path, experienced_path = find_last_run_output_plans(output_root, "year-")
         if plans_path is not None and plans_path.exists():
             if plans_path.name == "output_plans.xml.gz":
                 plans_key = BEAM_OUTPUT_PLANS_XML
@@ -694,9 +691,7 @@ def make_beam_run_step(
         model_name="beam",
         phase="run",
         outputs_class=BeamRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "beam", state
-        ),
+        component_getter=lambda factory, state: factory.get_runner("beam", state),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
             _execute_beam_run(
                 component,

@@ -322,12 +322,8 @@ def _log_step_records(
     for short_name, path, description in record_items:
         path_str = str(path)
         meta: Dict[str, Any] = {}
-        if (
-            short_name in profile_schema_keys
-            or (
-                profile_schema_suffixes
-                and path_str.endswith(profile_schema_suffixes)
-            )
+        if short_name in profile_schema_keys or (
+            profile_schema_suffixes and path_str.endswith(profile_schema_suffixes)
         ):
             meta["profile_file_schema"] = profile_schema_value
         if extra_meta_fn is not None:
@@ -405,7 +401,9 @@ def _log_named_h5_tables(
         logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
 
 
-def _parse_prefixed_iteration_key(short_name: str, prefix: str) -> Optional[Dict[str, Any]]:
+def _parse_prefixed_iteration_key(
+    short_name: str, prefix: str
+) -> Optional[Dict[str, Any]]:
     marker = f"{prefix}_"
     if not short_name.startswith(marker):
         return None
@@ -459,9 +457,7 @@ def _beam_artifact_facets(short_name: str) -> Optional[Dict[str, Any]]:
                     return None
             elif token.startswith("phys_sim_iter"):
                 try:
-                    payload["phys_sim_iteration"] = int(
-                        token[len("phys_sim_iter") :]
-                    )
+                    payload["phys_sim_iteration"] = int(token[len("phys_sim_iter") :])
                 except ValueError:
                     return None
             elif token.startswith("beam_sub_iter"):
@@ -676,9 +672,7 @@ def _log_beam_r5_osm_input(
                     BeamConfigIngestRunLink.config_name == config_name
                 )
             osm_rows = session.exec(
-                base_stmt.where(
-                    BeamConfigCache.key == "beam.routing.r5.osmFile"
-                )
+                base_stmt.where(BeamConfigCache.key == "beam.routing.r5.osmFile")
             ).all()
             if len(osm_rows) > 1:
                 logger.warning(
@@ -724,17 +718,14 @@ def _log_beam_r5_osm_input(
             if osm_value and "${" not in osm_value:
                 resolved_osm_path = osm_value
                 if not os.path.isabs(resolved_osm_path):
-                    resolved_osm_path = str(
-                        (config_root / resolved_osm_path).resolve()
-                    )
+                    resolved_osm_path = str((config_root / resolved_osm_path).resolve())
                 if not os.path.exists(resolved_osm_path):
                     resolved_osm_path = None
 
             if resolved_osm_path is None:
                 mapdb_row = session.exec(
                     base_stmt.where(
-                        BeamConfigCache.key
-                        == "beam.routing.r5.osmMapdbFile"
+                        BeamConfigCache.key == "beam.routing.r5.osmMapdbFile"
                     )
                 ).first()
                 mapdb_value = mapdb_row[0] if mapdb_row else None
@@ -755,15 +746,14 @@ def _log_beam_r5_osm_input(
                 cr.log_input(
                     resolved_osm_path,
                     key=BEAM_R5_OSM_FILE,
-                    description=(
-                        "BEAM R5 OSM input referenced by config"
-                    ),
+                    description=("BEAM R5 OSM input referenced by config"),
                 )
     except Exception:
         logger.debug(
             "Failed to resolve/log BEAM R5 OSM file from config.",
             exc_info=True,
         )
+
 
 StepOutputsT = TypeVar("StepOutputsT")
 InputLogger = Callable[
@@ -880,7 +870,9 @@ def _upstream_outputs_view(
         Mapping of holder field name to output object for populated entries.
     """
     current_attr = (
-        current_step_name.replace("-", "_") if isinstance(current_step_name, str) else None
+        current_step_name.replace("-", "_")
+        if isinstance(current_step_name, str)
+        else None
     )
     upstream: Dict[str, Any] = {}
     for holder_field in fields(StepOutputsHolder):
@@ -1062,8 +1054,7 @@ def validate_workflow_step_contracts(
         )
         if duplicate_declared:
             errors.append(
-                "Duplicate declared step model names: "
-                + ", ".join(duplicate_declared)
+                "Duplicate declared step model names: " + ", ".join(duplicate_declared)
             )
 
         declared_names = set(declared_counts.keys())
@@ -1094,7 +1085,9 @@ def validate_workflow_step_contracts(
                 continue
             canonical = list(declared_outputs_for_step_outputs_class(outputs_class))
             step_meta = getattr(step_func, "__consist_step__", None)
-            metadata_outputs = _normalize_output_keys(getattr(step_meta, "outputs", None))
+            metadata_outputs = _normalize_output_keys(
+                getattr(step_meta, "outputs", None)
+            )
             if canonical != metadata_outputs:
                 errors.append(
                     f"Step '{step_name}': canonical outputs {canonical} conflict with metadata outputs "
@@ -1140,7 +1133,9 @@ def require_common_runtime(
     return cr.require_runtime_kwargs("settings", "state", "workspace", *names)
 
 
-def _schema_outputs_from_class(outputs_class: Type[StepOutputsT]) -> Optional[list[str]]:
+def _schema_outputs_from_class(
+    outputs_class: Type[StepOutputsT],
+) -> Optional[list[str]]:
     record_keys = getattr(outputs_class, "record_keys", None) or {}
     values = [value for value in record_keys.values() if isinstance(value, str)]
     unique = sorted(set(values))

@@ -67,8 +67,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             ws_path = _workspace_path(ctx)
             if ws_path:
                 mutable_configs_root = (
-                    Path(ws_path)
-                    / activitysim_settings.local_mutable_configs_folder
+                    Path(ws_path) / activitysim_settings.local_mutable_configs_folder
                 )
         if mutable_configs_root is None:
             return None
@@ -119,7 +118,9 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_beam_mutable_data_dir"
         ):
-            config_root = Path(workspace_obj.get_beam_mutable_data_dir()) / run_settings.region
+            config_root = (
+                Path(workspace_obj.get_beam_mutable_data_dir()) / run_settings.region
+            )
         else:
             ws_path = _workspace_path(ctx)
             if ws_path:

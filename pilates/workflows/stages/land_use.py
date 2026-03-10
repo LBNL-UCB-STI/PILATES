@@ -79,9 +79,8 @@ def run_land_use_stage(
         "urbansim", usim_inputs, settings, state, workspace
     )
     preprocess_inputs = dict(usim_inputs)
-    if (
-        preprocess_inputs.get(USIM_DATASTORE_BASE_H5)
-        == preprocess_inputs.get(USIM_DATASTORE_CURRENT_H5)
+    if preprocess_inputs.get(USIM_DATASTORE_BASE_H5) == preprocess_inputs.get(
+        USIM_DATASTORE_CURRENT_H5
     ):
         preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
     preprocess_resolution = resolve_step_inputs(
@@ -126,7 +125,9 @@ def run_land_use_stage(
         # Some preprocessors materialize key artifacts via explicit logging rather
         # than RecordStore outputs; fall back to declared UrbanSim inputs so run
         # identity/provenance still reflects true dependencies.
-        run_inputs = {key: value for key, value in usim_inputs.items() if value is not None}
+        run_inputs = {
+            key: value for key, value in usim_inputs.items() if value is not None
+        }
     run_resolution = resolve_step_inputs(
         keys=run_inputs.keys(),
         explicit_inputs=run_inputs,

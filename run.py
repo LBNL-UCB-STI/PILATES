@@ -817,7 +817,9 @@ def main():
                 _format_missing_artifact_summary(restart_missing_artifacts_initial),
             )
             if restart_rehydrate_mode == "off":
-                logger.info("Restart rehydration disabled (run.restart_rehydrate_mode=off).")
+                logger.info(
+                    "Restart rehydration disabled (run.restart_rehydrate_mode=off)."
+                )
             elif restart_rehydrate_mode == "full":
                 _rehydrate_full_local_run_from_archive(
                     local_run_dir=local_run_dir,
@@ -944,7 +946,8 @@ def main():
     )
     scenario_tags = _merge_tag_list(
         ["pilates_simulation"],
-        [f"scenario_id:{scenario_id}"] + ([f"seed:{run_seed}"] if run_seed is not None else []),
+        [f"scenario_id:{scenario_id}"]
+        + ([f"seed:{run_seed}"] if run_seed is not None else []),
     )
     try:
         with cr.scenario(
@@ -1027,7 +1030,8 @@ def main():
                         usim_inputs=usim_inputs,
                         build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
-                            lambda iteration, y=year: snapshot_manager.on_outer_iteration_boundary(
+                            lambda iteration,
+                            y=year: snapshot_manager.on_outer_iteration_boundary(
                                 year=y,
                                 iteration=iteration,
                             )
@@ -1051,7 +1055,9 @@ def main():
                     snapshot_manager.maybe_snapshot_interval(
                         reason=f"after_postprocessing_y{year}"
                     )
-                snapshot_manager.maybe_snapshot_interval(reason=f"year_boundary_y{year}")
+                snapshot_manager.maybe_snapshot_interval(
+                    reason=f"year_boundary_y{year}"
+                )
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")

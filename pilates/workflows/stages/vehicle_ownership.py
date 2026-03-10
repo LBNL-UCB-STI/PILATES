@@ -308,7 +308,11 @@ def run_vehicle_ownership_stage(
             step_inputs.get(USIM_DATASTORE_BASE_H5),
         )
         atlas_run_resolution = resolve_step_inputs(
-            keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5, *atlas_static_keys],
+            keys=[
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+                *atlas_static_keys,
+            ],
             coupler=coupler,
             explicit_inputs={
                 USIM_DATASTORE_CURRENT_H5: step_inputs.get(USIM_DATASTORE_CURRENT_H5),

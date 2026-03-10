@@ -13,6 +13,7 @@ from .shared import (
     require_common_runtime,
 )
 
+
 def make_postprocessing_step() -> Callable[..., None]:
     """
     Build the postprocessing step function.
