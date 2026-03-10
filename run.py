@@ -15,6 +15,7 @@ import warnings
 from datetime import datetime
 import os
 import logging
+import shlex
 import sys
 import shutil
 import socket
@@ -82,6 +83,7 @@ logger = logging.getLogger(__name__)
 
 
 _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
+_RUN_FAILURE_CONTEXT: Dict[str, Any] = {}
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -94,6 +96,58 @@ def _resolve_scenario_id(settings: Any) -> str:
 
 def _resolve_seed(settings: Any) -> Optional[int]:
     return scenario_runtime.resolve_seed(settings)
+
+
+def _set_run_failure_context(**kwargs: Any) -> None:
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        _RUN_FAILURE_CONTEXT[key] = value
+
+
+def _format_restart_command(
+    *,
+    settings: Optional[Any],
+    archive_state_path: Optional[str],
+) -> Optional[str]:
+    config_path = None
+    if settings is not None:
+        config_path = getattr(settings, "settings_file", None)
+    if not config_path and not archive_state_path:
+        return None
+
+    command = ["python", "run.py"]
+    if config_path:
+        command.extend(["-c", str(config_path)])
+    if archive_state_path:
+        command.extend(["-S", str(archive_state_path)])
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def _log_restart_instructions_on_failure() -> None:
+    settings = _RUN_FAILURE_CONTEXT.get("settings")
+    state = _RUN_FAILURE_CONTEXT.get("state")
+    archive_run_dir = _RUN_FAILURE_CONTEXT.get("archive_run_dir")
+    local_run_dir = _RUN_FAILURE_CONTEXT.get("local_run_dir")
+    archive_state_path = _RUN_FAILURE_CONTEXT.get("archive_state_path")
+    if archive_state_path is None and state is not None:
+        archive_state_path = getattr(state, "run_info_path", None)
+
+    command = _format_restart_command(
+        settings=settings,
+        archive_state_path=archive_state_path,
+    )
+    if command is None:
+        return
+
+    logger.error("Run failed. Restart command:")
+    logger.error("  %s", command)
+    if archive_state_path:
+        logger.error("  state file: %s", archive_state_path)
+    if archive_run_dir:
+        logger.error("  archive run dir: %s", archive_run_dir)
+    if local_run_dir:
+        logger.error("  local run dir: %s", local_run_dir)
 
 
 def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
@@ -585,9 +639,11 @@ def main():
     - Model outputs: Cached per iteration (convergence check)
     - Restarting: Skips initialization if run_state.yaml exists
     """
+    _RUN_FAILURE_CONTEXT.clear()
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
     state = WorkflowState.from_settings(settings)
+    _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
 
@@ -624,6 +680,10 @@ def main():
 
     archive_run_dir = os.path.join(output_path, run_name)
     local_run_dir = os.path.join(local_root, run_name)
+    _set_run_failure_context(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+    )
     os.makedirs(local_run_dir, exist_ok=True)
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
@@ -708,6 +768,7 @@ def main():
     )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
+    _set_run_failure_context(archive_state_path=archive_state_path)
     if is_restart_run:
         _enforce_resume_rewind_guardrail(
             state=state,
@@ -1003,4 +1064,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_restart_instructions_on_failure()
+        raise

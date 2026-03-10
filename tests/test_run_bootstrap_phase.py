@@ -453,6 +453,100 @@ def test_resume_doctor_degraded_summary_reports_missing_checks_and_manifest_chec
     assert "[ResumeDoctor] summary status=degraded reason=missing_checks:" in caplog.text
 
 
+def test_format_restart_command_uses_config_and_archive_state():
+    settings = SimpleNamespace(settings_file="scenarios/settings-seattle.yaml")
+
+    command = run_module._format_restart_command(
+        settings=settings,
+        archive_state_path="/tmp/pilates run/run_state.yaml",
+    )
+
+    assert (
+        command
+        == "python run.py -c scenarios/settings-seattle.yaml -S '/tmp/pilates run/run_state.yaml'"
+    )
+
+
+def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    class SnapshotStub:
+        def final_snapshot(self):
+            return True
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(tmp_path / "archive-root"),
+            local_workspace_root=str(tmp_path / "local-root"),
+            enable_archive_copy=False,
+            output_run_name="restart-hint-test",
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file="scenarios/settings-seattle.yaml",
+    )
+    state = SimpleNamespace(
+        run_info_path=None,
+        data_initialized=False,
+    )
+    state.set_run_info_path = lambda path: setattr(state, "run_info_path", path)
+    state.set_data_initialized = lambda initialized: setattr(
+        state, "data_initialized", initialized
+    )
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: 1)
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(
+        run_module,
+        "build_restart_bundle_manifest",
+        lambda **_kwargs: {"artifacts": []},
+    )
+    monkeypatch.setattr(
+        run_module,
+        "write_restart_bundle_manifest",
+        lambda **_kwargs: str(tmp_path / "archive-root" / "manifest.yaml"),
+    )
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+
+    def _fail_bootstrap(**_kwargs):
+        raise RuntimeError("simulated bootstrap failure")
+
+    monkeypatch.setattr(run_module, "run_bootstrap_phase", _fail_bootstrap)
+
+    run_module._RUN_FAILURE_CONTEXT.clear()
+    with caplog.at_level("ERROR"):
+        with pytest.raises(RuntimeError, match="simulated bootstrap failure"):
+            run_module.main()
+        run_module._log_restart_instructions_on_failure()
+
+    assert "Run failed. Restart command:" in caplog.text
+    assert "python run.py -c scenarios/settings-seattle.yaml -S " in caplog.text
+    assert "run_state.yaml" in caplog.text
+
+
 def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     state = SimpleNamespace()
