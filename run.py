@@ -1030,10 +1030,11 @@ def main():
                         usim_inputs=usim_inputs,
                         build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
-                            lambda iteration,
-                            y=year: snapshot_manager.on_outer_iteration_boundary(
-                                year=y,
-                                iteration=iteration,
+                            lambda iteration, y=year: (
+                                snapshot_manager.on_outer_iteration_boundary(
+                                    year=y,
+                                    iteration=iteration,
+                                )
                             )
                         ),
                     )
