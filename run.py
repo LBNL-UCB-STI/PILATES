@@ -123,6 +123,24 @@ def _format_restart_command(
         command.extend(["-S", str(archive_state_path)])
     return " ".join(shlex.quote(part) for part in command)
 
+def _format_hpc_restart_command(
+    *,
+    settings: Optional[Any],
+    archive_state_path: Optional[str],
+) -> Optional[str]:
+    config_path = None
+    if settings is not None:
+        config_path = getattr(settings, "settings_file", None)
+    if not config_path and not archive_state_path:
+        return None
+
+    command = ["./hpc/job_runner.sh"]
+    if config_path:
+        command.extend(["-c", str(config_path)])
+    if archive_state_path:
+        command.extend(["-s", str(archive_state_path)])
+    return " ".join(shlex.quote(part) for part in command)
+
 
 def _log_restart_instructions_on_failure() -> None:
     settings = _RUN_FAILURE_CONTEXT.get("settings")
@@ -142,6 +160,12 @@ def _log_restart_instructions_on_failure() -> None:
 
     logger.error("Run failed. Restart command:")
     logger.error("  %s", command)
+    if archive_run_dir:
+        command_hpc = _format_hpc_restart_command(
+            settings=settings,
+            archive_state_path=archive_state_path,
+        )
+        logger.error("  HPC command: %s", command_hpc)
     if archive_state_path:
         logger.error("  state file: %s", archive_state_path)
     if archive_run_dir:
