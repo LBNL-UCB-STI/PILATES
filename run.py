@@ -19,7 +19,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Tuple, Mapping, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Tuple, Sequence, cast
 
 from pilates.workspace import Workspace
 from pilates.generic.records import sanitize_artifact_key
@@ -58,8 +58,8 @@ from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import restart as restart_runtime
+from pilates.runtime import scenario_runtime
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -70,24 +70,7 @@ from pilates.workflows.stages import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-from pilates.workflows.steps import (
-    StepOutputsHolder,
-    make_activitysim_compile_step,
-    make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step,
-    make_activitysim_run_step,
-    make_atlas_postprocess_step,
-    make_atlas_preprocess_step,
-    make_atlas_run_step,
-    make_beam_postprocess_step,
-    make_beam_full_skim_step,
-    make_beam_preprocess_step,
-    make_beam_run_step,
-    make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step,
-    make_urbansim_run_step,
-    validate_workflow_step_contracts,
-)
+from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts
 from consist.types import CacheOptions
 
 logging.basicConfig(
@@ -102,67 +85,23 @@ _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
 
 
 def _coerce_int(value: Any) -> Optional[int]:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return scenario_runtime.coerce_int(value)
 
 
 def _resolve_scenario_id(settings: Any) -> str:
-    run_cfg = getattr(settings, "run", None)
-    candidates = [
-        getattr(run_cfg, "scenario", None),
-        getattr(run_cfg, "output_run_name", None),
-    ]
-    for candidate in candidates:
-        text = str(candidate).strip() if candidate is not None else ""
-        if text:
-            return text
-    return "unknown_scenario"
+    return scenario_runtime.resolve_scenario_id(settings)
 
 
 def _resolve_seed(settings: Any) -> Optional[int]:
-    candidates = [
-        getattr(getattr(settings, "activitysim", None), "random_seed", None),
-        getattr(getattr(settings, "run", None), "seed", None),
-        getattr(settings, "seed", None),
-    ]
-    for candidate in candidates:
-        value = _coerce_int(candidate)
-        if value is not None:
-            return value
-    return None
+    return scenario_runtime.resolve_seed(settings)
 
 
 def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
-    merged: List[str] = []
-    seen = set()
-    if isinstance(existing, Sequence) and not isinstance(existing, (str, bytes)):
-        for value in existing:
-            text = str(value).strip()
-            if text and text not in seen:
-                merged.append(text)
-                seen.add(text)
-    for value in additions:
-        text = str(value).strip()
-        if text and text not in seen:
-            merged.append(text)
-            seen.add(text)
-    return merged
+    return scenario_runtime.merge_tag_list(existing, additions)
 
 
 def _facet_to_mapping(facet: Any) -> Dict[str, Any]:
-    if isinstance(facet, Mapping):
-        return dict(facet)
-    model_dump = getattr(facet, "model_dump", None)
-    if callable(model_dump):
-        try:
-            dumped = model_dump(mode="json")
-        except TypeError:
-            dumped = model_dump()
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
+    return scenario_runtime.facet_to_mapping(facet)
 
 
 def _merge_epoch_facet(
@@ -174,256 +113,34 @@ def _merge_epoch_facet(
     year: Optional[int],
     iteration: Optional[int],
 ) -> Dict[str, Any]:
-    merged = _facet_to_mapping(existing)
-    merged["scenario_id"] = scenario_id
-    if seed is not None:
-        merged["seed"] = seed
-    if model:
-        merged["model"] = model
-    if year is not None:
-        merged["year"] = year
-    if iteration is not None:
-        merged["iteration"] = iteration
-    return merged
+    return scenario_runtime.merge_epoch_facet(
+        existing=existing,
+        scenario_id=scenario_id,
+        seed=seed,
+        model=model,
+        year=year,
+        iteration=iteration,
+    )
 
 
-class _EpochTaggingScenarioProxy:
-    """
-    Wrapper around a Consist scenario that injects epoch metadata and parent linkage.
-    """
-
-    def __init__(self, scenario: Any, *, scenario_id: str, seed: Optional[int]) -> None:
-        self._scenario = scenario
-        self._scenario_id = scenario_id
-        self._seed = seed
-        self._activitysim_run_ids: Dict[Tuple[int, int], str] = {}
-        self._activitysim_step_ids: Dict[Tuple[int, int], str] = {}
-        self._beam_run_ids: Dict[Tuple[int, int], str] = {}
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._scenario, name)
-
-    def _infer_model_name(self, run_kwargs: Mapping[str, Any]) -> Optional[str]:
-        explicit = run_kwargs.get("model")
-        if explicit:
-            return str(explicit)
-        fn = run_kwargs.get("fn")
-        meta = getattr(fn, "__consist_step__", None)
-        model_name = getattr(meta, "model", None)
-        if model_name:
-            return str(model_name)
-        return None
-
-    def _resolve_parent_run_id(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-    ) -> Optional[str]:
-        if model_name is None or year is None or iteration is None:
-            return None
-        model_norm = model_name.lower()
-        if model_norm == "beam" or model_norm.startswith("beam_"):
-            key = (year, iteration)
-            return self._activitysim_run_ids.get(key) or self._activitysim_step_ids.get(
-                key
-            )
-        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
-            return self._beam_run_ids.get((year, iteration - 1))
-        return None
-
-    def _should_expect_parent(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-    ) -> bool:
-        if model_name is None or year is None or iteration is None:
-            return False
-        model_norm = model_name.lower()
-        if model_norm == "beam" or model_norm.startswith("beam_"):
-            return True
-        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
-            return True
-        return False
-
-    def _remember_run_id(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-        run_id: Optional[str],
-    ) -> None:
-        if model_name is None or year is None or iteration is None or not run_id:
-            return
-        key = (year, iteration)
-        model_norm = model_name.lower()
-        if model_norm == "activitysim" or model_norm.startswith("activitysim_"):
-            self._activitysim_step_ids[key] = run_id
-            if model_norm in {"activitysim", "activitysim_run"}:
-                self._activitysim_run_ids[key] = run_id
-        elif model_norm in {"beam", "beam_run"}:
-            self._beam_run_ids[key] = run_id
-
-    def remember_restored_run_id(
-        self,
-        *,
-        model_name: Optional[str],
-        year: Optional[int],
-        iteration: Optional[int],
-        run_id: Optional[str],
-    ) -> None:
-        """
-        Seed parent-linkage state from manifest-restored steps.
-        """
-        self._remember_run_id(
-            model_name=model_name,
-            year=year,
-            iteration=iteration,
-            run_id=run_id,
-        )
-
-    def run(self, *args: Any, **kwargs: Any) -> Any:
-        if len(args) > 2:
-            return self._scenario.run(*args, **kwargs)
-
-        run_kwargs: Dict[str, Any] = dict(kwargs)
-        if len(args) >= 1 and "fn" not in run_kwargs:
-            run_kwargs["fn"] = args[0]
-        if len(args) == 2 and "name" not in run_kwargs:
-            run_kwargs["name"] = args[1]
-
-        model_name = self._infer_model_name(run_kwargs)
-        year = _coerce_int(run_kwargs.get("year"))
-        iteration = _coerce_int(run_kwargs.get("iteration"))
-        if model_name and "model" not in run_kwargs:
-            run_kwargs["model"] = model_name
-
-        if not run_kwargs.get("parent_run_id"):
-            resolved_parent = self._resolve_parent_run_id(
-                model_name=model_name,
-                year=year,
-                iteration=iteration,
-            )
-            if resolved_parent:
-                run_kwargs["parent_run_id"] = resolved_parent
-            elif self._should_expect_parent(
-                model_name=model_name,
-                year=year,
-                iteration=iteration,
-            ):
-                # Keep execution behavior unchanged when lineage hints are unavailable.
-                logger.debug(
-                    "[RunTagging] parent_run_id unavailable for model=%s year=%s iteration=%s; leaving unset.",
-                    model_name,
-                    year,
-                    iteration,
-                )
-
-        tag_additions = [f"scenario_id:{self._scenario_id}"]
-        if self._seed is not None:
-            tag_additions.append(f"seed:{self._seed}")
-        if model_name:
-            tag_additions.append(f"model:{model_name}")
-        if year is not None:
-            tag_additions.append(f"year:{year}")
-        if iteration is not None:
-            tag_additions.append(f"iteration:{iteration}")
-        run_kwargs["tags"] = _merge_tag_list(run_kwargs.get("tags"), tag_additions)
-        run_kwargs["facet"] = _merge_epoch_facet(
-            existing=run_kwargs.get("facet"),
-            scenario_id=self._scenario_id,
-            seed=self._seed,
-            model=model_name,
-            year=year,
-            iteration=iteration,
-        )
-
-        result = self._scenario.run(**run_kwargs)
-        run_id = str(getattr(getattr(result, "run", None), "id", "")).strip() or None
-        self._remember_run_id(
-            model_name=model_name,
-            year=year,
-            iteration=iteration,
-            run_id=run_id,
-        )
-        return result
-
-
-class _SchemaCoupler:
-    """No-op coupler used to construct decorated step callables for schema introspection."""
-
-    def get(self, _key: str, default: Optional[Any] = None) -> Any:
-        return default
-
-    def set(self, _key: str, _value: Any) -> None:
-        return None
-
-    def update(self, _mapping: Dict[str, Any]) -> None:
-        return None
-
-    def view(self, _namespace: str) -> "_SchemaCoupler":
-        return self
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
+_EpochTaggingScenarioProxy = scenario_runtime.EpochTaggingScenarioProxy
+_SchemaCoupler = scenario_runtime.SchemaCoupler
 
 
 def _resolve_cache_epoch(settings: Any) -> int:
-    value = getattr(getattr(settings, "run", None), "cache_epoch", 1)
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 1
+    return scenario_runtime.resolve_cache_epoch(settings)
 
 
 def _build_schema_steps() -> List[Callable[..., Any]]:
-    coupler = _SchemaCoupler()
-    outputs_holder = StepOutputsHolder()
-    step_factories: Dict[str, Callable[..., Any]] = {
-        "urbansim_preprocess": make_urbansim_preprocess_step,
-        "urbansim_run": make_urbansim_run_step,
-        "urbansim_postprocess": make_urbansim_postprocess_step,
-        "atlas_preprocess": make_atlas_preprocess_step,
-        "atlas_run": make_atlas_run_step,
-        "atlas_postprocess": make_atlas_postprocess_step,
-        "activitysim_preprocess": make_activitysim_preprocess_step,
-        "activitysim_compile": make_activitysim_compile_step,
-        "activitysim_run": make_activitysim_run_step,
-        "activitysim_postprocess": make_activitysim_postprocess_step,
-        "beam_preprocess": make_beam_preprocess_step,
-        "beam_run": make_beam_run_step,
-        "beam_postprocess": make_beam_postprocess_step,
-        "beam_full_skim": make_beam_full_skim_step,
-    }
-    ordered_steps = schema_step_names()
-    missing_factories = [name for name in ordered_steps if name not in step_factories]
-    if missing_factories:
-        raise RuntimeError(
-            "Missing schema step factories for: " + ", ".join(missing_factories)
-        )
-    return [
-        step_factories[step_name](coupler=coupler, outputs_holder=outputs_holder)
-        for step_name in ordered_steps
-    ]
+    return scenario_runtime.build_schema_steps()
 
 
 def _is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
-    """
-    Resolve whether a workflow model is enabled.
-
-    Prefers precomputed flags from ``parse_args_and_settings`` and falls back to
-    ``settings.run.models`` when flags are not present.
-    """
-    explicit_flag = getattr(settings, flag_attr, None)
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None) if run_cfg is not None else None
-    return bool(getattr(model_cfg, model_attr, None))
+    return scenario_runtime.is_model_enabled(
+        settings,
+        flag_attr=flag_attr,
+        model_attr=model_attr,
+    )
 
 
 def _filter_schema_steps_for_enabled_models(
@@ -432,32 +149,11 @@ def _filter_schema_steps_for_enabled_models(
     *,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
-    """
-    Keep only step definitions for models enabled in the active run settings.
-
-    Parameters
-    ----------
-    steps : list of callables
-        Step functions decorated with ``@define_step`` metadata.
-    settings : Any
-        Runtime settings object used to resolve enabled model flags.
-    include_optional : bool, default True
-        Whether optional steps (currently ``beam_full_skim``) should be included.
-    """
-    enabled_models = enabled_schema_step_models(
+    return scenario_runtime.filter_schema_steps_for_enabled_models(
+        steps,
         settings,
-        is_model_enabled=_is_model_enabled,
         include_optional=include_optional,
     )
-
-    filtered: List[Callable[..., Any]] = []
-    for step_func in steps:
-        meta = getattr(step_func, "__consist_step__", None)
-        model_name = getattr(meta, "model", "") if meta is not None else ""
-        if model_name not in enabled_models:
-            continue
-        filtered.append(step_func)
-    return filtered
 
 
 def _get_consist_schemas() -> Optional[list[type[Any]]]:
@@ -467,6 +163,28 @@ def _get_consist_schemas() -> Optional[list[type[Any]]]:
         return get_consist_schemas()
     except Exception:
         return None
+
+
+def _build_scenario_runtime_contract(
+    *,
+    settings: Any,
+    scenario_id: str,
+    seed: Optional[int],
+    cache_epoch: int,
+) -> Dict[str, Any]:
+    return scenario_runtime.build_scenario_runtime_contract(
+        settings=settings,
+        scenario_id=scenario_id,
+        seed=seed,
+        cache_epoch=cache_epoch,
+        build_scenario_consist_kwargs_fn=build_scenario_consist_kwargs,
+        build_coupler_schema_fn=build_coupler_schema,
+        validate_workflow_step_contracts_fn=validate_workflow_step_contracts,
+        build_schema_steps_fn=_build_schema_steps,
+        filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
+        merge_epoch_facet_fn=_merge_epoch_facet,
+        scenario_name_template=_SCENARIO_NAME_TEMPLATE,
+    )
 
 
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
@@ -1141,36 +859,17 @@ def main():
     #   - Provenance logging (inputs, outputs, dependencies)
     #   - Coupler coordination (step outputs → coupler → next step inputs)
     # The coupler is a shared dict-like object for passing artifacts between steps.
-    scenario_kwargs = build_scenario_consist_kwargs(settings)
-    scenario_kwargs["facet"] = _merge_epoch_facet(
-        existing=scenario_kwargs.get("facet"),
+    scenario_contract = _build_scenario_runtime_contract(
+        settings=settings,
         scenario_id=scenario_id,
         seed=run_seed,
-        model="pilates_orchestrator",
-        year=None,
-        iteration=None,
+        cache_epoch=cache_epoch,
     )
-    scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
-    scenario_kwargs.setdefault("cache_epoch", cache_epoch)
-    schema_steps_all = _build_schema_steps()
-    validate_workflow_step_contracts(declared_steps=schema_steps_all)
-    schema_steps_enabled = _filter_schema_steps_for_enabled_models(
-        schema_steps_all,
-        settings,
-        include_optional=True,
-    )
-    coupler_schema = build_coupler_schema(schema_steps_enabled, settings=settings)
-    required_schema = build_coupler_schema(
-        _filter_schema_steps_for_enabled_models(
-            schema_steps_all,
-            settings,
-            include_optional=False,
-        ),
-        settings=settings,
-        include_extras=False,
-    )
-    required_output_keys = list(required_schema.keys())
-    scenario_kwargs["require_outputs"] = required_output_keys
+    scenario_kwargs = scenario_contract["scenario_kwargs"]
+    schema_steps_all = scenario_contract["schema_steps_all"]
+    schema_steps_enabled = scenario_contract["schema_steps_enabled"]
+    coupler_schema = scenario_contract["coupler_schema"]
+    required_output_keys = scenario_contract["required_output_keys"]
 
     preview_count = 25
     logger.info(

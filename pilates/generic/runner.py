@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import contextlib
 import logging
 import os
 import shlex
@@ -20,6 +21,7 @@ from pilates.utils.settings_helper import get as get_setting
 
 
 logger = logging.getLogger(__name__)
+CONSIST_CONTAINER_DEBUG_STREAM_ENV = "CONSIST_CONTAINER_DEBUG_STREAM"
 
 
 RunnerInputsT = TypeVar("RunnerInputsT")
@@ -166,6 +168,14 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         pull_latest = get_setting(
             settings, "infrastructure.docker_config.pull_latest", False
         )
+        docker_stdout = get_setting(
+            settings, "infrastructure.docker_config.stdout", None
+        )
+        if docker_stdout is None:
+            docker_stdout = get_setting(settings, "docker_stdout", False)
+        stream_container_logs = bool(docker_stdout) or logger.isEnabledFor(
+            logging.DEBUG
+        )
 
         tracker = cr.current_tracker()
         if not tracker:
@@ -225,21 +235,24 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                     "[%s] Delegating container execution to Consist", model_name
                 )
                 try:
-                    return consist_run_container(
-                        tracker=tracker,
-                        run_id=f"{model_name}_container",
-                        image=image,
-                        command=full_command_list,
-                        volumes=consist_volumes,
-                        inputs=input_artifacts or [],
-                        outputs=output_paths or [],
-                        environment=environment or {},
-                        working_dir=working_dir,
-                        backend_type=backend_type,
-                        pull_latest=pull_latest,
-                        lineage_mode=lineage_mode,
-                        strict_mounts=strict_mounts,
-                    )
+                    with GenericRunner._temporary_container_debug_stream(
+                        enabled=stream_container_logs
+                    ):
+                        return consist_run_container(
+                            tracker=tracker,
+                            run_id=f"{model_name}_container",
+                            image=image,
+                            command=full_command_list,
+                            volumes=consist_volumes,
+                            inputs=input_artifacts or [],
+                            outputs=output_paths or [],
+                            environment=environment or {},
+                            working_dir=working_dir,
+                            backend_type=backend_type,
+                            pull_latest=pull_latest,
+                            lineage_mode=lineage_mode,
+                            strict_mounts=strict_mounts,
+                        )
                 except Exception as exc:
                     logger.error(
                         "Consist container execution failed: %s. "
@@ -248,11 +261,6 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                         exc_info=True,
                     )
 
-        docker_stdout = get_setting(
-            settings, "infrastructure.docker_config.stdout", None
-        )
-        if docker_stdout is None:
-            docker_stdout = get_setting(settings, "docker_stdout", False)
         return GenericRunner._run_container_direct(
             image=image,
             command=full_command_list,
@@ -263,6 +271,20 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             pull_latest=pull_latest,
             docker_stdout=docker_stdout,
         )
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _temporary_container_debug_stream(*, enabled: bool):
+        previous = os.environ.get(CONSIST_CONTAINER_DEBUG_STREAM_ENV)
+        if enabled:
+            os.environ[CONSIST_CONTAINER_DEBUG_STREAM_ENV] = "1"
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop(CONSIST_CONTAINER_DEBUG_STREAM_ENV, None)
+            else:
+                os.environ[CONSIST_CONTAINER_DEBUG_STREAM_ENV] = previous
 
     @staticmethod
     def _build_full_command(command: Union[str, List[str]], args=None) -> List[str]:

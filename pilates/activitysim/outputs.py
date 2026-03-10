@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
     "accessibility": "accessibility_asim_out",
     "beam_plans": "beam_plans_asim_out",
+    "plans": "beam_plans_asim_out",
     "disaggregate_accessibility": "disaggregate_accessibility_asim_out",
     "households": "households_asim_out",
     "joint_tour_participants": "joint_tour_participants_asim_out",

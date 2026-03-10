@@ -678,6 +678,8 @@ class BeamPreprocessor(GenericPreprocessor):
             )
             if shortened_name.endswith("_asim_out"):
                 shortened_name = shortened_name.split("_asim_out")[0]
+            if shortened_name == "plans":
+                shortened_name = "beam_plans"
             if shortened_name in self.required_input_data:
                 asim_file_paths[shortened_name] = (
                     os.path.join(base_path, record.file_path),

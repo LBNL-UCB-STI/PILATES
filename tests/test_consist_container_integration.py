@@ -5,6 +5,7 @@ Tests the Consist delegation path and validates argument mapping and
 fallback behavior when Consist is disabled or unavailable.
 """
 
+import os
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 
@@ -222,3 +223,46 @@ class TestRunContainerConsistDelegation:
         assert (
             mock_consist_run_container.call_args.kwargs["backend_type"] == "singularity"
         )
+
+    @patch("pilates.generic.runner.get_setting")
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    def test_delegation_enables_debug_stream_when_stdout_requested(
+        self,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_get_setting,
+    ):
+        tracker = Mock()
+        mock_current_tracker.return_value = tracker
+
+        def get_setting_side_effect(_obj, key, default=None):
+            if key == "infrastructure.container_manager":
+                return "docker"
+            if key == "infrastructure.docker_config.pull_latest":
+                return False
+            if key == "infrastructure.docker_config.stdout":
+                return True
+            return default
+
+        mock_get_setting.side_effect = get_setting_side_effect
+
+        def _check_env(**_kwargs):
+            assert os.environ.get("CONSIST_CONTAINER_DEBUG_STREAM") == "1"
+            return True
+
+        mock_consist_run_container.side_effect = _check_env
+
+        os.environ.pop("CONSIST_CONTAINER_DEBUG_STREAM", None)
+
+        result = GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={},
+            command="cmd",
+            model_name="model",
+        )
+
+        assert result is True
+        assert "CONSIST_CONTAINER_DEBUG_STREAM" not in os.environ

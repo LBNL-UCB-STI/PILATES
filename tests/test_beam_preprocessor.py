@@ -10,6 +10,7 @@ import yaml
 import json
 
 from pilates.config.models import load_config
+from pilates.activitysim.outputs import normalize_asim_output_key
 
 # Define a canonical order for GEOIDs that our test will enforce
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
@@ -457,3 +458,57 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
     preprocessor._preprocess(mock_workspace, previous_records=previous_records)
 
     assert captured["keys"] == ["households_asim_out"]
+
+
+def test_normalize_asim_output_key_maps_plans_alias() -> None:
+    assert normalize_asim_output_key("plans") == "beam_plans_asim_out"
+
+
+def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
+    monkeypatch, mock_settings, mock_workspace, tmp_path
+):
+    state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        forecast_year=2020,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(
+        model_name="beam",
+        state=state,
+    )
+    object.__setattr__(preprocessor.settings, "vehicle_ownership_model_enabled", False)
+    object.__setattr__(
+        preprocessor.settings,
+        "activitysim",
+        SimpleNamespace(file_format="parquet"),
+    )
+    mock_workspace.get_asim_output_dir.return_value = str(tmp_path / "activitysim" / "output")
+
+    plans_path = tmp_path / "activitysim" / "output" / "year-2020-iteration-0" / "plans.parquet"
+    plans_path.parent.mkdir(parents=True, exist_ok=True)
+    plans_path.write_text("plans", encoding="utf-8")
+
+    input_records = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(plans_path),
+                short_name="plans_asim_out",
+                description="ActivitySim plans alias",
+            )
+        ]
+    )
+
+    captured = {}
+
+    def _capture_copy_initial(asim_file_paths, _file_format, _workspace):
+        captured["asim_file_paths"] = dict(asim_file_paths)
+        return []
+
+    monkeypatch.setattr(preprocessor, "_copy_initial_asim_files", _capture_copy_initial)
+
+    preprocessor._copy_plans_from_asim(input_records, mock_workspace)
+
+    assert "beam_plans" in captured["asim_file_paths"]
+    assert captured["asim_file_paths"]["beam_plans"][0] == str(plans_path)
