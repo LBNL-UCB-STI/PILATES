@@ -157,7 +157,9 @@ def _add_urbansim_candidates(
     archive_run_dir: str,
 ) -> None:
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "land_use", None) != "urbansim":
+    activity_demand_model = getattr(model_cfg, "activity_demand", None)
+    land_use_model = getattr(model_cfg, "land_use", None)
+    if land_use_model != "urbansim" and activity_demand_model != "activitysim":
         return
 
     get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
@@ -181,20 +183,23 @@ def _add_urbansim_candidates(
             archive_run_dir=archive_run_dir,
         )
 
-    current_year = getattr(state, "current_year", None)
-    try:
-        current_fname = get_usim_datastore_fname(settings, io="output", year=current_year)
-    except Exception:
-        current_fname = None
-    if current_fname:
-        _append_local_candidate(
-            artifacts,
-            key="usim_datastore_current_h5",
-            local_path=os.path.join(usim_dir, current_fname),
-            reason="UrbanSim current-year datastore (if present)",
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
+    if land_use_model == "urbansim":
+        current_year = getattr(state, "current_year", None)
+        try:
+            current_fname = get_usim_datastore_fname(
+                settings, io="output", year=current_year
+            )
+        except Exception:
+            current_fname = None
+        if current_fname:
+            _append_local_candidate(
+                artifacts,
+                key="usim_datastore_current_h5",
+                local_path=os.path.join(usim_dir, current_fname),
+                reason="UrbanSim current-year datastore (if present)",
+                local_run_dir=local_run_dir,
+                archive_run_dir=archive_run_dir,
+            )
 
 
 def _add_atlas_year_dir_candidates(

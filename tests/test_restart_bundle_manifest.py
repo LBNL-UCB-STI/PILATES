@@ -63,10 +63,15 @@ def _settings_with_activitysim():
                 vehicle_ownership="none",
                 activity_demand="activitysim",
             ),
+            region="test",
             start_year=2017,
             end_year=2050,
         ),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        urbansim=SimpleNamespace(
+            input_file_template="usim_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"test": "000"}},
+        ),
         atlas=SimpleNamespace(scenario="baseline"),
     )
 
@@ -168,7 +173,9 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     archive_run_dir = tmp_path / "archive-run"
     atlas_input_dir = local_run_dir / "atlas" / "atlas_input"
     asim_base_dir = local_run_dir / "activitysim"
+    usim_base_dir = local_run_dir / "urbansim" / "data"
     atlas_input_dir.mkdir(parents=True, exist_ok=True)
+    usim_base_dir.mkdir(parents=True, exist_ok=True)
     (archive_run_dir / "run_state.yaml").parent.mkdir(parents=True, exist_ok=True)
     (archive_run_dir / "run_state.yaml").write_text("year: 2023\n", encoding="utf-8")
 
@@ -181,16 +188,27 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     zarr_archive.mkdir(parents=True, exist_ok=True)
     (zarr_archive / "values").write_text("x", encoding="utf-8")
 
+    usim_local = usim_base_dir / "usim_000.h5"
+    usim_local.write_text("x", encoding="utf-8")
+    usim_archive = archive_run_dir / "urbansim" / "data" / "usim_000.h5"
+    usim_archive.parent.mkdir(parents=True, exist_ok=True)
+    usim_archive.write_text("x", encoding="utf-8")
+
     manifest = build_restart_bundle_manifest(
         archive_run_dir=str(archive_run_dir),
         local_run_dir=str(local_run_dir),
         settings=_settings_with_activitysim(),
-        workspace=_WorkspaceStub(str(atlas_input_dir), str(asim_base_dir)),
+        workspace=_WorkspaceStub(
+            str(atlas_input_dir),
+            str(asim_base_dir),
+            str(usim_base_dir),
+        ),
         state=SimpleNamespace(current_year=2023),
         local_consist_db_path=None,
     )
 
     keys = {item["key"] for item in manifest["artifacts"]}
+    assert "usim_datastore_base_h5" in keys
     assert "zarr_skims" in keys
     assert "asim_sharrow_cache_dir" in keys
     assert "activitysim_config_dir_configs" in keys

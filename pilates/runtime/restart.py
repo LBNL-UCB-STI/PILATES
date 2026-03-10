@@ -31,17 +31,23 @@ def restart_required_local_artifacts(
     """
     required: List[Dict[str, str]] = []
 
-    usim_data_dir = workspace.get_usim_mutable_data_dir()
-    usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-    required.append(
-        {
-            "key": "usim_datastore_base_h5",
-            "path": os.path.join(usim_data_dir, usim_base_fname),
-            "reason": "UrbanSim base datastore required for downstream restart inputs",
-        }
-    )
-
     current_stage = getattr(state, "current_major_stage", None)
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    requires_usim_base_h5 = (
+        getattr(model_cfg, "land_use", None) == "urbansim"
+        or getattr(model_cfg, "activity_demand", None) == "activitysim"
+    )
+    if requires_usim_base_h5:
+        usim_data_dir = workspace.get_usim_mutable_data_dir()
+        usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
+        required.append(
+            {
+                "key": "usim_datastore_base_h5",
+                "path": os.path.join(usim_data_dir, usim_base_fname),
+                "reason": "UrbanSim base datastore required for downstream restart inputs",
+            }
+        )
+
     region = getattr(getattr(settings, "run", None), "region", None)
     urbansim_cfg = getattr(settings, "urbansim", None)
     requires_urbansim_run_locals = current_stage in {
@@ -90,7 +96,6 @@ def restart_required_local_artifacts(
                 ]
             )
 
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
     requires_activitysim_locals = (
         getattr(model_cfg, "activity_demand", None) == "activitysim"
         and (
