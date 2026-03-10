@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import Generic, Optional, Tuple, TYPE_CHECKING, TypeVar
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -12,8 +12,14 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 
-class GenericPreprocessor(ABC, Model):
-    """Base class for preprocessors that stage and emit ``RecordStore`` data."""
+PreprocessInputsT = TypeVar("PreprocessInputsT")
+PreprocessOutputsT = TypeVar("PreprocessOutputsT")
+
+
+class GenericPreprocessor(
+    Model, ABC, Generic[PreprocessInputsT, PreprocessOutputsT]
+):
+    """Base class for preprocessors with model-specific staged outputs."""
 
     def __init__(
         self,
@@ -35,20 +41,17 @@ class GenericPreprocessor(ABC, Model):
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: Optional[RecordStore] = None,
-    ) -> RecordStore:
-        """Run preprocessing using upstream ``RecordStore`` inputs."""
+        previous_records: Optional[PreprocessInputsT] = None,
+    ) -> PreprocessOutputsT:
+        """Run preprocessing using optional prior records and return staged outputs."""
         self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(
-            workspace,
-            previous_records if previous_records is not None else RecordStore(),
-        )
+        return self._preprocess(workspace, previous_records)
 
     @abstractmethod
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore,
-    ) -> RecordStore:
-        """Implement preprocessing and return a ``RecordStore`` of outputs."""
+        previous_records: Optional[PreprocessInputsT],
+    ) -> PreprocessOutputsT:
+        """Implement preprocessing and return model-specific staged outputs."""
         raise NotImplementedError

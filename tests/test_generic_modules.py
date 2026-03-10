@@ -107,9 +107,9 @@ def test_get_model_and_image_missing_image():
         GenericRunner.get_model_and_image(settings, "land_use_model")
 
 
-def test_preprocessor_protocol_shape_forwards_previous_records():
+def test_preprocessor_protocol_shape_forwards_previous_payload():
     workspace = object()
-    previous_records = RecordStore()
+    previous_records = object()
     captured = {}
 
     class _Preprocessor:
@@ -159,7 +159,7 @@ def test_warm_start_activities_forwards_preprocess_outputs_to_runner_and_updates
     settings = SimpleNamespace()
     state = SimpleNamespace()
     workspace = object()
-    preprocess_outputs = RecordStore()
+    preprocess_outputs = object()
     captured = {}
 
     class _Preprocessor:
@@ -171,7 +171,7 @@ def test_warm_start_activities_forwards_preprocess_outputs_to_runner_and_updates
         def run(self, input_data_arg, workspace_arg):
             captured["runner_input_data"] = input_data_arg
             captured["runner_workspace"] = workspace_arg
-            return RecordStore()
+            return object()
 
     def _capture_update(settings_arg, state_arg, workspace_arg, model_run_hash=None):
         captured["update_call"] = {
@@ -223,10 +223,10 @@ class _StageTrackingState:
         self.sub_stages.append(progress)
 
 
-def test_generic_preprocessor_sets_stage_and_forwards_record_store():
+def test_generic_preprocessor_sets_stage_and_forwards_payload():
     state = _StageTrackingState()
     workspace = object()
-    previous_records = RecordStore()
+    previous_records = object()
     captured = {}
 
     class _GenericPreprocessor(GenericPreprocessor):
@@ -249,10 +249,10 @@ def test_generic_preprocessor_sets_stage_and_forwards_record_store():
     assert result is previous_records
 
 
-def test_generic_preprocessor_defaults_previous_records_to_new_store():
+def test_generic_preprocessor_defaults_previous_records_to_none():
     state = _StageTrackingState()
     workspace = object()
-    captured = {}
+    captured = {"previous_records": []}
 
     class _GenericPreprocessor(GenericPreprocessor):
         def copy_data_to_mutable_location(self, settings, output_dir):
@@ -260,7 +260,7 @@ def test_generic_preprocessor_defaults_previous_records_to_new_store():
 
         def _preprocess(self, workspace_arg, previous_records_arg):
             captured["workspace"] = workspace_arg
-            captured["previous_records"] = previous_records_arg
+            captured["previous_records"].append(previous_records_arg)
             return previous_records_arg
 
     preprocessor = _GenericPreprocessor("dummy", state)
@@ -269,9 +269,9 @@ def test_generic_preprocessor_defaults_previous_records_to_new_store():
 
     assert state.sub_stages == ["preprocessor", "preprocessor"]
     assert captured["workspace"] is workspace
-    assert isinstance(first, RecordStore)
-    assert isinstance(second, RecordStore)
-    assert first is not second
+    assert captured["previous_records"] == [None, None]
+    assert first is None
+    assert second is None
 
 
 def test_generic_postprocessor_sets_stage_and_forwards_model_run_hash():

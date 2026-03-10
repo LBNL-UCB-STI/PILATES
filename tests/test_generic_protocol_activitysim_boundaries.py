@@ -14,7 +14,7 @@ from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.generic.model_factory import ModelFactory
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -49,18 +49,10 @@ class _DummyWorkspace:
         return str(self._asim_output_dir)
 
 
-def test_generic_public_methods_still_exchange_recordstores() -> None:
+def test_generic_public_methods_now_exchange_model_specific_payloads() -> None:
     state = _StageTrackingState()
     workspace = object()
-    previous_records = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path="relative/input.txt",
-                short_name="generic_input",
-                description="generic input",
-            )
-        ]
-    )
+    previous_records = {"generic_input": "relative/input.txt"}
     captured = {}
 
     class _Preprocessor(GenericPreprocessor):
@@ -106,11 +98,11 @@ def test_generic_public_methods_still_exchange_recordstores() -> None:
     assert state.sub_stages == ["preprocessor", "runner", "postprocessor"]
 
 
-def test_warm_start_activities_keeps_legacy_recordstore_boundary(monkeypatch) -> None:
+def test_warm_start_activities_forwards_model_specific_payload(monkeypatch) -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace()
     workspace = object()
-    preprocess_outputs = RecordStore()
+    preprocess_outputs = object()
     captured = {}
 
     class _Preprocessor:
@@ -122,7 +114,7 @@ def test_warm_start_activities_keeps_legacy_recordstore_boundary(monkeypatch) ->
         def run(self, input_data_arg, workspace_arg):
             captured["runner_input_data"] = input_data_arg
             captured["runner_workspace"] = workspace_arg
-            return RecordStore()
+            return object()
 
     def _capture_update(settings_arg, state_arg, workspace_arg, model_run_hash=None):
         captured["update_call"] = (

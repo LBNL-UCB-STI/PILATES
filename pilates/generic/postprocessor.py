@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import Generic, Optional, TYPE_CHECKING, TypeVar
 
 from pilates.generic.model import Model
-from pilates.generic.records import RecordStore
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
     from workflow_state import WorkflowState
 
 
-class GenericPostprocessor(ABC, Model):
-    """Base class for postprocessors that consume and emit ``RecordStore`` data."""
+PostprocessInputsT = TypeVar("PostprocessInputsT")
+PostprocessOutputsT = TypeVar("PostprocessOutputsT")
+
+
+class GenericPostprocessor(
+    Model, ABC, Generic[PostprocessInputsT, PostprocessOutputsT]
+):
+    """Base class for postprocessors with model-specific input and output types."""
 
     def __init__(
         self,
@@ -24,20 +29,20 @@ class GenericPostprocessor(ABC, Model):
 
     def postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: PostprocessInputsT,
         workspace: "Workspace",
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
-        """Run postprocessing on runner outputs and return a ``RecordStore``."""
+    ) -> PostprocessOutputsT:
+        """Run postprocessing on runner outputs and return final model outputs."""
         self.state.set_sub_stage_progress("postprocessor")
         return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     @abstractmethod
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: PostprocessInputsT,
         workspace: "Workspace",
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
-        """Implement postprocessing and return a ``RecordStore`` of outputs."""
+    ) -> PostprocessOutputsT:
+        """Implement postprocessing and return model-specific outputs."""
         raise NotImplementedError
