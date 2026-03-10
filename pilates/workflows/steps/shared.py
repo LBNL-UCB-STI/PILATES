@@ -283,33 +283,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _warn_missing_coupler_inputs(
-    coupler: Optional[CouplerProtocol],
-    input_store: Optional[RecordStore],
-    context: str,
-) -> None:
-    if coupler is None or input_store is None:
-        return
-    keys_attr = getattr(coupler, "keys", None)
-    if not callable(keys_attr):
-        return
-    try:
-        coupler_keys = set(keys_attr())
-    except Exception:
-        return
-    missing = []
-    for record in input_store.all_records():
-        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
-        if key and key not in coupler_keys:
-            missing.append(key)
-    if missing:
-        logger.warning(
-            "[%s] Input RecordStore keys missing from coupler: %s",
-            context,
-            sorted(set(missing)),
-        )
-
-
 def _artifact_content_hash(value: Any) -> Optional[str]:
     """Extract a content hash from an artifact-like mapping value."""
     if value is None:
@@ -319,34 +292,6 @@ def _artifact_content_hash(value: Any) -> Optional[str]:
         if content_hash:
             return str(content_hash)
     return None
-
-
-def _append_artifact_mapping_records(
-    *,
-    record_store: RecordStore,
-    artifact_mapping: Optional[Mapping[str, Any]],
-    workspace: Optional["Workspace"],
-    description_prefix: str,
-    key_aliases: Optional[Mapping[str, str]] = None,
-) -> None:
-    """Materialize artifact-like mapping values into a ``RecordStore``."""
-    if not artifact_mapping:
-        return
-    aliases = key_aliases or {}
-    for key, value in artifact_mapping.items():
-        path = artifact_to_path(value, workspace)
-        if path is None and isinstance(value, (str, os.PathLike)):
-            path = os.fspath(value)
-        if not path:
-            continue
-        record_store.add_record(
-            FileRecord(
-                file_path=str(path),
-                short_name=aliases.get(key, key),
-                description=f"{description_prefix}: {key}",
-                content_hash=_artifact_content_hash(value),
-            )
-        )
 
 
 def _log_step_records(
@@ -1296,86 +1241,6 @@ def _execute_preprocess_typed(
     )
 
 
-def _build_required_input_store(
-    *,
-    outputs_holder: StepOutputsHolder,
-    upstream_attr: str,
-    missing_message: str,
-    context: str,
-    coupler: Optional[CouplerProtocol] = None,
-    workspace: Optional["Workspace"] = None,
-    extra_inputs: Optional[Mapping[str, Any]] = None,
-    extra_input_description_prefix: str = "Executor extra input",
-    warn_missing_coupler_inputs: bool = True,
-) -> RecordStore:
-    """
-    Build a RecordStore from required upstream step outputs.
-
-    Parameters
-    ----------
-    outputs_holder : StepOutputsHolder
-        Holder containing typed step outputs.
-    upstream_attr : str
-        Attribute name on ``outputs_holder`` to resolve.
-    missing_message : str
-        RuntimeError message when upstream outputs are missing.
-    context : str
-        Context label for warning logs.
-    coupler : CouplerProtocol, optional
-        Coupler used for missing-input key warning checks.
-    workspace : Workspace, optional
-        Workspace used to resolve artifact-like extra inputs into paths.
-    extra_inputs : mapping, optional
-        Additional artifact-like inputs merged into the upstream input store.
-    extra_input_description_prefix : str, default "Executor extra input"
-        Description prefix for extra inputs materialized at the executor boundary.
-    warn_missing_coupler_inputs : bool, default True
-        Whether to emit warnings for RecordStore keys not present in coupler.
-
-    Returns
-    -------
-    RecordStore
-        Input store for runner/postprocessor execution.
-    """
-    def _content_hash_for(short_name: str) -> Optional[str]:
-        for attr_name in (
-            "input_hashes",
-            "raw_output_hashes",
-            "processed_output_hashes",
-        ):
-            hashes = getattr(upstream, attr_name, None)
-            if isinstance(hashes, Mapping):
-                content_hash = hashes.get(short_name)
-                if content_hash:
-                    return str(content_hash)
-        return None
-
-    upstream = getattr(outputs_holder, upstream_attr, None)
-    if upstream is None:
-        raise RuntimeError(missing_message)
-    input_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(path),
-                short_name=short_name,
-                description=description,
-                content_hash=_content_hash_for(short_name),
-            )
-            for short_name, path, description in iter_step_output_items(upstream)
-        ]
-    )
-    if extra_inputs is not None:
-        _append_artifact_mapping_records(
-            record_store=input_store,
-            artifact_mapping=extra_inputs,
-            workspace=workspace,
-            description_prefix=extra_input_description_prefix,
-        )
-    if warn_missing_coupler_inputs:
-        _warn_missing_coupler_inputs(coupler, input_store, context)
-    return input_store
-
-
 def _typed_outputs_from_record_store(
     *,
     record_store: RecordStore,
@@ -1387,4 +1252,3 @@ def _typed_outputs_from_record_store(
         output_class=outputs_class,
         workspace=workspace,
     )
-

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from pilates.activitysim.outputs import ActivitySimRunOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.workflows.steps.activitysim import _execute_activitysim_postprocess
@@ -11,68 +9,8 @@ from pilates.workflows.steps.beam import (
     _execute_beam_full_skim,
     _execute_beam_preprocess,
 )
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import BEAM_HOUSEHOLDS_IN, BEAM_PLANS_IN
-from pilates.workflows.steps.shared import (
-    StepOutputsHolder,
-    _build_required_input_store,
-)
-
-
-class _FakeStepOutputs:
-    def __init__(self, store: RecordStore) -> None:
-        self._store = store
-
-    def _iter_record_items(self):
-        for record in self._store.all_records():
-            yield record.short_name, Path(record.file_path), record.description
-
-
-class _LegacyOnlyStepOutputs:
-    def __init__(self, store: RecordStore) -> None:
-        self._store = store
-
-    def to_record_store(self) -> RecordStore:
-        return self._store
-
-
-class _HashTrackingStepOutputs(_FakeStepOutputs):
-    def __init__(self, store: RecordStore, hashes: dict[str, str]) -> None:
-        super().__init__(store)
-        self.input_hashes = hashes
-
-
-class _KeysOnlyCoupler:
-    def __init__(self, keys: list[str]) -> None:
-        self._keys = keys
-
-    def keys(self):
-        return list(self._keys)
-
-
-class _ArtifactValue:
-    def __init__(self, path: Path, *, content_hash: str | None = None) -> None:
-        self.path = str(path)
-        self.content_hash = content_hash
-
-
-def _store_with_record(path: Path, key: str) -> RecordStore:
-    return RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(path),
-                short_name=key,
-                description=f"record for {key}",
-            )
-        ]
-    )
-
-
-def _record_by_short_name(store: RecordStore, short_name: str) -> FileRecord | None:
-    for record in store.all_records():
-        if record.short_name == short_name:
-            return record
-    return None
+from pilates.workflows.steps.shared import StepOutputsHolder
 
 
 def _beam_preprocess_outputs(
@@ -85,123 +23,6 @@ def _beam_preprocess_outputs(
         beam_mutable_data_dir=beam_dir,
         prepared_inputs=prepared_inputs,
     )
-
-
-def test_build_required_input_store_raises_when_upstream_missing() -> None:
-    holder = StepOutputsHolder()
-
-    with pytest.raises(RuntimeError, match="ActivitySim preprocess must complete first"):
-        _build_required_input_store(
-            outputs_holder=holder,
-            upstream_attr="activitysim_preprocess",
-            missing_message="ActivitySim preprocess must complete first",
-            context="activitysim_run",
-        )
-
-
-def test_build_required_input_store_merges_optional_extra_inputs(tmp_path: Path) -> None:
-    holder = StepOutputsHolder()
-    holder.activitysim_preprocess = _FakeStepOutputs(
-        _store_with_record(tmp_path / "input-a.txt", "input_a")
-    )
-    extra_path = tmp_path / "input-b.txt"
-    extra_path.write_text("input_b", encoding="utf-8")
-    extra_inputs = {"input_b": extra_path}
-
-    merged = _build_required_input_store(
-        outputs_holder=holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context="activitysim_run",
-        workspace=type("Workspace", (), {"full_path": str(tmp_path)})(),
-        extra_inputs=extra_inputs,
-    )
-
-    assert set(merged.to_mapping().keys()) == {"input_a", "input_b"}
-
-
-def test_build_required_input_store_preserves_extra_input_content_hashes(
-    tmp_path: Path,
-) -> None:
-    holder = StepOutputsHolder()
-    holder.activitysim_preprocess = _FakeStepOutputs(
-        _store_with_record(tmp_path / "input-a.txt", "input_a")
-    )
-    extra_path = tmp_path / "input-b.txt"
-    extra_path.write_text("input_b", encoding="utf-8")
-
-    merged = _build_required_input_store(
-        outputs_holder=holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context="activitysim_run",
-        workspace=type("Workspace", (), {"full_path": str(tmp_path)})(),
-        extra_inputs={"input_b": _ArtifactValue(extra_path, content_hash="hash-b")},
-        warn_missing_coupler_inputs=False,
-    )
-
-    record = _record_by_short_name(merged, "input_b")
-    assert record is not None
-    assert record.content_hash == "hash-b"
-
-
-def test_build_required_input_store_warns_for_keys_missing_from_coupler(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    holder = StepOutputsHolder()
-    holder.beam_preprocess = _FakeStepOutputs(
-        _store_with_record(tmp_path / "missing.txt", "missing_key")
-    )
-    coupler = _KeysOnlyCoupler(keys=["some_other_key"])
-
-    with caplog.at_level("WARNING"):
-        _build_required_input_store(
-            outputs_holder=holder,
-            upstream_attr="beam_preprocess",
-            missing_message="BEAM preprocess must complete first",
-            context="beam_run",
-            coupler=coupler,
-        )
-
-    assert "[beam_run] Input RecordStore keys missing from coupler" in caplog.text
-    assert "missing_key" in caplog.text
-
-
-def test_build_required_input_store_rejects_legacy_only_outputs(tmp_path: Path) -> None:
-    holder = StepOutputsHolder()
-    holder.activitysim_preprocess = _LegacyOnlyStepOutputs(
-        _store_with_record(tmp_path / "legacy.txt", "legacy_key")
-    )
-
-    with pytest.raises(TypeError, match="_iter_record_items"):
-        _build_required_input_store(
-            outputs_holder=holder,
-            upstream_attr="activitysim_preprocess",
-            missing_message="ActivitySim preprocess must complete first",
-            context="activitysim_run",
-        )
-
-
-def test_build_required_input_store_preserves_content_hashes(tmp_path: Path) -> None:
-    holder = StepOutputsHolder()
-    source_path = tmp_path / "input.txt"
-    store = _store_with_record(source_path, "input_a")
-    holder.activitysim_preprocess = _HashTrackingStepOutputs(
-        store,
-        hashes={"input_a": "hash-input-a"},
-    )
-
-    materialized = _build_required_input_store(
-        outputs_holder=holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context="activitysim_run",
-        warn_missing_coupler_inputs=False,
-    )
-
-    record = _record_by_short_name(materialized, "input_a")
-    assert record is not None
-    assert record.content_hash == "hash-input-a"
 
 
 def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadata_hook(
@@ -247,12 +68,16 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
 
     assert result is holder.activitysim_run
     assert captured["raw_outputs"] is holder.activitysim_run
-    raw_store = captured["raw_outputs"].to_postprocess_record_store()
-    raw_record = _record_by_short_name(raw_store, "households_asim_out_temp")
-    assert raw_record is not None and raw_record.content_hash == "raw-hash"
-    assert getattr(raw_store, "activitysim_source_input_hashes") == {
+    assert captured["raw_outputs"].raw_output_hashes == {
+        "households_asim_out_temp": "raw-hash",
+    }
+    assert captured["raw_outputs"].source_input_hashes == {
         "households_asim_in": "preprocess-hash",
         "zarr_skims": "zarr-hash",
+    }
+    assert captured["raw_outputs"].source_input_paths == {
+        "households_asim_in": tmp_path / "households.csv",
+        "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr",
     }
 
 

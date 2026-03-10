@@ -153,7 +153,7 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
             )
 
     fake_postprocessor = SimpleNamespace(
-        postprocess=lambda raw_outputs, _workspace: raw_outputs.to_postprocess_record_store()
+        postprocess=lambda raw_outputs, _workspace: raw_outputs
     )
     monkeypatch.setattr(
         steps_activitysim.ModelFactory,

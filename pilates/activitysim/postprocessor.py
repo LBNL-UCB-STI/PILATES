@@ -698,16 +698,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 "ActivitysimPostprocessor.postprocess expects ActivitySimRunOutputs"
             )
         self.state.set_sub_stage_progress("postprocessor")
-        output_store = self._postprocess(
-            raw_outputs.to_postprocess_record_store(),
-            workspace,
-            model_run_hash,
-        )
+        output_store = self._postprocess(raw_outputs, workspace, model_run_hash)
         return ActivitySimPostprocessOutputs.from_record_store(output_store, workspace)
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
     ) -> RecordStore:
@@ -718,7 +714,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         models in the workflow (e.g., UrbanSim, BEAM).
 
         Args:
-            raw_outputs (RecordStore): The raw outputs from the model run.
+            raw_outputs (ActivitySimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
@@ -760,17 +756,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
 
         def _build_content_hash_map() -> Dict[str, str]:
             hash_map: Dict[str, str] = {}
-            for record in raw_outputs.all_records():
-                path = record.get_absolute_path(base_path=workspace.full_path)
-                if not path:
-                    continue
-                record_hash = getattr(record, "content_hash", None)
+            for short_name, path in raw_outputs.raw_outputs.items():
+                record_hash = raw_outputs.raw_output_hashes.get(short_name)
                 if record_hash:
-                    hash_map[path] = record_hash
-            source_input_paths = getattr(raw_outputs, "activitysim_source_input_paths", {})
-            source_input_hashes = getattr(
-                raw_outputs, "activitysim_source_input_hashes", {}
-            )
+                    hash_map[os.path.abspath(str(path))] = record_hash
+            source_input_paths = raw_outputs.source_input_paths
+            source_input_hashes = raw_outputs.source_input_hashes
             if not source_input_paths and not source_input_hashes:
                 logger.warning(
                     "ActivitySim postprocess raw outputs are missing source input metadata; "
@@ -864,11 +855,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             )
 
             # The raw output files are implicitly the source for all derived products in this post-processing step.
-            source_file_paths = [
-                getattr(r, "file_path")
-                for r in raw_outputs.all_records()
-                if hasattr(r, "file_path")
-            ]
+            source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
 
             # 2. Prepare tables for integration with UrbanSim
             tables_updated_by_asim = ["households", "persons"]
@@ -895,37 +882,34 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 processed_records.append(usim_record)
 
         # Record raw outputs as inputs to this post-processing run
-        for record in raw_outputs.all_records():
-            if hasattr(record, "file_path"):
-                source = record.get_absolute_path(base_path=workspace.full_path)
-                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
-                output_key = normalize_asim_output_key(clean_name)
-                target = os.path.join(
-                    iteration_folder_path,
-                    clean_name + ".parquet",
+        for short_name, path in raw_outputs.raw_outputs.items():
+            source = os.path.abspath(str(path))
+            clean_name = re.sub(r"_asim_out_temp$", "", short_name)
+            output_key = normalize_asim_output_key(clean_name)
+            target = os.path.join(
+                iteration_folder_path,
+                clean_name + ".parquet",
+            )
+            if os.path.abspath(source) == os.path.abspath(target):
+                continue
+            if not os.path.exists(source):
+                logger.debug("ASim output missing, skipping move: %s", source)
+                continue
+            if os.path.exists(target):
+                logger.debug("ASim output already archived: %s", target)
+                continue
+            shutil.move(source, target)
+            content_hash = _resolve_content_hash(source)
+            processed_records.append(
+                FileRecord(
+                    file_path=target,
+                    year=self.state.forecast_year,
+                    description=f"ActivitySim output file: {clean_name}",
+                    short_name=output_key,
+                    iteration=self.state.current_inner_iter,
+                    content_hash=content_hash,
                 )
-                if not source:
-                    continue
-                if os.path.abspath(source) == os.path.abspath(target):
-                    continue
-                if not os.path.exists(source):
-                    logger.debug("ASim output missing, skipping move: %s", source)
-                    continue
-                if os.path.exists(target):
-                    logger.debug("ASim output already archived: %s", target)
-                    continue
-                shutil.move(source, target)
-                content_hash = _resolve_content_hash(source)
-                processed_records.append(
-                    FileRecord(
-                        file_path=target,
-                        year=self.state.forecast_year,
-                        description=f"ActivitySim output file: {clean_name}",
-                        short_name=output_key,
-                        iteration=self.state.current_inner_iter,
-                        content_hash=content_hash,
-                    )
-                )
+            )
 
         # Return a new RecordStore with the paths to the newly created/processed files.
         processed_store = RecordStore(recordList=processed_records)

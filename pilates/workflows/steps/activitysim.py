@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, Optional, Type, TypeVar, cast
 
 from pilates.activitysim.runner import (
+    ActivitysimCompileRunner,
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
@@ -16,7 +17,6 @@ from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.outputs_base import (
     StepOutputsBase,
     ValidationContext,
-    iter_step_output_items,
 )
 from pilates.workspace import Workspace
 
@@ -37,8 +37,6 @@ from .shared import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     CouplerProtocol,
-    FileRecord,
-    RecordStore,
     StepOutputsHolder,
     WorkflowState,
     _activitysim_output_facet_meta,
@@ -254,50 +252,38 @@ def make_activitysim_compile_step(
     ) -> None:
         factory = ModelFactory()
 
-        compile_runner = factory.get_runner(
-            "activitysim_compile",
-            state,
+        compile_runner = cast(
+            ActivitysimCompileRunner,
+            factory.get_runner(
+                "activitysim_compile",
+                state,
+            ),
         )
-
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError(
                 "ActivitySim compile must run after activitysim_preprocess"
             )
-        omx_record = None
-        omx_path = None
-        for short_name, path, description in iter_step_output_items(upstream):
-            if short_name != ASIM_OMX_SKIMS:
-                continue
-            omx_record = FileRecord(
-                file_path=str(path),
-                short_name=short_name,
-                description=description,
+        if not isinstance(upstream, ActivitySimPreprocessOutputs):
+            raise TypeError(
+                "activitysim_compile requires ActivitySimPreprocessOutputs from activitysim_preprocess"
             )
-            omx_path = artifact_to_path(path, workspace) or str(path)
-            break
-        input_store = (
-            RecordStore(recordList=[omx_record])
-            if omx_record is not None
-            else RecordStore()
+        omx_path = (
+            artifact_to_path(upstream.omx_skims, workspace)
+            if upstream.omx_skims is not None
+            else None
         )
         if omx_path and os.path.exists(omx_path):
             cr.log_input(
                 omx_path,
-                key=ASIM_OMX_SKIMS,
+                key=upstream.record_keys["omx_skims"],
                 description="ActivitySim compile input skims (OMX)",
             )
-        compile_outputs = compile_runner.run(input_store, workspace)
+        compile_outputs = compile_runner.run(upstream, workspace)
 
-        zarr_record = None
-        if compile_outputs:
-            for record in compile_outputs.all_records():
-                if record.short_name == ZARR_SKIMS:
-                    zarr_record = record
-                    break
         zarr_output_path = expected_outputs.get(ZARR_SKIMS)
-        if not zarr_output_path and zarr_record is not None:
-            zarr_output_path = zarr_record.file_path
+        if not zarr_output_path and compile_outputs.zarr_skims is not None:
+            zarr_output_path = str(compile_outputs.zarr_skims)
         if zarr_output_path and os.path.exists(zarr_output_path):
             log_and_set_output(
                 key=ZARR_SKIMS,
@@ -312,7 +298,11 @@ def make_activitysim_compile_step(
             )
 
         if persist_sharrow_cache_enabled(settings):
-            cache_path = asim_sharrow_cache_dir(workspace)
+            cache_path = (
+                str(compile_outputs.sharrow_cache_dir)
+                if compile_outputs.sharrow_cache_dir is not None
+                else asim_sharrow_cache_dir(workspace)
+            )
 
             if cache_path and _is_non_empty_directory(cache_path):
                 log_and_set_output(

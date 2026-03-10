@@ -8,8 +8,12 @@ import pytest
 
 from pilates.activitysim.runner import ActivitysimCompileRunner
 from pilates.activitysim.runner import ActivitysimRunner
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
+from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -49,46 +53,16 @@ class _CompileRunner:
         self._zarr_path = zarr_path
         self._cache_path = cache_path
 
-    def run(self, input_store: RecordStore, workspace: _DummyWorkspace) -> RecordStore:
-        records = [
-            FileRecord(
-                file_path=str(self._zarr_path),
-                short_name=ZARR_SKIMS,
-                description="Compiled ActivitySim skims (Zarr)",
-            )
-        ]
-        if self._cache_path is not None:
-            records.append(
-                FileRecord(
-                    file_path=str(self._cache_path),
-                    short_name=ASIM_SHARROW_CACHE_DIR,
-                    description="ActivitySim persisted compile cache",
-                )
-            )
-        return RecordStore(recordList=records)
-
-
-class _IterOnlyPreprocessOutputs:
-    def __init__(
+    def run(
         self,
-        *,
-        land_use: Path,
-        households: Path,
-        persons: Path,
-        omx_skims: Path,
-    ) -> None:
-        self._items = (
-            ("land_use", land_use, "ActivitySim land use input table"),
-            ("households", households, "ActivitySim households input table"),
-            ("persons", persons, "ActivitySim persons input table"),
-            ("omx_skims", omx_skims, "ActivitySim OMX skims input"),
+        inputs: ActivitySimPreprocessOutputs,
+        workspace: _DummyWorkspace,
+    ) -> ActivitySimCompileOutputs:
+        assert isinstance(inputs, ActivitySimPreprocessOutputs)
+        return ActivitySimCompileOutputs(
+            zarr_skims=self._zarr_path,
+            sharrow_cache_dir=self._cache_path,
         )
-
-    def _iter_record_items(self):
-        return iter(self._items)
-
-    def to_record_store(self) -> RecordStore:
-        raise AssertionError("compile step should not call to_record_store()")
 
 
 def _settings(*, persist_sharrow_cache: bool) -> SimpleNamespace:
@@ -253,7 +227,7 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
     }
 
 
-def test_activitysim_compile_reads_omx_from_iter_record_items_only(
+def test_activitysim_compile_passes_typed_preprocess_outputs_to_runner(
     monkeypatch, tmp_path: Path
 ) -> None:
     asim_output_dir = tmp_path / "asim_output"
@@ -276,27 +250,25 @@ def test_activitysim_compile_reads_omx_from_iter_record_items_only(
     state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
     coupler = _DummyCoupler()
     outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = _IterOnlyPreprocessOutputs(
-        land_use=land_use,
-        households=households,
-        persons=persons,
+    preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_mutable_dir,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
         omx_skims=omx_skims,
     )
+    outputs_holder.activitysim_preprocess = preprocess_outputs
 
     captured: dict = {}
 
     class _CaptureCompileRunner:
-        def run(self, input_store: RecordStore, workspace: _DummyWorkspace) -> RecordStore:
-            captured["inputs"] = input_store.to_mapping()
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(zarr_path),
-                        short_name=ZARR_SKIMS,
-                        description="Compiled ActivitySim skims (Zarr)",
-                    )
-                ]
-            )
+        def run(
+            self,
+            inputs: ActivitySimPreprocessOutputs,
+            workspace: _DummyWorkspace,
+        ) -> ActivitySimCompileOutputs:
+            captured["inputs"] = inputs
+            return ActivitySimCompileOutputs(zarr_skims=zarr_path)
 
     def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim_compile":
@@ -316,7 +288,8 @@ def test_activitysim_compile_reads_omx_from_iter_record_items_only(
         expected_outputs={ZARR_SKIMS: str(zarr_path)},
     )
 
-    assert captured["inputs"] == {"omx_skims": str(omx_skims)}
+    assert captured["inputs"] is preprocess_outputs
+    assert captured["inputs"].omx_skims == omx_skims
 
 
 def test_activitysim_compile_publishes_expected_zarr_path_without_runner_record(
@@ -342,16 +315,22 @@ def test_activitysim_compile_publishes_expected_zarr_path_without_runner_record(
     state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
     coupler = _DummyCoupler()
     outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_preprocess = _IterOnlyPreprocessOutputs(
-        land_use=land_use,
-        households=households,
-        persons=persons,
+    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_mutable_dir,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
         omx_skims=omx_skims,
     )
 
     class _NoRecordCompileRunner:
-        def run(self, input_store: RecordStore, workspace: _DummyWorkspace) -> RecordStore:
-            return RecordStore()
+        def run(
+            self,
+            inputs: ActivitySimPreprocessOutputs,
+            workspace: _DummyWorkspace,
+        ) -> ActivitySimCompileOutputs:
+            assert isinstance(inputs, ActivitySimPreprocessOutputs)
+            return ActivitySimCompileOutputs()
 
     def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim_compile":

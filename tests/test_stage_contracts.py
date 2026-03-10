@@ -24,7 +24,19 @@ import yaml
 
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.generic.records import RecordStore
+from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
+from pilates.beam.outputs import (
+    BeamFullSkimOutputs,
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.atlas.outputs import (
     AtlasPostprocessOutputs,
     AtlasPreprocessOutputs,
@@ -36,7 +48,6 @@ from pilates.urbansim.outputs import (
     UrbanSimRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -162,7 +173,7 @@ class DummyPreprocessor:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def preprocess(self, workspace, previous_records=None):
+    def preprocess(self, workspace, **_kwargs):
         return self._record_builder(self.model_name, "preprocess")
 
 
@@ -173,7 +184,7 @@ class DummyRunner:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def run(self, input_store, workspace):
+    def run(self, input_store, workspace, **_kwargs):
         return self._record_builder(self.model_name, "run")
 
 
@@ -184,7 +195,7 @@ class DummyPostprocessor:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def postprocess(self, raw_outputs, workspace):
+    def postprocess(self, raw_outputs, workspace, **_kwargs):
         return self._record_builder(self.model_name, "postprocess")
 
 
@@ -373,22 +384,22 @@ def stage_env(tmp_path, monkeypatch):
                     prepared_inputs={},
                 )
             if model_name == "activitysim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(land_use_path), short_name=ASIM_LAND_USE_IN),
-                        FileRecord(file_path=str(households_path), short_name=ASIM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(persons_path), short_name=ASIM_PERSONS_IN),
-                        FileRecord(file_path=str(omx_path), short_name=ASIM_OMX_SKIMS),
-                    ]
+                return ActivitySimPreprocessOutputs(
+                    mutable_data_dir=asim_dir,
+                    land_use_table=land_use_path,
+                    households_table=households_path,
+                    persons_table=persons_path,
+                    omx_skims=omx_path,
                 )
             if model_name == "beam":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(beam_plans_path), short_name=BEAM_PLANS_IN),
-                        FileRecord(file_path=str(beam_households_path), short_name=BEAM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(beam_persons_path), short_name=BEAM_PERSONS_IN),
-                        FileRecord(file_path=str(beam_linkstats_path), short_name=LINKSTATS_WARMSTART),
-                    ]
+                return BeamPreprocessOutputs(
+                    beam_mutable_data_dir=beam_dir,
+                    prepared_inputs={
+                        BEAM_PLANS_IN: beam_plans_path,
+                        BEAM_HOUSEHOLDS_IN: beam_households_path,
+                        BEAM_PERSONS_IN: beam_persons_path,
+                        LINKSTATS_WARMSTART: beam_linkstats_path,
+                    },
                 )
             return RecordStore()
         if phase == "run":
@@ -404,26 +415,29 @@ def stage_env(tmp_path, monkeypatch):
                     atlas_output_dir=Path(workspace.get_atlas_output_dir()),
                     raw_outputs={},
                 )
+            if model_name == "activitysim":
+                return ActivitySimRunOutputs(
+                    output_dir=asim_out_dir,
+                    raw_outputs={},
+                )
             if model_name == "activitysim_compile":
                 _write_file(zarr_path)
                 _write_file(numba_cache_path / "cache.bin")
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS),
-                        FileRecord(
-                            file_path=str(numba_cache_path),
-                            short_name=ASIM_SHARROW_CACHE_DIR,
-                        ),
-                    ]
+                return ActivitySimCompileOutputs(
+                    zarr_skims=zarr_path,
+                    sharrow_cache_dir=numba_cache_path,
+                )
+            if model_name == "beam":
+                return BeamRunOutputs(
+                    beam_output_dir=beam_out_dir,
+                    raw_outputs={
+                        "linkstats": beam_linkstats_path,
+                        "beam_plans_out": beam_plans_path,
+                    },
                 )
             if model_name == "beam_full_skim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(beam_full_skims_path),
-                            short_name=BEAM_FULL_SKIMS,
-                        )
-                    ]
+                return BeamFullSkimOutputs(
+                    full_skims=beam_full_skims_path,
                 )
             return RecordStore()
         if phase == "postprocess":
@@ -440,6 +454,18 @@ def stage_env(tmp_path, monkeypatch):
                     usim_datastore_h5=Path(usim_input_path),
                     processed_outputs={},
                 )
+            if model_name == "activitysim":
+                return ActivitySimPostprocessOutputs(
+                    usim_datastore_h5=None,
+                    asim_output_dir=asim_out_dir,
+                    processed_outputs={
+                        "beam_plans_out": beam_plans_path,
+                        "households_asim_out": households_path,
+                        "persons_asim_out": persons_path,
+                    },
+                )
+            if model_name == "beam":
+                return BeamPostprocessOutputs(zarr_skims=zarr_path)
             return RecordStore()
         return RecordStore()
 
@@ -1061,19 +1087,27 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     }
 
     class _BeamPreprocessorNoWarmstart:
-        def preprocess(self, workspace, previous_records=None):
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
             beam_dir = Path(workspace.get_beam_mutable_data_dir())
             plans = beam_dir / "plans.csv"
             households = beam_dir / "households.csv"
             persons = beam_dir / "persons.csv"
             for path in (plans, households, persons):
                 _write_file(path)
-            return RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(plans), short_name=BEAM_PLANS_IN),
-                    FileRecord(file_path=str(households), short_name=BEAM_HOUSEHOLDS_IN),
-                    FileRecord(file_path=str(persons), short_name=BEAM_PERSONS_IN),
-                ]
+            return BeamPreprocessOutputs(
+                beam_mutable_data_dir=beam_dir,
+                prepared_inputs={
+                    BEAM_PLANS_IN: plans,
+                    BEAM_HOUSEHOLDS_IN: households,
+                    BEAM_PERSONS_IN: persons,
+                },
             )
 
     original_get_preprocessor = ModelFactory.get_preprocessor
@@ -1143,39 +1177,42 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     coupler.set(ZARR_SKIMS, str(zarr_path))
 
     class _BeamPreprocessorNoWarmstart:
-        def preprocess(self, workspace, previous_records=None):
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
             beam_dir = Path(workspace.get_beam_mutable_data_dir())
             plans = beam_dir / "plans.csv"
             households = beam_dir / "households.csv"
             persons = beam_dir / "persons.csv"
             for path in (plans, households, persons):
                 _write_file(path)
-            return RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(plans), short_name=BEAM_PLANS_IN),
-                    FileRecord(file_path=str(households), short_name=BEAM_HOUSEHOLDS_IN),
-                    FileRecord(file_path=str(persons), short_name=BEAM_PERSONS_IN),
-                ]
+            return BeamPreprocessOutputs(
+                beam_mutable_data_dir=beam_dir,
+                prepared_inputs={
+                    BEAM_PLANS_IN: plans,
+                    BEAM_HOUSEHOLDS_IN: households,
+                    BEAM_PERSONS_IN: persons,
+                },
             )
 
     class _BeamRunnerWithSubIterationOutputs:
-        def run(self, input_store, workspace):
+        def run(self, inputs, workspace, **_kwargs):
             beam_out = Path(workspace.get_beam_output_dir())
             skim_sub0 = beam_out / "0.skimsActivitySimOD_current.zarr"
             events_sub0 = beam_out / "0.events.parquet"
             _write_file(skim_sub0)
             _write_file(events_sub0)
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(skim_sub0),
-                        short_name=f"raw_od_skims_zarr_{state.forecast_year}_0_sub0",
-                    ),
-                    FileRecord(
-                        file_path=str(events_sub0),
-                        short_name=f"events_parquet_{state.forecast_year}_0_sub0",
-                    ),
-                ]
+            return BeamRunOutputs(
+                beam_output_dir=beam_out,
+                raw_outputs={
+                    f"raw_od_skims_zarr_{state.forecast_year}_0_sub0": skim_sub0,
+                    f"events_parquet_{state.forecast_year}_0_sub0": events_sub0,
+                },
             )
 
     original_get_preprocessor = ModelFactory.get_preprocessor

@@ -269,6 +269,20 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
 
 
 @dataclass
+class ActivitySimCompileOutputs:
+    """
+    Path-based outputs from the ActivitySim compile step.
+
+    This is intentionally a small local contract rather than a workflow
+    boundary dataclass because `activitysim_compile` publishes directly to the
+    coupler and is not persisted in the typed step-output holder.
+    """
+
+    zarr_skims: Optional[Path] = None
+    sharrow_cache_dir: Optional[Path] = None
+
+
+@dataclass
 class ActivitySimRunOutputs(StepOutputsBase):
     """
     Outputs from the ActivitySim run step.
@@ -352,23 +366,6 @@ class ActivitySimRunOutputs(StepOutputsBase):
                 )
             )
         return RecordStore(recordList=records)
-
-    def to_postprocess_record_store(self) -> RecordStore:
-        """
-        Convert outputs to a RecordStore and attach carried input metadata.
-        """
-        record_store = self.to_record_store()
-        setattr(
-            record_store,
-            "activitysim_source_input_paths",
-            {key: str(path) for key, path in self.source_input_paths.items()},
-        )
-        setattr(
-            record_store,
-            "activitysim_source_input_hashes",
-            dict(self.source_input_hashes),
-        )
-        return record_store
 
 
 @dataclass

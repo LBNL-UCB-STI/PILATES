@@ -22,6 +22,17 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
+from pilates.beam.outputs import (
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
@@ -30,7 +41,6 @@ from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     ASIM_SHARROW_CACHE_DIR,
     BEAM_HOUSEHOLDS_IN,
@@ -143,7 +153,7 @@ class DummyPreprocessor:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def preprocess(self, workspace, previous_records=RecordStore()):
+    def preprocess(self, workspace, **_kwargs):
         return self._record_builder(self.model_name, "preprocess")
 
 
@@ -152,7 +162,7 @@ class DummyRunner:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def run(self, input_store, workspace):
+    def run(self, input_store, workspace, **_kwargs):
         return self._record_builder(self.model_name, "run")
 
 
@@ -161,7 +171,7 @@ class DummyPostprocessor:
         self.model_name = model_name
         self._record_builder = record_builder
 
-    def postprocess(self, raw_outputs, workspace):
+    def postprocess(self, raw_outputs, workspace, **_kwargs):
         return self._record_builder(self.model_name, "postprocess")
 
 
@@ -339,22 +349,22 @@ def restart_stage_env(tmp_path, monkeypatch):
     def record_builder(model_name, phase):
         if phase == "preprocess":
             if model_name == "activitysim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(land_use_path), short_name=ASIM_LAND_USE_IN),
-                        FileRecord(file_path=str(households_path), short_name=ASIM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(persons_path), short_name=ASIM_PERSONS_IN),
-                        FileRecord(file_path=str(omx_path), short_name=ASIM_OMX_SKIMS),
-                    ]
+                return ActivitySimPreprocessOutputs(
+                    mutable_data_dir=asim_dir,
+                    land_use_table=land_use_path,
+                    households_table=households_path,
+                    persons_table=persons_path,
+                    omx_skims=omx_path,
                 )
             if model_name == "beam":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(beam_plans_path), short_name=BEAM_PLANS_IN),
-                        FileRecord(file_path=str(beam_households_path), short_name=BEAM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(beam_persons_path), short_name=BEAM_PERSONS_IN),
-                        FileRecord(file_path=str(beam_linkstats_path), short_name=LINKSTATS_WARMSTART),
-                    ]
+                return BeamPreprocessOutputs(
+                    beam_mutable_data_dir=beam_dir,
+                    prepared_inputs={
+                        BEAM_PLANS_IN: beam_plans_path,
+                        BEAM_HOUSEHOLDS_IN: beam_households_path,
+                        BEAM_PERSONS_IN: beam_persons_path,
+                        LINKSTATS_WARMSTART: beam_linkstats_path,
+                    },
                 )
             return RecordStore()
         if phase == "run":
@@ -364,17 +374,25 @@ def restart_stage_env(tmp_path, monkeypatch):
                         FileRecord(file_path=str(usim_output_path), short_name=USIM_FORECAST_OUTPUT)
                     ]
                 )
+            if model_name == "activitysim":
+                return ActivitySimRunOutputs(
+                    output_dir=asim_output_dir,
+                    raw_outputs={},
+                )
             if model_name == "activitysim_compile":
                 _write_file(zarr_path)
                 _write_file(numba_cache_path)
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS),
-                        FileRecord(
-                            file_path=str(numba_cache_path.parent),
-                            short_name=ASIM_SHARROW_CACHE_DIR,
-                        ),
-                    ]
+                return ActivitySimCompileOutputs(
+                    zarr_skims=zarr_path,
+                    sharrow_cache_dir=numba_cache_path.parent,
+                )
+            if model_name == "beam":
+                return BeamRunOutputs(
+                    beam_output_dir=beam_output_dir,
+                    raw_outputs={
+                        "linkstats": beam_linkstats_path,
+                        "beam_plans_out": beam_plans_path,
+                    },
                 )
             if model_name == "beam_full_skim":
                 return RecordStore(
@@ -383,15 +401,28 @@ def restart_stage_env(tmp_path, monkeypatch):
                     ]
                 )
             return RecordStore()
-        if phase == "postprocess" and model_name == "urbansim":
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(usim_merged_path),
-                        short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-                    )
-                ]
-            )
+        if phase == "postprocess":
+            if model_name == "urbansim":
+                return RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(usim_merged_path),
+                            short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
+                        )
+                    ]
+                )
+            if model_name == "activitysim":
+                return ActivitySimPostprocessOutputs(
+                    usim_datastore_h5=None,
+                    asim_output_dir=asim_output_dir,
+                    processed_outputs={
+                        "beam_plans_out": beam_plans_path,
+                        "households_asim_out": households_path,
+                        "persons_asim_out": persons_path,
+                    },
+                )
+            if model_name == "beam":
+                return BeamPostprocessOutputs(zarr_skims=zarr_path)
         return RecordStore()
 
     monkeypatch.setattr(

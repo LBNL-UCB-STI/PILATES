@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Mapping
 
 from pilates.config import PilatesConfig
@@ -10,6 +11,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     write_asim_run_marker,
@@ -159,11 +161,24 @@ class ActivitysimCompileRunner(GenericRunner):
             ASIM_LAND_USE_IN,
         ]
 
+    def run(
+        self,
+        inputs: ActivitySimPreprocessOutputs,
+        workspace: Workspace,
+    ) -> ActivitySimCompileOutputs:
+        if not isinstance(inputs, ActivitySimPreprocessOutputs):
+            raise TypeError(
+                "ActivitysimCompileRunner.run expects ActivitySimPreprocessOutputs"
+            )
+        self.state.set_sub_stage_progress("runner")
+        return self._run(inputs, workspace)
+
     def _run(
         self,
-        store: RecordStore,
+        inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> RecordStore:
+    ) -> ActivitySimCompileOutputs:
+        del inputs
         settings = self.state.full_settings
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
@@ -227,7 +242,7 @@ class ActivitysimCompileRunner(GenericRunner):
         if not success:
             raise RuntimeError("ASim Compilation failed")
 
-        output_records = []
+        zarr_skims_path = None
         if os.path.exists(all_skims_path):
             try:
                 ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
@@ -240,33 +255,16 @@ class ActivitysimCompileRunner(GenericRunner):
                     "Failed to correct initial Zarr skims, cannot proceed."
                 ) from e
 
-            zarr_skims_rec = FileRecord(
-                file_path=all_skims_path,
-                year=self.state.current_year,
-                iteration=-1,
-                description="Zarr skims initialized from omx.",
-                short_name="zarr_skims",
-            )
-            output_records.append(zarr_skims_rec)
+            zarr_skims_path = all_skims_path
             logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
         else:
             logger.warning("ASIM compilation succeeded but skims.zarr was not found.")
 
+        sharrow_cache_dir = None
         if persist_sharrow_cache_enabled(settings):
             cache_dir = asim_sharrow_cache_dir(workspace)
             if _dir_contains_files(cache_dir):
-                output_records.append(
-                    FileRecord(
-                        file_path=cache_dir,
-                        year=self.state.current_year,
-                        iteration=-1,
-                        description=(
-                            "ActivitySim persisted compile cache directory "
-                            "(numba/sharrow)."
-                        ),
-                        short_name=ASIM_SHARROW_CACHE_DIR,
-                    )
-                )
+                sharrow_cache_dir = cache_dir
                 logger.info(
                     "ActivitySim compile cache directory is available: %s", cache_dir
                 )
@@ -289,7 +287,12 @@ class ActivitysimCompileRunner(GenericRunner):
                 )
 
         self.state.compile_asim()
-        return RecordStore(recordList=output_records)
+        return ActivitySimCompileOutputs(
+            zarr_skims=Path(zarr_skims_path) if zarr_skims_path is not None else None,
+            sharrow_cache_dir=(
+                Path(sharrow_cache_dir) if sharrow_cache_dir is not None else None
+            ),
+        )
 
 
 class ActivitysimRunner(GenericRunner):
