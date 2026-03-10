@@ -110,12 +110,29 @@ def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monke
     beam_run_spec = dict(patched_deps["beam_run"])
     beam_run_spec["depends_on"] = ["not_a_real_step"]
     patched_deps["beam_run"] = beam_run_spec
+    patched_runtime_deps = {
+        key: dict(value) for key, value in step_shared.STEP_RUNTIME_DEPENDENCIES.items()
+    }
+    patched_runtime_beam_run = dict(patched_runtime_deps["beam_run"])
+    patched_runtime_beam_run["depends_on"] = ["not_a_real_step"]
+    patched_runtime_deps["beam_run"] = patched_runtime_beam_run
     monkeypatch.setattr(step_shared, "STEP_DEPENDENCIES", patched_deps)
+    monkeypatch.setattr(step_shared, "STEP_RUNTIME_DEPENDENCIES", patched_runtime_deps)
 
     with pytest.raises(RuntimeError, match="depends_on unknown steps"):
         step_shared.validate_workflow_step_contracts(
             declared_steps=_declared_schema_steps()
         )
+
+
+def test_validate_step_ready_enforces_untracked_activitysim_compile_inputs():
+    holder = StepOutputsHolder()
+
+    with pytest.raises(
+        RuntimeError,
+        match="activitysim_compile requires activitysim_preprocess to complete first",
+    ):
+        step_shared.validate_step_ready("activitysim_compile", holder)
 
 
 def test_validate_workflow_step_contracts_flags_untracked_declared_steps():

@@ -265,6 +265,8 @@ from pilates.atlas.outputs import (
     AtlasRunOutputs,
 )
 from pilates.workflows.catalog import (
+    WORKFLOW_STEP_SPECS,
+    runtime_step_dependencies_from_catalog,
     step_dependencies_from_catalog,
     step_outputs_classes_from_catalog,
 )
@@ -894,6 +896,7 @@ STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
 
 
 STEP_DEPENDENCIES = step_dependencies_from_catalog()
+STEP_RUNTIME_DEPENDENCIES = runtime_step_dependencies_from_catalog()
 
 DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
 
@@ -912,7 +915,7 @@ def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> No
     outputs_holder : StepOutputsHolder
         Holder containing upstream outputs.
     """
-    spec = STEP_DEPENDENCIES.get(step_name)
+    spec = STEP_RUNTIME_DEPENDENCIES.get(step_name)
     if not spec:
         logger.warning("No dependency spec for %s; skipping validation", step_name)
         return
@@ -963,7 +966,9 @@ def validate_workflow_step_contracts(
     holder_fields = {f.name for f in fields(StepOutputsHolder)}
     output_class_keys = set(STEP_OUTPUTS_CLASSES.keys())
     dependency_keys = set(STEP_DEPENDENCIES.keys())
+    runtime_dependency_keys = set(STEP_RUNTIME_DEPENDENCIES.keys())
     tracked_step_names = holder_fields | output_class_keys | dependency_keys
+    declared_step_names = {spec.step_name for spec in WORKFLOW_STEP_SPECS}
 
     missing_output_class = holder_fields - output_class_keys
     if missing_output_class:
@@ -991,7 +996,19 @@ def validate_workflow_step_contracts(
             + ", ".join(sorted(extra_dependency_spec))
         )
 
-    for step_name, spec in STEP_DEPENDENCIES.items():
+    if declared_step_names - runtime_dependency_keys:
+        errors.append(
+            "Missing runtime dependency specs for declared steps: "
+            + ", ".join(sorted(declared_step_names - runtime_dependency_keys))
+        )
+
+    if runtime_dependency_keys - declared_step_names:
+        errors.append(
+            "Runtime dependency specs reference undeclared steps: "
+            + ", ".join(sorted(runtime_dependency_keys - declared_step_names))
+        )
+
+    for step_name, spec in STEP_RUNTIME_DEPENDENCIES.items():
         if not isinstance(spec, Mapping):
             errors.append(
                 f"Dependency spec for {step_name!r} must be a mapping, got {type(spec).__name__}"
@@ -1010,7 +1027,7 @@ def validate_workflow_step_contracts(
             )
             holder_inputs = []
 
-        unknown_depends_on = set(depends_on) - tracked_step_names
+        unknown_depends_on = set(depends_on) - declared_step_names
         if unknown_depends_on:
             errors.append(
                 f"STEP_DEPENDENCIES[{step_name!r}] depends_on unknown steps: "
