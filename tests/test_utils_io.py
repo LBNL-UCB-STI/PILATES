@@ -207,7 +207,7 @@ class TestParseArgsAndSettings:
         mock_load_config.assert_called_with("settings.yaml")
         mock_compute_flags.assert_called_once_with(settings)
 
-        assert settings.state_file_loc == "current_stage.yaml"
+        assert settings.state_file_loc is None
         assert settings.settings_file == "settings.yaml"
         assert settings.land_use_enabled is True
         assert settings.vehicle_ownership_model_enabled is True

@@ -144,7 +144,7 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     if args.config:
         settings_file = args.config
 
-    stage_file_loc = args.stage or "current_stage.yaml"
+    stage_file_loc = args.stage
     if args.stage is not None and not os.path.exists(stage_file_loc):
         raise FileNotFoundError(
             f"Explicit stage file provided via -S/--stage does not exist: {stage_file_loc}"

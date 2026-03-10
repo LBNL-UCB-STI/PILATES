@@ -223,6 +223,39 @@ def test_state_corruption_detection(tmp_path):
         WorkflowState.from_settings(settings)
 
 
+def test_from_settings_ignores_repo_default_stage_file_for_fresh_runs(tmp_path, monkeypatch):
+    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+    settings.state_file_loc = None
+
+    stale_stage_path = tmp_path / "current_stage.yaml"
+    with open(stale_stage_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {
+                "year": 2017,
+                "stage": "traffic_assignment",
+                "iteration": 0,
+                "asim_compiled": False,
+                "sub_stage_progress": None,
+                "run_info_path": str(tmp_path / "run_state.yaml"),
+                "data_initialized": True,
+            },
+            handle,
+        )
+
+    monkeypatch.chdir(tmp_path)
+
+    resumed = WorkflowState.from_settings(settings)
+
+    assert resumed.current_year == 2017
+    assert resumed.current_major_stage == WorkflowState.Stage.land_use
+    assert resumed.current_sub_stage is None
+    assert resumed.current_inner_iter == 0
+    assert resumed.run_info_path is None
+    assert resumed.data_initialized is False
+
+
 def test_state_consistency_across_years(tmp_path):
     settings = _make_settings(tmp_path, start_year=2020, end_year=2021)
     state = WorkflowState.from_settings(settings)

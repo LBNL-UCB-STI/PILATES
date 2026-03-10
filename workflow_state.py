@@ -38,7 +38,7 @@ class WorkflowState:
         major_stage: Stage | None,
         inner_iter: int,
         sub_stage: Stage | None,
-        file_loc: str,
+        file_loc: Optional[str],
         asim_compiled: bool,
         full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
@@ -235,17 +235,26 @@ class WorkflowState:
         traffic_assignment_enabled = getattr(
             settings, "traffic_assignment_enabled", False
         )
-        file_loc = getattr(settings, "state_file_loc", "current_stage.yaml")
+        file_loc = getattr(settings, "state_file_loc", None)
 
-        [
-            year,
-            stage,
-            iteration,
-            asim_compiled,
-            sub_stage_progress,
-            run_info_path,
-            data_initialized,
-        ] = cls.read_current_stage(file_loc)
+        if file_loc:
+            [
+                year,
+                stage,
+                iteration,
+                asim_compiled,
+                sub_stage_progress,
+                run_info_path,
+                data_initialized,
+            ] = cls.read_current_stage(file_loc)
+        else:
+            year = None
+            stage = None
+            iteration = 0
+            asim_compiled = False
+            sub_stage_progress = None
+            run_info_path = None
+            data_initialized = False
 
         resume_major_stage = stage
         resume_sub_stage = None
