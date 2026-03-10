@@ -13,7 +13,6 @@ from pathlib import Path
 import pandas as pd
 
 from pilates.activitysim.outputs import (
-    ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
@@ -134,10 +133,7 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     )
 
     preprocessor = ActivitysimPreprocessor("activitysim", state)
-    preprocess_records = preprocessor.preprocess(workspace)
-    preprocess_outputs = ActivitySimPreprocessOutputs.from_record_store(
-        preprocess_records, workspace
-    )
+    preprocess_outputs = preprocessor.preprocess(workspace)
 
     preprocess_keys = {
         short_name
@@ -200,12 +196,12 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     run_outputs.source_input_hashes["zarr_skims"] = "hash_zarr_skims"
 
     postprocessor = ActivitysimPostprocessor("activitysim", state)
-    postprocess_outputs = postprocessor.postprocess(
-        run_outputs.to_postprocess_record_store(),
-        workspace,
-    )
+    postprocess_outputs = postprocessor.postprocess(run_outputs, workspace)
 
-    output_map = postprocess_outputs.to_mapping()
+    output_map = {
+        short_name: path
+        for short_name, path, _description in postprocess_outputs._iter_record_items()
+    }
     assert "households_asim_out" in output_map
     assert "persons_asim_out" in output_map
     assert "beam_plans_asim_out" in output_map
@@ -224,12 +220,20 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert not raw_persons.exists()
     assert not raw_beam_plans.exists()
 
-    records = {record.short_name: record for record in postprocess_outputs.all_records()}
-    assert records["households_asim_out"].content_hash == "hash_households_out"
-    assert records["persons_asim_out"].content_hash == "hash_persons_out"
-    assert records["beam_plans_asim_out"].content_hash == "hash_beam_plans_out"
-    assert records["asim_input_households_csv_archived"].content_hash == "hash_households_in"
-    assert records["asim_input_persons_csv_archived"].content_hash == "hash_persons_in"
-    assert records["asim_input_land_use_csv_archived"].content_hash == "hash_land_use"
-    assert records["asim_input_skims_zarr_archived"].content_hash == "hash_zarr_skims"
+    assert postprocess_outputs.processed_output_hashes["households_asim_out"] == "hash_households_out"
+    assert postprocess_outputs.processed_output_hashes["persons_asim_out"] == "hash_persons_out"
+    assert postprocess_outputs.processed_output_hashes["beam_plans_asim_out"] == "hash_beam_plans_out"
+    assert (
+        postprocess_outputs.processed_output_hashes["asim_input_households_csv_archived"]
+        == "hash_households_in"
+    )
+    assert (
+        postprocess_outputs.processed_output_hashes["asim_input_persons_csv_archived"]
+        == "hash_persons_in"
+    )
+    assert postprocess_outputs.processed_output_hashes["asim_input_land_use_csv_archived"] == "hash_land_use"
+    assert (
+        postprocess_outputs.processed_output_hashes["asim_input_skims_zarr_archived"]
+        == "hash_zarr_skims"
+    )
     assert state.sub_stage_progress == "postprocessor"

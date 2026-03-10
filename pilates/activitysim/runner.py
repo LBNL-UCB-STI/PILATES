@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import Tuple, Optional, Dict, Any
+import shutil
+from typing import Tuple, Optional, Dict, Any, Mapping
 
 from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore, FileRecord
@@ -9,6 +10,8 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
     write_asim_run_marker,
     clear_asim_run_marker,
 )
@@ -56,6 +59,29 @@ def _dir_contains_files(path: str) -> bool:
         if files:
             return True
     return False
+
+
+def _stage_runtime_input_path(
+    *,
+    key: str,
+    input_path: str,
+    workspace: Workspace,
+) -> str:
+    if key != "zarr_skims":
+        return input_path
+
+    runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+    if os.path.abspath(input_path) == os.path.abspath(runtime_path):
+        return runtime_path
+
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    if os.path.isdir(input_path):
+        if os.path.exists(runtime_path):
+            shutil.rmtree(runtime_path)
+        shutil.copytree(input_path, runtime_path)
+    else:
+        shutil.copyfile(input_path, runtime_path)
+    return runtime_path
 
 
 class ActivitysimCompileRunner(GenericRunner):
@@ -314,6 +340,38 @@ class ActivitysimRunner(GenericRunner):
             "zarr_skims",
             "asim_geoms",
         ]
+
+    def run(
+        self,
+        inputs: ActivitySimPreprocessOutputs,
+        workspace: Workspace,
+        *,
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> ActivitySimRunOutputs:
+        if not isinstance(inputs, ActivitySimPreprocessOutputs):
+            raise TypeError(
+                "ActivitysimRunner.run expects ActivitySimPreprocessOutputs"
+            )
+        self.state.set_sub_stage_progress("runner")
+        input_store = inputs.to_record_store()
+        for key, value in (extra_inputs or {}).items():
+            input_path = value if isinstance(value, str) else getattr(value, "path", value)
+            if input_path is None:
+                continue
+            staged_input_path = _stage_runtime_input_path(
+                key=key,
+                input_path=str(input_path),
+                workspace=workspace,
+            )
+            input_store.add_record(
+                FileRecord(
+                    file_path=staged_input_path,
+                    short_name=key,
+                    description=f"ActivitySim run input: {key}",
+                )
+            )
+        output_store = self._run(input_store, workspace)
+        return ActivitySimRunOutputs.from_record_store(output_store, workspace)
 
     @staticmethod
     def get_base_asim_cmd(

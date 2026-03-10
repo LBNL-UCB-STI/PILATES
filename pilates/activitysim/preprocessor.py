@@ -16,6 +16,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from pilates.config import PilatesConfig
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
@@ -2011,6 +2012,18 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
         return _copy_data_to_mutable_location(settings, output_dir)
+
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: Optional[RecordStore] = None,
+    ) -> ActivitySimPreprocessOutputs:
+        self.state.set_sub_stage_progress("preprocessor")
+        record_store = self._preprocess(
+            workspace,
+            previous_records if previous_records is not None else RecordStore(),
+        )
+        return ActivitySimPreprocessOutputs.from_record_store(record_store, workspace)
 
     def _preprocess(
         self,

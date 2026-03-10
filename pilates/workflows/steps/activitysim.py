@@ -12,7 +12,6 @@ from pilates.activitysim.runner import (
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.coupler_helpers import record_store_to_outputs
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.outputs_base import (
     StepOutputsBase,
@@ -45,9 +44,6 @@ from .shared import (
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
     _declared_outputs_from_class,
-    _execute_preprocess,
-    _execute_postprocess,
-    _execute_run,
     _log_named_h5_tables,
     _log_step_records,
     _schema_outputs_from_class,
@@ -85,6 +81,49 @@ def _artifact_content_hash(value: Any) -> Optional[str]:
     return None
 
 
+def _execute_activitysim_preprocess(
+    preprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> ActivitySimPreprocessOutputs:
+    return preprocessor.preprocess(workspace)
+
+
+def _execute_activitysim_run(
+    runner: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    *,
+    extra_inputs: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> ActivitySimRunOutputs:
+    upstream = outputs_holder.activitysim_preprocess
+    if upstream is None:
+        raise RuntimeError("ActivitySim preprocess must complete first")
+    if not isinstance(upstream, ActivitySimPreprocessOutputs):
+        raise TypeError(
+            "activitysim_run requires ActivitySimPreprocessOutputs from activitysim_preprocess"
+        )
+    return runner.run(upstream, workspace, extra_inputs=extra_inputs)
+
+
+def _execute_activitysim_postprocess(
+    postprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **kwargs: Any,
+) -> ActivitySimPostprocessOutputs:
+    upstream = outputs_holder.activitysim_run
+    if upstream is None:
+        raise RuntimeError("ActivitySim run must complete first")
+    if not isinstance(upstream, ActivitySimRunOutputs):
+        raise TypeError(
+            "activitysim_postprocess requires ActivitySimRunOutputs from activitysim_run"
+        )
+    return postprocessor.postprocess(upstream, workspace)
+
+
 def _make_activitysim_typed_step_function(
     *,
     coupler: CouplerProtocol,
@@ -93,7 +132,7 @@ def _make_activitysim_typed_step_function(
     phase: str,
     outputs_class: Type[StepOutputsT],
     component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., RecordStore],
+    component_executor: Callable[..., StepOutputsT],
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
@@ -115,7 +154,7 @@ def _make_activitysim_typed_step_function(
                 input_logger(settings, state, workspace, outputs_holder) or {}
             )
 
-        record_store = component_executor(
+        step_outputs = component_executor(
             component,
             workspace,
             outputs_holder,
@@ -124,11 +163,11 @@ def _make_activitysim_typed_step_function(
             **extra_kwargs,
             **kwargs,
         )
-        step_outputs = record_store_to_outputs(
-            record_store=record_store,
-            output_class=outputs_class,
-            workspace=workspace,
-        )
+        if not isinstance(step_outputs, outputs_class):
+            raise TypeError(
+                f"{model_name}_{phase} must return {outputs_class.__name__}, "
+                f"got {type(step_outputs).__name__}"
+            )
         validation_context = ValidationContext(
             settings=settings,
             state=state,
@@ -531,7 +570,7 @@ def make_activitysim_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "activitysim", state
         ),
-        component_executor=_execute_preprocess,
+        component_executor=_execute_activitysim_preprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_preprocess", outputs
         ),
@@ -641,13 +680,12 @@ def make_activitysim_run_step(
 
         get_value = getattr(coupler, "get", None)
         zarr_value = get_value(ZARR_SKIMS) if callable(get_value) else None
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
+        runtime_zarr_path = os.path.join(
+            workspace.get_asim_output_dir(), "cache", "skims.zarr"
+        )
+        zarr_path = runtime_zarr_path if os.path.exists(runtime_zarr_path) else artifact_to_path(
+            zarr_value, workspace
+        )
         if zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
             content_hash = _artifact_content_hash(zarr_value) or compile_input_hashes.get(
@@ -679,7 +717,7 @@ def make_activitysim_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "activitysim", state
         ),
-        component_executor=_execute_run,
+        component_executor=_execute_activitysim_run,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_run", outputs
         ),
@@ -853,7 +891,7 @@ def make_activitysim_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "activitysim", state
         ),
-        component_executor=_execute_postprocess,
+        component_executor=_execute_activitysim_postprocess,
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "activitysim_postprocess", outputs
         ),

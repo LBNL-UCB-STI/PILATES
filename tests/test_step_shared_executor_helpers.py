@@ -355,6 +355,47 @@ def test_execute_beam_preprocess_keeps_previous_outputs_from_overwriting_canonic
     assert str(previous_path) in mapping.values()
 
 
+def test_execute_beam_preprocess_preserves_three_source_precedence_and_aliases(
+    tmp_path: Path,
+) -> None:
+    canonical_path = tmp_path / "canonical.parquet"
+    canonical_path.write_text("canonical", encoding="utf-8")
+    previous_path = tmp_path / "previous.parquet"
+    previous_path.write_text("previous", encoding="utf-8")
+    fallback_path = tmp_path / "fallback.parquet"
+    fallback_path.write_text("fallback", encoding="utf-8")
+    households_path = tmp_path / "households.csv"
+    households_path.write_text("households", encoding="utf-8")
+    warmstart_path = tmp_path / "warmstart.parquet"
+    warmstart_path.write_text("warmstart", encoding="utf-8")
+
+    class _Preprocessor:
+        def preprocess(self, workspace, previous_records=None):
+            return previous_records
+
+    result = _execute_beam_preprocess(
+        preprocessor=_Preprocessor(),
+        workspace=type("Workspace", (), {"full_path": str(tmp_path)})(),
+        outputs_holder=StepOutputsHolder(),
+        activity_demand_outputs={"beam_plans": canonical_path},
+        previous_beam_outputs={
+            "beam_plans": previous_path,
+            "linkstats_parquet_2018_0": warmstart_path,
+        },
+        beam_preprocess_inputs={
+            BEAM_PLANS_IN: fallback_path,
+            BEAM_HOUSEHOLDS_IN: households_path,
+        },
+    )
+
+    mapping = result.to_mapping()
+    assert mapping["beam_plans"] == str(canonical_path)
+    assert mapping["households"] == str(households_path)
+    assert mapping["linkstats_parquet_2018_0"] == str(warmstart_path)
+    assert str(previous_path) in mapping.values()
+    assert str(fallback_path) in mapping.values()
+
+
 def test_execute_beam_preprocess_omits_missing_optional_inputs(tmp_path: Path) -> None:
     captured = {}
 

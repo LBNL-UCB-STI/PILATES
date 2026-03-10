@@ -128,7 +128,15 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
     )
 
     compile_runner = _CompileRunner(zarr_path)
-    run_runner = object()
+    captured: dict = {}
+
+    class _RunRunner:
+        def run(self, inputs, workspace, *, extra_inputs=None):
+            captured["inputs"] = inputs
+            captured["extra_inputs"] = extra_inputs
+            return ActivitySimRunOutputs(output_dir=asim_output_dir, raw_outputs={})
+
+    run_runner = _RunRunner()
 
     def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim_compile":
@@ -137,15 +145,7 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
             return run_runner
         raise AssertionError(f"Unexpected model_name: {model_name}")
 
-    captured: dict = {}
-
-    def _capture_execute_run(runner, workspace, outputs_holder, **kwargs):
-        captured["runner"] = runner
-        captured["extra_inputs"] = kwargs.get("extra_inputs")
-        return RecordStore()
-
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(activitysim_steps, "_execute_run", _capture_execute_run)
 
     compile_step = activitysim_steps.make_activitysim_compile_step(
         coupler=coupler,
@@ -167,7 +167,7 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
     )
     run_step(settings=settings, state=state, workspace=workspace)
 
-    assert captured["runner"] is run_runner
+    assert captured["inputs"] is outputs_holder.activitysim_preprocess
     extra_inputs = captured["extra_inputs"]
     assert extra_inputs == {ZARR_SKIMS: str(zarr_path)}
 
@@ -209,26 +209,23 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
         },
     )
 
+    class _RunRunner:
+        def run(self, inputs, workspace, *, extra_inputs=None):
+            output_path = workspace.get_asim_output_dir() + "/households.parquet"
+            Path(output_path).write_text("out")
+            return ActivitySimRunOutputs(
+                output_dir=Path(workspace.get_asim_output_dir()),
+                raw_outputs={
+                    "households_asim_out_temp": Path(output_path),
+                },
+            )
+
     def _get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name != "activitysim":
             raise AssertionError(f"Unexpected model_name: {model_name}")
-        return object()
-
-    def _fake_execute_run(runner, workspace, outputs_holder, **kwargs):
-        output_path = workspace.get_asim_output_dir() + "/households.parquet"
-        Path(output_path).write_text("out")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=output_path,
-                    short_name="households_asim_out_temp",
-                    description="ActivitySim raw output: households_asim_out_temp",
-                )
-            ]
-        )
+        return _RunRunner()
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(activitysim_steps, "_execute_run", _fake_execute_run)
     monkeypatch.setattr(
         activitysim_steps.cr,
         "log_output",
@@ -320,6 +317,67 @@ def test_activitysim_compile_reads_omx_from_iter_record_items_only(
     )
 
     assert captured["inputs"] == {"omx_skims": str(omx_skims)}
+
+
+def test_activitysim_compile_publishes_expected_zarr_path_without_runner_record(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asim_output_dir = tmp_path / "asim_output"
+    asim_output_dir.mkdir(parents=True)
+    zarr_path = asim_output_dir / "cache" / "skims.zarr"
+    zarr_path.parent.mkdir(parents=True)
+    zarr_path.write_text("dummy-zarr")
+
+    asim_mutable_dir = tmp_path / "asim_mutable"
+    asim_mutable_dir.mkdir(parents=True)
+    land_use = asim_mutable_dir / "land_use.csv"
+    households = asim_mutable_dir / "households.csv"
+    persons = asim_mutable_dir / "persons.csv"
+    omx_skims = asim_mutable_dir / "skims.omx"
+    for path in (land_use, households, persons, omx_skims):
+        path.write_text("dummy")
+
+    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    coupler = _DummyCoupler()
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_preprocess = _IterOnlyPreprocessOutputs(
+        land_use=land_use,
+        households=households,
+        persons=persons,
+        omx_skims=omx_skims,
+    )
+
+    class _NoRecordCompileRunner:
+        def run(self, input_store: RecordStore, workspace: _DummyWorkspace) -> RecordStore:
+            return RecordStore()
+
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
+        if model_name != "activitysim_compile":
+            raise AssertionError(f"Unexpected model_name: {model_name}")
+        return _NoRecordCompileRunner()
+
+    logged_outputs = {}
+
+    def _capture_log_and_set_output(**kwargs):
+        logged_outputs[kwargs["key"]] = kwargs["path"]
+
+    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
+    monkeypatch.setattr(activitysim_steps, "log_and_set_output", _capture_log_and_set_output)
+
+    compile_step = activitysim_steps.make_activitysim_compile_step(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+    )
+    compile_step(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        expected_outputs={ZARR_SKIMS: str(zarr_path)},
+    )
+
+    assert logged_outputs[ZARR_SKIMS] == str(zarr_path)
 
 
 def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None:
@@ -541,5 +599,64 @@ def test_activitysim_run_raises_when_container_execution_fails(monkeypatch, tmp_
     )
     monkeypatch.setattr(runner, "run_container", lambda **_kwargs: False)
 
+    preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_data_dir,
+        land_use_table=asim_data_dir / "land_use.csv",
+        households_table=asim_data_dir / "households.csv",
+        persons_table=asim_data_dir / "persons.csv",
+    )
     with pytest.raises(RuntimeError, match="ASIM run failed for year 2023 iteration 0"):
-        runner.run(RecordStore(), workspace)
+        runner.run(preprocess_outputs, workspace)
+
+
+def test_activitysim_run_stages_external_zarr_input_into_runtime_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "run"
+    asim_output_dir = root / "activitysim" / "output"
+    asim_output_dir.mkdir(parents=True)
+    asim_data_dir = root / "activitysim" / "data"
+    asim_data_dir.mkdir(parents=True)
+    for name in ("land_use.csv", "households.csv", "persons.csv"):
+        (asim_data_dir / name).write_text("dummy")
+
+    external_zarr = tmp_path / "external" / "skims.zarr"
+    external_zarr.mkdir(parents=True)
+    (external_zarr / ".zarray").write_text("{}")
+
+    workspace = _DummyWorkspace(root, asim_output_dir)
+    state = SimpleNamespace(
+        current_year=2023,
+        current_inner_iter=0,
+        forecast_year=2029,
+        set_sub_stage_progress=lambda _value: None,
+    )
+    settings = SimpleNamespace()
+    state.full_settings = settings
+    runner = ActivitysimRunner("activitysim", state)
+
+    preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_data_dir,
+        land_use_table=asim_data_dir / "land_use.csv",
+        households_table=asim_data_dir / "households.csv",
+        persons_table=asim_data_dir / "persons.csv",
+    )
+
+    captured = {}
+
+    def _fake_run(store, _workspace):
+        captured["store"] = store
+        return RecordStore()
+
+    monkeypatch.setattr(runner, "_run", _fake_run)
+
+    runner.run(
+        preprocess_outputs,
+        workspace,
+        extra_inputs={ZARR_SKIMS: str(external_zarr)},
+    )
+
+    staged_zarr = asim_output_dir / "cache" / "skims.zarr"
+    assert staged_zarr.is_dir()
+    assert (staged_zarr / ".zarray").read_text() == "{}"
+    assert captured["store"].to_mapping()[ZARR_SKIMS] == str(staged_zarr)

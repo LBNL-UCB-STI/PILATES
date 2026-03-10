@@ -1,45 +1,13 @@
 import logging
-from typing import Optional, Protocol
 
 from pilates.activitysim import postprocessor as asim_post
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.generic.records import RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
-
-
-class Preprocessor(Protocol):
-    """Protocol for preprocessors that emit a RecordStore."""
-
-    def preprocess(
-        self,
-        workspace: Workspace,
-        previous_records: Optional[RecordStore] = None,
-    ) -> RecordStore:
-        """Run preprocessing for the given workspace."""
-
-
-class Runner(Protocol):
-    """Protocol for runners that consume and emit RecordStores."""
-
-    def run(self, input_store: RecordStore, workspace: Workspace) -> RecordStore:
-        """Run the model using the provided inputs."""
-
-
-class Postprocessor(Protocol):
-    """Protocol for postprocessors that emit a RecordStore."""
-
-    def postprocess(
-        self,
-        raw_outputs: RecordStore,
-        workspace: Workspace,
-        model_run_hash: str | None = None,
-    ) -> RecordStore:
-        """Postprocess model outputs."""
 
 
 def warm_start_activities(

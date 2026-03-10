@@ -5,6 +5,7 @@ import pytest
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
 )
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows import steps
@@ -66,21 +67,16 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
 
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
     fake_postprocessor = SimpleNamespace(
-        postprocess=lambda _raw_outputs, _workspace: RecordStore()
+        postprocess=lambda _raw_outputs, _workspace: ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=tmp_path,
+            processed_outputs={},
+        )
     )
     monkeypatch.setattr(
         steps_activitysim.ModelFactory,
         "get_postprocessor",
         lambda self, *args, **kwargs: fake_postprocessor,
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "record_store_to_outputs",
-        lambda **_kwargs: ActivitySimPostprocessOutputs(
-            usim_datastore_h5=None,
-            asim_output_dir=tmp_path,
-            processed_outputs={},
-        ),
     )
     monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
     monkeypatch.setattr(steps_activitysim, "log_and_set_output", lambda **_kwargs: None)
@@ -127,7 +123,7 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(
-            activitysim_run=SimpleNamespace(to_postprocess_record_store=RecordStore)
+            activitysim_run=ActivitySimRunOutputs(output_dir=asim_output_dir, raw_outputs={})
         ),
     )
     step_fn(settings=settings, state=state, workspace=workspace)
@@ -156,7 +152,9 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
                 ]
             )
 
-    fake_postprocessor = SimpleNamespace(postprocess=lambda *_args, **_kwargs: RecordStore())
+    fake_postprocessor = SimpleNamespace(
+        postprocess=lambda raw_outputs, _workspace: raw_outputs.to_postprocess_record_store()
+    )
     monkeypatch.setattr(
         steps_activitysim.ModelFactory,
         "get_postprocessor",
@@ -195,20 +193,24 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
         outputs_holder=SimpleNamespace(activitysim_run=_LegacyOnlyRunOutputs()),
     )
 
-    with pytest.raises(TypeError, match="_iter_record_items"):
+    with pytest.raises(TypeError, match="ActivitySimRunOutputs"):
         step_fn(settings=settings, state=state, workspace=workspace)
 
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:
+    fake_preprocessor = SimpleNamespace(
+        preprocess=lambda _workspace: ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_data_dir,
+            land_use_table=asim_data_dir / "land_use.csv",
+            households_table=asim_data_dir / "households.csv",
+            persons_table=asim_data_dir / "persons.csv",
+            omx_skims=None,
+        )
+    )
     monkeypatch.setattr(
         steps_activitysim.ModelFactory,
         "get_preprocessor",
-        lambda self, *args, **kwargs: object(),
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "_execute_preprocess",
-        lambda *_args, **_kwargs: RecordStore(),
+        lambda self, *args, **kwargs: fake_preprocessor,
     )
     table_calls = []
 
@@ -247,17 +249,6 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
     asim_data_dir.mkdir(parents=True, exist_ok=True)
     for filename in ("land_use.csv", "households.csv", "persons.csv"):
         (asim_data_dir / filename).write_text("x")
-    monkeypatch.setattr(
-        steps_activitysim,
-        "record_store_to_outputs",
-        lambda **_kwargs: ActivitySimPreprocessOutputs(
-            mutable_data_dir=asim_data_dir,
-            land_use_table=asim_data_dir / "land_use.csv",
-            households_table=asim_data_dir / "households.csv",
-            persons_table=asim_data_dir / "persons.csv",
-            omx_skims=None,
-        ),
-    )
 
     step_fn = steps.make_activitysim_preprocess_step(
         coupler=_dummy_coupler(),

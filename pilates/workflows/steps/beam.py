@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import LINKSTATS, LINKSTATS_WARMSTART
-from pilates.workflows.outputs_base import ValidationContext
-from pilates.utils.coupler_helpers import record_store_to_outputs
+from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -26,10 +25,10 @@ from .shared import (
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
     _decorate_step_with_consist,
-    _execute_beam_full_skim,
-    _execute_beam_postprocess,
-    _execute_beam_preprocess,
-    _execute_beam_run,
+    _execute_beam_full_skim_typed,
+    _execute_beam_postprocess_typed,
+    _execute_beam_preprocess_typed,
+    _execute_beam_run_typed,
     _log_beam_r5_osm_input,
     _log_step_records,
     _schema_outputs_from_class,
@@ -40,6 +39,8 @@ from .shared import (
     log_and_set_output,
     log_output_only,
 )
+
+StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
 def _is_beam_sub_iteration_key(short_name: Optional[str]) -> bool:
@@ -176,12 +177,12 @@ def _make_beam_step_function(
     outputs_holder: StepOutputsHolder,
     model_name: str,
     phase: str,
-    outputs_class,
-    component_getter,
-    component_executor,
-    outputs_holder_setter,
-    input_logger=None,
-    output_logger=None,
+    outputs_class: Type[StepOutputsT],
+    component_getter: Callable[[ModelFactory, WorkflowState], Any],
+    component_executor: Callable[..., StepOutputsT],
+    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
+    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
+    output_logger: Optional[Callable[..., None]] = None,
 ) -> Callable[..., None]:
     @cr.require_runtime_kwargs("settings", "state", "workspace")
     def _step_func(
@@ -196,7 +197,7 @@ def _make_beam_step_function(
         extra_kwargs = dict(
             input_logger(settings, state, workspace, outputs_holder) or {}
         ) if input_logger is not None else {}
-        record_store = component_executor(
+        step_outputs = component_executor(
             component,
             workspace,
             outputs_holder,
@@ -205,11 +206,11 @@ def _make_beam_step_function(
             **extra_kwargs,
             **kwargs,
         )
-        step_outputs = record_store_to_outputs(
-            record_store=record_store,
-            output_class=outputs_class,
-            workspace=workspace,
-        )
+        if not isinstance(step_outputs, outputs_class):
+            raise TypeError(
+                f"{model_name}_{phase} must return {outputs_class.__name__}, "
+                f"got {type(step_outputs).__name__}"
+            )
         step_outputs.validate(
             context=ValidationContext(
                 settings=settings,
@@ -333,7 +334,15 @@ def make_beam_preprocess_step(
         component_getter=lambda factory, state: factory.get_preprocessor(
             "beam", state
         ),
-        component_executor=_execute_beam_preprocess,
+        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+            _execute_beam_preprocess_typed(
+                component,
+                workspace,
+                outputs_holder,
+                outputs_class=BeamPreprocessOutputs,
+                **kwargs,
+            )
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_preprocess", outputs
         ),
@@ -471,7 +480,15 @@ def make_beam_run_step(
         component_getter=lambda factory, state: factory.get_runner(
             "beam", state
         ),
-        component_executor=_execute_beam_run,
+        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+            _execute_beam_run_typed(
+                component,
+                workspace,
+                outputs_holder,
+                outputs_class=BeamRunOutputs,
+                **kwargs,
+            )
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_run", outputs
         ),
@@ -550,7 +567,15 @@ def make_beam_postprocess_step(
         component_getter=lambda factory, state: factory.get_postprocessor(
             "beam", state
         ),
-        component_executor=_execute_beam_postprocess,
+        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+            _execute_beam_postprocess_typed(
+                component,
+                workspace,
+                outputs_holder,
+                outputs_class=BeamPostprocessOutputs,
+                **kwargs,
+            )
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_postprocess", outputs
         ),
@@ -594,7 +619,15 @@ def make_beam_full_skim_step(
         component_getter=lambda factory, state: factory.get_runner(
             "beam_full_skim", state
         ),
-        component_executor=_execute_beam_full_skim,
+        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+            _execute_beam_full_skim_typed(
+                component,
+                workspace,
+                outputs_holder,
+                outputs_class=BeamFullSkimOutputs,
+                **kwargs,
+            )
+        ),
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_full_skim", outputs
         ),

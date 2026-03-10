@@ -196,6 +196,7 @@ from typing import (
     Iterable,
     Mapping,
     Optional,
+    Protocol,
     Sequence,
     Set,
     TYPE_CHECKING,
@@ -218,6 +219,7 @@ from pilates.utils.coupler_helpers import (
     log_and_set_output as log_and_set_output,
     log_input_only as log_input_only,
     log_output_only as log_output_only,
+    record_store_to_outputs,
     resolve_artifact_from_value as resolve_artifact_from_value,
     update_coupler_from_beam_outputs as update_coupler_from_beam_outputs,
 )
@@ -244,12 +246,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     ZARR_SKIMS,
 )
-from pilates.workflows.step_exec import (
-    Postprocessor,
-    Preprocessor,
-    Runner,
-    warm_start_activities as warm_start_activities,
-)
+from pilates.workflows.step_exec import warm_start_activities as warm_start_activities
 from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
     iter_step_output_items,
@@ -831,6 +828,27 @@ OutputLogger = Callable[
 ]
 
 
+class _PreprocessorExecutor(Protocol):
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: Optional[RecordStore] = None,
+    ) -> RecordStore: ...
+
+
+class _RunnerExecutor(Protocol):
+    def run(self, input_store: RecordStore, workspace: "Workspace") -> RecordStore: ...
+
+
+class _PostprocessorExecutor(Protocol):
+    def postprocess(
+        self,
+        raw_outputs: RecordStore,
+        workspace: "Workspace",
+        model_run_hash: Optional[str] = None,
+    ) -> RecordStore: ...
+
+
 @dataclass
 class StepOutputsHolder:
     """
@@ -1233,7 +1251,7 @@ def _decorate_step_with_consist(
 
 
 def _execute_preprocess(
-    preprocessor: Preprocessor,
+    preprocessor: _PreprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
@@ -1259,6 +1277,27 @@ def _execute_preprocess(
         Preprocessor outputs.
     """
     return preprocessor.preprocess(workspace)
+
+
+def _execute_preprocess_typed(
+    preprocessor: _PreprocessorExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_preprocess(
+        preprocessor,
+        workspace,
+        outputs_holder,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
 
 
 def _build_required_input_store(
@@ -1341,8 +1380,21 @@ def _build_required_input_store(
     return input_store
 
 
+def _typed_outputs_from_record_store(
+    *,
+    record_store: RecordStore,
+    outputs_class: Type[StepOutputsT],
+    workspace: "Workspace",
+) -> StepOutputsT:
+    return record_store_to_outputs(
+        record_store=record_store,
+        output_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_run(
-    runner: Runner,
+    runner: _RunnerExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1385,8 +1437,35 @@ def _execute_run(
     return runner.run(input_store, workspace)
 
 
+def _execute_run_typed(
+    runner: _RunnerExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "runner",
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_run(
+        runner,
+        workspace,
+        outputs_holder,
+        coupler=coupler,
+        context=context,
+        extra_inputs=extra_inputs,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_postprocess(
-    postprocessor: Postprocessor,
+    postprocessor: _PostprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
@@ -1430,8 +1509,29 @@ def _execute_postprocess(
     return postprocessor.postprocess(raw_outputs, workspace)
 
 
+def _execute_postprocess_typed(
+    postprocessor: _PostprocessorExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_postprocess(
+        postprocessor,
+        workspace,
+        outputs_holder,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_beam_preprocess(
-    preprocessor: Preprocessor,
+    preprocessor: _PreprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1498,8 +1598,39 @@ def _execute_beam_preprocess(
     return preprocessor.preprocess(workspace, combined)
 
 
+def _execute_beam_preprocess_typed(
+    preprocessor: _PreprocessorExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_preprocess",
+    activity_demand_outputs: Optional[Mapping[str, Any]] = None,
+    previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+    beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_beam_preprocess(
+        preprocessor,
+        workspace,
+        outputs_holder,
+        coupler=coupler,
+        context=context,
+        activity_demand_outputs=activity_demand_outputs,
+        previous_beam_outputs=previous_beam_outputs,
+        beam_preprocess_inputs=beam_preprocess_inputs,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_beam_run(
-    runner: Runner,
+    runner: _RunnerExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1542,8 +1673,35 @@ def _execute_beam_run(
     return runner.run(input_store, workspace)
 
 
+def _execute_beam_run_typed(
+    runner: _RunnerExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_run",
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_beam_run(
+        runner,
+        workspace,
+        outputs_holder,
+        coupler=coupler,
+        context=context,
+        extra_inputs=extra_inputs,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_beam_postprocess(
-    postprocessor: Postprocessor,
+    postprocessor: _PostprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
@@ -1579,8 +1737,31 @@ def _execute_beam_postprocess(
     return postprocessor.postprocess(raw_outputs, workspace)
 
 
+def _execute_beam_postprocess_typed(
+    postprocessor: _PostprocessorExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_beam_postprocess(
+        postprocessor,
+        workspace,
+        outputs_holder,
+        previous_beam_outputs=previous_beam_outputs,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_beam_full_skim(
-    runner: Runner,
+    runner: _RunnerExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1608,8 +1789,35 @@ def _execute_beam_full_skim(
     return runner.run(input_store, workspace)
 
 
+def _execute_beam_full_skim_typed(
+    runner: _RunnerExecutor,
+    workspace: "Workspace",
+    outputs_holder: StepOutputsHolder,
+    *,
+    outputs_class: Type[StepOutputsT],
+    coupler: Optional[CouplerProtocol] = None,
+    context: str = "beam_full_skim",
+    previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> StepOutputsT:
+    record_store = _execute_beam_full_skim(
+        runner,
+        workspace,
+        outputs_holder,
+        coupler=coupler,
+        context=context,
+        previous_beam_outputs=previous_beam_outputs,
+        **kwargs,
+    )
+    return _typed_outputs_from_record_store(
+        record_store=record_store,
+        outputs_class=outputs_class,
+        workspace=workspace,
+    )
+
+
 def _execute_urbansim_run(
-    runner: Runner,
+    runner: _RunnerExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1648,7 +1856,7 @@ def _execute_urbansim_run(
 
 
 def _execute_urbansim_postprocess(
-    postprocessor: Postprocessor,
+    postprocessor: _PostprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1687,7 +1895,7 @@ def _execute_urbansim_postprocess(
 
 
 def _execute_atlas_run(
-    runner: Runner,
+    runner: _RunnerExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,
@@ -1726,7 +1934,7 @@ def _execute_atlas_run(
 
 
 def _execute_atlas_postprocess(
-    postprocessor: Postprocessor,
+    postprocessor: _PostprocessorExecutor,
     workspace: "Workspace",
     outputs_holder: StepOutputsHolder,
     *,

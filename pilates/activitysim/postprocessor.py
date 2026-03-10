@@ -8,6 +8,7 @@ import os
 from typing import Tuple, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
+from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivitySimRunOutputs
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.activitysim.outputs import (
@@ -685,6 +686,24 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         state: "WorkflowState",
     ):
         super().__init__(model_name, state)
+
+    def postprocess(
+        self,
+        raw_outputs: ActivitySimRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> ActivitySimPostprocessOutputs:
+        if not isinstance(raw_outputs, ActivitySimRunOutputs):
+            raise TypeError(
+                "ActivitysimPostprocessor.postprocess expects ActivitySimRunOutputs"
+            )
+        self.state.set_sub_stage_progress("postprocessor")
+        output_store = self._postprocess(
+            raw_outputs.to_postprocess_record_store(),
+            workspace,
+            model_run_hash,
+        )
+        return ActivitySimPostprocessOutputs.from_record_store(output_store, workspace)
 
     def _postprocess(
         self,
