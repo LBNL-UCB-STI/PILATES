@@ -364,3 +364,61 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
     assert summary["input_records_by_model"]["activitysim"] >= 1
     assert summary["output_records_by_model"]["activitysim"] >= 1
     assert "activitysim" in summary["models"]
+
+
+def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_activitysim_enabled(
+    monkeypatch, tmp_path
+):
+    class _CountingPreprocessor:
+        def __init__(self, model_name, calls):
+            self.model_name = model_name
+            self.calls = calls
+
+        def copy_data_to_mutable_location(self, settings, output_dir):
+            self.calls.append((self.model_name, output_dir))
+            record = FileRecord(
+                unique_id=f"{self.model_name}-out",
+                short_name=f"{self.model_name}_output",
+                file_path=str(tmp_path / f"{self.model_name}.txt"),
+            )
+            return RecordStore(), RecordStore(recordList=[record])
+
+    class _CountingFactory:
+        def __init__(self):
+            self.calls = []
+
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            return _CountingPreprocessor(model_name, self.calls)
+
+    factory = _CountingFactory()
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", lambda: factory
+    )
+
+    workspace = DummyWorkspace()
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    workspace.usim_mutable_dir = str(tmp_path / "usim")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="none",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use="urbansim",
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(zones=None),
+        ),
+    )
+
+    init = Initialization("init", None)
+    init.run(settings, workspace)
+
+    urbansim_calls = [call for call in factory.calls if call[0] == "urbansim"]
+    activitysim_calls = [call for call in factory.calls if call[0] == "activitysim"]
+
+    assert len(urbansim_calls) == 1
+    assert len(activitysim_calls) == 1

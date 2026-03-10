@@ -289,6 +289,7 @@ class Initialization(Model):
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
+        urbansim_enabled = settings.run.models.land_use == "urbansim"
         model_factory = ModelFactory()
 
         try:
@@ -393,7 +394,9 @@ class Initialization(Model):
 
                 # UrbanSim data copy (once)
                 if model_name == "urbansim" or (
-                    model_name == "activitysim" and have_not_copied_usim_data
+                    model_name == "activitysim"
+                    and have_not_copied_usim_data
+                    and not urbansim_enabled
                 ):
 
                     output_dir = workspace.get_usim_mutable_data_dir()
