@@ -398,6 +398,10 @@ class ActivitysimRunner(GenericRunner):
                 elif "output" in d["bind"]:
                     additional_args.append("-o")
                     additional_args.append(d["bind"])
+                elif "configs_mp" in d["bind"]:
+                    if not compile:
+                        additional_args.append("-c")
+                        additional_args.append(d["bind"])
                 elif "compile" in d["bind"]:
                     if compile:
                         additional_args.append("-c")
