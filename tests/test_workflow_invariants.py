@@ -19,6 +19,10 @@ from types import SimpleNamespace
 
 import yaml
 
+from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
 from pilates.workflows import steps
 from pilates.workflows.artifact_keys import (
@@ -478,3 +482,108 @@ def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):
     refreshed_outputs = manifest["activitysim_preprocess"]["outputs"]
     assert refreshed_outputs["households_table"] != bad_path
     assert Path(refreshed_outputs["households_table"]).exists()
+
+
+def test_stale_manifest_entry_invalidates_downstream_steps(tmp_path):
+    """
+    A stale upstream manifest entry must invalidate later manifest entries too.
+
+    Otherwise manifest replay can mix freshly rerun upstream outputs with stale
+    downstream outputs from an earlier iteration.
+    """
+    workspace = _ManifestWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+    old_run_path = tmp_path / "run-old" / "households.parquet"
+    new_run_path = tmp_path / "run-new" / "households.parquet"
+    _write_file(old_run_path)
+    _write_file(new_run_path)
+
+    stale_preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        households_table=tmp_path / "missing_households.csv",
+        persons_table=asim_dir / "persons.csv",
+        land_use_table=asim_dir / "land_use.csv",
+    )
+    old_run_outputs = ActivitySimRunOutputs(
+        output_dir=tmp_path / "run-old",
+        raw_outputs={"households_asim_out_temp": old_run_path},
+    )
+
+    manifest_path = tmp_path / "manifest_downstream_stale.yaml"
+    manifest = {
+        "activitysim_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(stale_preprocess_outputs),
+        },
+        "activitysim_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(old_run_outputs),
+        },
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    state = SimpleNamespace(year=2018, iteration=0)
+
+    def _rerun_preprocess(**_kwargs):
+        holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_dir,
+            households_table=asim_dir / "households.csv",
+            persons_table=asim_dir / "persons.csv",
+            land_use_table=asim_dir / "land_use.csv",
+        )
+
+    def _rerun_run(**_kwargs):
+        holder.activitysim_run = ActivitySimRunOutputs(
+            output_dir=tmp_path / "run-new",
+            raw_outputs={"households_asim_out_temp": new_run_path},
+        )
+
+    for fn, model in (
+        (_rerun_preprocess, "activitysim_preprocess"),
+        (_rerun_run, "activitysim_run"),
+    ):
+        fn.__consist_step__ = SimpleNamespace(model=model)
+
+    class _ExecutingManifestScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            kwargs["fn"]()
+            return SimpleNamespace(cache_hit=False)
+
+    scenario = _ExecutingManifestScenario()
+    run_manifested_steps(
+        stage_name="activity_demand",
+        steps=[
+            StepRef(name="activitysim_preprocess", step_func=_rerun_preprocess),
+            StepRef(name="activitysim_run", step_func=_rerun_run),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_i0",
+        iteration=0,
+    )
+
+    assert [call["fn"].__name__ for call in scenario.calls] == [
+        "_rerun_preprocess",
+        "_rerun_run",
+    ]
+    manifest = yaml.safe_load(manifest_path.read_text())
+    refreshed_run_outputs = manifest["activitysim_run"]["outputs"]
+    assert refreshed_run_outputs["raw_outputs"]["households_asim_out_temp"] == str(
+        new_run_path
+    )

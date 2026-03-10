@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
+from pilates.beam.outputs import (
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.beam.runner import BeamRunner
 from pilates.generic.records import FileRecord, RecordStore
 
@@ -111,3 +115,28 @@ def test_beam_runner_run_rejects_non_typed_inputs(tmp_path) -> None:
 
     with pytest.raises(TypeError, match="BeamPreprocessOutputs"):
         runner.run(object(), _Workspace(tmp_path))
+
+
+def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
+    tmp_path: Path,
+) -> None:
+    zarr_skims = tmp_path / "skims.zarr"
+    final_skims_omx = tmp_path / "final-skims.omx"
+    split_event = tmp_path / "events.parquet"
+    split_links = tmp_path / "links.parquet"
+
+    outputs = BeamPostprocessOutputs(
+        zarr_skims=zarr_skims,
+        final_skims_omx=final_skims_omx,
+        split_events={"events_parquet_2030_2_type_PathTraversal": split_event},
+        split_event_links={"path_traversal_links_2030_2": split_links},
+    )
+
+    mapping = outputs.to_record_store().to_mapping()
+
+    assert mapping["final_skims_omx"] == str(final_skims_omx)
+    assert mapping["zarr_skims"] == str(zarr_skims)
+    assert (
+        mapping["events_parquet_2030_2_type_PathTraversal"] == str(split_event)
+    )
+    assert mapping["path_traversal_links_2030_2"] == str(split_links)

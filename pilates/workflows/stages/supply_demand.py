@@ -833,6 +833,53 @@ def _collect_beam_preprocess_inputs(
     return beam_preprocess_inputs
 
 
+def _restore_activity_demand_outputs_for_resume(
+    *,
+    coupler: CouplerProtocol,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+) -> Optional[Dict[str, str]]:
+    """
+    Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
+
+    On restart directly into ``traffic_assignment``, the current iteration's
+    ``StepOutputsHolder`` starts empty even though restart recovery may already
+    have restored the required ActivitySim artifacts into the coupler. Promote
+    the narrow BEAM-facing subset back into a plain mapping so BEAM preprocess
+    sees the same inputs it would have received after a live ActivitySim run.
+    """
+    postprocess_outputs = outputs_holder.activitysim_postprocess
+    if postprocess_outputs is not None:
+        restored_outputs = step_output_mapping(postprocess_outputs)
+        return restored_outputs or None
+
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None
+
+    restored_outputs: Dict[str, str] = {}
+    for key in (
+        "beam_plans_asim_out",
+        "beam_plans_out",
+        "households_asim_out",
+        "linkstats",
+        "persons_asim_out",
+    ):
+        value = get_value(key)
+        if value is None:
+            continue
+        path = artifact_to_path(value, workspace)
+        if path and os.path.exists(path):
+            restored_outputs[key] = path
+    if restored_outputs:
+        outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=None,
+            processed_outputs={key: Path(path) for key, path in restored_outputs.items()},
+        )
+    return restored_outputs or None
+
+
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
@@ -1336,6 +1383,12 @@ def run_supply_demand_stage(
             outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
                 usim_datastore_h5=None,
                 asim_output_dir=None,
+            )
+        elif outputs_holder.activitysim_postprocess is None:
+            activity_demand_outputs = _restore_activity_demand_outputs_for_resume(
+                coupler=coupler,
+                workspace=workspace,
+                outputs_holder=outputs_holder,
             )
 
         # C2. TRAFFIC ASSIGNMENT

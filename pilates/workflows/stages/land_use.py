@@ -205,12 +205,13 @@ def run_land_use_stage(
     if urbansim_settings is None:
         raise RuntimeError("UrbanSim config is required for the land use stage.")
 
+    forecast_year = state.forecast_year if state.forecast_year is not None else year
     usim_forecast_output_path = os.path.join(
         workspace.get_usim_mutable_data_dir(),
-        urbansim_settings.output_file_template.format(year=year),
+        urbansim_settings.output_file_template.format(year=forecast_year),
     )
     enqueue_archive_copy(
-        key=f"usim_year_output_h5_{year}",
+        key=f"usim_year_output_h5_{forecast_year}",
         path=usim_forecast_output_path,
     )
     flush_archive_queue(timeout=300, fail_on_timeout=True)

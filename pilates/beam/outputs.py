@@ -325,7 +325,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
-        Yield only the skim file updated for downstream use.
+        Yield all BEAM postprocess artifacts for downstream serialization.
         """
         if self.final_skims_omx is not None:
             yield (
@@ -333,13 +333,16 @@ class BeamPostprocessOutputs(StepOutputsBase):
                 self.final_skims_omx,
                 "Final skims OMX for downstream models",
             )
-            return
         if self.zarr_skims is not None:
             yield (
                 ZARR_SKIMS,
                 self.zarr_skims,
                 "Zarr skims updated with BEAM outputs",
             )
+        for key, path in self.split_events.items():
+            yield key, path, f"Split BEAM events parquet: {key}"
+        for key, path in self.split_event_links.items():
+            yield key, path, f"Derived split-event links parquet: {key}"
 
     @classmethod
     def from_record_store(

@@ -711,6 +711,62 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
     assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
 
 
+def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
+    restart_stage_env, tmp_path
+):
+    settings = restart_stage_env["settings"]
+    state = restart_stage_env["state"]
+    workspace = restart_stage_env["workspace"]
+    coupler = restart_stage_env["coupler"]
+    scenario = restart_stage_env["scenario"]
+
+    settings.run.models.activity_demand = "activitysim"
+    settings.activity_demand_enabled = True
+    state._settings["activity_demand_enabled"] = True
+    settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="disabled")
+
+    restored_plans = _write_file(tmp_path / "restored" / "beam_plans_asim_out.parquet")
+    restored_households = _write_file(
+        tmp_path / "restored" / "households_asim_out.parquet"
+    )
+    restored_persons = _write_file(tmp_path / "restored" / "persons_asim_out.parquet")
+    coupler.set("beam_plans_asim_out", str(restored_plans))
+    coupler.set("households_asim_out", str(restored_households))
+    coupler.set("persons_asim_out", str(restored_persons))
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs={
+            USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
+            USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
+        },
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"restart_traffic_asim_{year}_{iteration}.yaml",
+    )
+
+    beam_preprocess_calls = [
+        call
+        for call in scenario.calls
+        if "beam_plans_asim_out" in call["inputs"]
+        and "households_asim_out" in call["inputs"]
+        and "persons_asim_out" in call["inputs"]
+    ]
+    assert beam_preprocess_calls, "Expected BEAM preprocess to start from restored ActivitySim outputs."
+    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
+    assert beam_preprocess_inputs["beam_plans_asim_out"] == str(restored_plans)
+    assert beam_preprocess_inputs["households_asim_out"] == str(restored_households)
+    assert beam_preprocess_inputs["persons_asim_out"] == str(restored_persons)
+
+
 def test_restart_mid_iteration_traffic_assignment_preserves_promoted_warmstart(
     restart_stage_env, tmp_path
 ):

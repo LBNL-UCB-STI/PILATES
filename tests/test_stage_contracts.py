@@ -559,6 +559,53 @@ def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch
     assert flush_calls == [300]
 
 
+def test_land_use_stage_archives_forecast_output_using_state_forecast_year(
+    stage_env, monkeypatch
+):
+    """Archive keys/paths should follow the produced forecast-year datastore."""
+    from pilates.workflows.stages import land_use as land_use_stage
+    from pilates.workflows.steps import StepOutputsHolder
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        land_use_stage,
+        "enqueue_archive_copy",
+        lambda **kwargs: enqueue_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+
+    stage_env["state"].forecast_year = stage_env["state"].year + 2
+    forecast_path = (
+        Path(stage_env["workspace"].get_usim_mutable_data_dir())
+        / stage_env["settings"].urbansim.output_file_template.format(
+            year=stage_env["state"].forecast_year
+        )
+    )
+    _write_file(forecast_path)
+
+    outputs_holder = StepOutputsHolder()
+    run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    forecast_archive = next(
+        call
+        for call in enqueue_calls
+        if call["key"] == f"usim_year_output_h5_{stage_env['state'].forecast_year}"
+    )
+    assert forecast_archive["path"] == str(forecast_path)
+
+
 def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_partial(
     stage_env, monkeypatch
 ):

@@ -881,16 +881,28 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 iteration_folder_path,
                 clean_name + ".parquet",
             )
+            content_hash = raw_outputs.raw_output_hashes.get(short_name)
             if os.path.abspath(source) == os.path.abspath(target):
+                processed_outputs[output_key] = target
+                if content_hash:
+                    processed_output_hashes[output_key] = content_hash
+                continue
+            if os.path.exists(target):
+                logger.debug("ASim output already archived: %s", target)
+                processed_outputs[output_key] = target
+                if content_hash is None:
+                    content_hash = _resolve_content_hash(source) or _resolve_content_hash(
+                        target
+                    )
+                if content_hash:
+                    processed_output_hashes[output_key] = content_hash
                 continue
             if not os.path.exists(source):
                 logger.debug("ASim output missing, skipping move: %s", source)
                 continue
-            if os.path.exists(target):
-                logger.debug("ASim output already archived: %s", target)
-                continue
             shutil.move(source, target)
-            content_hash = _resolve_content_hash(source)
+            if content_hash is None:
+                content_hash = _resolve_content_hash(source)
             processed_outputs[output_key] = target
             if content_hash:
                 processed_output_hashes[output_key] = content_hash
