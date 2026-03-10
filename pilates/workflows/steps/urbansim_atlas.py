@@ -141,6 +141,11 @@ def _execute_urbansim_run_typed(
     upstream = outputs_holder.urbansim_preprocess
     if upstream is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
+    if not isinstance(upstream, UrbanSimPreprocessOutputs):
+        raise TypeError(
+            "urbansim_run requires UrbanSimPreprocessOutputs from "
+            "urbansim_preprocess"
+        )
     return runner.run(upstream, workspace)
 
 
@@ -153,6 +158,10 @@ def _execute_urbansim_postprocess_typed(
     upstream = outputs_holder.urbansim_run
     if upstream is None:
         raise RuntimeError("UrbanSim run must complete first")
+    if not isinstance(upstream, UrbanSimRunOutputs):
+        raise TypeError(
+            "urbansim_postprocess requires UrbanSimRunOutputs from urbansim_run"
+        )
     return postprocessor.postprocess(upstream, workspace)
 
 
@@ -174,6 +183,10 @@ def _execute_atlas_run_typed(
     upstream = outputs_holder.atlas_preprocess
     if upstream is None:
         raise RuntimeError("ATLAS preprocess must complete first")
+    if not isinstance(upstream, AtlasPreprocessOutputs):
+        raise TypeError(
+            "atlas_run requires AtlasPreprocessOutputs from atlas_preprocess"
+        )
     return runner.run(upstream, workspace)
 
 
@@ -186,6 +199,8 @@ def _execute_atlas_postprocess_typed(
     upstream = outputs_holder.atlas_run
     if upstream is None:
         raise RuntimeError("ATLAS run must complete first")
+    if not isinstance(upstream, AtlasRunOutputs):
+        raise TypeError("atlas_postprocess requires AtlasRunOutputs from atlas_run")
     return postprocessor.postprocess(upstream, workspace)
 
 def make_urbansim_preprocess_step(

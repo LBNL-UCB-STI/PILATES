@@ -179,7 +179,18 @@ class AtlasPostprocessor(GenericPostprocessor):
         settings = self.state.full_settings
         output_year = self.state.forecast_year
         output_paths: Dict[str, Path] = {}
-        updated_usim_h5: Optional[Path] = None
+        atlas_hh_path = raw_outputs.raw_outputs.get(f"householdv_{output_year}")
+        atlas_veh_path = raw_outputs.raw_outputs.get(f"vehicles_{output_year}")
+        if atlas_hh_path is None or not atlas_hh_path.exists():
+            raise RuntimeError(
+                "ATLAS postprocess requires the current-year householdv CSV from "
+                "AtlasRunOutputs"
+            )
+        if atlas_veh_path is None or not atlas_veh_path.exists():
+            raise RuntimeError(
+                "ATLAS postprocess requires the current-year vehicles CSV from "
+                "AtlasRunOutputs"
+            )
 
         # --- HDF5 Update and Provenance ---
         usim_h5_path = workspace.get_usim_mutable_data_dir()
@@ -187,39 +198,38 @@ class AtlasPostprocessor(GenericPostprocessor):
             settings, io="output", year=output_year
         )
         usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
-        atlas_hh_file = os.path.join(
-            workspace.get_atlas_output_dir(), f"householdv_{output_year}.csv"
-        )
+        if not os.path.exists(usim_h5_file):
+            raise RuntimeError(
+                "ATLAS postprocess requires the current-year UrbanSim datastore H5"
+            )
 
-        if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
-            # Perform the update
-            self.atlas_update_h5_vehicle(
-                settings, output_year, usim_h5_file, atlas_hh_file
-            )
-            logger.info(
-                "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
-            )
-            updated_usim_h5 = Path(usim_h5_file)
-            output_paths[USIM_H5_UPDATED] = Path(usim_h5_file)
+        # Perform the update
+        self.atlas_update_h5_vehicle(
+            settings, output_year, usim_h5_file, str(atlas_hh_path)
+        )
+        logger.info(
+            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
+        )
+        updated_usim_h5 = Path(usim_h5_file)
+        output_paths[USIM_H5_UPDATED] = Path(usim_h5_file)
 
         # --- vehicleTypeId addition and Provenance ---
-        atlas_veh_file = os.path.join(
-            workspace.get_atlas_output_dir(), f"vehicles_{output_year}.csv"
-        )
         atlas_veh2_file = os.path.join(
             workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
         )
 
-        if os.path.exists(atlas_veh_file):
-            atlas_add_vehileTypeId(
-                settings, output_year, atlas_veh_file, atlas_veh2_file
+        atlas_add_vehileTypeId(
+            settings, output_year, str(atlas_veh_path), atlas_veh2_file
+        )
+        logger.info(
+            "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
+        )
+        if not os.path.exists(atlas_veh2_file):
+            raise RuntimeError(
+                "ATLAS postprocess did not produce vehicles2 output for year "
+                f"{output_year}"
             )
-            logger.info(
-                "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
-            )
-
-            if os.path.exists(atlas_veh2_file):
-                output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
+        output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
 
         # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
         atlas_input_root = workspace.get_atlas_mutable_input_dir()
@@ -244,6 +254,17 @@ class AtlasPostprocessor(GenericPostprocessor):
             usim_datastore_h5=updated_usim_h5,
             processed_outputs=output_paths,
         )
+
+    def postprocess(
+        self,
+        raw_outputs: AtlasRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> AtlasPostprocessOutputs:
+        if not isinstance(raw_outputs, AtlasRunOutputs):
+            raise TypeError("AtlasPostprocessor.postprocess expects AtlasRunOutputs")
+        self.state.set_sub_stage_progress("postprocessor")
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     def atlas_update_h5_vehicle(
         self,

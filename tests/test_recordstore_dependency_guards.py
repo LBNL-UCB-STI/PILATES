@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 import pilates.generic.model as generic_model
 from pilates.generic.records import FileRecord, RecordStore
@@ -16,7 +17,8 @@ from pilates.workflows.orchestration import _update_coupler_from_outputs
 from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
-from pilates.workflows.steps.shared import _build_required_input_store, _execute_run
+from pilates.workflows.steps.activitysim import _execute_activitysim_run
+from pilates.workflows.steps.shared import _build_required_input_store
 
 
 class _TrackingOutputs:
@@ -141,31 +143,41 @@ def test_build_required_input_store_rejects_outputs_without_iter_record_items(
         )
 
 
-def test_execute_run_materializes_runner_inputs_from_typed_output_items(
-    monkeypatch, tmp_path: Path
+def test_execute_activitysim_run_forwards_typed_preprocess_outputs(
+    tmp_path: Path,
 ) -> None:
     holder = StepOutputsHolder()
-    store = _store_with_record(tmp_path / "runner-input.txt", "input_a")
-    upstream = _TrackingOutputs(store)
+    land_use = tmp_path / "land_use.csv"
+    households = tmp_path / "households.csv"
+    persons = tmp_path / "persons.csv"
+    for path in (land_use, households, persons):
+        path.write_text(path.stem, encoding="utf-8")
+    upstream = ActivitySimPreprocessOutputs(
+        mutable_data_dir=tmp_path,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+    )
     holder.activitysim_preprocess = upstream
-    runner_outputs = RecordStore()
+    runner_outputs = object()
     captured = {}
 
     class _Runner:
-        def run(self, input_store, workspace):
+        def run(self, input_outputs, workspace, *, extra_inputs=None):
             captured["runner"] = self
-            captured["input_store"] = input_store
+            captured["input_outputs"] = input_outputs
+            captured["extra_inputs"] = extra_inputs
             captured["workspace"] = workspace
             return runner_outputs
 
     runner = _Runner()
     workspace = object()
-    result = _execute_run(runner, workspace, holder, context="activitysim_run")
+    result = _execute_activitysim_run(runner, workspace, holder)
 
-    assert upstream.iter_record_item_calls == 1
     assert captured["runner"] is runner
     assert captured["workspace"] is workspace
-    assert captured["input_store"].to_mapping() == store.to_mapping()
+    assert captured["input_outputs"] is upstream
+    assert captured["extra_inputs"] is None
     assert result is runner_outputs
 
 

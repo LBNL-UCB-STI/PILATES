@@ -204,3 +204,14 @@ class UrbansimRunner(GenericRunner):
             usim_datastore_h5=Path(usim_datastore_fpath),
             raw_outputs={USIM_FORECAST_OUTPUT: Path(usim_datastore_fpath)},
         )
+
+    def run(
+        self,
+        inputs: UrbanSimPreprocessOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> UrbanSimRunOutputs:
+        if not isinstance(inputs, UrbanSimPreprocessOutputs):
+            raise TypeError("UrbansimRunner.run expects UrbanSimPreprocessOutputs")
+        self.state.set_sub_stage_progress("runner")
+        return self._run(inputs, workspace, model_run_hash)

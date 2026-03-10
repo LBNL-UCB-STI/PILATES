@@ -464,7 +464,7 @@ class AtlasPreprocessor(GenericPreprocessor):
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
+        previous_records: Optional[RecordStore] = None,
     ) -> AtlasPreprocessOutputs:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
@@ -788,6 +788,15 @@ class AtlasPreprocessor(GenericPreprocessor):
             prepared_input_meta=prepared_input_meta,
         )
 
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: Optional[RecordStore] = None,
+    ) -> AtlasPreprocessOutputs:
+        """Prepare ATLAS inputs and return typed outputs."""
+        self.state.set_sub_stage_progress("preprocessor")
+        return self._preprocess(workspace, previous_records)
+
 
 def compute_accessibility(
     path_list, measure_list, settings, year, workspace, threshold=500
@@ -818,9 +827,6 @@ def compute_accessibility(
 
     # read and format geoid_to_zoneid mapping list
     mapping = get_block_to_zone_mapping(settings, year, workspace)
-
-    # read OD matrix size (i.e., range of zone_id)
-    zone_count = ODmatrix.shape[0]
 
     # read in jobs data (keep low_memory=False to solve dtypeerror)
     jobs = pd.read_csv(
@@ -911,7 +917,7 @@ def _get_time_ODmatrix(
             key = "{}_{}__AM".format(path, measure)
             try:
                 tmp_measure = np.array(skims[key])
-            except:
+            except KeyError:
                 tmp_measure = np.zeros(skims.shape())
                 # logger.error('{} not found in skims'.format(key))
 

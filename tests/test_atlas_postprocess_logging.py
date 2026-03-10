@@ -184,7 +184,13 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
     monkeypatch.setattr(postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: None)
 
     postprocessor._postprocess(
-        AtlasRunOutputs(atlas_output_dir=atlas_output_dir, raw_outputs={}),
+        AtlasRunOutputs(
+            atlas_output_dir=atlas_output_dir,
+            raw_outputs={
+                "householdv_2023": atlas_output_dir / "householdv_2023.csv",
+                "vehicles_2023": atlas_output_dir / "vehicles_2023.csv",
+            },
+        ),
         workspace,
     )
 

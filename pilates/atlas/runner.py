@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import logging
 import os
 
@@ -182,8 +182,6 @@ class AtlasRunner(GenericRunner):
         atlas_docker_vols = get_atlas_docker_vols(settings, workspace)
         freq = settings.run.vehicle_ownership_freq
         npe = settings.atlas.num_processes
-        container_input_dir = settings.atlas.container_input_folder
-        container_output_dir = settings.atlas.container_output_folder
         sample_size = settings.atlas.sample_size
         # BEAMAC is an integer flag that controls accessibility calculation
         # 0 = no accessibility calculation
@@ -273,13 +271,21 @@ class AtlasRunner(GenericRunner):
 
         # 1. Define Expected Outputs EARLY (so we can pass to Consist)
         raw_outputs = {}
+        missing_outputs = []
         for output_path in expected_output_paths:
             if os.path.exists(output_path):
                 # Extract filename for short_name
                 fname = os.path.basename(output_path)
                 raw_outputs[fname.replace(".csv", "")] = Path(output_path)
             else:
-                logger.warning(f"Expected ATLAS output file not found: {output_path}")
+                missing_outputs.append(output_path)
+
+        if missing_outputs:
+            preview = ", ".join(missing_outputs)
+            raise RuntimeError(
+                "ATLAS run did not produce required current-year outputs: "
+                f"{preview}"
+            )
 
         logger.info(
             "[AtlasRunner] ATLAS model run complete for year %s (outputs=%d)",
@@ -291,3 +297,13 @@ class AtlasRunner(GenericRunner):
             atlas_output_dir=Path(atlas_output_dir),
             raw_outputs=raw_outputs,
         )
+
+    def run(
+        self,
+        inputs: AtlasPreprocessOutputs,
+        workspace: Workspace,
+    ) -> AtlasRunOutputs:
+        if not isinstance(inputs, AtlasPreprocessOutputs):
+            raise TypeError("AtlasRunner.run expects AtlasPreprocessOutputs")
+        self.state.set_sub_stage_progress("runner")
+        return self._run(inputs, workspace)

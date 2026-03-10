@@ -401,10 +401,19 @@ class UrbansimPreprocessor(GenericPreprocessor):
         logger.info("[UrbansimPreprocessor] Finished copying UrbanSim input files.")
         return RecordStore(recordList=inputs), RecordStore(recordList=outputs)
 
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: Optional[RecordStore] = None,
+    ) -> UrbanSimPreprocessOutputs:
+        """Prepare UrbanSim inputs and return typed outputs."""
+        self.state.set_sub_stage_progress("preprocessor")
+        return self._preprocess(workspace, previous_records)
+
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
+        previous_records: Optional[RecordStore] = None,
     ) -> UrbanSimPreprocessOutputs:
         """
         Preprocess UrbanSim data, including copying necessary skims.

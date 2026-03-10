@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from pilates.activitysim.outputs import ActivitySimRunOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.workflows.steps.activitysim import _execute_activitysim_postprocess
 from pilates.workflows.steps.beam import (
     _execute_beam_full_skim,
     _execute_beam_preprocess,
@@ -14,7 +16,6 @@ from pilates.workflows.artifact_keys import BEAM_HOUSEHOLDS_IN, BEAM_PLANS_IN
 from pilates.workflows.steps.shared import (
     StepOutputsHolder,
     _build_required_input_store,
-    _execute_postprocess,
 )
 
 
@@ -39,32 +40,6 @@ class _HashTrackingStepOutputs(_FakeStepOutputs):
     def __init__(self, store: RecordStore, hashes: dict[str, str]) -> None:
         super().__init__(store)
         self.input_hashes = hashes
-
-
-class _RunHashTrackingStepOutputs(_FakeStepOutputs):
-    def __init__(self, store: RecordStore, hashes: dict[str, str]) -> None:
-        super().__init__(store)
-        self.raw_output_hashes = hashes
-
-    def to_postprocess_record_store(self) -> RecordStore:
-        record_store = self._store
-        setattr(
-            record_store,
-            "activitysim_source_input_paths",
-            {
-                "households_asim_in": str(Path(record_store.all_records()[0].file_path).with_name("households.csv")),
-                "zarr_skims": str(Path(record_store.all_records()[0].file_path).parent / "cache" / "skims.zarr"),
-            },
-        )
-        setattr(
-            record_store,
-            "activitysim_source_input_hashes",
-            {
-                "households_asim_in": "preprocess-hash",
-                "zarr_skims": "zarr-hash",
-            },
-        )
-        return record_store
 
 
 class _KeysOnlyCoupler:
@@ -229,28 +204,25 @@ def test_build_required_input_store_preserves_content_hashes(tmp_path: Path) -> 
     assert record.content_hash == "hash-input-a"
 
 
-def test_execute_postprocess_uses_activitysim_run_postprocess_record_store(
+def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadata_hook(
     monkeypatch, tmp_path: Path
 ) -> None:
     holder = StepOutputsHolder()
-    raw_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(tmp_path / "raw.parquet"),
-                short_name="households_asim_out_temp",
-                description="raw output",
-                content_hash="raw-hash",
-            )
-        ]
+    raw_path = tmp_path / "raw.parquet"
+    raw_path.write_text("raw", encoding="utf-8")
+    holder.activitysim_run = ActivitySimRunOutputs(
+        output_dir=tmp_path / "asim-output",
+        raw_outputs={"households_asim_out_temp": raw_path},
+        raw_output_hashes={"households_asim_out_temp": "raw-hash"},
+        source_input_paths={
+            "households_asim_in": tmp_path / "households.csv",
+            "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr",
+        },
+        source_input_hashes={
+            "households_asim_in": "preprocess-hash",
+            "zarr_skims": "zarr-hash",
+        },
     )
-    holder.activitysim_run = _RunHashTrackingStepOutputs(
-        raw_store,
-        hashes={"households_asim_out_temp": "raw-hash"},
-    )
-
-    zarr_path = tmp_path / "asim-output" / "cache" / "skims.zarr"
-    zarr_path.parent.mkdir(parents=True, exist_ok=True)
-    zarr_path.write_text("zarr", encoding="utf-8")
 
     captured = {}
 
@@ -267,16 +239,18 @@ def test_execute_postprocess_uses_activitysim_run_postprocess_record_store(
         {"get_asim_output_dir": lambda self: str(tmp_path / "asim-output")},
     )()
 
-    result = _execute_postprocess(
+    result = _execute_activitysim_postprocess(
         postprocessor=_Postprocessor(),
         workspace=workspace,
         outputs_holder=holder,
     )
 
-    assert result is captured["raw_outputs"]
-    raw_record = _record_by_short_name(captured["raw_outputs"], "households_asim_out_temp")
+    assert result is holder.activitysim_run
+    assert captured["raw_outputs"] is holder.activitysim_run
+    raw_store = captured["raw_outputs"].to_postprocess_record_store()
+    raw_record = _record_by_short_name(raw_store, "households_asim_out_temp")
     assert raw_record is not None and raw_record.content_hash == "raw-hash"
-    assert getattr(captured["raw_outputs"], "activitysim_source_input_hashes") == {
+    assert getattr(raw_store, "activitysim_source_input_hashes") == {
         "households_asim_in": "preprocess-hash",
         "zarr_skims": "zarr-hash",
     }

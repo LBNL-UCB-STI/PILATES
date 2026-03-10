@@ -1,7 +1,7 @@
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 import pandas as pd
 
@@ -16,6 +16,8 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
 )
 
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ def create_next_iter_usim_data(
     settings,
     forecast_year,
     mutable_data_dir,
+    *,
+    output_store_path: Optional[str] = None,
 ):
     """Merge UrbanSim outputs with previous inputs to create the input for the next iteration."""
     # Define paths
@@ -70,8 +74,10 @@ def create_next_iter_usim_data(
     output_store, table_prefix_year = read_datastore(
         settings, forecast_year, mutable_data_dir=mutable_data_dir
     )
-    output_store_path = output_store._path
+    resolved_output_store_path = output_store._path
     output_store.close()
+    if output_store_path is None:
+        output_store_path = resolved_output_store_path
 
     # Archive the original input file.
     logger.info(f"Archiving previous iteration's inputs to {archive_fname}")
@@ -81,7 +87,7 @@ def create_next_iter_usim_data(
     logger.info("Merging results back into new UrbanSim input store!")
 
     # Create an empty HDF5 file for the merged output.
-    with pd.HDFStore(str(input_store_path), "w") as store:
+    with pd.HDFStore(str(input_store_path), "w"):
         pass
 
     output_store = pd.HDFStore(str(output_store_path), "r")
@@ -242,6 +248,7 @@ class UrbansimPostprocessor(GenericPostprocessor):
                     settings,
                     self.state.forecast_year,
                     workspace.get_usim_mutable_data_dir(),
+                    output_store_path=str(raw_outputs.usim_datastore_h5),
                 )
                 if output_paths:
                     processed_outputs.update(output_paths)
@@ -264,3 +271,16 @@ class UrbansimPostprocessor(GenericPostprocessor):
             usim_datastore_h5=merged_path,
             processed_outputs=processed_outputs,
         )
+
+    def postprocess(
+        self,
+        raw_outputs: UrbanSimRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> UrbanSimPostprocessOutputs:
+        if not isinstance(raw_outputs, UrbanSimRunOutputs):
+            raise TypeError(
+                "UrbansimPostprocessor.postprocess expects UrbanSimRunOutputs"
+            )
+        self.state.set_sub_stage_progress("postprocessor")
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
