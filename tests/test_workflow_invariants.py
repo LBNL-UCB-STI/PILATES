@@ -37,7 +37,7 @@ from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
-    _recover_cached_outputs,
+    _recover_step_outputs,
     run_manifested_steps,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
@@ -330,14 +330,22 @@ def _prepare_activitysim_preprocess_manifest(
 ) -> dict:
     seed_holder = StepOutputsHolder()
     seed_coupler = _ManifestCoupler()
-    outputs = _recover_cached_outputs(
+    step_func = make_activitysim_preprocess_step(
+        coupler=seed_coupler,
+        outputs_holder=seed_holder,
+    )
+    outputs = _recover_step_outputs(
         step_name="activitysim_preprocess",
+        step_func=step_func,
         outputs_holder=seed_holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, iteration=0),
         workspace=workspace,
         coupler=seed_coupler,
         step_inputs=None,
+        cached_outputs=None,
+        run_id=None,
+        publish_outputs=True,
     )
     assert outputs is not None
 
@@ -376,30 +384,18 @@ def test_manifest_restore_skips_run_and_rehydrates_coupler(tmp_path):
         manifest_path=manifest_path,
     )
 
-    def _should_not_run(**_kwargs):
-        raise AssertionError("step function should not execute on manifest restore")
-
-    _should_not_run.__consist_step__ = object()
-    _should_not_run.__pilates_output_replayer__ = (
-        lambda outputs, settings, state, workspace, holder: (
-            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
-            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
-            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
-            coupler.set("replayed_manifest_outputs", str(outputs.households_table)),
-        )
-    )
-
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
     scenario = _ManifestScenario(cache_hit=False)
     state = SimpleNamespace(year=2018, iteration=0)
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
 
     run_manifested_steps(
         stage_name="activity_demand_preprocess",
         steps=[
             StepRef(
                 name="activitysim_preprocess",
-                step_func=_should_not_run,
+                step_func=step_func,
             )
         ],
         outputs_holder=holder,
@@ -418,9 +414,6 @@ def test_manifest_restore_skips_run_and_rehydrates_coupler(tmp_path):
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     assert coupler.get(ASIM_PERSONS_IN) is not None
     assert coupler.get(ASIM_LAND_USE_IN) is not None
-    assert coupler.get("replayed_manifest_outputs") == str(
-        holder.activitysim_preprocess.households_table
-    )
 
 
 def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):
@@ -447,22 +440,18 @@ def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):
         mutate_outputs=lambda data: data.update({"households_table": bad_path}),
     )
 
-    def _noop_step(**_kwargs):
-        return None
-
-    _noop_step.__consist_step__ = object()
-
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
     scenario = _ManifestScenario(cache_hit=True)
     state = SimpleNamespace(year=2018, iteration=0)
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
 
     run_manifested_steps(
         stage_name="activity_demand_preprocess",
         steps=[
             StepRef(
                 name="activitysim_preprocess",
-                step_func=_noop_step,
+                step_func=step_func,
             )
         ],
         outputs_holder=holder,

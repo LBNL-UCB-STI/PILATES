@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Type, TypeVar
+from pathlib import Path
+from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.artifact_keys import LINKSTATS, LINKSTATS_WARMSTART
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
@@ -255,6 +258,7 @@ def _make_beam_step_function(
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
+    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
 ) -> Callable[..., None]:
     @cr.require_runtime_kwargs("settings", "state", "workspace")
     def _step_func(
@@ -308,6 +312,8 @@ def _make_beam_step_function(
                 outputs, settings, state, workspace, holder
             ),
         )
+    if output_recoverer is not None:
+        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
 
     step_model = f"{model_name}_{phase}"
     return _decorate_step_with_consist(
@@ -318,6 +324,140 @@ def _make_beam_step_function(
         outputs=list(outputs_class.declared_output_keys()) or None,
         tags=[model_name, phase],
     )
+
+
+def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
+    if not run_id:
+        return {}
+    tracker = cr.current_tracker()
+    if tracker is None:
+        return {}
+    get_run_outputs = getattr(tracker, "get_run_outputs", None)
+    if not callable(get_run_outputs):
+        return {}
+    try:
+        run_outputs = get_run_outputs(run_id) or {}
+    except Exception:
+        return {}
+    resolved: Dict[str, Any] = {}
+    for raw_key, value in run_outputs.items():
+        if value is None:
+            continue
+        raw_key_str = str(raw_key)
+        local_key = raw_key_str.split("/", 1)[-1]
+        resolved[resolve_artifact_key(local_key)] = value
+    return resolved
+
+
+def _recovered_cached_paths(
+    *,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+    workspace: Workspace,
+) -> Dict[str, Path]:
+    merged: Dict[str, Any] = {}
+    if cached_outputs:
+        for raw_key, value in cached_outputs.items():
+            if value is None:
+                continue
+            raw_key_str = str(raw_key)
+            local_key = raw_key_str.split("/", 1)[-1]
+            merged[resolve_artifact_key(local_key)] = value
+    for key, value in _resolve_cached_run_outputs(run_id).items():
+        merged[key] = value
+    recovered: Dict[str, Path] = {}
+    for key, value in merged.items():
+        path = artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if path is not None:
+            recovered[key] = Path(path)
+    return recovered
+
+
+def _recover_beam_run_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[BeamRunOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    if not recovered_paths:
+        return None
+    return BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()),
+        raw_outputs=recovered_paths,
+    )
+
+
+def _recover_beam_postprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[BeamPostprocessOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    if not recovered_paths:
+        return None
+    return BeamPostprocessOutputs(
+        zarr_skims=recovered_paths.get("zarr_skims"),
+        final_skims_omx=recovered_paths.get("final_skims_omx"),
+        split_events={
+            key: path
+            for key, path in recovered_paths.items()
+            if key.startswith("events_parquet_") and "_type_" in key
+        },
+        split_event_links={
+            key: path
+            for key, path in recovered_paths.items()
+            if key.startswith("path_traversal_links_")
+        },
+    )
+
+
+def _recover_beam_full_skim_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[BeamFullSkimOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    full_skims = recovered_paths.get("beam_full_skims")
+    if full_skims is None:
+        return None
+    return BeamFullSkimOutputs(full_skims=full_skims)
 
 
 def make_beam_preprocess_step(
@@ -567,6 +707,7 @@ def make_beam_run_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_beam_run_outputs,
     )
 
 
@@ -652,6 +793,7 @@ def make_beam_postprocess_step(
             holder, "beam_postprocess", outputs
         ),
         output_logger=_log_outputs,
+        output_recoverer=_recover_beam_postprocess_outputs,
     )
 
 
@@ -703,4 +845,5 @@ def make_beam_full_skim_step(
             holder, "beam_full_skim", outputs
         ),
         output_logger=_log_outputs,
+        output_recoverer=_recover_beam_full_skim_outputs,
     )

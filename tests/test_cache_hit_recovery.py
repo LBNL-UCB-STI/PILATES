@@ -22,14 +22,24 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
-from pilates.workflows.orchestration import ManifestConfig, _recover_cached_outputs
+from pilates.workflows.orchestration import (
+    ManifestConfig,
+    _recover_cached_outputs,
+    _recover_step_outputs,
+)
 from pilates.workflows.orchestration import run_manifested_steps, run_workflow
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_preprocess_step,
+    make_activitysim_postprocess_step,
+    make_activitysim_run_step,
+    make_atlas_run_step,
     make_atlas_postprocess_step,
+    make_beam_full_skim_step,
+    make_beam_run_step,
     make_beam_postprocess_step,
+    make_urbansim_postprocess_step,
     make_urbansim_run_step,
 )
 from pilates.beam.outputs import BeamRunOutputs
@@ -94,6 +104,62 @@ def _write_file(path: Path) -> None:
     path.write_text("test")
 
 
+def _recover_activitysim_step_outputs(
+    *,
+    step_name: str,
+    step_func,
+    holder: StepOutputsHolder,
+    workspace: DummyWorkspace,
+    coupler: DummyCoupler,
+    settings=None,
+    state=None,
+    step_inputs=None,
+    cached_outputs=None,
+    run_id=None,
+):
+    return _recover_step_outputs(
+        step_name=step_name,
+        step_func=step_func,
+        outputs_holder=holder,
+        settings=settings or SimpleNamespace(),
+        state=state or SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=step_inputs,
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        publish_outputs=True,
+    )
+
+
+def _recover_beam_step_outputs(
+    *,
+    step_name: str,
+    step_func,
+    holder: StepOutputsHolder,
+    workspace: DummyWorkspace,
+    coupler: DummyCoupler,
+    settings=None,
+    state=None,
+    step_inputs=None,
+    cached_outputs=None,
+    run_id=None,
+):
+    return _recover_step_outputs(
+        step_name=step_name,
+        step_func=step_func,
+        outputs_holder=holder,
+        settings=settings or SimpleNamespace(),
+        state=state or SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=step_inputs,
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        publish_outputs=True,
+    )
+
+
 def test_recover_activitysim_preprocess_outputs(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
@@ -104,14 +170,13 @@ def test_recover_activitysim_preprocess_outputs(tmp_path):
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_preprocess",
-        outputs_holder=holder,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        step_func=step_func,
+        holder=holder,
         workspace=workspace,
         coupler=coupler,
-        step_inputs=None,
     )
 
     assert outputs is not None
@@ -134,19 +199,20 @@ def test_recover_activitysim_preprocess_outputs_preserves_input_hashes(
     _write_file(asim_dir / "skims.omx")
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        "pilates.workflows.steps.activitysim.resolve_artifact_from_value",
         lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
     )
 
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_activitysim_preprocess_step(
+        coupler=DummyCoupler(), outputs_holder=holder
+    )
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_preprocess",
-        outputs_holder=holder,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        step_func=step_func,
+        holder=holder,
         workspace=workspace,
         coupler=DummyCoupler(),
-        step_inputs=None,
     )
 
     assert outputs is not None
@@ -175,14 +241,13 @@ def test_recover_activitysim_preprocess_outputs_from_archive_only(tmp_path, monk
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_preprocess",
-        outputs_holder=holder,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        step_func=step_func,
+        holder=holder,
         workspace=workspace,
         coupler=coupler,
-        step_inputs=None,
     )
 
     assert outputs is not None
@@ -249,7 +314,7 @@ def test_recover_activitysim_run_outputs_carries_source_input_hashes(
     _write_file(output_dir / "cache" / "skims.zarr")
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        "pilates.workflows.steps.activitysim.resolve_artifact_from_value",
         lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
     )
 
@@ -268,14 +333,16 @@ def test_recover_activitysim_run_outputs_carries_source_input_hashes(
         },
     )
 
-    outputs = _recover_cached_outputs(
+    coupler = DummyCoupler()
+    step_func = make_activitysim_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_run",
-        outputs_holder=holder,
+        step_func=step_func,
+        holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(year=2018, iteration=0),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
-        coupler=DummyCoupler(),
-        step_inputs=None,
+        coupler=coupler,
     )
 
     assert outputs is not None
@@ -307,7 +374,7 @@ def test_recover_activitysim_run_outputs_does_not_require_source_input_paths_to_
     _write_file(output_dir / "cache" / "skims.zarr")
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        "pilates.workflows.steps.activitysim.resolve_artifact_from_value",
         lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
     )
 
@@ -326,14 +393,16 @@ def test_recover_activitysim_run_outputs_does_not_require_source_input_paths_to_
         },
     )
 
-    outputs = _recover_cached_outputs(
+    coupler = DummyCoupler()
+    step_func = make_activitysim_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_run",
-        outputs_holder=holder,
+        step_func=step_func,
+        holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(year=2018, iteration=0),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
-        coupler=DummyCoupler(),
-        step_inputs=None,
+        coupler=coupler,
     )
 
     assert outputs is not None
@@ -354,22 +423,10 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     _write_file(asim_dir / "households.csv")
     _write_file(asim_dir / "persons.csv")
     _write_file(asim_dir / "land_use.csv")
-
-    def _noop_step(**_kwargs):
-        raise AssertionError("step function should not execute on cache hit")
-    _noop_step.__consist_step__ = object()
-    _noop_step.__pilates_output_replayer__ = (
-        lambda outputs, settings, state, workspace, holder: (
-            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
-            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
-            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
-            coupler.set("replayed_cache_outputs", str(outputs.households_table)),
-        )
-    )
-
+    coupler = DummyCoupler()
     holder = StepOutputsHolder()
     scenario = DummyScenario(cache_hit=True)
-    coupler = DummyCoupler()
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
     manifest_path = tmp_path / "manifest.json"
     manifest_config = ManifestConfig(path=manifest_path)
     state = SimpleNamespace(year=2018, iteration=0)
@@ -379,7 +436,7 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
         steps=[
             StepRef(
                 name="activitysim_preprocess",
-                step_func=_noop_step,
+                step_func=step_func,
                 input_keys=None,
                 inputs=None,
             )
@@ -398,9 +455,6 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     assert holder.activitysim_preprocess is not None
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
     holder.activitysim_preprocess.validate()
-    assert coupler.get("replayed_cache_outputs") == str(
-        holder.activitysim_preprocess.households_table
-    )
     manifest = yaml.safe_load(manifest_path.read_text())
     assert manifest["activitysim_preprocess"]["cache_hit"]
 
@@ -426,14 +480,17 @@ def test_recover_activitysim_postprocess_outputs_preserves_hashes(
     _write_file(usim_h5)
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.resolve_artifact_from_value",
+        "pilates.workflows.steps.activitysim.resolve_artifact_from_value",
         lambda value, *, key=None, workspace=None: SimpleNamespace(hash=f"hash-{key}"),
     )
 
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    coupler = DummyCoupler()
+    step_func = make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_postprocess",
-        outputs_holder=holder,
+        step_func=step_func,
+        holder=holder,
         settings=SimpleNamespace(
             urbansim=SimpleNamespace(
                 region_id="000",
@@ -444,7 +501,7 @@ def test_recover_activitysim_postprocess_outputs_preserves_hashes(
         ),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=coupler,
         step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
     )
 
@@ -491,14 +548,13 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_beam_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_beam_step_outputs(
         step_name="beam_run",
-        outputs_holder=holder,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        step_func=step_func,
+        holder=holder,
         workspace=workspace,
         coupler=coupler,
-        step_inputs=None,
         cached_outputs={
             LINKSTATS: str(linkstats_path),
             BEAM_PLANS_OUT: str(plans_path),
@@ -509,8 +565,9 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
     assert outputs is not None
     assert holder.beam_run is not None
     assert holder.beam_run.raw_outputs["events_parquet_2018_0"] == events_path
-    assert coupler.get("events_parquet_2018_0") is not None
-    assert coupler.get("linkstats_parquet_2018_0") is not None
+    assert coupler.get(LINKSTATS) is None
+    assert coupler.get(BEAM_PLANS_OUT) is None
+    assert coupler.get("events_parquet_2018_0") is None
 
 
 def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
@@ -530,22 +587,28 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    holder.urbansim_preprocess = object()
+    step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
         step_name="urbansim_run",
+        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
         coupler=coupler,
         step_inputs=None,
+        cached_outputs=None,
         run_id="usim-run-id",
+        publish_outputs=True,
     )
 
     assert outputs is not None
     assert holder.urbansim_run is not None
     assert holder.urbansim_run.usim_datastore_h5 == usim_output
     assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
-    assert coupler.get(USIM_FORECAST_OUTPUT) is not None
+    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_FORECAST_OUTPUT) is None
 
 
 def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
@@ -578,22 +641,28 @@ def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    holder.urbansim_run = object()
+    step_func = make_urbansim_postprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
         step_name="urbansim_postprocess",
+        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
         coupler=coupler,
         step_inputs=None,
+        cached_outputs=None,
         run_id="usim-post-id",
+        publish_outputs=True,
     )
 
     assert outputs is not None
     assert holder.urbansim_postprocess is not None
     assert holder.urbansim_postprocess.usim_datastore_h5 == merged_path
     assert holder.urbansim_postprocess.processed_outputs[merged_key] == merged_path
-    assert coupler.get(merged_key) is not None
+    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(merged_key) is None
 
 
 def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
@@ -618,22 +687,27 @@ def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypat
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    holder.atlas_preprocess = object()
+    step_func = make_atlas_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
         step_name="atlas_run",
+        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         workspace=workspace,
         coupler=coupler,
         step_inputs=None,
+        cached_outputs=None,
         run_id="atlas-run-id",
+        publish_outputs=True,
     )
 
     assert outputs is not None
     assert holder.atlas_run is not None
     assert holder.atlas_run.raw_outputs["householdv_2018"] == householdv_path
     assert holder.atlas_run.raw_outputs["vehicles_2018"] == vehicles_path
-    assert coupler.get("householdv_2018") is not None
+    assert coupler.get("householdv_2018") is None
 
 
 def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
@@ -660,15 +734,25 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    holder.atlas_run = object()
+    step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
         step_name="atlas_postprocess",
+        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=2017,
+            forecast_year=2018,
+            iteration=0,
+            is_start_year=lambda: False,
+        ),
         workspace=workspace,
         coupler=coupler,
         step_inputs=None,
+        cached_outputs=None,
         run_id="atlas-post-id",
+        publish_outputs=True,
     )
 
     assert outputs is not None
@@ -676,7 +760,8 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     assert holder.atlas_postprocess.usim_datastore_h5 == updated_h5
     assert holder.atlas_postprocess.processed_outputs[USIM_H5_UPDATED] == updated_h5
     assert holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"] == vehicles2
-    assert coupler.get(USIM_H5_UPDATED) is not None
+    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_H5_UPDATED) is None
 
 
 def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
@@ -696,14 +781,13 @@ def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monk
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_beam_full_skim_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_beam_step_outputs(
         step_name="beam_full_skim",
-        outputs_holder=holder,
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        step_func=step_func,
+        holder=holder,
         workspace=workspace,
         coupler=coupler,
-        step_inputs=None,
         run_id="beam-skim-id",
     )
 
@@ -726,23 +810,11 @@ def test_run_workflow_cache_hit_uses_output_replayer(tmp_path):
         def run(self, **_kwargs):
             return SimpleNamespace(cache_hit=True)
 
-    def _noop_step(**_kwargs):
-        raise AssertionError("step function should not execute on cache hit")
-
-    _noop_step.__consist_step__ = object()
-    _noop_step.__pilates_output_replayer__ = (
-        lambda outputs, settings, state, workspace, holder: (
-            coupler.set(ASIM_HOUSEHOLDS_IN, str(outputs.households_table)),
-            coupler.set(ASIM_PERSONS_IN, str(outputs.persons_table)),
-            coupler.set(ASIM_LAND_USE_IN, str(outputs.land_use_table)),
-            coupler.set("non_manifest_replay", str(outputs.households_table)),
-        )
-    )
-
     holder = StepOutputsHolder()
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
     run_workflow(
         stage_name="activity_demand_preprocess",
-        steps=[StepRef(name="activitysim_preprocess", step_func=_noop_step)],
+        steps=[StepRef(name="activitysim_preprocess", step_func=step_func)],
         scenario=CacheHitScenario(),
         state=SimpleNamespace(year=2018, iteration=0),
         settings=SimpleNamespace(),
@@ -754,9 +826,6 @@ def test_run_workflow_cache_hit_uses_output_replayer(tmp_path):
     )
 
     assert holder.activitysim_preprocess is not None
-    assert coupler.get("non_manifest_replay") == str(
-        holder.activitysim_preprocess.households_table
-    )
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
 
 
@@ -842,7 +911,55 @@ def test_run_workflow_cache_hit_beam_postprocess_replays_promoted_outputs(tmp_pa
     assert coupler.get(BEAM_PLANS_OUT) is not None
 
 
-def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(tmp_path):
+def test_run_workflow_cache_hit_prefers_beam_step_local_recoverer(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    linkstats = Path(workspace.get_beam_output_dir()) / "linkstats.csv.gz"
+    plans = Path(workspace.get_beam_output_dir()) / "plans.csv.gz"
+    zarr = Path(workspace.get_beam_output_dir()) / "skims.zarr"
+    for path in (linkstats, plans, zarr):
+        _write_file(path)
+
+    holder.beam_run = BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()),
+        raw_outputs={LINKSTATS: linkstats, BEAM_PLANS_OUT: plans},
+    )
+    step_func = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_cached_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy orchestration recovery should not run")
+        ),
+    )
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(cache_hit=True, outputs={ZARR_SKIMS: str(zarr)})
+
+    run_workflow(
+        stage_name="beam_postprocess",
+        steps=[StepRef(name="beam_postprocess", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.beam_postprocess is not None
+    assert coupler.get(ZARR_SKIMS) is not None
+    assert coupler.get(LINKSTATS) is not None
+
+
+def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(
+    tmp_path, monkeypatch
+):
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
@@ -851,6 +968,13 @@ def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(tmp
     usim_output = Path(workspace.get_usim_mutable_data_dir()) / "usim_output.h5"
     _write_file(usim_output)
     step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_cached_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy orchestration recovery should not run")
+        ),
+    )
 
     class CacheHitScenario:
         def run(self, **_kwargs):
@@ -879,6 +1003,7 @@ def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(tmp
 
 def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_key(
     tmp_path,
+    monkeypatch,
 ):
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()
@@ -890,6 +1015,13 @@ def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_ke
     for path in (updated_h5, vehicles2):
         _write_file(path)
     step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_cached_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy orchestration recovery should not run")
+        ),
+    )
 
     class CacheHitScenario:
         def run(self, **_kwargs):

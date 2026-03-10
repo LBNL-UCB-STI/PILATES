@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, Optional, Type, TypeVar
+from pathlib import Path
+from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
@@ -14,8 +17,10 @@ from pilates.workspace import Workspace
 from .shared import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
     AtlasPostprocessOutputs,
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
@@ -55,6 +60,7 @@ def _make_typed_step_function(
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
+    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
 ) -> Callable[..., None]:
     @cr.require_runtime_kwargs("settings", "state", "workspace")
     def _step_func(
@@ -113,6 +119,8 @@ def _make_typed_step_function(
                 outputs, settings, state, workspace, holder
             ),
         )
+    if output_recoverer is not None:
+        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
     return _decorate_step_with_consist(
         step_func=_step_func,
         step_model=f"{model_name}_{phase}",
@@ -120,6 +128,169 @@ def _make_typed_step_function(
         schema_outputs=_schema_outputs_from_class(outputs_class),
         outputs=_declared_outputs_from_class(outputs_class),
         tags=[model_name, phase],
+    )
+
+
+def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
+    if not run_id:
+        return {}
+    tracker = cr.current_tracker()
+    if tracker is None:
+        return {}
+    get_run_outputs = getattr(tracker, "get_run_outputs", None)
+    if not callable(get_run_outputs):
+        return {}
+    try:
+        return get_run_outputs(run_id) or {}
+    except Exception:
+        logger.debug(
+            "Failed loading cached run outputs for run_id=%s", run_id, exc_info=True
+        )
+        return {}
+
+
+def _recovered_cached_paths(
+    *,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+    workspace: Workspace,
+) -> Dict[str, Path]:
+    merged: Dict[str, Any] = {}
+    if cached_outputs:
+        for raw_key, value in cached_outputs.items():
+            if value is None:
+                continue
+            local_key = str(raw_key).split("/", 1)[-1]
+            merged[resolve_artifact_key(local_key)] = value
+    for raw_key, value in _resolve_cached_run_outputs(run_id).items():
+        if value is None:
+            continue
+        local_key = str(raw_key).split("/", 1)[-1]
+        merged[resolve_artifact_key(local_key)] = value
+    recovered: Dict[str, Path] = {}
+    for key, value in merged.items():
+        path = artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if path is not None:
+            recovered[key] = Path(path)
+    return recovered
+
+
+def _recover_urbansim_run_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[UrbanSimRunOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    usim_datastore_h5 = recovered_paths.get(USIM_FORECAST_OUTPUT) or recovered_paths.get(
+        USIM_DATASTORE_H5
+    )
+    if usim_datastore_h5 is None:
+        return None
+    return UrbanSimRunOutputs(
+        usim_datastore_h5=usim_datastore_h5,
+        raw_outputs=recovered_paths,
+    )
+
+
+def _recover_urbansim_postprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[UrbanSimPostprocessOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    usim_datastore_h5 = next(
+        (
+            path
+            for key, path in recovered_paths.items()
+            if key.startswith(USIM_INPUT_MERGED_PREFIX)
+        ),
+        None,
+    ) or recovered_paths.get(USIM_DATASTORE_H5)
+    if usim_datastore_h5 is None:
+        return None
+    return UrbanSimPostprocessOutputs(
+        usim_datastore_h5=usim_datastore_h5,
+        processed_outputs=recovered_paths,
+    )
+
+
+def _recover_atlas_run_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[AtlasRunOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    if not recovered_paths:
+        return None
+    return AtlasRunOutputs(
+        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+        raw_outputs=recovered_paths,
+    )
+
+
+def _recover_atlas_postprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[AtlasPostprocessOutputs]:
+    del settings, state, coupler, outputs_holder, step_inputs
+    recovered_paths = _recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+    )
+    usim_datastore_h5 = recovered_paths.get(USIM_H5_UPDATED) or recovered_paths.get(
+        USIM_DATASTORE_H5
+    )
+    if usim_datastore_h5 is None:
+        return None
+    return AtlasPostprocessOutputs(
+        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+        usim_datastore_h5=usim_datastore_h5,
+        processed_outputs=recovered_paths,
     )
 
 
@@ -374,6 +545,7 @@ def make_urbansim_run_step(
             holder, "urbansim_run", outputs
         ),
         output_logger=_log_outputs,
+        output_recoverer=_recover_urbansim_run_outputs,
     )
 
 
@@ -457,6 +629,7 @@ def make_urbansim_postprocess_step(
             holder, "urbansim_postprocess", outputs
         ),
         output_logger=_log_outputs,
+        output_recoverer=_recover_urbansim_postprocess_outputs,
     )
 
 
@@ -612,6 +785,7 @@ def make_atlas_run_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_atlas_run_outputs,
     )
 
 
@@ -762,4 +936,5 @@ def make_atlas_postprocess_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
+        output_recoverer=_recover_atlas_postprocess_outputs,
     )

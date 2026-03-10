@@ -24,11 +24,17 @@ from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
     _recover_cached_outputs,
+    _recover_step_outputs,
     _update_coupler_from_outputs,
     run_manifested_steps,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
-from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_activitysim_postprocess_step,
+    make_activitysim_preprocess_step,
+    make_activitysim_run_step,
+)
 
 
 class DummyCoupler:
@@ -85,6 +91,34 @@ class DummyScenario:
 def _write_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x")
+
+
+def _recover_manifest_outputs(
+    *,
+    step_name: str,
+    step_func,
+    workspace: DummyWorkspace,
+    settings,
+    state,
+    holder=None,
+    coupler=None,
+    step_inputs=None,
+):
+    holder = holder or StepOutputsHolder()
+    coupler = coupler or DummyCoupler()
+    return _recover_step_outputs(
+        step_name=step_name,
+        step_func=step_func,
+        outputs_holder=holder,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=step_inputs,
+        cached_outputs=None,
+        run_id=None,
+        publish_outputs=True,
+    )
 
 
 def _seed_manifest(manifest_path: Path, step_name: str, outputs) -> None:
@@ -188,11 +222,15 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
         _write_file(path)
 
     settings = SimpleNamespace()
-    state = SimpleNamespace(year=2018, iteration=0)
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     coupler_keys = [ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN]
 
     fresh_holder = StepOutputsHolder()
     fresh_coupler = DummyCoupler()
+    fresh_runtime_step = make_activitysim_preprocess_step(
+        coupler=fresh_coupler,
+        outputs_holder=fresh_holder,
+    )
     fresh_outputs = ActivitySimPreprocessOutputs(
         mutable_data_dir=asim_dir,
         land_use_table=land_use,
@@ -202,10 +240,12 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_preprocess", fresh_outputs)
-        _update_coupler_from_outputs(
+        fresh_runtime_step.__pilates_output_replayer__(
             fresh_outputs,
-            coupler=fresh_coupler,
-            workspace=workspace,
+            settings,
+            state,
+            workspace,
+            fresh_holder,
         )
 
     _fresh_step.__consist_step__ = object()
@@ -223,40 +263,51 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
     )
     fresh_snapshot = fresh_result["snapshot"]
 
-    def _should_not_run(**_runtime_kwargs):
-        raise AssertionError("cache-hit and manifest paths should not execute the step")
-
-    _should_not_run.__consist_step__ = object()
-
+    cache_holder = StepOutputsHolder()
+    cache_coupler = DummyCoupler()
+    cache_step = make_activitysim_preprocess_step(
+        coupler=cache_coupler,
+        outputs_holder=cache_holder,
+    )
     cache_result = _run_step_mode(
         step_name="activitysim_preprocess",
         mode_label="cache",
-        step_func=_should_not_run,
+        step_func=cache_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=cache_holder,
+        coupler=cache_coupler,
         cache_hit=True,
     )
 
-    manifest_outputs = _recover_cached_outputs(
+    manifest_holder = StepOutputsHolder()
+    manifest_coupler = DummyCoupler()
+    manifest_step = make_activitysim_preprocess_step(
+        coupler=manifest_coupler,
+        outputs_holder=manifest_holder,
+    )
+    manifest_outputs = _recover_manifest_outputs(
         step_name="activitysim_preprocess",
-        outputs_holder=StepOutputsHolder(),
+        step_func=manifest_step,
+        holder=manifest_holder,
+        workspace=workspace,
         settings=settings,
         state=state,
-        workspace=workspace,
-        coupler=DummyCoupler(),
-        step_inputs=None,
+        coupler=manifest_coupler,
     )
     assert manifest_outputs is not None
     manifest_result = _run_step_mode(
         step_name="activitysim_preprocess",
         mode_label="manifest",
-        step_func=_should_not_run,
+        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=StepOutputsHolder(),
+        coupler=manifest_coupler,
         manifest_outputs=manifest_outputs,
     )
 
@@ -280,7 +331,7 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
         _write_file(path)
 
     settings = SimpleNamespace()
-    state = SimpleNamespace(year=2018, iteration=0)
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     step_inputs = {
         BEAM_PLANS_IN: str(plans),
         BEAM_HOUSEHOLDS_IN: str(households),
@@ -402,15 +453,32 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
     write_asim_run_marker(asim_output_dir, year=2018, iteration=0)
 
     settings = SimpleNamespace()
-    state = SimpleNamespace(year=2018, iteration=0)
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     coupler_keys = [
         "households_asim_out_temp",
         "persons_asim_out_temp",
         "beam_plans_asim_out_temp",
     ]
 
+    upstream_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=Path(workspace.get_asim_mutable_data_dir()) / "land_use.csv",
+        households_table=Path(workspace.get_asim_mutable_data_dir()) / "households.csv",
+        persons_table=Path(workspace.get_asim_mutable_data_dir()) / "persons.csv",
+    )
+    for path in (
+        upstream_preprocess.land_use_table,
+        upstream_preprocess.households_table,
+        upstream_preprocess.persons_table,
+    ):
+        _write_file(path)
+
     fresh_holder = StepOutputsHolder()
     fresh_coupler = DummyCoupler()
+    fresh_runtime_step = make_activitysim_run_step(
+        coupler=fresh_coupler,
+        outputs_holder=fresh_holder,
+    )
     fresh_outputs = ActivitySimRunOutputs(
         output_dir=asim_output_dir,
         raw_outputs={
@@ -422,10 +490,12 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_run", fresh_outputs)
-        _update_coupler_from_outputs(
+        fresh_runtime_step.__pilates_output_replayer__(
             fresh_outputs,
-            coupler=fresh_coupler,
-            workspace=workspace,
+            settings,
+            state,
+            workspace,
+            fresh_holder,
         )
 
     _fresh_step.__consist_step__ = object()
@@ -442,52 +512,63 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
         coupler=fresh_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_preprocess",
-            object(),
+            upstream_preprocess,
         ),
     )
     fresh_snapshot = fresh_result["snapshot"]
 
-    def _should_not_run(**_runtime_kwargs):
-        raise AssertionError("cache-hit and manifest paths should not execute the step")
-
-    _should_not_run.__consist_step__ = object()
-
+    cache_holder = StepOutputsHolder()
+    cache_coupler = DummyCoupler()
+    cache_step = make_activitysim_run_step(
+        coupler=cache_coupler,
+        outputs_holder=cache_holder,
+    )
     cache_result = _run_step_mode(
         step_name="activitysim_run",
         mode_label="cache",
-        step_func=_should_not_run,
+        step_func=cache_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=cache_holder,
+        coupler=cache_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_preprocess",
-            object(),
+            upstream_preprocess,
         ),
         cache_hit=True,
     )
 
-    manifest_outputs = _recover_cached_outputs(
+    manifest_holder = StepOutputsHolder()
+    manifest_holder.set_attribute("activitysim_preprocess", upstream_preprocess)
+    manifest_coupler = DummyCoupler()
+    manifest_step = make_activitysim_run_step(
+        coupler=manifest_coupler,
+        outputs_holder=manifest_holder,
+    )
+    manifest_outputs = _recover_manifest_outputs(
         step_name="activitysim_run",
-        outputs_holder=StepOutputsHolder(),
+        step_func=manifest_step,
+        holder=manifest_holder,
+        workspace=workspace,
         settings=settings,
         state=state,
-        workspace=workspace,
-        coupler=DummyCoupler(),
-        step_inputs=None,
+        coupler=manifest_coupler,
     )
     assert manifest_outputs is not None
     manifest_result = _run_step_mode(
         step_name="activitysim_run",
         mode_label="manifest",
-        step_func=_should_not_run,
+        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_preprocess",
-            object(),
+            upstream_preprocess,
         ),
         manifest_outputs=manifest_outputs,
     )
@@ -548,6 +629,10 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
 
     fresh_holder = StepOutputsHolder()
     fresh_coupler = DummyCoupler()
+    fresh_runtime_step = make_activitysim_postprocess_step(
+        coupler=fresh_coupler,
+        outputs_holder=fresh_holder,
+    )
     fresh_outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=usim_h5,
         asim_output_dir=asim_output_dir,
@@ -566,10 +651,12 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_postprocess", fresh_outputs)
-        _update_coupler_from_outputs(
+        fresh_runtime_step.__pilates_output_replayer__(
             fresh_outputs,
-            coupler=fresh_coupler,
-            workspace=workspace,
+            settings,
+            state,
+            workspace,
+            fresh_holder,
         )
 
     _fresh_step.__consist_step__ = object()
@@ -591,19 +678,22 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
     )
     fresh_snapshot = fresh_result["snapshot"]
 
-    def _should_not_run(**_runtime_kwargs):
-        raise AssertionError("cache-hit and manifest paths should not execute the step")
-
-    _should_not_run.__consist_step__ = object()
-
+    cache_holder = StepOutputsHolder()
+    cache_coupler = DummyCoupler()
+    cache_step = make_activitysim_postprocess_step(
+        coupler=cache_coupler,
+        outputs_holder=cache_holder,
+    )
     cache_result = _run_step_mode(
         step_name="activitysim_postprocess",
         mode_label="cache",
-        step_func=_should_not_run,
+        step_func=cache_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=cache_holder,
+        coupler=cache_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_run",
             object(),
@@ -612,24 +702,32 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
         cache_hit=True,
     )
 
-    manifest_outputs = _recover_cached_outputs(
+    manifest_holder = StepOutputsHolder()
+    manifest_coupler = DummyCoupler()
+    manifest_step = make_activitysim_postprocess_step(
+        coupler=manifest_coupler,
+        outputs_holder=manifest_holder,
+    )
+    manifest_outputs = _recover_manifest_outputs(
         step_name="activitysim_postprocess",
-        outputs_holder=StepOutputsHolder(),
+        step_func=manifest_step,
+        holder=manifest_holder,
+        workspace=workspace,
         settings=settings,
         state=state,
-        workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=manifest_coupler,
         step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
     )
     assert manifest_outputs is not None
     manifest_result = _run_step_mode(
         step_name="activitysim_postprocess",
         mode_label="manifest",
-        step_func=_should_not_run,
+        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_run",
             object(),
