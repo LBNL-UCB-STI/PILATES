@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from consist.core.step_context import StepContext
 
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -34,18 +34,20 @@ class DummyPreprocessor:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = Path(output_dir)
 
-    def preprocess(self, workspace, inputs) -> RecordStore:
+    def preprocess(
+        self,
+        workspace,
+        *,
+        activity_demand_outputs=None,
+        previous_beam_outputs=None,
+        beam_preprocess_inputs=None,
+    ) -> BeamPreprocessOutputs:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         prepared = self.output_dir / "beam_input.txt"
         prepared.write_text("dummy")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(prepared),
-                    short_name="beam_input_dummy",
-                    description="Dummy BEAM input file",
-                )
-            ]
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=self.output_dir,
+            prepared_inputs={"beam_input_dummy": prepared},
         )
 
 
@@ -205,11 +207,21 @@ def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):
     captured = {}
 
     class CapturingPreprocessor:
-        def preprocess(self, workspace, inputs) -> RecordStore:
-            captured["keys"] = {
-                record.short_name for record in inputs.all_records()
-            }
-            return RecordStore()
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ) -> BeamPreprocessOutputs:
+            captured["activity_demand_outputs"] = activity_demand_outputs
+            captured["previous_beam_outputs"] = previous_beam_outputs
+            captured["beam_preprocess_inputs"] = beam_preprocess_inputs
+            return BeamPreprocessOutputs(
+                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+                prepared_inputs={},
+            )
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
@@ -242,6 +254,10 @@ def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):
         },
     )
 
-    assert "beam_plans" in captured["keys"]
-    assert "households" in captured["keys"]
-    assert "persons" in captured["keys"]
+    assert captured["activity_demand_outputs"] is None
+    assert captured["previous_beam_outputs"] is None
+    assert captured["beam_preprocess_inputs"] == {
+        BEAM_PLANS_IN: str(plans),
+        BEAM_HOUSEHOLDS_IN: str(households),
+        BEAM_PERSONS_IN: str(persons),
+    }

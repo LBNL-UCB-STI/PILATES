@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
-from pilates.generic.records import RecordStore
+from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -52,6 +52,19 @@ class BeamPreprocessOutputs(StepOutputsBase):
         """
         for key, path in self.prepared_inputs.items():
             yield key, path, f"BEAM prepared input: {key}"
+
+    def to_record_store(self) -> RecordStore:
+        """Convert typed preprocess outputs into a local ``RecordStore``."""
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in self._iter_record_items()
+            ]
+        )
 
     @classmethod
     def from_record_store(
@@ -233,6 +246,19 @@ class BeamRunOutputs(StepOutputsBase):
             )
         for key, path in self.raw_outputs.items():
             yield key, path, f"BEAM raw output: {key}"
+
+    def to_record_store(self) -> RecordStore:
+        """Convert typed runner outputs into a local ``RecordStore``."""
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in self._iter_record_items()
+            ]
+        )
 
     @classmethod
     def from_record_store(

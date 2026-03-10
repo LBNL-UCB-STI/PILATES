@@ -25,10 +25,6 @@ from .shared import (
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
     _decorate_step_with_consist,
-    _execute_beam_full_skim_typed,
-    _execute_beam_postprocess_typed,
-    _execute_beam_preprocess_typed,
-    _execute_beam_run_typed,
     _log_beam_r5_osm_input,
     _log_step_records,
     _schema_outputs_from_class,
@@ -169,6 +165,82 @@ def _publish_beam_run_outputs(
             coupler=coupler,
             profile_file_schema=True,
         )
+
+
+def _execute_beam_preprocess(
+    preprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    *,
+    activity_demand_outputs: Optional[Dict[str, Any]] = None,
+    previous_beam_outputs: Optional[Dict[str, Any]] = None,
+    beam_preprocess_inputs: Optional[Dict[str, Any]] = None,
+    **_: Any,
+) -> BeamPreprocessOutputs:
+    return preprocessor.preprocess(
+        workspace,
+        activity_demand_outputs=activity_demand_outputs,
+        previous_beam_outputs=previous_beam_outputs,
+        beam_preprocess_inputs=beam_preprocess_inputs,
+    )
+
+
+def _execute_beam_run(
+    runner: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    *,
+    extra_inputs: Optional[Dict[str, Any]] = None,
+    **_: Any,
+) -> BeamRunOutputs:
+    upstream = outputs_holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+    if not isinstance(upstream, BeamPreprocessOutputs):
+        raise TypeError(
+            "beam_run requires BeamPreprocessOutputs from beam_preprocess"
+        )
+    return runner.run(
+        upstream,
+        workspace,
+        extra_inputs=extra_inputs,
+    )
+
+
+def _execute_beam_postprocess(
+    postprocessor: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    **_: Any,
+) -> BeamPostprocessOutputs:
+    upstream = outputs_holder.beam_run
+    if upstream is None:
+        raise RuntimeError("BEAM run must complete first")
+    if not isinstance(upstream, BeamRunOutputs):
+        raise TypeError("beam_postprocess requires BeamRunOutputs from beam_run")
+    return postprocessor.postprocess(upstream, workspace)
+
+
+def _execute_beam_full_skim(
+    runner: Any,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+    *,
+    previous_beam_outputs: Optional[Dict[str, Any]] = None,
+    **_: Any,
+) -> BeamFullSkimOutputs:
+    upstream = outputs_holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+    if not isinstance(upstream, BeamPreprocessOutputs):
+        raise TypeError(
+            "beam_full_skim requires BeamPreprocessOutputs from beam_preprocess"
+        )
+    return runner.run(
+        upstream,
+        workspace,
+        previous_beam_outputs=previous_beam_outputs,
+    )
 
 
 def _make_beam_step_function(
@@ -335,11 +407,10 @@ def make_beam_preprocess_step(
             "beam", state
         ),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_preprocess_typed(
+            _execute_beam_preprocess(
                 component,
                 workspace,
                 outputs_holder,
-                outputs_class=BeamPreprocessOutputs,
                 **kwargs,
             )
         ),
@@ -481,11 +552,10 @@ def make_beam_run_step(
             "beam", state
         ),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_run_typed(
+            _execute_beam_run(
                 component,
                 workspace,
                 outputs_holder,
-                outputs_class=BeamRunOutputs,
                 **kwargs,
             )
         ),
@@ -568,11 +638,10 @@ def make_beam_postprocess_step(
             "beam", state
         ),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_postprocess_typed(
+            _execute_beam_postprocess(
                 component,
                 workspace,
                 outputs_holder,
-                outputs_class=BeamPostprocessOutputs,
                 **kwargs,
             )
         ),
@@ -620,11 +689,10 @@ def make_beam_full_skim_step(
             "beam_full_skim", state
         ),
         component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_full_skim_typed(
+            _execute_beam_full_skim(
                 component,
                 workspace,
                 outputs_holder,
-                outputs_class=BeamFullSkimOutputs,
                 **kwargs,
             )
         ),

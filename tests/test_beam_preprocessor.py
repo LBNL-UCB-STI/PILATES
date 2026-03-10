@@ -371,7 +371,6 @@ class TestBeamPreprocessor:
         preprocessor = BeamPreprocessor(
             model_name="beam",
             state=mock_state,
-            major_stage=None,
         )
 
         # Act
@@ -403,7 +402,6 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
     preprocessor = BeamPreprocessor(
         model_name="beam",
         state=state,
-        major_stage=None,
     )
     object.__setattr__(preprocessor.settings, "vehicle_ownership_model_enabled", False)
     object.__setattr__(

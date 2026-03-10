@@ -4,13 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.workflows.steps.beam import (
+    _execute_beam_full_skim,
+    _execute_beam_preprocess,
+)
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import BEAM_HOUSEHOLDS_IN, BEAM_PLANS_IN
 from pilates.workflows.steps.shared import (
     StepOutputsHolder,
     _build_required_input_store,
-    _execute_beam_full_skim,
-    _execute_beam_preprocess,
     _execute_postprocess,
 )
 
@@ -95,6 +98,18 @@ def _record_by_short_name(store: RecordStore, short_name: str) -> FileRecord | N
         if record.short_name == short_name:
             return record
     return None
+
+
+def _beam_preprocess_outputs(
+    tmp_path: Path,
+    prepared_inputs: dict[str, Path],
+) -> BeamPreprocessOutputs:
+    beam_dir = tmp_path / "beam-input"
+    beam_dir.mkdir(parents=True, exist_ok=True)
+    return BeamPreprocessOutputs(
+        beam_mutable_data_dir=beam_dir,
+        prepared_inputs=prepared_inputs,
+    )
 
 
 def test_build_required_input_store_raises_when_upstream_missing() -> None:
@@ -278,10 +293,26 @@ def test_execute_beam_preprocess_aliases_fallback_inputs(tmp_path: Path) -> None
     captured = {}
 
     class _Preprocessor:
-        def preprocess(self, workspace, previous_records=None):
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
             captured["workspace"] = workspace
-            captured["previous_records"] = previous_records
-            return previous_records
+            captured["activity_demand_outputs"] = activity_demand_outputs
+            captured["previous_beam_outputs"] = previous_beam_outputs
+            captured["beam_preprocess_inputs"] = beam_preprocess_inputs
+            return _beam_preprocess_outputs(
+                tmp_path,
+                {
+                    "beam_plans_out": activity_path,
+                    "linkstats_parquet_2018_0": warmstart_path,
+                    "beam_plans": fallback_path,
+                },
+            )
 
     workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
     holder = StepOutputsHolder()
@@ -295,12 +326,16 @@ def test_execute_beam_preprocess_aliases_fallback_inputs(tmp_path: Path) -> None
         beam_preprocess_inputs={BEAM_PLANS_IN: fallback_path},
     )
 
-    assert result is captured["previous_records"]
-    assert result.to_mapping() == {
-        "beam_plans_out": str(activity_path),
-        "linkstats_parquet_2018_0": str(warmstart_path),
-        "beam_plans": str(fallback_path),
+    assert result.prepared_inputs == {
+        "beam_plans_out": activity_path,
+        "linkstats_parquet_2018_0": warmstart_path,
+        "beam_plans": fallback_path,
     }
+    assert captured["activity_demand_outputs"] == {"beam_plans_out": activity_path}
+    assert captured["previous_beam_outputs"] == {
+        "linkstats_parquet_2018_0": warmstart_path
+    }
+    assert captured["beam_preprocess_inputs"] == {BEAM_PLANS_IN: fallback_path}
 
 
 def test_execute_beam_preprocess_keeps_earlier_duplicate_key_canonical(
@@ -312,8 +347,14 @@ def test_execute_beam_preprocess_keeps_earlier_duplicate_key_canonical(
     fallback_path.write_text("fallback", encoding="utf-8")
 
     class _Preprocessor:
-        def preprocess(self, workspace, previous_records=None):
-            return previous_records
+        def preprocess(self, workspace, **kwargs):
+            return _beam_preprocess_outputs(
+                tmp_path,
+                {
+                    "beam_plans": canonical_path,
+                    "fallback_duplicate": fallback_path,
+                },
+            )
 
     result = _execute_beam_preprocess(
         preprocessor=_Preprocessor(),
@@ -324,9 +365,9 @@ def test_execute_beam_preprocess_keeps_earlier_duplicate_key_canonical(
         beam_preprocess_inputs={BEAM_PLANS_IN: fallback_path},
     )
 
-    mapping = result.to_mapping()
-    assert mapping["beam_plans"] == str(canonical_path)
-    assert str(fallback_path) in mapping.values()
+    mapping = result.prepared_inputs
+    assert mapping["beam_plans"] == canonical_path
+    assert str(fallback_path) in {str(path) for path in mapping.values()}
 
 
 def test_execute_beam_preprocess_keeps_previous_outputs_from_overwriting_canonical(
@@ -338,8 +379,14 @@ def test_execute_beam_preprocess_keeps_previous_outputs_from_overwriting_canonic
     previous_path.write_text("previous", encoding="utf-8")
 
     class _Preprocessor:
-        def preprocess(self, workspace, previous_records=None):
-            return previous_records
+        def preprocess(self, workspace, **kwargs):
+            return _beam_preprocess_outputs(
+                tmp_path,
+                {
+                    "beam_plans": canonical_path,
+                    "previous_duplicate": previous_path,
+                },
+            )
 
     result = _execute_beam_preprocess(
         preprocessor=_Preprocessor(),
@@ -350,9 +397,9 @@ def test_execute_beam_preprocess_keeps_previous_outputs_from_overwriting_canonic
         beam_preprocess_inputs=None,
     )
 
-    mapping = result.to_mapping()
-    assert mapping["beam_plans"] == str(canonical_path)
-    assert str(previous_path) in mapping.values()
+    mapping = result.prepared_inputs
+    assert mapping["beam_plans"] == canonical_path
+    assert str(previous_path) in {str(path) for path in mapping.values()}
 
 
 def test_execute_beam_preprocess_preserves_three_source_precedence_and_aliases(
@@ -370,8 +417,17 @@ def test_execute_beam_preprocess_preserves_three_source_precedence_and_aliases(
     warmstart_path.write_text("warmstart", encoding="utf-8")
 
     class _Preprocessor:
-        def preprocess(self, workspace, previous_records=None):
-            return previous_records
+        def preprocess(self, workspace, **kwargs):
+            return _beam_preprocess_outputs(
+                tmp_path,
+                {
+                    "beam_plans": canonical_path,
+                    "households": households_path,
+                    "linkstats_parquet_2018_0": warmstart_path,
+                    "previous_duplicate": previous_path,
+                    "fallback_duplicate": fallback_path,
+                },
+            )
 
     result = _execute_beam_preprocess(
         preprocessor=_Preprocessor(),
@@ -388,21 +444,31 @@ def test_execute_beam_preprocess_preserves_three_source_precedence_and_aliases(
         },
     )
 
-    mapping = result.to_mapping()
-    assert mapping["beam_plans"] == str(canonical_path)
-    assert mapping["households"] == str(households_path)
-    assert mapping["linkstats_parquet_2018_0"] == str(warmstart_path)
-    assert str(previous_path) in mapping.values()
-    assert str(fallback_path) in mapping.values()
+    mapping = result.prepared_inputs
+    assert mapping["beam_plans"] == canonical_path
+    assert mapping["households"] == households_path
+    assert mapping["linkstats_parquet_2018_0"] == warmstart_path
+    mapped_values = {str(path) for path in mapping.values()}
+    assert str(previous_path) in mapped_values
+    assert str(fallback_path) in mapped_values
 
 
 def test_execute_beam_preprocess_omits_missing_optional_inputs(tmp_path: Path) -> None:
     captured = {}
 
     class _Preprocessor:
-        def preprocess(self, workspace, previous_records=None):
-            captured["previous_records"] = previous_records
-            return previous_records
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
+            captured["activity_demand_outputs"] = activity_demand_outputs
+            captured["previous_beam_outputs"] = previous_beam_outputs
+            captured["beam_preprocess_inputs"] = beam_preprocess_inputs
+            return _beam_preprocess_outputs(tmp_path, {})
 
     workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
 
@@ -415,24 +481,29 @@ def test_execute_beam_preprocess_omits_missing_optional_inputs(tmp_path: Path) -
         beam_preprocess_inputs={BEAM_HOUSEHOLDS_IN: None},
     )
 
-    assert result is captured["previous_records"]
-    assert result.to_mapping() == {}
+    assert result.prepared_inputs == {}
+    assert captured["activity_demand_outputs"] == {"beam_plans_out": None}
+    assert captured["previous_beam_outputs"] is None
+    assert captured["beam_preprocess_inputs"] == {BEAM_HOUSEHOLDS_IN: None}
 
 
 def test_execute_beam_full_skim_materializes_warm_start_inputs(tmp_path: Path) -> None:
     holder = StepOutputsHolder()
-    holder.beam_preprocess = _FakeStepOutputs(
-        _store_with_record(tmp_path / "plans.txt", "beam_plans")
+    holder.beam_preprocess = _beam_preprocess_outputs(
+        tmp_path,
+        {"beam_plans": tmp_path / "plans.txt"},
     )
+    (tmp_path / "plans.txt").write_text("plans", encoding="utf-8")
     warmstart_path = tmp_path / "history.parquet"
     warmstart_path.write_text("history", encoding="utf-8")
     captured = {}
 
     class _Runner:
-        def run(self, input_store, workspace):
-            captured["input_store"] = input_store
+        def run(self, input_outputs, workspace, *, previous_beam_outputs=None):
+            captured["input_outputs"] = input_outputs
             captured["workspace"] = workspace
-            return input_store
+            captured["previous_beam_outputs"] = previous_beam_outputs
+            return object()
 
     workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
     result = _execute_beam_full_skim(
@@ -443,14 +514,9 @@ def test_execute_beam_full_skim_materializes_warm_start_inputs(tmp_path: Path) -
         context="beam_full_skim_run",
     )
 
-    assert result is captured["input_store"]
-    assert captured["input_store"].to_mapping()["beam_plans"] == str(
-        tmp_path / "plans.txt"
-    )
-    warmstart_record = _record_by_short_name(
-        captured["input_store"], "linkstats_parquet_2018_0"
-    )
-    assert warmstart_record is not None
-    assert warmstart_record.description == (
-        "BEAM full-skim warm-start input: linkstats_parquet_2018_0"
-    )
+    assert result is not None
+    assert captured["input_outputs"] is holder.beam_preprocess
+    assert captured["input_outputs"].prepared_inputs["beam_plans"] == tmp_path / "plans.txt"
+    assert captured["previous_beam_outputs"] == {
+        "linkstats_parquet_2018_0": warmstart_path
+    }

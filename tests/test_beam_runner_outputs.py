@@ -1,11 +1,29 @@
 from pathlib import Path
 
+import pytest
+
+from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam.runner import BeamRunner
+from pilates.generic.records import FileRecord, RecordStore
+
+
+class _Workspace:
+    def __init__(self, tmp_path: Path) -> None:
+        self._tmp_path = tmp_path
+
+    def get_beam_output_dir(self) -> str:
+        return str(self._tmp_path / "beam-output")
 
 
 class _StubState:
     forecast_year = 2030
     iteration = 2
+
+    def __init__(self) -> None:
+        self.sub_stage_progress = None
+
+    def set_sub_stage_progress(self, progress: str) -> None:
+        self.sub_stage_progress = progress
 
 
 def _touch(path: Path) -> None:
@@ -44,3 +62,52 @@ def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
     assert facet.get("iteration") == 2
     assert facet.get("phys_sim_iteration") == 2
     assert facet.get("beam_sub_iteration") == 1
+
+
+def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
+    state = _StubState()
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    captured = {}
+
+    def _fake_run(store: RecordStore, _workspace) -> RecordStore:
+        captured["store"] = store
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(tmp_path / "beam-output" / "plans.csv.gz"),
+                    short_name="beam_plans_out_2030_2",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(runner, "_run", _fake_run)
+    preprocess_outputs = BeamPreprocessOutputs(
+        beam_mutable_data_dir=tmp_path / "beam-input",
+        prepared_inputs={"beam_plans": tmp_path / "beam-input" / "plans.csv.gz"},
+    )
+
+    outputs = runner.run(
+        preprocess_outputs,
+        workspace,
+        extra_inputs={"zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr"},
+    )
+
+    assert isinstance(outputs, BeamRunOutputs)
+    assert captured["store"].to_mapping()["beam_plans"] == str(
+        tmp_path / "beam-input" / "plans.csv.gz"
+    )
+    assert captured["store"].to_mapping()["zarr_skims"] == str(
+        tmp_path / "asim-output" / "cache" / "skims.zarr"
+    )
+    assert outputs.raw_outputs["beam_plans_out_2030_2"] == (
+        tmp_path / "beam-output" / "plans.csv.gz"
+    )
+    assert state.sub_stage_progress == "runner"
+
+
+def test_beam_runner_run_rejects_non_typed_inputs(tmp_path) -> None:
+    runner = BeamRunner("beam_runner", _StubState())
+
+    with pytest.raises(TypeError, match="BeamPreprocessOutputs"):
+        runner.run(object(), _Workspace(tmp_path))

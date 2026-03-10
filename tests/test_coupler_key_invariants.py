@@ -10,8 +10,13 @@ typed outputs currently bridge through RecordStore updates.
 from pathlib import Path
 from types import SimpleNamespace
 
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
+from pilates.beam.outputs import BeamPostprocessOutputs, BeamPreprocessOutputs, BeamRunOutputs
 from pilates.generic.model_factory import ModelFactory
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -104,11 +109,31 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
 
+    original_get_preprocessor = ModelFactory.get_preprocessor
     original_get_runner = ModelFactory.get_runner
     original_get_postprocessor = ModelFactory.get_postprocessor
 
+    class _ActivitySimPreprocessor:
+        def preprocess(self, workspace):
+            input_dir = Path(workspace.get_asim_mutable_data_dir())
+            outputs = {
+                ASIM_LAND_USE_IN: input_dir / "land_use.csv",
+                ASIM_HOUSEHOLDS_IN: input_dir / "households.csv",
+                ASIM_PERSONS_IN: input_dir / "persons.csv",
+                ASIM_OMX_SKIMS: input_dir / "skims.omx",
+            }
+            for path in outputs.values():
+                _write_file(path)
+            return ActivitySimPreprocessOutputs(
+                mutable_data_dir=input_dir,
+                land_use_table=outputs[ASIM_LAND_USE_IN],
+                households_table=outputs[ASIM_HOUSEHOLDS_IN],
+                persons_table=outputs[ASIM_PERSONS_IN],
+                omx_skims=outputs[ASIM_OMX_SKIMS],
+            )
+
     class _ActivitySimRunner:
-        def run(self, input_store, workspace):
+        def run(self, input_store, workspace, *, extra_inputs=None):
             output_dir = Path(workspace.get_asim_output_dir())
             raw_outputs = {
                 "beam_plans_asim_out": output_dir / "beam_plans.csv",
@@ -117,11 +142,9 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             }
             for path in raw_outputs.values():
                 _write_file(path)
-            return RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(path), short_name=short_name)
-                    for short_name, path in raw_outputs.items()
-                ]
+            return ActivitySimRunOutputs(
+                output_dir=output_dir,
+                raw_outputs=raw_outputs,
             )
 
     class _ActivitySimPostprocessor:
@@ -138,17 +161,17 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             )
             for path in (*processed_outputs.values(), updated_usim):
                 _write_file(path)
-            records = [
-                FileRecord(file_path=str(path), short_name=short_name)
-                for short_name, path in processed_outputs.items()
-            ]
-            records.append(
-                FileRecord(
-                    file_path=str(updated_usim),
-                    short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-                )
+            return ActivitySimPostprocessOutputs(
+                usim_datastore_h5=updated_usim,
+                asim_output_dir=output_dir,
+                processed_outputs=processed_outputs,
+                usim_datastore_key=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
             )
-            return RecordStore(recordList=records)
+
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "activitysim":
+            return _ActivitySimPreprocessor()
+        return original_get_preprocessor(self, model_name, state)
 
     def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim":
@@ -160,6 +183,7 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             return _ActivitySimPostprocessor()
         return original_get_postprocessor(self, model_name, state)
 
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
 
@@ -230,11 +254,31 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
         short_name: str(path) for short_name, path in activity_outputs.items()
     }
 
+    original_get_preprocessor = ModelFactory.get_preprocessor
     original_get_runner = ModelFactory.get_runner
     original_get_postprocessor = ModelFactory.get_postprocessor
 
+    class _BeamPreprocessor:
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
+            prepared_inputs = {
+                BEAM_PLANS_IN: Path(activity_demand_outputs["beam_plans_asim_out"]),
+                BEAM_HOUSEHOLDS_IN: Path(activity_demand_outputs["households_asim_out"]),
+                BEAM_PERSONS_IN: Path(activity_demand_outputs["persons_asim_out"]),
+            }
+            return BeamPreprocessOutputs(
+                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+                prepared_inputs=prepared_inputs,
+            )
+
     class _BeamRunner:
-        def run(self, input_store, workspace):
+        def run(self, input_store, workspace, *, extra_inputs=None):
             output_dir = Path(workspace.get_beam_output_dir())
             run_outputs = {
                 f"linkstats_parquet_{state.forecast_year}_0": output_dir / "linkstats.parquet",
@@ -244,21 +288,22 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
             }
             for path in run_outputs.values():
                 _write_file(path)
-            return RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(path), short_name=short_name)
-                    for short_name, path in run_outputs.items()
-                ]
+            return BeamRunOutputs(
+                beam_output_dir=output_dir,
+                raw_outputs=run_outputs,
             )
 
     class _BeamPostprocessor:
         def postprocess(self, raw_outputs, workspace):
             _write_file(zarr_path)
-            return RecordStore(
-                recordList=[
-                    FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS)
-                ]
+            return BeamPostprocessOutputs(
+                zarr_skims=zarr_path,
             )
+
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "beam":
+            return _BeamPreprocessor()
+        return original_get_preprocessor(self, model_name, state)
 
     def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
@@ -270,6 +315,7 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
             return _BeamPostprocessor()
         return original_get_postprocessor(self, model_name, state)
 
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
 

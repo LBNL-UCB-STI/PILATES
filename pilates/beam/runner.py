@@ -2,9 +2,14 @@ import logging
 import os
 from datetime import datetime
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Mapping
 
 from pilates.config import PilatesConfig
+from pilates.beam.outputs import (
+    BeamFullSkimOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.beam.postprocessor import (
@@ -12,12 +17,47 @@ from pilates.beam.postprocessor import (
     find_beam_iterations,
     find_iteration_file,
 )
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
+
+
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
+
+
+def _append_artifact_mapping_records(
+    record_store: RecordStore,
+    artifact_mapping: Optional[Mapping[str, Any]],
+    *,
+    description_prefix: str,
+) -> None:
+    if not artifact_mapping:
+        return
+    for key, value in artifact_mapping.items():
+        path = artifact_to_path(value, None)
+        if path is None and isinstance(value, (str, os.PathLike)):
+            path = os.fspath(value)
+        if not path:
+            continue
+        record_store.add_record(
+            FileRecord(
+                file_path=str(path),
+                short_name=key,
+                description=f"{description_prefix}: {key}",
+                content_hash=_artifact_content_hash(value),
+            )
+        )
 
 
 def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
@@ -535,6 +575,30 @@ class BeamRunner(GenericRunner):
 
         return output_store
 
+    def run(
+        self,
+        inputs: BeamPreprocessOutputs,
+        workspace: Workspace,
+        *,
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamRunOutputs:
+        """
+        Run BEAM from typed preprocess outputs and return typed run outputs.
+        """
+        if not isinstance(inputs, BeamPreprocessOutputs):
+            raise TypeError("BeamRunner.run expects BeamPreprocessOutputs")
+        self.state.set_sub_stage_progress("runner")
+        input_store = inputs.to_record_store()
+        _append_artifact_mapping_records(
+            input_store,
+            extra_inputs,
+            description_prefix="BEAM run extra input",
+        )
+        return BeamRunOutputs.from_record_store(
+            self._run(input_store, workspace),
+            workspace,
+        )
+
 
 class BeamFullSkimRunner(GenericRunner):
     """
@@ -700,4 +764,27 @@ class BeamFullSkimRunner(GenericRunner):
                     description="BEAM full-skim background skims output",
                 )
             ]
+        )
+
+    def run(
+        self,
+        inputs: BeamPreprocessOutputs,
+        workspace: Workspace,
+        *,
+        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamFullSkimOutputs:
+        """
+        Run FullSkimsCreatorApp from typed preprocess outputs and optional warm-start artifacts.
+        """
+        if not isinstance(inputs, BeamPreprocessOutputs):
+            raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
+        self.state.set_sub_stage_progress("runner")
+        input_store = inputs.to_record_store()
+        _append_artifact_mapping_records(
+            input_store,
+            previous_beam_outputs,
+            description_prefix="BEAM full-skim warm-start input",
+        )
+        return BeamFullSkimOutputs.from_record_store(
+            self._run(input_store, workspace), workspace
         )

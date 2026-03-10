@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
 import re
 
 if TYPE_CHECKING:
@@ -13,8 +13,10 @@ if TYPE_CHECKING:
 import pandas as pd
 
 from pilates.config import PilatesConfig
+from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
@@ -25,11 +27,82 @@ from pilates.workflows.artifact_keys import (
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
 )
 from pilates.activitysim.outputs import has_asim_run_marker
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
+
+
+def _record_store_from_artifact_mappings(
+    *,
+    activity_demand_outputs: Optional[Mapping[str, Any]],
+    previous_beam_outputs: Optional[Mapping[str, Any]],
+    beam_preprocess_inputs: Optional[Mapping[str, Any]],
+) -> RecordStore:
+    """
+    Build the BEAM-internal input store from plain artifact mappings.
+    """
+
+    def _append_mapping(
+        store: RecordStore,
+        artifact_mapping: Optional[Mapping[str, Any]],
+        *,
+        description_prefix: str,
+        key_aliases: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if not artifact_mapping:
+            return
+        for key, value in artifact_mapping.items():
+            path = artifact_to_path(value, None)
+            if path is None and isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+            if not path:
+                continue
+            record_key = key_aliases.get(key, key) if key_aliases else key
+            store.add_record(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=record_key,
+                    description=f"{description_prefix}: {record_key}",
+                    content_hash=_artifact_content_hash(value),
+                )
+            )
+
+    combined = RecordStore()
+    _append_mapping(
+        combined,
+        activity_demand_outputs,
+        description_prefix="BEAM preprocess activity-demand input",
+    )
+    _append_mapping(
+        combined,
+        previous_beam_outputs,
+        description_prefix="BEAM preprocess warm-start input",
+    )
+    _append_mapping(
+        combined,
+        beam_preprocess_inputs,
+        description_prefix="BEAM preprocess provided input",
+        key_aliases={
+            BEAM_PLANS_IN: "beam_plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+            LINKSTATS_WARMSTART: "linkstats",
+        },
+    )
+    return combined
 
 # Mappings for BEAM configuration parameters
 beam_param_map = {
@@ -392,6 +465,26 @@ class BeamPreprocessor(GenericPreprocessor):
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
+
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        *,
+        activity_demand_outputs: Optional[Mapping[str, Any]] = None,
+        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+        beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamPreprocessOutputs:
+        """
+        Build BEAM inputs from plain artifact mappings and return typed outputs.
+        """
+        self.state.set_sub_stage_progress("preprocessor")
+        input_store = _record_store_from_artifact_mappings(
+            activity_demand_outputs=activity_demand_outputs,
+            previous_beam_outputs=previous_beam_outputs,
+            beam_preprocess_inputs=beam_preprocess_inputs,
+        )
+        record_store = self._preprocess(workspace, input_store)
+        return BeamPreprocessOutputs.from_record_store(record_store, workspace)
 
     def copy_data_to_mutable_location(
         self, settings: PilatesConfig, output_dir: str
