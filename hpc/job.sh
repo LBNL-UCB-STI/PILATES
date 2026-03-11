@@ -115,7 +115,7 @@ module load gcc/11.4.0
 module load proj/9.2.1
 module load python/3.11.6
 
-export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:${LD_LIBRARY_PATH:-}
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
 cd "$PILATES_DIR"
