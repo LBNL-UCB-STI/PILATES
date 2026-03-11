@@ -112,7 +112,7 @@ beam_local_input_folder: pilates/beam/production/
 beam_local_mutable_data_folder: beam/input/
 beam_local_output_folder: beam/beam_output/
 beam_scenario_folder: urbansim/
-beam_memory: "180g"
+beam_memory: "${BEAM_MEMORY}"
 replan_iters: 0
 replan_hh_samp_size: 0
 replan_after: non_mandatory_tour_scheduling  # resume asim after this step

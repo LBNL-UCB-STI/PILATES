@@ -341,7 +341,7 @@ beam:
   config: sfbay-pilates-base-omx.conf
   sample: 1.0
   replanning_portion: 0.4
-  memory: 180g
+  memory: "${BEAM_MEMORY}"
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
