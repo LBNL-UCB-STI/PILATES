@@ -217,7 +217,12 @@ def assert_bootstrap_output_invariant(
     bootstrap_result: Optional[Dict[str, Any]],
 ) -> None:
     """
-    Ensure bootstrap produced a non-empty artifact summary before state mutation.
+    Ensure bootstrap produced a valid artifact summary before state mutation.
+
+    Some bootstrap modes, such as BEAM-only initialization, can legitimately
+    prepare the workspace without emitting copied ``RecordStore`` artifacts.
+    In those cases ``copied_records_total == 0`` is still a valid result as
+    long as the summary structure is present.
     """
     summary = (
         bootstrap_result.get("staged_artifact_summary")
@@ -227,7 +232,7 @@ def assert_bootstrap_output_invariant(
     copied_total = (
         summary.get("copied_records_total") if isinstance(summary, dict) else None
     )
-    if isinstance(copied_total, int) and copied_total > 0:
+    if isinstance(summary, dict) and isinstance(copied_total, int) and copied_total >= 0:
         return
 
     diagnostics = {
@@ -246,6 +251,6 @@ def assert_bootstrap_output_invariant(
     }
     raise RuntimeError(
         "Bootstrap initialization invariant failed: expected "
-        "'staged_artifact_summary.copied_records_total' > 0 before setting "
+        "a valid 'staged_artifact_summary.copied_records_total' before setting "
         f"data_initialized=True. diagnostics={diagnostics}"
     )

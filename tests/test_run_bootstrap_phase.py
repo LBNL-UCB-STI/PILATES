@@ -299,13 +299,22 @@ def test_bootstrap_output_invariant_accepts_valid_result():
     )
 
 
+def test_bootstrap_output_invariant_accepts_zero_copied_records_for_valid_summary():
+    run_module._assert_bootstrap_output_invariant(
+        {
+            "bootstrap_cache_hit": False,
+            "manifest_reference": {"probe_run_id": "bootstrap_probe"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "invalid_result",
     [
         None,
         {},
         {"staged_artifact_summary": {}},
-        {"staged_artifact_summary": {"copied_records_total": 0}},
     ],
 )
 def test_bootstrap_output_invariant_rejects_invalid_or_empty_result(invalid_result):
