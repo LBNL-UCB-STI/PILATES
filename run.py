@@ -546,6 +546,19 @@ def _map_local_path_to_archive(
     )
 
 
+def _repair_restart_state_for_incomplete_atlas_outputs(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    archive_run_dir: str,
+) -> bool:
+    return restart_runtime.repair_restart_state_for_incomplete_atlas_outputs(
+        settings=settings,
+        state=state,
+        archive_run_dir=archive_run_dir,
+    )
+
+
 def _copy_archive_entry_preserve_existing(
     *,
     archive_path: str,
@@ -798,6 +811,11 @@ def main():
             state=state,
             archive_state_path=archive_state_path,
             allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+        )
+        _repair_restart_state_for_incomplete_atlas_outputs(
+            settings=settings,
+            state=state,
+            archive_run_dir=archive_run_dir,
         )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path

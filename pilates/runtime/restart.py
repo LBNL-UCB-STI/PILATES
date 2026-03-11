@@ -253,6 +253,65 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
+def repair_restart_state_for_incomplete_atlas_outputs(
+    *,
+    settings: Any,
+    state: Any,
+    archive_run_dir: str,
+) -> bool:
+    """Rewind stale supply-demand resumes back to ATLAS when atlas outputs are incomplete."""
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return False
+
+    stage_enum = getattr(state, "Stage", None)
+    current_major_stage = getattr(state, "current_major_stage", None)
+    if stage_enum is None or current_major_stage != stage_enum.supply_demand_loop:
+        return False
+
+    current_year = _coerce_int(getattr(state, "current_year", None))
+    forecast_year = _coerce_int(getattr(state, "forecast_year", None))
+    if current_year is None or forecast_year is None or forecast_year < current_year:
+        return False
+
+    atlas_output_dir = os.path.join(
+        os.path.realpath(archive_run_dir), "atlas", "atlas_output"
+    )
+    sub_years = [current_year]
+    if forecast_year > current_year:
+        sub_years.extend(range(current_year + 2, forecast_year + 1, 2))
+
+    incomplete_years: List[int] = []
+    for atlas_year in sub_years:
+        required_outputs = (
+            os.path.join(atlas_output_dir, f"householdv_{atlas_year}.csv"),
+            os.path.join(atlas_output_dir, f"vehicles_{atlas_year}.csv"),
+            os.path.join(atlas_output_dir, f"vehicles2_{atlas_year}.csv"),
+        )
+        if not all(os.path.exists(path) for path in required_outputs):
+            incomplete_years.append(atlas_year)
+
+    if not incomplete_years:
+        return False
+
+    state.current_major_stage = stage_enum.vehicle_ownership_model
+    state.current_sub_stage = None
+    state.current_inner_iter = 0
+    if hasattr(state, "sub_stage_progress"):
+        state.sub_stage_progress = None
+    write_state = getattr(state, "write_state", None)
+    if callable(write_state):
+        write_state()
+    logger.warning(
+        "[RestartRepair] Rewinding stale restart state from supply_demand_loop to "
+        "vehicle_ownership_model because archived ATLAS outputs are incomplete for "
+        "years=%s in %s",
+        incomplete_years,
+        atlas_output_dir,
+    )
+    return True
+
+
 def map_local_path_to_archive(
     *,
     local_path: str,

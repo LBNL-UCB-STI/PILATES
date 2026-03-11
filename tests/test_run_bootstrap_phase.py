@@ -626,6 +626,80 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
 
 
+def test_restart_repair_rewinds_stale_supply_demand_state_when_atlas_outputs_incomplete(
+    tmp_path,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    atlas_output_dir = archive_run_dir / "atlas" / "atlas_output"
+    atlas_output_dir.mkdir(parents=True, exist_ok=True)
+    (atlas_output_dir / "householdv_2017.csv").write_text("hh\n", encoding="utf-8")
+    (atlas_output_dir / "vehicles_2017.csv").write_text("veh\n", encoding="utf-8")
+
+    writes = []
+    state = SimpleNamespace(
+        Stage=WorkflowState.Stage,
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        current_sub_stage=WorkflowState.Stage.activity_demand,
+        current_inner_iter=3,
+        sub_stage_progress="postprocessor",
+        current_year=2017,
+        forecast_year=2023,
+        write_state=lambda: writes.append("written"),
+    )
+
+    repaired = run_module._repair_restart_state_for_incomplete_atlas_outputs(
+        settings=_restart_settings(),
+        state=state,
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert repaired is True
+    assert state.current_major_stage == WorkflowState.Stage.vehicle_ownership_model
+    assert state.current_sub_stage is None
+    assert state.current_inner_iter == 0
+    assert state.sub_stage_progress is None
+    assert writes == ["written"]
+
+
+def test_restart_repair_keeps_supply_demand_when_all_atlas_outputs_complete(tmp_path):
+    archive_run_dir = tmp_path / "archive-run"
+    atlas_output_dir = archive_run_dir / "atlas" / "atlas_output"
+    atlas_output_dir.mkdir(parents=True, exist_ok=True)
+    for atlas_year in (2017, 2019, 2021, 2023):
+        (atlas_output_dir / f"householdv_{atlas_year}.csv").write_text(
+            "hh\n", encoding="utf-8"
+        )
+        (atlas_output_dir / f"vehicles_{atlas_year}.csv").write_text(
+            "veh\n", encoding="utf-8"
+        )
+        (atlas_output_dir / f"vehicles2_{atlas_year}.csv").write_text(
+            "veh2\n", encoding="utf-8"
+        )
+
+    writes = []
+    state = SimpleNamespace(
+        Stage=WorkflowState.Stage,
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        current_sub_stage=WorkflowState.Stage.activity_demand,
+        current_inner_iter=0,
+        sub_stage_progress=None,
+        current_year=2017,
+        forecast_year=2023,
+        write_state=lambda: writes.append("written"),
+    )
+
+    repaired = run_module._repair_restart_state_for_incomplete_atlas_outputs(
+        settings=_restart_settings(),
+        state=state,
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert repaired is False
+    assert state.current_major_stage == WorkflowState.Stage.supply_demand_loop
+    assert state.current_sub_stage == WorkflowState.Stage.activity_demand
+    assert writes == []
+
+
 def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_path):
     settings = _restart_settings()
     workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
