@@ -565,9 +565,6 @@ def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
         "relmap",
         "schools",
         "school_districts",
-        "activitysim_input_households.csv",
-        "activitysim_input_persons.csv",
-        "activitysim_input_land_use.csv",
         "activitysim_config_settings_yaml_configs",
         "activitysim_config_settings_yaml_configs_extended",
         "activitysim_config_settings_yaml_configs_mp",
@@ -686,10 +683,12 @@ def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preser
     assert first_summary["copied"] == len(missing)
     assert first_summary["copy_errors"] == 0
 
-    households = next(
-        item["path"] for item in missing if item["key"] == "activitysim_input_households.csv"
+    config_settings = next(
+        item["path"]
+        for item in missing
+        if item["key"] == "activitysim_config_settings_yaml_configs"
     )
-    Path(households).write_text("local-only", encoding="utf-8")
+    Path(config_settings).write_text("local-only", encoding="utf-8")
 
     second_summary = run_module._rehydrate_missing_local_artifacts_from_archive(
         missing_artifacts=missing,
@@ -698,7 +697,7 @@ def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preser
     )
     assert second_summary["copied"] == 0
     assert second_summary["skipped_existing"] >= len(missing)
-    assert Path(households).read_text(encoding="utf-8") == "local-only"
+    assert Path(config_settings).read_text(encoding="utf-8") == "local-only"
 
 
 def test_rehydrate_missing_local_artifacts_from_archive_partial_archive_missing_counts(

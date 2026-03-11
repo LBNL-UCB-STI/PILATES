@@ -101,17 +101,6 @@ def _add_activitysim_candidates(
     if not callable(get_data_dir) or not callable(get_cfg_dir):
         return
 
-    asim_data_dir = get_data_dir()
-    for filename in ("households.csv", "persons.csv", "land_use.csv"):
-        _append_local_candidate(
-            artifacts,
-            key=f"activitysim_input_{filename}",
-            local_path=os.path.join(asim_data_dir, filename),
-            reason="ActivitySim restart input",
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
-
     main_configs_dir = (
         getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
         or "configs"

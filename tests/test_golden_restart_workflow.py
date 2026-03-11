@@ -96,9 +96,6 @@ def test_golden_restart_rehydrates_local_workspace_and_resumes_supply_demand(
         workspace=workspace,
     )
     assert {item["key"] for item in missing_before} >= {
-        "activitysim_input_households.csv",
-        "activitysim_input_persons.csv",
-        "activitysim_input_land_use.csv",
         "activitysim_config_settings_yaml_configs_mp",
         "activitysim_config_settings_yaml_configs_sh_compile",
     }

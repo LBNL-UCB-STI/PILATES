@@ -109,15 +109,6 @@ def restart_required_local_artifacts(
         )
     )
     if requires_activitysim_locals:
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        for filename in ("households.csv", "persons.csv", "land_use.csv"):
-            required.append(
-                {
-                    "key": f"activitysim_input_{filename}",
-                    "path": os.path.join(asim_data_dir, filename),
-                    "reason": "ActivitySim mutable input required on restart",
-                }
-            )
         asim_configs_dir = workspace.get_asim_mutable_configs_dir()
         main_configs_dir = (
             getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)

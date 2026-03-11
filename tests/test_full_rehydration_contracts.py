@@ -151,9 +151,7 @@ def test_full_rehydrate_clears_activitysim_restart_missing_artifacts(tmp_path):
         workspace=workspace,
     )
     assert {item["key"] for item in before} >= {
-        "activitysim_input_households.csv",
-        "activitysim_input_persons.csv",
-        "activitysim_input_land_use.csv",
+        "usim_datastore_base_h5",
         "activitysim_config_settings_yaml_configs",
         "activitysim_config_settings_yaml_configs_mp",
         "activitysim_config_settings_yaml_configs_sh_compile",
@@ -164,7 +162,7 @@ def test_full_rehydrate_clears_activitysim_restart_missing_artifacts(tmp_path):
         archive_run_dir=str(archive_run_dir),
     )
 
-    assert summary["copied"] >= 8
+    assert summary["copied"] >= 5
 
     after = run_module._find_missing_restart_local_artifacts(
         settings=settings,
