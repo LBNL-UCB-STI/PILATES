@@ -5,6 +5,20 @@
 
 set -euo pipefail
 
+# Comprehensive error reporting
+error_exit() {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "ERROR: job.sh failed!" >&2
+    echo "  Line: $1" >&2
+    echo "  Command: $2" >&2
+    echo "  Exit code: $3" >&2
+    echo "  Job log: ${JOB_LOG_FILE_PATH:-<not set>}" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    exit "$3"
+}
+
+trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
+
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"

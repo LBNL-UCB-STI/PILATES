@@ -5,6 +5,19 @@
 
 set -euo pipefail
 
+# Comprehensive error reporting
+error_exit() {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "ERROR: job_runner.sh failed!" >&2
+    echo "  Line: $1" >&2
+    echo "  Command: $2" >&2
+    echo "  Exit code: $3" >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    exit "$3"
+}
+
+trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
+
 # Generate random ID (avoid SIGPIPE from urandom pipe)
 RANDOM_PART="$(head -c 32 /dev/urandom | base64 | tr -dc A-Z0-9 | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
