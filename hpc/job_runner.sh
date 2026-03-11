@@ -15,6 +15,7 @@ settings_file="settings.yaml"  # May be a template with ${BEAM_MEMORY}
 generated_settings_file="settings_${JOB_NAME}.yaml"
 stage_file="current_stage_${JOB_NAME}.yaml"
 partition_arg="lr7"
+account_arg=""
 high_mem=false
 
 while [ $# -gt 0 ]; do
@@ -31,17 +32,22 @@ while [ $# -gt 0 ]; do
         partition_arg="${2:-}"
         shift 2
         ;;
+    -a|--account)
+        account_arg="${2:-}"
+        shift 2
+        ;;
     --high-mem|-H)
         high_mem=true
         shift
         ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [--high-mem|-H]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]"
+        echo "  -a, --account: Slurm account name (default: pc_beamcore)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [--high-mem|-H]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]\n" "$0"
         exit 2
         ;;
     esac
@@ -76,7 +82,12 @@ case "$partition_arg" in
         ;;
 esac
 
-ACCOUNT="${ACCOUNT:-pc_beamcore}"
+# Use command-line account if provided, else env var, else default
+if [ -n "$account_arg" ]; then
+    ACCOUNT="$account_arg"
+else
+    ACCOUNT="${ACCOUNT:-pc_beamcore}"
+fi
 EXPECTED_EXECUTION_DURATION="${EXPECTED_EXECUTION_DURATION:-3-00:00:00}"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 
