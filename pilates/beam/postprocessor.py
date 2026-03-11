@@ -3,26 +3,32 @@ import os
 import re
 import shutil
 import time
-from typing import Optional, List, Dict, Any, Tuple
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 
 import numpy as np
 import openmatrix as omx
 import pandas as pd
 
 from pilates.config import PilatesConfig
+from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
 import pilates.utils.zone_utils as zone_utils
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 try:
     import xarray as xr
-except:
+except Exception:
     print("FAILED TO LOAD XARRAY or ZARR")
 
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
+
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
 
 
 logger = logging.getLogger(__name__)
@@ -392,8 +398,6 @@ def _postprocess_tnc_zarr(
         If True, process RH_* modes. If False, process TNC_* provider modes.
     """
     logger.info("Applying TNC/RH-specific post-processing...")
-    tp_to_idx = {tp: idx for idx, tp in enumerate(timePeriods)}
-
     if use_rh_modes:
         # Process consolidated RH modes
         modes_to_process = [
@@ -1522,7 +1526,6 @@ def _consolidate_tnc_data_zarr(
     logger.info("Starting TNC fleet consolidation from OMX to Zarr...")
 
     all_partial_vars = partialSkims.list_matrices()
-    tp_to_idx = {tp: idx for idx, tp in enumerate(timePeriods)}
     # Get Zarr shape/coords from an existing 3D variable
     try:
         zarr_shape = skims_ds["SOV_TRIPS"].shape
@@ -3362,7 +3365,6 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
         skims.close()
         return
 
-    tp_to_idx = {p: i for i, p in enumerate(periods)}
     num_zones = len(order)
 
     # Calculate total trips per OD pair across all non-RH transit/walk/bike modes for each period
@@ -3637,9 +3639,8 @@ class BeamPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_data = ["zarr_skims", "raw_od_skims"]
         self.skim_format = get_setting(
             self.state.full_settings, "shared.skims.fname", "skimsActivitySimOD_current"
@@ -3855,3 +3856,50 @@ class BeamPostprocessor(GenericPostprocessor):
 
         output_store = RecordStore(recordList=processed_records)
         return output_store
+
+    def postprocess(
+        self,
+        raw_outputs: BeamRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> BeamPostprocessOutputs:
+        """
+        Postprocess typed BEAM run outputs and return typed outputs.
+        """
+        if not isinstance(raw_outputs, BeamRunOutputs):
+            raise TypeError("BeamPostprocessor.postprocess expects BeamRunOutputs")
+        self.state.set_sub_stage_progress("postprocessor")
+        input_store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(path),
+                    short_name=short_name,
+                    description=description,
+                )
+                for short_name, path, description in raw_outputs._iter_record_items()
+            ]
+        )
+        output_store = self._postprocess(input_store, workspace, model_run_hash)
+        mapping = output_store.to_mapping()
+
+        zarr_path = artifact_to_path(mapping.get("zarr_skims"), workspace)
+        final_omx_path = artifact_to_path(mapping.get("final_skims_omx"), workspace)
+
+        split_events: Dict[str, Path] = {}
+        split_event_links: Dict[str, Path] = {}
+        for key, value in mapping.items():
+            if key.startswith("events_parquet_") and "_type_" in key:
+                path = artifact_to_path(value, workspace)
+                if path is not None:
+                    split_events[key] = Path(path)
+            elif key.startswith("path_traversal_links_"):
+                path = artifact_to_path(value, workspace)
+                if path is not None:
+                    split_event_links[key] = Path(path)
+
+        return BeamPostprocessOutputs(
+            zarr_skims=Path(zarr_path) if zarr_path is not None else None,
+            final_skims_omx=Path(final_omx_path) if final_omx_path is not None else None,
+            split_events=split_events,
+            split_event_links=split_event_links,
+        )

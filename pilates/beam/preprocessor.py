@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
+from pathlib import Path
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
 import re
 
 if TYPE_CHECKING:
@@ -13,24 +14,96 @@ if TYPE_CHECKING:
 import pandas as pd
 
 from pilates.config import PilatesConfig
+from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
-    ATLAS_VEHICLES2_INPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
 )
 from pilates.activitysim.outputs import has_asim_run_marker
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
+
+
+def _record_store_from_artifact_mappings(
+    *,
+    activity_demand_outputs: Optional[Mapping[str, Any]],
+    previous_beam_outputs: Optional[Mapping[str, Any]],
+    beam_preprocess_inputs: Optional[Mapping[str, Any]],
+) -> RecordStore:
+    """
+    Build the BEAM-internal input store from plain artifact mappings.
+    """
+
+    def _append_mapping(
+        store: RecordStore,
+        artifact_mapping: Optional[Mapping[str, Any]],
+        *,
+        description_prefix: str,
+        key_aliases: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if not artifact_mapping:
+            return
+        for key, value in artifact_mapping.items():
+            path = artifact_to_path(value, None)
+            if path is None and isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+            if not path:
+                continue
+            record_key = key_aliases.get(key, key) if key_aliases else key
+            store.add_record(
+                FileRecord(
+                    file_path=str(path),
+                    short_name=record_key,
+                    description=f"{description_prefix}: {record_key}",
+                    content_hash=_artifact_content_hash(value),
+                )
+            )
+
+    combined = RecordStore()
+    _append_mapping(
+        combined,
+        activity_demand_outputs,
+        description_prefix="BEAM preprocess activity-demand input",
+    )
+    _append_mapping(
+        combined,
+        previous_beam_outputs,
+        description_prefix="BEAM preprocess warm-start input",
+    )
+    _append_mapping(
+        combined,
+        beam_preprocess_inputs,
+        description_prefix="BEAM preprocess provided input",
+        key_aliases={
+            BEAM_PLANS_IN: "beam_plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+            LINKSTATS_WARMSTART: "linkstats",
+        },
+    )
+    return combined
 
 # Mappings for BEAM configuration parameters
 beam_param_map = {
@@ -254,9 +327,8 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_data: List[str] = [
             "persons",
             "households",
@@ -327,7 +399,7 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         Prepares all data needed to run BEAM for the current iteration.
         """
-        input_records = workspace.output_data.get("beam", RecordStore())
+        input_records = RecordStore()
         output_records = RecordStore()
 
         # Collect necessary records from the previous (ActivitySim) step
@@ -376,11 +448,7 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            atlas_input_record, beam_output_record = self._copy_vehicles_from_atlas(
-                workspace
-            )
-            if atlas_input_record is not None:
-                store.add_record(atlas_input_record)
+            beam_output_record = self._copy_vehicles_from_atlas(workspace)
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
 
@@ -398,6 +466,35 @@ class BeamPreprocessor(GenericPreprocessor):
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
+
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        *,
+        activity_demand_outputs: Optional[Mapping[str, Any]] = None,
+        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
+        beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> BeamPreprocessOutputs:
+        """
+        Build BEAM inputs from plain artifact mappings and return typed outputs.
+        """
+        self.state.set_sub_stage_progress("preprocessor")
+        input_store = _record_store_from_artifact_mappings(
+            activity_demand_outputs=activity_demand_outputs,
+            previous_beam_outputs=previous_beam_outputs,
+            beam_preprocess_inputs=beam_preprocess_inputs,
+        )
+        record_store = self._preprocess(workspace, input_store)
+        prepared_inputs: Dict[str, Path] = {}
+        for key, value in record_store.to_mapping().items():
+            path = artifact_to_path(value, workspace)
+            if path is None:
+                continue
+            prepared_inputs[key] = Path(path)
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+            prepared_inputs=prepared_inputs,
+        )
 
     def copy_data_to_mutable_location(
         self, settings: PilatesConfig, output_dir: str
@@ -500,14 +597,14 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def _copy_vehicles_from_atlas(
         self, workspace: "Workspace"
-    ) -> Tuple[Optional[FileRecord], Optional[FileRecord]]:
+    ) -> Optional[FileRecord]:
         """
         Copies the vehicles file from the ATLAS output to the BEAM input scenario.
 
         Returns
         -------
-        tuple of FileRecord or None
-            (input_record, output_record) for lineage tracking.
+        FileRecord or None
+            Output record for BEAM `vehicles_beam_in`.
         """
         beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
         os.makedirs(beam_scenario_folder, exist_ok=True)
@@ -538,7 +635,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 "ATLAS vehicles2 file not found for BEAM input: %s",
                 atlas_vehicle_file_loc,
             )
-            return None, None
+            return None
 
         logger.info(
             f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
@@ -546,13 +643,6 @@ class BeamPreprocessor(GenericPreprocessor):
 
         df = pd.read_csv(atlas_vehicle_file_loc)
         df.to_csv(beam_vehicles_path, compression="gzip", index=False)
-        input_record = FileRecord(
-            file_path=atlas_vehicle_file_loc,
-            description="ATLAS vehicles2 input for BEAM",
-            short_name=ATLAS_VEHICLES2_INPUT,
-            year=getattr(self.state, "forecast_year", None),
-            iteration=getattr(self.state, "current_inner_iter", None),
-        )
         output_record = FileRecord(
             file_path=beam_vehicles_path,
             description="BEAM vehicles input derived from ATLAS vehicles2",
@@ -560,7 +650,7 @@ class BeamPreprocessor(GenericPreprocessor):
             year=getattr(self.state, "forecast_year", None),
             iteration=getattr(self.state, "current_inner_iter", None),
         )
-        return input_record, output_record
+        return output_record
 
     def _copy_plans_from_asim(
         self,
@@ -588,6 +678,8 @@ class BeamPreprocessor(GenericPreprocessor):
             )
             if shortened_name.endswith("_asim_out"):
                 shortened_name = shortened_name.split("_asim_out")[0]
+            if shortened_name == "plans":
+                shortened_name = "beam_plans"
             if shortened_name in self.required_input_data:
                 asim_file_paths[shortened_name] = (
                     os.path.join(base_path, record.file_path),

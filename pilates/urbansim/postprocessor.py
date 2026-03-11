@@ -1,15 +1,23 @@
 import os
 import logging
-from typing import Optional, Dict, Any
+from pathlib import Path
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 import pandas as pd
 
 from pilates.config import PilatesConfig
 from pilates.utils.io import read_datastore
+from pilates.utils.coupler_helpers import enqueue_archive_copy
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.urbansim.outputs import UrbanSimPostprocessOutputs, UrbanSimRunOutputs
 from pilates.workspace import Workspace
+from pilates.workflows.artifact_keys import (
+    USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
+)
 
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +52,8 @@ def create_next_iter_usim_data(
     settings,
     forecast_year,
     mutable_data_dir,
+    *,
+    output_store_path: Optional[str] = None,
 ):
     """Merge UrbanSim outputs with previous inputs to create the input for the next iteration."""
     # Define paths
@@ -64,8 +74,10 @@ def create_next_iter_usim_data(
     output_store, table_prefix_year = read_datastore(
         settings, forecast_year, mutable_data_dir=mutable_data_dir
     )
-    output_store_path = output_store._path
+    resolved_output_store_path = output_store._path
     output_store.close()
+    if output_store_path is None:
+        output_store_path = resolved_output_store_path
 
     # Archive the original input file.
     logger.info(f"Archiving previous iteration's inputs to {archive_fname}")
@@ -75,7 +87,7 @@ def create_next_iter_usim_data(
     logger.info("Merging results back into new UrbanSim input store!")
 
     # Create an empty HDF5 file for the merged output.
-    with pd.HDFStore(str(input_store_path), "w") as store:
+    with pd.HDFStore(str(input_store_path), "w"):
         pass
 
     output_store = pd.HDFStore(str(output_store_path), "r")
@@ -115,23 +127,25 @@ def create_next_iter_usim_data(
 
     logger.info(f"Prepared merged input H5 for next iteration: {input_store_path}")
 
-    return [
-        FileRecord(
-            file_path=archived_input_store_path,
-            description=f"Archived UrbanSim input H5 for year {forecast_year}",
-            short_name=f"usim_input_archive_{forecast_year}",
-            year=forecast_year,
-        ),
-        FileRecord(
-            file_path=input_store_path,
-            description=(
-                f"Merged UrbanSim input H5 for next iteration "
-                f"(from year {forecast_year} outputs)"
-            ),
-            short_name=f"usim_input_merged_{forecast_year}",
-            year=forecast_year,
-        ),
-    ]
+    # Ensure restart-critical UrbanSim H5s are copied to archive as soon as they
+    # are produced/updated.
+    enqueue_archive_copy(
+        key=f"usim_year_output_h5_{forecast_year}",
+        path=output_store_path,
+    )
+    enqueue_archive_copy(
+        key=f"usim_input_archive_{forecast_year}",
+        path=archived_input_store_path,
+    )
+    enqueue_archive_copy(
+        key=f"usim_input_merged_{forecast_year}",
+        path=input_store_path,
+    )
+
+    return {
+        f"{USIM_INPUT_ARCHIVE_PREFIX}{forecast_year}": Path(archived_input_store_path),
+        f"{USIM_INPUT_MERGED_PREFIX}{forecast_year}": Path(input_store_path),
+    }
 
 
 class UrbansimPostprocessor(GenericPostprocessor):
@@ -200,26 +214,25 @@ class UrbansimPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: UrbanSimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
+    ) -> UrbanSimPostprocessOutputs:
         """
         Postprocess UrbanSim outputs.
 
         Args:
-            raw_outputs (RecordStore): The raw outputs from the model run.
+            raw_outputs (UrbanSimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: Postprocessed output data.
+            UrbanSimPostprocessOutputs: Postprocessed output data.
         """
         logger.info(
             "[UrbansimPostprocessor] Postprocessing UrbanSim outputs for year %s",
@@ -227,17 +240,18 @@ class UrbansimPostprocessor(GenericPostprocessor):
         )
 
         settings = self.state.full_settings
-        processed_records = []
+        processed_outputs: Dict[str, Path] = {}
 
         try:
             if settings.run.models.land_use == "urbansim":
-                output_records = create_next_iter_usim_data(
+                output_paths = create_next_iter_usim_data(
                     settings,
                     self.state.forecast_year,
                     workspace.get_usim_mutable_data_dir(),
+                    output_store_path=str(raw_outputs.usim_datastore_h5),
                 )
-                if output_records:
-                    processed_records.extend(output_records)
+                if output_paths:
+                    processed_outputs.update(output_paths)
                 logger.info("Prepared UrbanSim data for next iteration")
             else:
                 logger.info("Urbansim model is not activated, skipping postprocessing.")
@@ -246,4 +260,27 @@ class UrbansimPostprocessor(GenericPostprocessor):
             logger.error(f"Error during UrbanSim postprocessing: {e}")
             raise
 
-        return RecordStore(recordList=processed_records)
+        merged_key = f"{USIM_INPUT_MERGED_PREFIX}{self.state.forecast_year}"
+        merged_path = processed_outputs.get(merged_key)
+        if merged_path is None:
+            raise RuntimeError(
+                "UrbanSim postprocess did not produce the merged next-iteration datastore "
+                f"for year {self.state.forecast_year}"
+            )
+        return UrbanSimPostprocessOutputs(
+            usim_datastore_h5=merged_path,
+            processed_outputs=processed_outputs,
+        )
+
+    def postprocess(
+        self,
+        raw_outputs: UrbanSimRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> UrbanSimPostprocessOutputs:
+        if not isinstance(raw_outputs, UrbanSimRunOutputs):
+            raise TypeError(
+                "UrbansimPostprocessor.postprocess expects UrbanSimRunOutputs"
+            )
+        self.state.set_sub_stage_progress("postprocessor")
+        return self._postprocess(raw_outputs, workspace, model_run_hash)

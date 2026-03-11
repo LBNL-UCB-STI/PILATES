@@ -34,19 +34,17 @@ class WorkflowState:
         vehicle_ownership_model_enabled: bool,
         activity_demand_enabled: bool,
         traffic_assignment_enabled: bool,
-        replanning_enabled: bool,
         year: int | None,
         major_stage: Stage | None,
         inner_iter: int,
         sub_stage: Stage | None,
-        file_loc: str,
+        file_loc: Optional[str],
         asim_compiled: bool,
         full_settings: PilatesConfig,
         sub_stage_progress: Optional[str] = None,
         run_info_path: Optional[str] = None,  # new
         data_initialized: bool = False,
     ):
-
         # Store basic simulation parameters
         self.start_year = start_year
         self.end_year = end_year
@@ -61,15 +59,14 @@ class WorkflowState:
         self.run_info_path = run_info_path  # new
         self.data_initialized = data_initialized
 
-        self.forecast_year = None
+        self.forecast_year: int | None = None
         self.file_loc = file_loc
+        self.mirror_file_loc: Optional[str] = None
 
         self.__asim_compiled = asim_compiled
-        self.initial_step = 7 if self.current_year == 2010 else None
 
         # Store settings for access by methods that need them
         self._settings = {
-            "end_year": end_year,
             "supply_demand_iters": 1,  # Default, will be updated in from_settings
             "land_use_enabled": land_use_enabled,
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
@@ -103,9 +100,6 @@ class WorkflowState:
         # If we have activity demand OR traffic assignment, we need the supply-demand loop
         if activity_demand_enabled or traffic_assignment_enabled:
             self.enabled_stages.add(self.Stage.supply_demand_loop)
-            if self.Stage.supply_demand_loop not in self.major_stage_order:
-                self.major_stage_order.append(self.Stage.supply_demand_loop)
-                logger.debug("Added supply_demand_loop to major_stage_order")
 
         # Define what happens inside the supply-demand loop
         self.loop_substages = []
@@ -117,14 +111,6 @@ class WorkflowState:
             )
         if traffic_assignment_enabled:
             self.loop_substages.append(self.Stage.traffic_assignment)
-
-    @property
-    def settings(self):
-        return (
-            self._settings
-            if hasattr(self, "_settings")
-            else {"end_year": self.end_year}
-        )
 
     @property
     def asim_compiled(self):
@@ -176,9 +162,6 @@ class WorkflowState:
         self.sub_stage_progress = sub_stage_progress
         self.write_state()
 
-    def enabled(self, stage):
-        return stage in self.enabled_stages
-
     @classmethod
     def write_stage(
         cls,
@@ -200,6 +183,9 @@ class WorkflowState:
             "run_info_path": run_info_path,
             "data_initialized": data_initialized,
         }
+        directory = os.path.dirname(file_loc)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         with open(file_loc, mode="w", encoding="utf-8") as f:
             yaml.dump(to_save, f)
 
@@ -249,18 +235,37 @@ class WorkflowState:
         traffic_assignment_enabled = getattr(
             settings, "traffic_assignment_enabled", False
         )
-        replanning_enabled = getattr(settings, "replanning_enabled", False)
-        file_loc = getattr(settings, "state_file_loc", "current_stage.yaml")
+        file_loc = getattr(settings, "state_file_loc", None)
 
-        [
-            year,
-            stage,
-            iteration,
-            asim_compiled,
-            sub_stage_progress,
-            run_info_path,
-            data_initialized,
-        ] = cls.read_current_stage(file_loc)
+        if file_loc:
+            [
+                year,
+                stage,
+                iteration,
+                asim_compiled,
+                sub_stage_progress,
+                run_info_path,
+                data_initialized,
+            ] = cls.read_current_stage(file_loc)
+        else:
+            year = None
+            stage = None
+            iteration = 0
+            asim_compiled = False
+            sub_stage_progress = None
+            run_info_path = None
+            data_initialized = False
+
+        resume_major_stage = stage
+        resume_sub_stage = None
+        loop_stage_aliases = {
+            cls.Stage.activity_demand,
+            cls.Stage.activity_demand_directly_from_land_use,
+            cls.Stage.traffic_assignment,
+        }
+        if stage in loop_stage_aliases:
+            resume_major_stage = cls.Stage.supply_demand_loop
+            resume_sub_stage = stage
 
         year = year or start_year
 
@@ -272,11 +277,10 @@ class WorkflowState:
             vehicle_ownership_model_enabled,
             activity_demand_enabled,
             traffic_assignment_enabled,
-            replanning_enabled,
             year,
-            stage,
+            resume_major_stage,
             iteration,
-            None,
+            resume_sub_stage,
             file_loc,
             asim_compiled,
             settings,
@@ -302,21 +306,42 @@ class WorkflowState:
             out.current_sub_stage = None
             out.current_inner_iter = 0
 
-        if year:
-            # Calculate forecast_year based on current_year and frequency
-            # Ensure forecast_year does not exceed end_year
-            next_year_candidate = out.current_year + (
-                out.initial_step if out.current_year == 2010 else out.travel_model_freq
-            )
-            out.forecast_year = (
-                min(next_year_candidate, out.end_year)
-                if land_use_enabled
-                else out.start_year
-            )
+        if out.current_major_stage == out.Stage.supply_demand_loop:
+            if not out.loop_substages:
+                logger.info(
+                    "Persisted supply-demand loop state has no enabled substages; "
+                    "resetting to first enabled major stage."
+                )
+                out.current_major_stage = None
+                out.current_sub_stage = None
+                out.current_inner_iter = 0
+            elif (
+                out.current_sub_stage is not None
+                and out.current_sub_stage not in out.loop_substages
+            ):
+                logger.info(
+                    "Persisted supply-demand substage %s is disabled in current settings; "
+                    "resetting to first enabled substage %s.",
+                    out.current_sub_stage.name,
+                    out.loop_substages[0].name,
+                )
+                out.current_sub_stage = out.loop_substages[0]
+                out.sub_stage_progress = None
 
-        # Initialize state if starting fresh (current_major_stage is None)
-        if out.current_major_stage is None:
+        if year:
+            out.forecast_year = out._compute_forecast_year()
+
+        # Initialize state only when we're not already in a terminal completed state.
+        if out.current_major_stage is None and not (
+            out.current_year is not None and out.current_year > out.end_year
+        ):
             out._initialize_first_stage()
+        elif out.current_major_stage is None:
+            logger.info(
+                "Loaded terminal workflow state (year=%s > end_year=%s); not reinitializing stages.",
+                out.current_year,
+                out.end_year,
+            )
 
         return out
 
@@ -341,18 +366,52 @@ class WorkflowState:
             logger.info("No enabled stages found. Workflow is complete.")
             self._advance_to_next_year()  # This will set current_major_stage to None and handle state file removal
 
+    def _interval_step_for_year(self, year: int) -> int:
+        # Keep 2010 as a one-time bridge into regular interval boundaries.
+        return 7 if year == 2010 else self.travel_model_freq
+
+    def _compute_forecast_year(self) -> int:
+        if not self._settings.get("land_use_enabled"):
+            return self.current_year
+        next_year_candidate = self.current_year + self._interval_step_for_year(
+            self.current_year
+        )
+        return min(next_year_candidate, self.end_year)
+
+    def _next_current_year(self) -> int:
+        if not self._settings.get("land_use_enabled"):
+            return self.end_year + 1
+
+        next_year = (
+            self.forecast_year
+            if self.forecast_year is not None
+            else self._compute_forecast_year()
+        )
+        # Guard against stale or capped forecast years that would cause
+        # backward moves or no-op loops.
+        if next_year <= self.current_year:
+            return self.end_year + 1
+        return next_year
+
     def write_state(self):
         """Save the current state to file"""
-        WorkflowState.write_stage(
-            self.current_year,
-            self.current_sub_stage or self.current_major_stage,
-            self.file_loc,
-            self.current_inner_iter,
-            self.__asim_compiled,
-            self.sub_stage_progress,
-            self.run_info_path,
-            self.data_initialized,
-        )
+        targets = []
+        if self.file_loc:
+            targets.append(self.file_loc)
+        mirror = getattr(self, "mirror_file_loc", None)
+        if mirror and mirror not in targets:
+            targets.append(mirror)
+        for target in targets:
+            WorkflowState.write_stage(
+                self.current_year,
+                self.current_sub_stage or self.current_major_stage,
+                target,
+                self.current_inner_iter,
+                self.__asim_compiled,
+                self.sub_stage_progress,
+                self.run_info_path,
+                self.data_initialized,
+            )
 
     def is_enabled(self, stage: Stage) -> bool:
         """Checks if a stage is enabled in settings."""
@@ -384,10 +443,13 @@ class WorkflowState:
                 target_idx = self.major_stage_order.index(target_major)
                 return current_idx == target_idx
             except ValueError:
-                logger.warning(
-                    f"Target major stage {target_major.name} not found in order, allowing run"
+                logger.error(
+                    "State inconsistency: current major stage %s or target stage %s "
+                    "not found in major_stage_order; refusing run.",
+                    self.current_major_stage.name if self.current_major_stage else None,
+                    target_major.name if target_major else None,
                 )
-                return True
+                return False
 
         # For substages within the supply-demand loop
         if target_sub_stage is not None:
@@ -437,9 +499,16 @@ class WorkflowState:
             and self.current_major_stage is None
         ):
             # Clean up state file if finished
-            if os.path.exists(self.file_loc):
-                logger.info(f"Workflow finished. Removing state file: {self.file_loc}")
-                os.remove(self.file_loc)
+            cleanup_paths = []
+            if self.file_loc:
+                cleanup_paths.append(self.file_loc)
+            mirror = getattr(self, "mirror_file_loc", None)
+            if mirror and mirror not in cleanup_paths:
+                cleanup_paths.append(mirror)
+            for path in cleanup_paths:
+                if os.path.exists(path):
+                    logger.info(f"Workflow finished. Removing state file: {path}")
+                    os.remove(path)
             raise StopIteration
 
         # If current_year is None, it means read_current_stage returned None for year,
@@ -526,8 +595,13 @@ class WorkflowState:
         # Handle major stage completion
         elif completed_major is not None:
             if self.current_major_stage != completed_major:
+                current_major_name = (
+                    self.current_major_stage.name
+                    if self.current_major_stage is not None
+                    else "None"
+                )
                 logger.error(
-                    f"Completed major stage {completed_major.name} but current major stage is {self.current_major_stage.name}. State inconsistency."
+                    f"Completed major stage {completed_major.name} but current major stage is {current_major_name}. State inconsistency."
                 )
                 # Attempt to recover by advancing major stage from current state
                 self._advance_to_next_major_stage()
@@ -578,24 +652,14 @@ class WorkflowState:
             self._advance_to_next_year()
 
     def _advance_to_next_year(self):
-        """Move to the next year and reset to first stage"""
-        self.current_year += 1
+        """Move to the next interval boundary year and reset to first stage"""
+        self.current_year = self._next_current_year()
 
         if self.current_year <= self.end_year:
             logger.info(f"Starting year {self.current_year}")
             # Reset to the first enabled major stage for the new year
             self._initialize_first_stage()
-            # Recalculate forecast year for the new current year
-            next_year_candidate = self.current_year + (
-                self.initial_step
-                if self.current_year == 2010
-                else self.travel_model_freq
-            )
-            self.forecast_year = (
-                min(next_year_candidate, self.end_year)
-                if self._settings.get("land_use_enabled")
-                else self.start_year
-            )
+            self.forecast_year = self._compute_forecast_year()
 
         else:
             logger.info(f"Workflow complete at end year {self.end_year}")
@@ -611,19 +675,3 @@ class WorkflowState:
     def set_data_initialized(self, value: bool):
         self.data_initialized = value
         self.write_state()
-
-    def get_sub_stages_from(self, start_sub_stage: Optional[Stage]):
-        """Returns the sequence of sub-stages starting from the given stage (inclusive)."""
-        if not self.loop_substages:
-            return []
-        if start_sub_stage is None:
-            return self.loop_substages
-        try:
-            start_index = self.loop_substages.index(start_sub_stage)
-            return self.loop_substages[start_index:]
-        except ValueError:
-            logger.error(
-                "Start sub-stage %s not found in sequence. Restarting from beginning.",
-                start_sub_stage.name if start_sub_stage else None,
-            )
-            return self.loop_substages

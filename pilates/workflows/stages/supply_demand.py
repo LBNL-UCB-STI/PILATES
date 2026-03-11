@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.io import locate_beam_file
@@ -14,7 +14,10 @@ from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
     clean_expected_outputs,
+    enqueue_archive_copy,
+    flush_archive_queue,
     resolve_artifact_from_value,
+    set_coupler_from_artifact,
 )
 from pilates.workflows.input_resolution import (
     ResolvedStepInputs,
@@ -28,6 +31,7 @@ from pilates.workflows.orchestration import (
     run_workflow,
     run_manifested_steps,
 )
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.step_io import build_outputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -41,6 +45,7 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
     ASIM_OMX_SKIMS,
     ATLAS_VEHICLES2_INPUT,
     BEAM_HOUSEHOLDS_IN,
@@ -55,6 +60,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
+from pilates.activitysim.runner import persist_sharrow_cache_enabled
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -90,12 +96,12 @@ class ActivityDemandPhaseOutputs:
 
     Parameters
     ----------
-    activity_demand_outputs : Optional[RecordStore]
-        RecordStore containing ActivitySim outputs needed downstream
+    activity_demand_outputs : Optional[dict[str, str]]
+        Mapping containing ActivitySim outputs needed downstream
         (e.g., households, persons, plans). None if not produced.
     """
 
-    activity_demand_outputs: Optional[RecordStore]
+    activity_demand_outputs: Optional[Dict[str, str]]
 
 
 @dataclass
@@ -109,16 +115,16 @@ class TrafficAssignmentPhaseInputs:
         Forecast year being simulated.
     iteration : int
         Supply-demand iteration index for the year.
-    activity_demand_outputs : Optional[RecordStore]
+    activity_demand_outputs : Optional[dict[str, str]]
         ActivitySim outputs used to seed BEAM inputs for this iteration.
-    previous_beam_outputs : Optional[RecordStore]
+    previous_beam_outputs : Optional[dict[str, str]]
         Prior BEAM outputs (e.g., linkstats) used for warm-starting.
     """
 
     year: int
     iteration: int
-    activity_demand_outputs: Optional[RecordStore]
-    previous_beam_outputs: Optional[RecordStore]
+    activity_demand_outputs: Optional[Dict[str, str]]
+    previous_beam_outputs: Optional[Dict[str, str]]
 
 
 @dataclass
@@ -128,12 +134,12 @@ class TrafficAssignmentPhaseOutputs:
 
     Parameters
     ----------
-    previous_beam_outputs : Optional[RecordStore]
+    previous_beam_outputs : Optional[dict[str, str]]
         Combined BEAM run + postprocess outputs for warm-starting the
         next iteration, if available.
     """
 
-    previous_beam_outputs: Optional[RecordStore]
+    previous_beam_outputs: Optional[Dict[str, str]]
 
 
 def _run_supply_demand_manifested_steps(
@@ -199,10 +205,13 @@ def _run_supply_demand_workflow(
 def _find_initial_linkstats_warmstart(
     settings: PilatesConfig, workspace: Workspace
 ) -> Optional[str]:
+    beam_settings = settings.beam
+    if beam_settings is None:
+        return None
     base_dir = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         settings.run.region,
-        settings.beam.router_directory,
+        beam_settings.router_directory,
     )
     candidates = [
         os.path.join(base_dir, "init.linkstats.parquet"),
@@ -331,7 +340,7 @@ def _run_activity_demand_phase(
     Returns
     -------
     ActivityDemandPhaseOutputs
-        RecordStore of ActivitySim outputs for downstream BEAM inputs.
+        Mapping of ActivitySim outputs for downstream BEAM inputs.
     """
     formatted_print("ACTIVITY DEMAND MODEL")
 
@@ -381,10 +390,7 @@ def _run_activity_demand_phase(
             "(explicit, coupler, or fallback), but none were available."
         )
 
-    if (
-        not preprocess_resolution.inputs
-        and not preprocess_resolution.input_keys
-    ):
+    if not preprocess_resolution.inputs and not preprocess_resolution.input_keys:
         # Keep existing behavior for provenance/cache identity compatibility:
         # require the canonical current datastore key when no concrete source
         # could be selected from the preferred chain.
@@ -422,12 +428,100 @@ def _run_activity_demand_phase(
         iteration=inputs.iteration,
     )
 
+    def _resolved_existing_zarr_skims_path() -> Optional[str]:
+        zarr_value = None
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            zarr_value = resolve_artifact_from_value(
+                get_value(ZARR_SKIMS),
+                key=ZARR_SKIMS,
+                workspace=workspace,
+            )
+        zarr_path = artifact_to_path(zarr_value, workspace)
+        if not zarr_path:
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(),
+                "cache",
+                "skims.zarr",
+            )
+            if os.path.exists(candidate):
+                zarr_path = candidate
+        if zarr_path and os.path.exists(zarr_path):
+            return zarr_path
+        return None
+
+    def _resolved_existing_numba_cache_path() -> Optional[str]:
+        cache_value = None
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            cache_value = resolve_artifact_from_value(
+                get_value(ASIM_SHARROW_CACHE_DIR),
+                key=ASIM_SHARROW_CACHE_DIR,
+                workspace=workspace,
+            )
+        cache_path = artifact_to_path(cache_value, workspace)
+        if not cache_path:
+            cache_path = os.path.join(workspace.full_path, "shared_cache", "numba")
+        if os.path.isdir(cache_path):
+            for _root, _dirs, files in os.walk(cache_path):
+                if files:
+                    return cache_path
+        return None
+
+    def _republish_existing_compile_artifacts() -> None:
+        zarr_path = _resolved_existing_zarr_skims_path()
+        if zarr_path:
+            set_coupler_from_artifact(
+                coupler,
+                ZARR_SKIMS,
+                None,
+                fallback=zarr_path,
+            )
+
+        if requires_numba_cache:
+            cache_path = _resolved_existing_numba_cache_path()
+            if cache_path:
+                set_coupler_from_artifact(
+                    coupler,
+                    ASIM_SHARROW_CACHE_DIR,
+                    None,
+                    fallback=cache_path,
+                )
+
+    activitysim_cfg = getattr(settings, "activitysim", None)
+    requires_numba_cache = bool(
+        getattr(activitysim_cfg, "num_processes", 1) > 1
+        and persist_sharrow_cache_enabled(settings)
+    )
+
     # ActivitySim Compilation: run once per year after preprocess.
-    if not state.asim_compiled:
+    # Restart safety: if state says compiled but zarr skims are missing on local
+    # ephemeral storage, force recompile instead of hard-failing.
+    needs_compile = not state.asim_compiled
+    if not needs_compile:
+        existing_zarr_path = _resolved_existing_zarr_skims_path()
+        existing_cache_path = (
+            _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
+        )
+        if not existing_zarr_path or (requires_numba_cache and not existing_cache_path):
+            missing_parts = []
+            if not existing_zarr_path:
+                missing_parts.append("zarr_skims")
+            if requires_numba_cache and not existing_cache_path:
+                missing_parts.append("numba_cache")
+            logger.warning(
+                "ActivitySim marked compiled for year %s but compiled artifacts were "
+                "missing (%s); forcing recompilation.",
+                state.current_year,
+                ",".join(missing_parts),
+            )
+            needs_compile = True
+
+    if needs_compile:
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
-        compile_store_inputs = upstream.to_record_store().to_mapping()
+        compile_store_inputs = step_output_mapping(upstream)
         compile_explicit_inputs: Dict[str, Any] = {}
         if ASIM_OMX_SKIMS in compile_store_inputs:
             compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
@@ -487,28 +581,22 @@ def _run_activity_demand_phase(
             },
         )
     else:
-        zarr_value = None
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            zarr_value = resolve_artifact_from_value(
-                get_value(ZARR_SKIMS),
-                key=ZARR_SKIMS,
-                workspace=workspace,
-            )
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(),
-                "cache",
-                "skims.zarr",
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
-        if not zarr_path or not os.path.exists(zarr_path):
-            raise RuntimeError(
-                "ActivitySim run requires zarr_skims, "
-                "but none were found while asim_compiled=True."
-            )
+        _republish_existing_compile_artifacts()
+    final_zarr_path = _resolved_existing_zarr_skims_path()
+    final_cache_path = (
+        _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
+    )
+    if not final_zarr_path or (requires_numba_cache and not final_cache_path):
+        missing_parts = []
+        if not final_zarr_path:
+            missing_parts.append("zarr_skims")
+        if requires_numba_cache and not final_cache_path:
+            missing_parts.append("numba_cache")
+        raise RuntimeError(
+            "ActivitySim run requires compiled artifacts before execution, but "
+            f"missing after compile check: {','.join(missing_parts)}. "
+            "This guard prevents multi-process runtime re-compilation races."
+        )
 
     upstream_preprocess = outputs_holder.activitysim_preprocess
     if upstream_preprocess is None:
@@ -516,9 +604,7 @@ def _run_activity_demand_phase(
     asim_run_input_keys = [
         short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
     ]
-    asim_run_input_keys = [
-        key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS
-    ]
+    asim_run_input_keys = [key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS]
     asim_run_input_keys.append(ZARR_SKIMS)
 
     activitysim_postprocess_inputs: Dict[str, str] = {}
@@ -614,7 +700,7 @@ def _run_activity_demand_phase(
 
     postprocess_outputs = outputs_holder.activitysim_postprocess
     activity_demand_outputs = (
-        postprocess_outputs.to_record_store()
+        step_output_mapping(postprocess_outputs)
         if postprocess_outputs is not None
         else None
     )
@@ -628,10 +714,13 @@ def _find_input_scenario_dir(
     filename: str,
     filetype: str = "parquet",
 ) -> str:
+    beam_settings = settings.beam
+    if beam_settings is None:
+        raise RuntimeError("BEAM config is required for traffic-assignment inputs.")
     scenario_dir = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         settings.run.region,
-        settings.beam.scenario_folder,
+        beam_settings.scenario_folder,
     )
     return locate_beam_file(scenario_dir, filename, filetype)
 
@@ -642,8 +731,8 @@ def _collect_previous_beam_outputs(
     workspace: Workspace,
     state: WorkflowState,
     iteration: int,
-    previous_beam_outputs: Optional[RecordStore],
-) -> Optional[RecordStore]:
+    previous_beam_outputs: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
     """
     Resolve previous BEAM outputs for warm-starting.
 
@@ -657,23 +746,15 @@ def _collect_previous_beam_outputs(
     if not callable(get_value):
         return None
 
-    promoted_store = RecordStore()
+    promoted_outputs: Dict[str, str] = {}
     for key in (LINKSTATS, BEAM_PLANS_OUT):
         value = get_value(key)
         if value is None:
             continue
         path = artifact_to_path(value, workspace)
         if path and os.path.exists(path):
-            promoted_store.add_record(
-                FileRecord(
-                    file_path=path,
-                    short_name=key,
-                    description=f"Promoted BEAM output: {key}",
-                    year=state.forecast_year,
-                    iteration=iteration,
-                )
-            )
-    return promoted_store if promoted_store.all_records() else None
+            promoted_outputs[key] = path
+    return promoted_outputs or None
 
 
 def _collect_beam_preprocess_inputs(
@@ -682,8 +763,8 @@ def _collect_beam_preprocess_inputs(
     workspace: Workspace,
     state: WorkflowState,
     iteration: int,
-    activity_demand_outputs: Optional[RecordStore],
-    previous_beam_outputs: Optional[RecordStore],
+    activity_demand_outputs: Optional[Dict[str, str]],
+    previous_beam_outputs: Optional[Dict[str, str]],
 ) -> Dict[str, Any]:
     """
     Build preprocess inputs for BEAM from available upstream sources.
@@ -695,6 +776,11 @@ def _collect_beam_preprocess_inputs(
     4) ATLAS vehicles2 (iteration 0 only, when vehicle ownership is enabled)
     """
     beam_preprocess_inputs: Dict[str, Any] = {}
+    forecast_year = state.forecast_year
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before building BEAM inputs."
+        )
 
     if activity_demand_outputs is not None:
         asim_input_keys = {
@@ -704,7 +790,7 @@ def _collect_beam_preprocess_inputs(
             "linkstats",
             "persons_asim_out",
         }
-        for key, value in activity_demand_outputs.to_mapping().items():
+        for key, value in activity_demand_outputs.items():
             if key in asim_input_keys:
                 beam_preprocess_inputs[key] = value
     elif settings.run.models.activity_demand is None:
@@ -728,22 +814,18 @@ def _collect_beam_preprocess_inputs(
         )
 
     if previous_beam_outputs is not None:
-        for key, value in previous_beam_outputs.to_mapping().items():
+        for key, value in previous_beam_outputs.items():
             if key.startswith("linkstats"):
                 beam_preprocess_inputs[key] = value
 
     if previous_beam_outputs is None or not any(
-        key.startswith("linkstats")
-        for key in previous_beam_outputs.to_mapping().keys()
+        key.startswith("linkstats") for key in previous_beam_outputs.keys()
     ):
         warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
         if warmstart_path:
             beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
 
-    if (
-        getattr(settings, "vehicle_ownership_model_enabled", False)
-        and iteration == 0
-    ):
+    if getattr(settings, "vehicle_ownership_model_enabled", False) and iteration == 0:
         if state.run_info_path and os.path.exists(state.run_info_path):
             previous_run_dir = os.path.dirname(state.run_info_path)
             atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
@@ -751,12 +833,12 @@ def _collect_beam_preprocess_inputs(
             atlas_output_dir = workspace.get_atlas_output_dir()
         atlas_vehicle_path = os.path.join(
             atlas_output_dir,
-            f"vehicles2_{state.forecast_year}.csv",
+            f"vehicles2_{forecast_year}.csv",
         )
         if not os.path.exists(atlas_vehicle_path):
             atlas_vehicle_path = os.path.join(
                 atlas_output_dir,
-                f"vehicles2_{state.forecast_year - 1}.csv",
+                f"vehicles2_{forecast_year - 1}.csv",
             )
         if os.path.exists(atlas_vehicle_path):
             beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_INPUT, atlas_vehicle_path)
@@ -764,10 +846,59 @@ def _collect_beam_preprocess_inputs(
     return beam_preprocess_inputs
 
 
+def _restore_activity_demand_outputs_for_resume(
+    *,
+    coupler: CouplerProtocol,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+) -> Optional[Dict[str, str]]:
+    """
+    Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
+
+    On restart directly into ``traffic_assignment``, the current iteration's
+    ``StepOutputsHolder`` starts empty even though restart recovery may already
+    have restored the required ActivitySim artifacts into the coupler. Promote
+    the narrow BEAM-facing subset back into a plain mapping so BEAM preprocess
+    sees the same inputs it would have received after a live ActivitySim run.
+    """
+    postprocess_outputs = outputs_holder.activitysim_postprocess
+    if postprocess_outputs is not None:
+        restored_outputs = step_output_mapping(postprocess_outputs)
+        return restored_outputs or None
+
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None
+
+    restored_outputs: Dict[str, str] = {}
+    for key in (
+        "beam_plans_asim_out",
+        "beam_plans_out",
+        "households_asim_out",
+        "linkstats",
+        "persons_asim_out",
+    ):
+        value = get_value(key)
+        if value is None:
+            continue
+        path = artifact_to_path(value, workspace)
+        if path and os.path.exists(path):
+            restored_outputs[key] = path
+    if restored_outputs:
+        outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=None,
+            processed_outputs={
+                key: Path(path) for key, path in restored_outputs.items()
+            },
+        )
+    return restored_outputs or None
+
+
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
-    activity_demand_outputs: Optional[RecordStore],
+    activity_demand_outputs: Optional[Dict[str, str]],
 ) -> list[str]:
     """
     Derive BEAM run input keys from preprocess outputs and warm-start signals.
@@ -835,7 +966,7 @@ def _run_beam_preprocess_step(
                     keys=beam_preprocess_inputs.keys(),
                     explicit_inputs=beam_preprocess_inputs,
                 ).stepref_inputs(),
-                year=state.forecast_year,
+                year=year,
             )
         ],
         scenario=scenario,
@@ -864,7 +995,7 @@ def _run_beam_steps(
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[RecordStore]:
+) -> Optional[Dict[str, str]]:
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
     """
@@ -891,7 +1022,7 @@ def _run_beam_steps(
                     outputs_holder=outputs_holder,
                 ),
                 input_keys=beam_run_input_keys,
-                year=state.forecast_year,
+                year=year,
             )
         ],
         scenario=scenario,
@@ -912,10 +1043,17 @@ def _run_beam_steps(
         upstream_keys=[
             short_name for short_name, _, _ in upstream_run._iter_record_items()
         ],
-        year=state.forecast_year,
+        year=year,
         iteration=iteration,
         include_zarr_skims=include_zarr_skims,
     )
+    beam_postprocess_resolution = None
+    if beam_postprocess_input_keys:
+        beam_postprocess_resolution = resolve_step_inputs(
+            keys=beam_postprocess_input_keys,
+            coupler=coupler,
+            explicit_inputs=step_output_mapping(upstream_run),
+        )
 
     _run_supply_demand_workflow(
         stage_name="beam",
@@ -926,8 +1064,17 @@ def _run_beam_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=beam_postprocess_input_keys,
-                year=state.forecast_year,
+                input_keys=(
+                    beam_postprocess_resolution.stepref_input_keys()
+                    if beam_postprocess_resolution is not None
+                    else None
+                ),
+                inputs=(
+                    beam_postprocess_resolution.stepref_inputs()
+                    if beam_postprocess_resolution is not None
+                    else None
+                ),
+                year=year,
             )
         ],
         scenario=scenario,
@@ -944,11 +1091,13 @@ def _run_beam_steps(
     if outputs_holder.beam_run is None and outputs_holder.beam_postprocess is None:
         return None
 
-    combined_beam_outputs = RecordStore()
+    combined_beam_outputs: Dict[str, str] = {}
     if outputs_holder.beam_run is not None:
-        combined_beam_outputs += outputs_holder.beam_run.to_record_store()
+        combined_beam_outputs.update(step_output_mapping(outputs_holder.beam_run))
     if outputs_holder.beam_postprocess is not None:
-        combined_beam_outputs += outputs_holder.beam_postprocess.to_record_store()
+        combined_beam_outputs.update(
+            step_output_mapping(outputs_holder.beam_postprocess)
+        )
     return combined_beam_outputs
 
 
@@ -962,9 +1111,9 @@ def _run_beam_full_skim_step(
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    previous_beam_outputs: Optional[RecordStore],
+    previous_beam_outputs: Optional[Dict[str, str]],
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[RecordStore]:
+) -> Optional[Dict[str, str]]:
     """
     Execute dedicated BEAM full-skim step and return its outputs.
     """
@@ -997,7 +1146,7 @@ def _run_beam_full_skim_step(
 
     if outputs_holder.beam_full_skim is None:
         return None
-    return outputs_holder.beam_full_skim.to_record_store()
+    return step_output_mapping(outputs_holder.beam_full_skim)
 
 
 def _run_traffic_assignment_phase(
@@ -1122,8 +1271,8 @@ def _run_traffic_assignment_phase(
             )
             if full_skim_outputs is not None:
                 if combined_beam_outputs is None:
-                    combined_beam_outputs = RecordStore()
-                combined_beam_outputs += full_skim_outputs
+                    combined_beam_outputs = {}
+                combined_beam_outputs.update(full_skim_outputs)
 
     state.complete_step(
         state.Stage.supply_demand_loop,
@@ -1210,15 +1359,15 @@ def run_supply_demand_stage(
       state to the next iteration.
     """
     total_iters = settings.run.supply_demand_iters
-    previous_beam_outputs: Optional[RecordStore] = None
+    previous_beam_outputs: Optional[Dict[str, str]] = None
 
     for i in range(state.iteration, total_iters):
         state.iteration = i
-        formatted_print(f"SUPPLY/DEMAND ITERATION {i+1}/{total_iters}")
+        formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
         activity_demand_outputs = None
         outputs_holder = StepOutputsHolder()
         manifest_path = build_manifest_path(workspace, year, i)
-        manifest_config = ManifestConfig(path=manifest_path)
+        manifest_config = ManifestConfig(path=Path(manifest_path))
 
         # C1. ACTIVITY DEMAND
         if state.should_run(
@@ -1250,6 +1399,12 @@ def run_supply_demand_stage(
                 usim_datastore_h5=None,
                 asim_output_dir=None,
             )
+        elif outputs_holder.activitysim_postprocess is None:
+            activity_demand_outputs = _restore_activity_demand_outputs_for_resume(
+                coupler=coupler,
+                workspace=workspace,
+                outputs_holder=outputs_holder,
+            )
 
         # C2. TRAFFIC ASSIGNMENT
         if state.should_run(
@@ -1273,7 +1428,19 @@ def run_supply_demand_stage(
                 outputs_holder=outputs_holder,
             ).previous_beam_outputs
 
+        if os.path.exists(manifest_path):
+            enqueue_archive_copy(
+                key="workflow_manifest",
+                path=manifest_path,
+            )
+        # Year/iteration boundary durability checkpoint for restart artifacts.
+        flush_archive_queue(timeout=300, fail_on_timeout=True)
+
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)
 
-    state.complete_step(state.Stage.supply_demand_loop)
+    # The final substage completion may already have advanced the workflow
+    # into the next year/major stage. Only complete the major stage here when
+    # the state is still inside the supply-demand loop.
+    if state.current_major_stage == state.Stage.supply_demand_loop:
+        state.complete_step(state.Stage.supply_demand_loop)

@@ -15,13 +15,15 @@ import warnings
 from datetime import datetime
 import os
 import logging
+import shlex
 import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List
+from typing import Optional, Dict, Any, Callable, List, Tuple, Sequence, cast
 
 from pilates.workspace import Workspace
+from pilates.generic.records import sanitize_artifact_key
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -39,10 +41,26 @@ from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
+    snapshot_latest_dir,
 )
-from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
+from pilates.utils.coupler_helpers import (
+    enqueue_archive_copy,
+    flush_archive_queue,
+    stop_archive_worker,
+)
+from pilates.utils.restart_bundle import (
+    build_restart_bundle_manifest,
+    manifest_entries_to_local_artifacts,
+    write_restart_bundle_manifest,
+)
+from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.activitysim.preprocessor import required_asim_config_dirs
+from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.runtime import bootstrap as bootstrap_runtime
+from pilates.runtime import restart as restart_runtime
+from pilates.runtime import scenario_runtime
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.catalog import schema_step_names, enabled_schema_step_models
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -53,24 +71,7 @@ from pilates.workflows.stages import (
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
 
-from pilates.workflows.steps import (
-    StepOutputsHolder,
-    make_activitysim_compile_step,
-    make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step,
-    make_activitysim_run_step,
-    make_atlas_postprocess_step,
-    make_atlas_preprocess_step,
-    make_atlas_run_step,
-    make_beam_postprocess_step,
-    make_beam_full_skim_step,
-    make_beam_preprocess_step,
-    make_beam_run_step,
-    make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step,
-    make_urbansim_run_step,
-    validate_workflow_step_contracts,
-)
+from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts
 from consist.types import CacheOptions
 
 logging.basicConfig(
@@ -82,79 +83,142 @@ logger = logging.getLogger(__name__)
 
 
 _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
+_RUN_FAILURE_CONTEXT: Dict[str, Any] = {}
 
 
-class _SchemaCoupler:
-    """No-op coupler used to construct decorated step callables for schema introspection."""
+def _coerce_int(value: Any) -> Optional[int]:
+    return scenario_runtime.coerce_int(value)
 
-    def get(self, _key: str, default: Optional[Any] = None) -> Any:
-        return default
 
-    def set(self, _key: str, _value: Any) -> None:
+def _resolve_scenario_id(settings: Any) -> str:
+    return scenario_runtime.resolve_scenario_id(settings)
+
+
+def _resolve_seed(settings: Any) -> Optional[int]:
+    return scenario_runtime.resolve_seed(settings)
+
+
+def _set_run_failure_context(**kwargs: Any) -> None:
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        _RUN_FAILURE_CONTEXT[key] = value
+
+
+def _format_restart_command(
+    *,
+    settings: Optional[Any],
+    archive_state_path: Optional[str],
+) -> Optional[str]:
+    config_path = None
+    if settings is not None:
+        config_path = getattr(settings, "settings_file", None)
+    if not config_path and not archive_state_path:
         return None
 
-    def update(self, _mapping: Dict[str, Any]) -> None:
+    command = ["python", "run.py"]
+    if config_path:
+        command.extend(["-c", str(config_path)])
+    if archive_state_path:
+        command.extend(["-S", str(archive_state_path)])
+    return " ".join(shlex.quote(part) for part in command)
+
+def _format_hpc_restart_command(
+    *,
+    settings: Optional[Any],
+    archive_state_path: Optional[str],
+) -> Optional[str]:
+    config_path = None
+    if settings is not None:
+        config_path = getattr(settings, "settings_file", None)
+    if not config_path and not archive_state_path:
         return None
 
-    def view(self, _namespace: str) -> "_SchemaCoupler":
-        return self
+    command = ["./hpc/job_runner.sh"]
+    if config_path:
+        command.extend(["-c", str(config_path)])
+    if archive_state_path:
+        command.extend(["-s", str(archive_state_path)])
+    return " ".join(shlex.quote(part) for part in command)
 
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
+
+def _log_restart_instructions_on_failure() -> None:
+    settings = _RUN_FAILURE_CONTEXT.get("settings")
+    state = _RUN_FAILURE_CONTEXT.get("state")
+    archive_run_dir = _RUN_FAILURE_CONTEXT.get("archive_run_dir")
+    local_run_dir = _RUN_FAILURE_CONTEXT.get("local_run_dir")
+    archive_state_path = _RUN_FAILURE_CONTEXT.get("archive_state_path")
+    if archive_state_path is None and state is not None:
+        archive_state_path = getattr(state, "run_info_path", None)
+
+    command = _format_restart_command(
+        settings=settings,
+        archive_state_path=archive_state_path,
+    )
+    if command is None:
+        return
+
+    logger.error("Run failed. Restart command:")
+    logger.error("  %s", command)
+    if archive_run_dir:
+        command_hpc = _format_hpc_restart_command(
+            settings=settings,
+            archive_state_path=archive_state_path,
+        )
+        logger.error("  HPC command: %s", command_hpc)
+    if archive_state_path:
+        logger.error("  state file: %s", archive_state_path)
+    if archive_run_dir:
+        logger.error("  archive run dir: %s", archive_run_dir)
+    if local_run_dir:
+        logger.error("  local run dir: %s", local_run_dir)
+
+
+def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
+    return scenario_runtime.merge_tag_list(existing, additions)
+
+
+def _facet_to_mapping(facet: Any) -> Dict[str, Any]:
+    return scenario_runtime.facet_to_mapping(facet)
+
+
+def _merge_epoch_facet(
+    *,
+    existing: Any,
+    scenario_id: str,
+    seed: Optional[int],
+    model: Optional[str],
+    year: Optional[int],
+    iteration: Optional[int],
+) -> Dict[str, Any]:
+    return scenario_runtime.merge_epoch_facet(
+        existing=existing,
+        scenario_id=scenario_id,
+        seed=seed,
+        model=model,
+        year=year,
+        iteration=iteration,
+    )
+
+
+_EpochTaggingScenarioProxy = scenario_runtime.EpochTaggingScenarioProxy
+_SchemaCoupler = scenario_runtime.SchemaCoupler
 
 
 def _resolve_cache_epoch(settings: Any) -> int:
-    value = getattr(getattr(settings, "run", None), "cache_epoch", 1)
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 1
+    return scenario_runtime.resolve_cache_epoch(settings)
 
 
 def _build_schema_steps() -> List[Callable[..., Any]]:
-    coupler = _SchemaCoupler()
-    outputs_holder = StepOutputsHolder()
-    step_factories: Dict[str, Callable[..., Any]] = {
-        "urbansim_preprocess": make_urbansim_preprocess_step,
-        "urbansim_run": make_urbansim_run_step,
-        "urbansim_postprocess": make_urbansim_postprocess_step,
-        "atlas_preprocess": make_atlas_preprocess_step,
-        "atlas_run": make_atlas_run_step,
-        "atlas_postprocess": make_atlas_postprocess_step,
-        "activitysim_preprocess": make_activitysim_preprocess_step,
-        "activitysim_compile": make_activitysim_compile_step,
-        "activitysim_run": make_activitysim_run_step,
-        "activitysim_postprocess": make_activitysim_postprocess_step,
-        "beam_preprocess": make_beam_preprocess_step,
-        "beam_run": make_beam_run_step,
-        "beam_postprocess": make_beam_postprocess_step,
-        "beam_full_skim": make_beam_full_skim_step,
-    }
-    ordered_steps = schema_step_names()
-    missing_factories = [name for name in ordered_steps if name not in step_factories]
-    if missing_factories:
-        raise RuntimeError(
-            "Missing schema step factories for: " + ", ".join(missing_factories)
-        )
-    return [
-        step_factories[step_name](coupler=coupler, outputs_holder=outputs_holder)
-        for step_name in ordered_steps
-    ]
+    return scenario_runtime.build_schema_steps()
 
 
 def _is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
-    """
-    Resolve whether a workflow model is enabled.
-
-    Prefers precomputed flags from ``parse_args_and_settings`` and falls back to
-    ``settings.run.models`` when flags are not present.
-    """
-    explicit_flag = getattr(settings, flag_attr, None)
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None) if run_cfg is not None else None
-    return bool(getattr(model_cfg, model_attr, None))
+    return scenario_runtime.is_model_enabled(
+        settings,
+        flag_attr=flag_attr,
+        model_attr=model_attr,
+    )
 
 
 def _filter_schema_steps_for_enabled_models(
@@ -163,35 +227,14 @@ def _filter_schema_steps_for_enabled_models(
     *,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
-    """
-    Keep only step definitions for models enabled in the active run settings.
-
-    Parameters
-    ----------
-    steps : list of callables
-        Step functions decorated with ``@define_step`` metadata.
-    settings : Any
-        Runtime settings object used to resolve enabled model flags.
-    include_optional : bool, default True
-        Whether optional steps (currently ``beam_full_skim``) should be included.
-    """
-    enabled_models = enabled_schema_step_models(
+    return scenario_runtime.filter_schema_steps_for_enabled_models(
+        steps,
         settings,
-        is_model_enabled=_is_model_enabled,
         include_optional=include_optional,
     )
 
-    filtered: List[Callable[..., Any]] = []
-    for step_func in steps:
-        meta = getattr(step_func, "__consist_step__", None)
-        model_name = getattr(meta, "model", "") if meta is not None else ""
-        if model_name not in enabled_models:
-            continue
-        filtered.append(step_func)
-    return filtered
 
-
-def _get_consist_schemas() -> Optional[list[type]]:
+def _get_consist_schemas() -> Optional[list[type[Any]]]:
     try:
         from pilates.database.schema.registry import get_consist_schemas
 
@@ -200,12 +243,52 @@ def _get_consist_schemas() -> Optional[list[type]]:
         return None
 
 
+def _build_scenario_runtime_contract(
+    *,
+    settings: Any,
+    scenario_id: str,
+    seed: Optional[int],
+    cache_epoch: int,
+) -> Dict[str, Any]:
+    return scenario_runtime.build_scenario_runtime_contract(
+        settings=settings,
+        scenario_id=scenario_id,
+        seed=seed,
+        cache_epoch=cache_epoch,
+        build_scenario_consist_kwargs_fn=build_scenario_consist_kwargs,
+        build_coupler_schema_fn=build_coupler_schema,
+        validate_workflow_step_contracts_fn=validate_workflow_step_contracts,
+        build_schema_steps_fn=_build_schema_steps,
+        filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
+        merge_epoch_facet_fn=_merge_epoch_facet,
+        scenario_name_template=_SCENARIO_NAME_TEMPLATE,
+    )
+
+
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
     return (
         Path(workspace.full_path)
         / ".workflow"
         / f"year_{year}_iteration_{iteration}.yaml"
     )
+
+
+def _atlas_static_input_key(relpath: str) -> str:
+    normalized_relpath = relpath.replace("\\", "/")
+    rel_no_ext = os.path.splitext(normalized_relpath)[0]
+    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
+
+
+def _iter_existing_atlas_static_inputs(
+    settings: Any,
+    atlas_input_dir: str,
+):
+    for relpath in atlas_static_input_relpaths(settings):
+        normalized_relpath = relpath.replace("\\", "/")
+        path = os.path.join(atlas_input_dir, normalized_relpath)
+        if not os.path.exists(path):
+            continue
+        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
 
 
 def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
@@ -219,12 +302,23 @@ def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
     atlas_input_dir = workspace.get_atlas_mutable_input_dir()
     if not os.path.exists(atlas_input_dir):
         return {}
+
+    settings = getattr(workspace, "settings", None)
+    if settings is not None:
+        inputs: Dict[str, str] = {}
+        for _relpath, key, path in _iter_existing_atlas_static_inputs(
+            settings, atlas_input_dir
+        ):
+            inputs.setdefault(key, path)
+        if inputs:
+            return inputs
+
     inputs: Dict[str, str] = {}
     for root, _, files in os.walk(atlas_input_dir):
         for filename in sorted(files):
             path = os.path.join(root, filename)
             relpath = os.path.relpath(path, atlas_input_dir)
-            key = f"atlas_static_{relpath.replace(os.sep, '__')}"
+            key = _atlas_static_input_key(relpath)
             inputs.setdefault(key, path)
     return inputs
 
@@ -255,11 +349,12 @@ def _mount_for_path(path: str, mounts: Dict[str, str]) -> str:
 
 
 def _format_bytes(value: int) -> str:
+    size = float(value)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-        if value < 1024:
-            return f"{value:.1f}{unit}"
-        value /= 1024.0
-    return f"{value:.1f}EiB"
+        if size < 1024:
+            return f"{size:.1f}{unit}"
+        size /= 1024.0
+    return f"{size:.1f}EiB"
 
 
 def _log_local_storage_info() -> None:
@@ -314,8 +409,7 @@ def _log_local_storage_info() -> None:
 
 
 def _is_bootstrap_cache_enabled(settings: Any) -> bool:
-    run_cfg = getattr(settings, "run", None)
-    return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
+    return bootstrap_runtime.is_bootstrap_cache_enabled(settings)
 
 
 def _build_bootstrap_manifest_reference(
@@ -323,12 +417,24 @@ def _build_bootstrap_manifest_reference(
     probe_run_id: Optional[str] = None,
     materialization_run_id: Optional[str] = None,
 ) -> Dict[str, str]:
-    reference: Dict[str, str] = {}
-    if probe_run_id:
-        reference["probe_run_id"] = probe_run_id
-    if materialization_run_id:
-        reference["materialization_run_id"] = materialization_run_id
-    return reference
+    return bootstrap_runtime.build_bootstrap_manifest_reference(
+        probe_run_id=probe_run_id,
+        materialization_run_id=materialization_run_id,
+    )
+
+
+def _archive_bootstrap_restart_artifacts(
+    *,
+    settings: Any,
+    workspace: Workspace,
+) -> None:
+    bootstrap_runtime.archive_bootstrap_restart_artifacts(
+        settings=settings,
+        workspace=workspace,
+        enqueue_archive_copy_fn=enqueue_archive_copy,
+        flush_archive_queue_fn=flush_archive_queue,
+        get_usim_datastore_fname_fn=get_usim_datastore_fname,
+    )
 
 
 def run_bootstrap_phase(
@@ -337,130 +443,211 @@ def run_bootstrap_phase(
     settings: Any,
     state: WorkflowState,
     workspace: Workspace,
+    scenario_id: str,
+    seed: Optional[int],
 ) -> Dict[str, Any]:
-    """
-    Execute initialization in a dedicated pre-scenario bootstrap phase.
-
-    Phase 1 behavior:
-    - probe cache via tracker.run(...) before scenario starts;
-    - if cache hit, force one overwrite run to materialize workspace safely;
-    - return cache status plus lightweight artifact summary metadata.
-    """
-    staged_artifact_summary: Dict[str, Any] = {}
-
-    def _execute_initialization() -> None:
-        nonlocal staged_artifact_summary
-        init_model = Initialization("initialization", state)
-        copied_records = init_model.run(settings, workspace)
-        staged_artifact_summary = build_bootstrap_artifact_summary(
-            workspace,
-            copied_records,
-        )
-
-    run_kwargs: Dict[str, Any] = {
-        "fn": _execute_initialization,
-        "name": "bootstrap_initialization",
-        "model": "initialization",
-        "year": state.start_year,
-        "iteration": 0,
-        "phase": "bootstrap",
-        "stage": "bootstrap",
-        "tags": ["bootstrap", "init"],
-        **build_step_consist_kwargs(
-            "initialization",
-            settings,
-            workspace_path=workspace.full_path,
-        ),
-    }
-
-    if not _is_bootstrap_cache_enabled(settings):
-        logger.info("Bootstrap cache disabled; running initialization once.")
-        run_result = tracker.run(
-            **run_kwargs,
-            cache_options=CacheOptions(cache_mode="off"),
-        )
-        if not staged_artifact_summary:
-            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-        return {
-            "bootstrap_cache_hit": False,
-            "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": _build_bootstrap_manifest_reference(
-                probe_run_id=getattr(getattr(run_result, "run", None), "id", None)
-            ),
-        }
-
-    probe_result = tracker.run(**run_kwargs)
-    probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
-    cache_hit = bool(getattr(probe_result, "cache_hit", False))
-
-    if cache_hit:
-        logger.info(
-            "BOOTSTRAP CACHE HIT. Running Phase 1 materialization pass to keep workspace safe."
-        )
-        materialized_result = tracker.run(
-            **run_kwargs,
-            cache_options=CacheOptions(cache_mode="overwrite"),
-        )
-        if not staged_artifact_summary:
-            staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-        return {
-            "bootstrap_cache_hit": True,
-            "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": _build_bootstrap_manifest_reference(
-                probe_run_id=probe_run_id,
-                materialization_run_id=getattr(
-                    getattr(materialized_result, "run", None), "id", None
-                ),
-            ),
-        }
-
-    logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
-    if not staged_artifact_summary:
-        staged_artifact_summary = build_bootstrap_artifact_summary(workspace)
-    return {
-        "bootstrap_cache_hit": False,
-        "staged_artifact_summary": staged_artifact_summary,
-        "manifest_reference": _build_bootstrap_manifest_reference(
-            probe_run_id=probe_run_id
-        ),
-    }
+    return bootstrap_runtime.run_bootstrap_phase(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        scenario_id=scenario_id,
+        seed=seed,
+        initialization_cls=Initialization,
+        build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
+        build_step_consist_kwargs_fn=build_step_consist_kwargs,
+        merge_tag_list_fn=_merge_tag_list,
+        merge_epoch_facet_fn=_merge_epoch_facet,
+        archive_bootstrap_restart_artifacts_fn=_archive_bootstrap_restart_artifacts,
+        cache_options_cls=CacheOptions,
+    )
 
 
 def _assert_bootstrap_output_invariant(
     bootstrap_result: Optional[Dict[str, Any]],
 ) -> None:
-    """
-    Ensure bootstrap produced a non-empty artifact summary before state mutation.
-    """
-    summary = (
-        bootstrap_result.get("staged_artifact_summary")
-        if isinstance(bootstrap_result, dict)
-        else None
-    )
-    copied_total = (
-        summary.get("copied_records_total") if isinstance(summary, dict) else None
-    )
-    if isinstance(copied_total, int) and copied_total > 0:
-        return
+    bootstrap_runtime.assert_bootstrap_output_invariant(bootstrap_result)
 
-    diagnostics = {
-        "bootstrap_result_type": type(bootstrap_result).__name__,
-        "bootstrap_cache_hit": (
-            bootstrap_result.get("bootstrap_cache_hit")
-            if isinstance(bootstrap_result, dict)
-            else None
-        ),
-        "manifest_reference": (
-            bootstrap_result.get("manifest_reference")
-            if isinstance(bootstrap_result, dict)
-            else None
-        ),
-        "staged_artifact_summary": summary,
-    }
-    raise RuntimeError(
-        "Bootstrap initialization invariant failed: expected "
-        "'staged_artifact_summary.copied_records_total' > 0 before setting "
-        f"data_initialized=True. diagnostics={diagnostics}"
+
+def _restart_required_local_artifacts(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> List[Dict[str, str]]:
+    return restart_runtime.restart_required_local_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        get_usim_datastore_fname_fn=get_usim_datastore_fname,
+        required_asim_config_dirs_fn=required_asim_config_dirs,
+        atlas_static_input_relpaths_fn=atlas_static_input_relpaths,
+        workflow_stage=WorkflowState.Stage,
+    )
+
+
+def _find_missing_restart_local_artifacts(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> List[Dict[str, str]]:
+    return restart_runtime.find_missing_restart_local_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        restart_required_local_artifacts_fn=_restart_required_local_artifacts,
+    )
+
+
+def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
+    return restart_runtime.format_missing_artifact_summary(artifacts)
+
+
+def _resolve_restart_rehydrate_mode(settings: Any) -> str:
+    return restart_runtime.resolve_restart_rehydrate_mode(settings)
+
+
+def _is_restart_strict(settings: Any) -> bool:
+    return restart_runtime.is_restart_strict(settings)
+
+
+def _read_archive_run_state_year(state_path: str) -> Optional[int]:
+    return restart_runtime.read_archive_run_state_year(
+        state_path,
+        read_current_stage_fn=WorkflowState.read_current_stage,
+    )
+
+
+def _enforce_resume_rewind_guardrail(
+    *,
+    state: WorkflowState,
+    archive_state_path: str,
+    allow_rewind_resume: bool,
+) -> None:
+    restart_runtime.enforce_resume_rewind_guardrail(
+        state=state,
+        archive_state_path=archive_state_path,
+        allow_rewind_resume=allow_rewind_resume,
+        read_archive_run_state_year_fn=_read_archive_run_state_year,
+    )
+
+
+def _map_local_path_to_archive(
+    *,
+    local_path: str,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Optional[str]:
+    return restart_runtime.map_local_path_to_archive(
+        local_path=local_path,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+
+
+def _repair_restart_state_for_incomplete_atlas_outputs(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    archive_run_dir: str,
+) -> bool:
+    return restart_runtime.repair_restart_state_for_incomplete_atlas_outputs(
+        settings=settings,
+        state=state,
+        archive_run_dir=archive_run_dir,
+    )
+
+
+def _copy_archive_entry_preserve_existing(
+    *,
+    archive_path: str,
+    local_path: str,
+) -> Tuple[int, int]:
+    return restart_runtime.copy_archive_entry_preserve_existing(
+        archive_path=archive_path,
+        local_path=local_path,
+    )
+
+
+def _rehydrate_missing_local_artifacts_from_archive(
+    *,
+    missing_artifacts: List[Dict[str, str]],
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    return restart_runtime.rehydrate_missing_local_artifacts_from_archive(
+        missing_artifacts=missing_artifacts,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        map_local_path_to_archive_fn=_map_local_path_to_archive,
+        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
+    )
+
+
+def _rehydrate_full_local_run_from_archive(
+    *,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    return restart_runtime.rehydrate_full_local_run_from_archive(
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
+    )
+
+
+def _rehydrate_bundle_local_artifacts_from_archive(
+    *,
+    bundle_manifest: Optional[Dict[str, Any]],
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> Dict[str, int]:
+    return restart_runtime.rehydrate_bundle_local_artifacts_from_archive(
+        bundle_manifest=bundle_manifest,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        manifest_entries_to_local_artifacts_fn=manifest_entries_to_local_artifacts,
+        rehydrate_missing_local_artifacts_fn=_rehydrate_missing_local_artifacts_from_archive,
+    )
+
+
+def _log_resume_doctor_check(
+    *,
+    check: str,
+    ok: bool,
+    detail: str,
+) -> None:
+    restart_runtime.log_resume_doctor_check(check=check, ok=ok, detail=detail)
+
+
+def _run_resume_doctor_diagnostics(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+    local_run_dir: str,
+    archive_run_dir: str,
+    archive_state_path: str,
+    local_state_path: str,
+    local_consist_db_path: Optional[str],
+    restart_missing_artifacts_initial: List[Dict[str, str]],
+    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
+) -> None:
+    restart_runtime.run_resume_doctor_diagnostics(
+        state=state,
+        workspace=workspace,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        archive_state_path=archive_state_path,
+        local_state_path=local_state_path,
+        local_consist_db_path=local_consist_db_path,
+        restart_missing_artifacts_initial=restart_missing_artifacts_initial,
+        restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+        snapshot_latest_dir_fn=snapshot_latest_dir,
+        build_manifest_path_fn=build_manifest_path,
+        map_local_path_to_archive_fn=_map_local_path_to_archive,
+        format_missing_artifact_summary_fn=_format_missing_artifact_summary,
+        log_resume_doctor_check_fn=_log_resume_doctor_check,
     )
 
 
@@ -489,9 +676,11 @@ def main():
     - Model outputs: Cached per iteration (convergence check)
     - Restarting: Skips initialization if run_state.yaml exists
     """
+    _RUN_FAILURE_CONTEXT.clear()
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     settings = parse_args_and_settings()
     state = WorkflowState.from_settings(settings)
+    _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
 
@@ -510,16 +699,28 @@ def main():
     # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
     # - local_run_dir (node-local) holds mutable workspace during execution
 
-    if state.run_info_path:
+    is_restart_run = bool(state.run_info_path)
+    if is_restart_run:
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
         partial_run_name = settings.run.output_run_name
         run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
+    scenario_id = _resolve_scenario_id(settings)
+    run_seed = _resolve_seed(settings)
+    logger.info(
+        "Resolved run tagging metadata: scenario_id=%s seed=%s",
+        scenario_id,
+        run_seed if run_seed is not None else "n/a",
+    )
 
     archive_run_dir = os.path.join(output_path, run_name)
     local_run_dir = os.path.join(local_root, run_name)
+    _set_run_failure_context(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+    )
     os.makedirs(local_run_dir, exist_ok=True)
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
@@ -602,25 +803,150 @@ def main():
         local_root,
         folder_name=run_name,
     )
-    state.file_loc = os.path.join(workspace.full_path, "run_state.yaml")
-    if not state.run_info_path:
-        state.set_run_info_path(state.file_loc)
+    archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
+    local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
+    _set_run_failure_context(archive_state_path=archive_state_path)
+    if is_restart_run:
+        _enforce_resume_rewind_guardrail(
+            state=state,
+            archive_state_path=archive_state_path,
+            allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+        )
+        _repair_restart_state_for_incomplete_atlas_outputs(
+            settings=settings,
+            state=state,
+            archive_run_dir=archive_run_dir,
+        )
+    state.file_loc = archive_state_path
+    state.mirror_file_loc = local_state_path
+    if state.run_info_path != archive_state_path:
+        state.set_run_info_path(archive_state_path)
+
+    restart_rehydrate_mode = _resolve_restart_rehydrate_mode(settings)
+    restart_strict = _is_restart_strict(settings)
+    restart_bundle_manifest = build_restart_bundle_manifest(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+        local_consist_db_path=local_consist_db_path,
+    )
+    restart_bundle_manifest_path = write_restart_bundle_manifest(
+        archive_run_dir=archive_run_dir,
+        manifest=restart_bundle_manifest,
+    )
+    logger.info(
+        "Restart bundle manifest ready: path=%s artifacts=%s mode=%s strict=%s",
+        restart_bundle_manifest_path,
+        len(restart_bundle_manifest.get("artifacts", [])),
+        restart_rehydrate_mode,
+        restart_strict,
+    )
+
+    restart_missing_artifacts_initial: List[Dict[str, str]] = []
+    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]] = []
+    if state.data_initialized:
+        restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        if restart_missing_artifacts_initial:
+            logger.warning(
+                "Restart preflight found missing local workspace inputs while "
+                "data_initialized=True: %s",
+                _format_missing_artifact_summary(restart_missing_artifacts_initial),
+            )
+            if restart_rehydrate_mode == "off":
+                logger.info(
+                    "Restart rehydration disabled (run.restart_rehydrate_mode=off)."
+                )
+            elif restart_rehydrate_mode == "full":
+                _rehydrate_full_local_run_from_archive(
+                    local_run_dir=local_run_dir,
+                    archive_run_dir=archive_run_dir,
+                )
+            else:
+                _rehydrate_bundle_local_artifacts_from_archive(
+                    bundle_manifest=restart_bundle_manifest,
+                    local_run_dir=local_run_dir,
+                    archive_run_dir=archive_run_dir,
+                )
+            restart_missing_artifacts_after_rehydrate = (
+                _find_missing_restart_local_artifacts(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                )
+            )
+            if restart_missing_artifacts_after_rehydrate:
+                logger.warning(
+                    "Restart preflight still missing required local workspace inputs "
+                    "after archive rehydration: %s",
+                    _format_missing_artifact_summary(
+                        restart_missing_artifacts_after_rehydrate
+                    ),
+                )
+                if restart_strict:
+                    raise RuntimeError(
+                        "Strict restart preflight failed; required restart artifacts are "
+                        "still missing after hydration. missing="
+                        + _format_missing_artifact_summary(
+                            restart_missing_artifacts_after_rehydrate
+                        )
+                    )
+    if is_restart_run:
+        _run_resume_doctor_diagnostics(
+            state=state,
+            workspace=workspace,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            archive_state_path=archive_state_path,
+            local_state_path=local_state_path,
+            local_consist_db_path=local_consist_db_path,
+            restart_missing_artifacts_initial=restart_missing_artifacts_initial,
+            restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+        )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap
     # lifecycle can evolve independently from normal model steps.
     cr.set_tracker(tracker)
     bootstrap_result: Optional[Dict[str, Any]] = None
-    if not state.data_initialized:
-        logger.info("Running bootstrap initialization phase.")
+    force_restart_bootstrap = bool(restart_missing_artifacts_after_rehydrate)
+    if (
+        restart_missing_artifacts_initial
+        and not restart_missing_artifacts_after_rehydrate
+    ):
+        logger.info(
+            "Restart preflight recovered missing local inputs from archive; "
+            "continuing without forced bootstrap."
+        )
+    if not state.data_initialized or force_restart_bootstrap:
+        if force_restart_bootstrap:
+            logger.warning(
+                "Forcing bootstrap initialization on restart because required local "
+                "inputs were missing during preflight. initial_missing=%s "
+                "remaining_after_rehydrate=%s",
+                _format_missing_artifact_summary(restart_missing_artifacts_initial),
+                _format_missing_artifact_summary(
+                    restart_missing_artifacts_after_rehydrate
+                ),
+            )
+        else:
+            logger.info("Running bootstrap initialization phase.")
         bootstrap_result = run_bootstrap_phase(
             tracker=tracker,
             settings=settings,
             state=state,
             workspace=workspace,
+            scenario_id=scenario_id,
+            seed=run_seed,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
-        state.set_data_initialized(True)
+        if not state.data_initialized:
+            state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     if bootstrap_result is not None:
@@ -638,28 +964,17 @@ def main():
     #   - Provenance logging (inputs, outputs, dependencies)
     #   - Coupler coordination (step outputs → coupler → next step inputs)
     # The coupler is a shared dict-like object for passing artifacts between steps.
-    scenario_kwargs = build_scenario_consist_kwargs(settings)
-    scenario_kwargs.setdefault("name_template", _SCENARIO_NAME_TEMPLATE)
-    scenario_kwargs.setdefault("cache_epoch", cache_epoch)
-    schema_steps_all = _build_schema_steps()
-    validate_workflow_step_contracts(declared_steps=schema_steps_all)
-    schema_steps_enabled = _filter_schema_steps_for_enabled_models(
-        schema_steps_all,
-        settings,
-        include_optional=True,
-    )
-    coupler_schema = build_coupler_schema(schema_steps_enabled, settings=settings)
-    required_schema = build_coupler_schema(
-        _filter_schema_steps_for_enabled_models(
-            schema_steps_all,
-            settings,
-            include_optional=False,
-        ),
+    scenario_contract = _build_scenario_runtime_contract(
         settings=settings,
-        include_extras=False,
+        scenario_id=scenario_id,
+        seed=run_seed,
+        cache_epoch=cache_epoch,
     )
-    required_output_keys = list(required_schema.keys())
-    scenario_kwargs["require_outputs"] = required_output_keys
+    scenario_kwargs = scenario_contract["scenario_kwargs"]
+    schema_steps_all = scenario_contract["schema_steps_all"]
+    schema_steps_enabled = scenario_contract["schema_steps_enabled"]
+    coupler_schema = scenario_contract["coupler_schema"]
+    required_output_keys = scenario_contract["required_output_keys"]
 
     preview_count = 25
     logger.info(
@@ -671,15 +986,25 @@ def main():
         len(schema_steps_all),
         required_output_keys[:preview_count],
     )
+    scenario_tags = _merge_tag_list(
+        ["pilates_simulation"],
+        [f"scenario_id:{scenario_id}"]
+        + ([f"seed:{run_seed}"] if run_seed is not None else []),
+    )
     try:
         with cr.scenario(
             run_name,
             tracker=tracker,
-            tags=["pilates_simulation"],
+            tags=scenario_tags,
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            coupler = scenario.coupler
+            tagged_scenario = _EpochTaggingScenarioProxy(
+                scenario,
+                scenario_id=scenario_id,
+                seed=run_seed,
+            )
+            coupler = tagged_scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),
                 warn_undefined=True,
@@ -705,7 +1030,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.land_use):
                     usim_inputs = run_land_use_stage(
-                        scenario=scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -723,7 +1048,7 @@ def main():
                         f"VEHICLE OWNERSHIP MODEL (ATLAS) FOR YEAR {state.forecast_year}"
                     )
                     run_vehicle_ownership_stage(
-                        scenario=scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -738,7 +1063,7 @@ def main():
 
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
-                        scenario=scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -747,9 +1072,11 @@ def main():
                         usim_inputs=usim_inputs,
                         build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
-                            lambda iteration, y=year: snapshot_manager.on_outer_iteration_boundary(
-                                year=y,
-                                iteration=iteration,
+                            lambda iteration, y=year: (
+                                snapshot_manager.on_outer_iteration_boundary(
+                                    year=y,
+                                    iteration=iteration,
+                                )
                             )
                         ),
                     )
@@ -760,7 +1087,7 @@ def main():
                 if state.should_run(WorkflowState.Stage.postprocessing):
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
-                        scenario=scenario,
+                        scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         state=state,
                         settings=settings,
                         workspace=workspace,
@@ -771,7 +1098,9 @@ def main():
                     snapshot_manager.maybe_snapshot_interval(
                         reason=f"after_postprocessing_y{year}"
                     )
-                snapshot_manager.maybe_snapshot_interval(reason=f"year_boundary_y{year}")
+                snapshot_manager.maybe_snapshot_interval(
+                    reason=f"year_boundary_y{year}"
+                )
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")
@@ -784,4 +1113,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_restart_instructions_on_failure()
+        raise

@@ -24,6 +24,17 @@ def test_step_dependencies_are_catalog_derived():
     assert step_shared.STEP_DEPENDENCIES == expected
 
 
+def test_runtime_step_dependencies_include_untracked_schema_steps():
+    expected = {
+        spec.step_name: {
+            "depends_on": list(spec.depends_on),
+            "holder_inputs": list(spec.holder_inputs),
+        }
+        for spec in catalog.WORKFLOW_STEP_SPECS
+    }
+    assert step_shared.STEP_RUNTIME_DEPENDENCIES == expected
+
+
 def test_schema_steps_follow_catalog_order():
     schema_steps = _build_schema_steps()
     models = [step.__consist_step__.model for step in schema_steps]

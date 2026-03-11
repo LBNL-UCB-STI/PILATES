@@ -3,11 +3,15 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Callable, Dict, Mapping, Union, Any, Optional
+from typing import Callable, Dict, Mapping, Union, Any, Optional, cast
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    enqueue_archive_copy,
+    flush_archive_queue,
+)
 from pilates.atlas.inputs import (
     build_atlas_inputs,
     atlas_static_input_keys_for_interval,
@@ -41,10 +45,17 @@ def _atlas_sub_years(state: WorkflowState) -> list[int]:
     ATLAS advances in biannual increments. Keep years bounded to the parent
     interval and never overshoot ``state.forecast_year``.
     """
+    if state.year is None:
+        raise RuntimeError("WorkflowState.year must be set before running ATLAS.")
+    forecast_year = state.forecast_year
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before running ATLAS."
+        )
     years = [state.year]
-    if state.forecast_year <= state.year:
+    if forecast_year <= state.year:
         return years
-    years.extend(range(state.year + 2, state.forecast_year + 1, 2))
+    years.extend(range(state.year + 2, forecast_year + 1, 2))
     return years
 
 
@@ -85,9 +96,20 @@ def select_atlas_usim_input_path(
     else:
         usim_dir = workspace.get_usim_mutable_data_dir()
 
+    forecast_year = state.forecast_year
+    urbansim_settings = settings.urbansim
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before ATLAS input resolution."
+        )
+    if urbansim_settings is None:
+        raise RuntimeError(
+            "UrbanSim config is required for the vehicle ownership stage."
+        )
+
     forecast_output_path = os.path.join(
         usim_dir,
-        settings.urbansim.output_file_template.format(year=state.forecast_year),
+        urbansim_settings.output_file_template.format(year=forecast_year),
     )
 
     current_candidate = (
@@ -161,15 +183,26 @@ def run_vehicle_ownership_stage(
     else:
         urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
 
+    forecast_year = state.forecast_year
+    urbansim_settings = settings.urbansim
+    if forecast_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year must be set before running vehicle ownership."
+        )
+    if urbansim_settings is None:
+        raise RuntimeError(
+            "UrbanSim config is required for the vehicle ownership stage."
+        )
+
     if state.is_start_year():
         region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_datastore_fname = settings.urbansim.input_file_template.format(
+        region_id = urbansim_settings.region_mappings["region_to_region_id"][region]
+        usim_datastore_fname = urbansim_settings.input_file_template.format(
             region_id=region_id
         )
     else:
-        usim_datastore_fname = settings.urbansim.output_file_template.format(
-            year=state.forecast_year
+        usim_datastore_fname = urbansim_settings.output_file_template.format(
+            year=forecast_year
         )
 
     usim_datastore_h5_default_path = os.path.join(
@@ -221,15 +254,15 @@ def run_vehicle_ownership_stage(
 
         step_inputs, step_input_descriptions = build_atlas_inputs(
             settings,
-            atlas_state,
+            cast(WorkflowState, atlas_state),
             workspace,
             atlas_year,
             coupler,
             atlas_usim_datastore_h5_path,
         )
-        log_inputs(step_inputs, step_input_descriptions)
+        log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
         step_inputs = merge_model_expected_inputs(
-            "atlas", step_inputs, settings, atlas_state, workspace
+            "atlas", step_inputs, settings, cast(WorkflowState, atlas_state), workspace
         )
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path
@@ -247,13 +280,9 @@ def run_vehicle_ownership_stage(
             keys=atlas_preprocess_inputs.keys(),
             explicit_inputs=atlas_preprocess_inputs,
         )
-        atlas_run_inputs: Dict[str, Any] = {}
-        atlas_static_inputs = workspace.input_data.get("atlas")
-        if atlas_static_inputs is not None:
-            for key, value in atlas_static_inputs.to_mapping().items():
-                atlas_run_inputs.setdefault(key, value)
-        else:
-            atlas_run_inputs.update(build_atlas_static_inputs_fallback(workspace))
+        atlas_run_inputs: Dict[str, Any] = dict(
+            build_atlas_static_inputs_fallback(workspace)
+        )
 
         atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
         atlas_interval_end_year = atlas_year
@@ -279,7 +308,11 @@ def run_vehicle_ownership_stage(
             step_inputs.get(USIM_DATASTORE_BASE_H5),
         )
         atlas_run_resolution = resolve_step_inputs(
-            keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5, *atlas_static_keys],
+            keys=[
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+                *atlas_static_keys,
+            ],
             coupler=coupler,
             explicit_inputs={
                 USIM_DATASTORE_CURRENT_H5: step_inputs.get(USIM_DATASTORE_CURRENT_H5),
@@ -331,11 +364,6 @@ def run_vehicle_ownership_stage(
             upstream_run = outputs_holder_atlas.atlas_run
             if upstream_run is None:
                 raise RuntimeError("ATLAS run must complete before postprocess")
-            postprocess_input_keys = [
-                short_name for short_name, _, _ in upstream_run._iter_record_items()
-            ]
-            if not postprocess_input_keys:
-                postprocess_input_keys = None
 
             postprocess_steps = [
                 StepRef(
@@ -344,7 +372,6 @@ def run_vehicle_ownership_stage(
                         coupler=coupler,
                         outputs_holder=outputs_holder_atlas,
                     ),
-                    input_keys=postprocess_input_keys,
                 )
             ]
             run_workflow(
@@ -358,6 +385,25 @@ def run_vehicle_ownership_stage(
                 outputs_holder=outputs_holder_atlas,
                 name_suffix=str(atlas_year),
             )
+
+            atlas_input_root = workspace.get_atlas_mutable_input_dir()
+            atlas_year_input_dir = os.path.join(atlas_input_root, f"year{atlas_year}")
+            enqueue_archive_copy(
+                key=f"atlas_input_year_dir_{atlas_year}",
+                path=atlas_year_input_dir,
+            )
+            for base_dir in (
+                atlas_year_input_dir,
+                atlas_input_root,
+                workspace.get_atlas_output_dir(),
+            ):
+                for filename in ("vehicles_output.RData", "households_output.RData"):
+                    enqueue_archive_copy(
+                        key=f"atlas_rdata_{atlas_year}",
+                        path=os.path.join(base_dir, filename),
+                    )
+            # Ensure year N artifacts are durable before year N+1 consumes them.
+            flush_archive_queue(timeout=300, fail_on_timeout=True)
         except Exception:
             from pilates.utils.failure_handling import persist_state_on_error
 

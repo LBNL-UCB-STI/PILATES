@@ -4,7 +4,7 @@ import consist
 import pytest
 from consist.types import CacheOptions, ExecutionOptions
 
-from pilates.generic.model import Model, provenance_logging
+from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.generic.runner import GenericRunner
 from pilates.utils import consist_runtime as cr
@@ -44,175 +44,12 @@ def test_noop_scenario_run_returns_outputs_mapping():
     assert result.cache_hit is False
 
 
-def test_provenance_logging_requires_active_run_when_enabled(monkeypatch):
+def test_model_keeps_name_and_state():
     state = _StubState()
+    model = Model("dummy", state)
 
-    class DummyModel(Model):
-        @provenance_logging
-        def do(self, input_store: RecordStore) -> RecordStore:
-            return RecordStore(recordList=[])
-
-    monkeypatch.setattr(cr, "current_run", lambda: None)
-
-    model = DummyModel("dummy", state)
-    with pytest.raises(RuntimeError, match="No active Consist run context"):
-        model.do(RecordStore())
-
-
-def test_provenance_logging_uses_input_store_kwarg(monkeypatch):
-    state = _StubState()
-    calls = []
-
-    class DummyModel(Model):
-        @provenance_logging
-        def do(self, input_store: RecordStore) -> RecordStore:
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path="/tmp/out.txt", short_name="out", description="out"
-                    )
-                ]
-            )
-
-    monkeypatch.setattr(cr, "current_run", lambda: object())
-
-    def _log_artifacts(mapping, **meta):
-        calls.append((mapping, meta))
-
-    monkeypatch.setattr(cr, "log_artifacts", _log_artifacts)
-    monkeypatch.setattr(cr, "log_meta", lambda **_: None)
-
-    input_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path="/tmp/in.txt", short_name="input_store", description="in"
-            )
-        ]
-    )
-    model = DummyModel("dummy", state)
-    model.do(input_store=input_store)
-
-    assert len(calls) == 2
-    assert calls[0][1]["direction"] == "input"
-    assert calls[0][0] == {"input_store": "/tmp/in.txt"}
-    assert calls[1][1]["direction"] == "output"
-    assert calls[1][0] == {"out": "/tmp/out.txt"}
-
-
-def test_provenance_logging_forwards_batch_artifact_facets(monkeypatch):
-    state = _StubState()
-    calls = []
-
-    class DummyModel(Model):
-        @provenance_logging
-        def do(self, input_store: RecordStore) -> RecordStore:
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path="/tmp/linkstats.parquet",
-                        short_name="linkstats_ps2",
-                        description="linkstats",
-                        metadata={
-                            "facet": {
-                                "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
-                                "year": 2030,
-                                "iteration": 7,
-                                "beam_sub_iteration": 0,
-                                "phys_sim_iteration": 2,
-                            },
-                            "facet_schema_version": "v1",
-                            "facet_index": True,
-                        },
-                    )
-                ]
-            )
-
-    monkeypatch.setattr(cr, "current_run", lambda: object())
-    monkeypatch.setattr(cr, "log_meta", lambda **_: None)
-
-    def _log_artifacts(mapping, **meta):
-        calls.append((mapping, meta))
-
-    monkeypatch.setattr(cr, "log_artifacts", _log_artifacts)
-
-    input_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path="/tmp/in.txt", short_name="input_store", description="in"
-            )
-        ]
-    )
-    model = DummyModel("dummy", state)
-    model.do(input_store=input_store)
-
-    output_calls = [c for c in calls if c[1].get("direction") == "output"]
-    assert output_calls, "Expected output log_artifacts call"
-    _mapping, meta = output_calls[0]
-    assert meta["facet_index"] is True
-    assert meta["facets_by_key"]["linkstats_ps2"]["phys_sim_iteration"] == 2
-    assert meta["facet_schema_versions_by_key"]["linkstats_ps2"] == "v1"
-
-
-def test_decorator_logs_artifacts_with_consist(monkeypatch, tmp_path):
-    consist = pytest.importorskip("consist")
-    from consist import Tracker
-
-    run_dir = tmp_path / "consist_runs"
-    tracker = Tracker(
-        run_dir=run_dir,
-        db_path=str(tmp_path / "consist_test.duckdb"),
-        mounts={"workspace": str(tmp_path)},
-    )
-
-    calls = []
-
-    def _log_artifacts(mapping, **meta):
-        calls.append((mapping, meta))
-        return mapping
-
-    monkeypatch.setattr(consist, "log_artifacts", _log_artifacts)
-
-    state = _StubState()
-
-    class DummyModel(Model):
-        @provenance_logging
-        def do(self, input_store: RecordStore) -> RecordStore:
-            return RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(tmp_path / "out.txt"),
-                        short_name="out",
-                        description="out",
-                    )
-                ]
-            )
-
-    input_store = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(tmp_path / "in.txt"),
-                short_name="input_store",
-                description="in",
-            )
-        ]
-    )
-
-    model = DummyModel("dummy", state)
-    with cr.use_tracker(tracker):
-        with cr.scenario("decorator-test", tracker=tracker) as scenario:
-            scenario.run(
-                fn=lambda: model.do(input_store=input_store),
-                name="dummy_step",
-                model="dummy",
-                year=2017,
-                iteration=0,
-                execution_options=ExecutionOptions(load_inputs=False),
-            )
-
-    assert calls
-    directions = [meta.get("direction") for _, meta in calls]
-    assert "input" in directions
-    assert "output" in directions
+    assert model.model_name == "dummy"
+    assert model.state is state
 
 
 def test_run_container_uses_current_tracker(monkeypatch, tmp_path):

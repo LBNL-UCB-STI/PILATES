@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -66,3 +67,4 @@ def run_postprocessing_stage(
         name_suffix=str(year),
         iteration=getattr(state, "iteration", 0),
     )
+    flush_archive_queue(timeout=300, fail_on_timeout=True)

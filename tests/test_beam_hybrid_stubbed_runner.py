@@ -10,8 +10,10 @@ selects the right runner artifacts and emits expected output records.
 
 from pathlib import Path
 
+import pytest
+
+from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.postprocessor import BeamPostprocessor
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.settings_helper import get as real_get_setting
 from pilates.workspace import Workspace
 from tests.test_golden_stub_workflow import _build_settings
@@ -116,26 +118,25 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         _fake_get_setting,
     )
 
-    raw_outputs = RecordStore(
-        recordList=[
-            FileRecord(
-                file_path=str(events_sub0),
-                short_name=f"events_parquet_{state.forecast_year}_{state.iteration}_sub0",
-            ),
-            FileRecord(
-                file_path=str(events_sub1),
-                short_name=f"events_parquet_{state.forecast_year}_{state.iteration}_sub1",
-            ),
-            FileRecord(
-                file_path=str(raw_skims),
-                short_name=f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}",
-            ),
-        ]
+    raw_outputs = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={
+            f"events_parquet_{state.forecast_year}_{state.iteration}_sub0": events_sub0,
+            f"events_parquet_{state.forecast_year}_{state.iteration}_sub1": events_sub1,
+            f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}": raw_skims,
+        },
     )
 
     postprocessor = BeamPostprocessor("beam", state)
     outputs = postprocessor.postprocess(raw_outputs, workspace)
-    output_keys = set(outputs.to_mapping())
+    output_keys = {
+        *outputs.split_events.keys(),
+        *outputs.split_event_links.keys(),
+    }
+    if outputs.zarr_skims is not None:
+        output_keys.add("zarr_skims")
+    if outputs.final_skims_omx is not None:
+        output_keys.add("final_skims_omx")
 
     assert split_calls == [(str(events_sub1), True)]
     assert len(merge_calls) == 1
@@ -150,3 +151,13 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     assert "zarr_skims" in output_keys
     assert "final_skims_omx" not in output_keys
     assert state.sub_stage_progress == "postprocessor"
+
+
+def test_beam_postprocess_rejects_non_typed_run_outputs(tmp_path: Path) -> None:
+    settings = _build_settings(tmp_path)
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    postprocessor = BeamPostprocessor("beam", state)
+
+    with pytest.raises(TypeError, match="BeamRunOutputs"):
+        postprocessor.postprocess(object(), workspace)

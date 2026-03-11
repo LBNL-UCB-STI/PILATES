@@ -1,6 +1,7 @@
 import logging
 import re
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import zipfile
@@ -8,13 +9,13 @@ import os
 from typing import Tuple, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
+from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivitySimRunOutputs
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.generic.records import RecordStore, FileRecord
+from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
 )
-from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -122,6 +123,86 @@ def get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
+def _normalized_h5_keys(store: pd.HDFStore) -> Dict[str, str]:
+    return {key.strip("/"): key for key in store.keys()}
+
+
+def _detect_h5_prefix(
+    store: pd.HDFStore,
+    required_tables,
+    preferred_prefix=None,
+) -> Optional[str]:
+    normalized_keys = _normalized_h5_keys(store)
+    candidate_prefixes = []
+    if preferred_prefix not in (None, ""):
+        candidate_prefixes.append(str(preferred_prefix))
+    candidate_prefixes.append("")
+
+    discovered_prefixes = []
+    for key in normalized_keys:
+        if "/" in key:
+            discovered_prefixes.append(key.split("/", 1)[0])
+    for candidate in discovered_prefixes:
+        if candidate not in candidate_prefixes:
+            candidate_prefixes.append(candidate)
+
+    for candidate_prefix in candidate_prefixes:
+        if all(
+            (
+                f"{candidate_prefix}/{table_name}"
+                if candidate_prefix
+                else table_name
+            )
+            in normalized_keys
+            for table_name in required_tables
+        ):
+            return candidate_prefix
+    return None
+
+
+def _resolve_usim_store_path_and_prefix(
+    settings,
+    state: WorkflowState,
+    workspace: Workspace,
+    required_tables,
+    preferred_prefix=None,
+):
+    data_dir = workspace.get_usim_mutable_data_dir()
+    forecast_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        ),
+    )
+    current_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(settings, io="input"),
+    )
+
+    for candidate_path, label in (
+        (forecast_store_path, "forecast output"),
+        (current_store_path, "current input"),
+    ):
+        if not os.path.exists(candidate_path):
+            continue
+        with pd.HDFStore(candidate_path, mode="r") as store:
+            resolved_prefix = _detect_h5_prefix(
+                store,
+                required_tables=required_tables,
+                preferred_prefix=preferred_prefix,
+            )
+        if resolved_prefix is not None:
+            return candidate_path, resolved_prefix
+        logger.warning(
+            "UrbanSim %s datastore exists but is missing required tables %s: %s",
+            label,
+            list(required_tables),
+            candidate_path,
+        )
+
+    return None, None
+
+
 def _prepare_updated_tables(
     settings,
     state: WorkflowState,
@@ -137,16 +218,48 @@ def _prepare_updated_tables(
 
     data_dir = workspace.get_usim_mutable_data_dir()
 
-    # e.g. model_data_2012.h5
-    usim_output_store_name = get_usim_datastore_fname(
-        settings, io="output", year=state.forecast_year
+    usim_output_store_path, resolved_prefix = _resolve_usim_store_path_and_prefix(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        required_tables=tables_updated_by_asim,
+        preferred_prefix=prefix,
     )
-    usim_output_store_path = os.path.join(data_dir, usim_output_store_name)
-    if not os.path.exists(usim_output_store_path):
+    if not usim_output_store_path:
+        forecast_path = os.path.join(
+            data_dir,
+            get_usim_datastore_fname(settings, io="output", year=state.forecast_year),
+        )
         raise ValueError(
-            "No output data store found at {0}".format(usim_output_store_path)
+            "No output data store found at {0}".format(forecast_path)
+        )
+    if resolved_prefix != prefix:
+        logger.info(
+            "Using UrbanSim datastore %s with table prefix %r for ActivitySim postprocess "
+            "(requested prefix %r).",
+            usim_output_store_path,
+            resolved_prefix,
+            prefix,
         )
     usim_output_store = pd.HDFStore(usim_output_store_path)
+    normalized_usim_keys = _normalized_h5_keys(usim_output_store)
+
+    def _resolve_h5_key(table_name: str) -> str:
+        candidates = []
+        if resolved_prefix not in (None, ""):
+            candidates.append(f"{resolved_prefix}/{table_name}")
+        candidates.append(table_name)
+        for candidate in candidates:
+            actual = normalized_usim_keys.get(candidate.strip("/"))
+            if actual:
+                return actual
+        raise KeyError(
+            "UrbanSim datastore {0} does not contain table '{1}'. Available keys: {2}".format(
+                usim_output_store_path,
+                table_name,
+                sorted(normalized_usim_keys),
+            )
+        )
 
     # ensure we preserve all columns originally in the urbansim outputs
     required_cols = {}
@@ -193,21 +306,49 @@ def _prepare_updated_tables(
 
     def _get_usim_table(table_name: str) -> pd.DataFrame:
         if table_name not in usim_tables:
-            h5_key = table_name
-            if prefix:
-                h5_key = os.path.join(str(prefix), h5_key)
+            h5_key = _resolve_h5_key(table_name)
             usim_tables[table_name] = usim_output_store[h5_key].copy()
         return usim_tables[table_name]
 
     for table_name in tables_updated_by_asim:
-        h5_key = table_name
-        if prefix:
-            h5_key = os.path.join(str(prefix), h5_key)
+        h5_key = _resolve_h5_key(table_name)
         logger.info("Reading h5 table {0}".format(h5_key))
         required_cols[table_name] = list(usim_output_store[h5_key].columns)
 
     # This is the inverse process of asim_pre._update_persons_table()
     p_cols_to_include = required_cols["persons"]
+
+    def _normalize_person_household_ids(
+        persons_df: pd.DataFrame, target_dtype
+    ) -> pd.DataFrame:
+        if "household_id" not in persons_df.columns:
+            return persons_df
+
+        numeric = pd.to_numeric(persons_df["household_id"], errors="coerce")
+        invalid_mask = numeric.isna()
+        invalid_mask |= (numeric % 1 != 0).fillna(False)
+
+        if invalid_mask.any():
+            dropped = int(invalid_mask.sum())
+            sample_person_ids = []
+            if persons_df.index.name == "person_id":
+                sample_person_ids = persons_df.index[invalid_mask].tolist()[:10]
+            elif "person_id" in persons_df.columns:
+                sample_person_ids = (
+                    persons_df.loc[invalid_mask, "person_id"].tolist()[:10]
+                )
+            logger.warning(
+                "Dropping %s ActivitySim persons rows with missing/invalid household_id "
+                "before writing the updated UrbanSim persons table. Sample person_ids=%s",
+                dropped,
+                sample_person_ids,
+            )
+            persons_df = persons_df.loc[~invalid_mask].copy()
+            numeric = numeric.loc[~invalid_mask]
+
+        persons_df.loc[:, "household_id"] = numeric.astype(target_dtype)
+        return persons_df
+
     def _set_from_source(df: pd.DataFrame, target: str, sources) -> bool:
         for source in sources:
             if source in df.columns:
@@ -273,6 +414,9 @@ def _prepare_updated_tables(
                 )
             else:
                 persons = aligned.join(usim_persons[missing_person_cols], how="left")
+        persons = _normalize_person_household_ids(
+            persons, usim_persons["household_id"].dtype
+        )
         asim_output_dict["persons"] = persons[p_cols_to_include]
 
     logger.info("Preparing households table!")
@@ -318,9 +462,7 @@ def _prepare_updated_tables(
     else:
         logger.warning("Household table not found in ASim outputs!")
     for table_name in tables_updated_by_asim:
-        h5_key = table_name
-        if prefix:
-            h5_key = os.path.join(str(prefix), h5_key)
+        h5_key = _resolve_h5_key(table_name)
         logger.info("Validating data schemas for table {0}.".format(table_name))
 
         # make sure all required columns are present
@@ -330,14 +472,15 @@ def _prepare_updated_tables(
                 for col in required_cols[table_name]
             ]
         ):
+            missing_columns = [
+                col
+                for col in required_cols[table_name]
+                if col not in asim_output_dict[table_name].columns
+            ]
             raise KeyError(
-                "Not all required columns are in the {0} table! We're missing".format(
+                "Not all required columns are in the {0} table! We're missing {1}".format(
                     table_name,
-                    [
-                        col
-                        for col in required_cols[table_name]
-                        if col not in asim_output_dict[table_name].columns
-                    ],
+                    missing_columns,
                 )
             )
         # make sure data types match
@@ -409,7 +552,6 @@ def create_usim_input_data(
     in the ActivitySim outputs. Likewise, UrbanSim *inputs* are only passed
     on to the next iteration if they were not found in the UrbanSim *outputs*.
     """
-    input_year = state.year
     forecast_year = state.forecast_year
     # parse settings
     data_dir = workspace.get_usim_mutable_data_dir()
@@ -422,6 +564,20 @@ def create_usim_input_data(
     archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
     archive_path = input_store_path.replace(input_datastore_name, archive_fname)
 
+    forecast_output_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(settings, "output", forecast_year),
+    )
+    fallback_to_current_input = not os.path.exists(forecast_output_store_path)
+    source_store_path = (
+        input_store_path if fallback_to_current_input else forecast_output_store_path
+    )
+    source_store_label = (
+        "current UrbanSim input datastore"
+        if fallback_to_current_input
+        else "UrbanSim forecast output datastore"
+    )
+
     if os.path.exists(input_store_path):
         logger.info(
             "Moving urbansim inputs from the previous iteration to {0}".format(
@@ -429,6 +585,8 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
+        if fallback_to_current_input:
+            source_store_path = archive_path
     elif not os.path.exists(archive_path):
         logger.warning(
             "No input data found at {0} or {1}. Cannot create next iteration inputs.".format(
@@ -437,30 +595,61 @@ def create_usim_input_data(
         )
         return None, None
 
-    # 3. Previous UrbanSim output data
-    usim_output_datastore_name = get_usim_datastore_fname(
-        settings, "output", forecast_year
-    )
-    usim_output_store_path = os.path.join(data_dir, usim_output_datastore_name)
+    source_prefix = None
+    if os.path.exists(source_store_path):
+        with pd.HDFStore(source_store_path, mode="r") as source_store:
+            source_prefix = _detect_h5_prefix(
+                source_store,
+                required_tables=["households"],
+                preferred_prefix=forecast_year,
+            )
+
+    if source_prefix is None:
+        logger.warning(
+            "No UrbanSim source data found at %s. Cannot create next iteration inputs.",
+            source_store_path,
+        )
+        return None, None
+
+    if fallback_to_current_input:
+        logger.info(
+            "Falling back to %s for ActivitySim postprocess because forecast output is missing: %s",
+            source_store_label,
+            source_store_path,
+        )
+
+    # 3. Previous UrbanSim output/current data
+    usim_output_datastore_name = os.path.basename(source_store_path)
+    usim_output_store_path = source_store_path
     if not os.path.exists(usim_output_store_path):
         logger.warning(
-            "No UrbanSim output data found at {0}. Cannot create next iteration inputs.".format(
+            "No UrbanSim source data found at {0}. Cannot create next iteration inputs.".format(
                 usim_output_store_path
             )
         )
         return None, None
-    # --- Perform Transformation ---
+
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
     # load last iter UrbanSim input data
-    og_input_store = pd.HDFStore(archive_path)
+    og_input_store = pd.HDFStore(archive_path, mode="r")
 
-    # load last iter UrbanSim output data
-    usim_output_store, table_prefix_year = read_datastore(
-        settings, forecast_year, mutable_data_dir=workspace.get_usim_mutable_data_dir()
+    # load last iter UrbanSim output/current data
+    same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
+        archive_path
     )
+    usim_output_store = (
+        og_input_store
+        if same_source_as_archive
+        else pd.HDFStore(usim_output_store_path, mode="r")
+    )
+    table_prefix_year = str(source_prefix)
 
-    logger.info("Merging results back into UrbanSim format and storing as .h5!")
+    logger.info(
+        "Merging results back into UrbanSim format and storing as .h5 using %s (%s).",
+        usim_output_store_path,
+        source_store_label,
+    )
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
     new_input_store = pd.HDFStore(input_store_path)
@@ -526,7 +715,8 @@ def create_usim_input_data(
 
     og_input_store.close()
     new_input_store.close()
-    usim_output_store.close()
+    if not same_source_as_archive:
+        usim_output_store.close()
     logger.info("Closing all open h5 files")
 
     output_record = FileRecord(
@@ -648,16 +838,28 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
+
+    def postprocess(
+        self,
+        raw_outputs: ActivitySimRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> ActivitySimPostprocessOutputs:
+        if not isinstance(raw_outputs, ActivitySimRunOutputs):
+            raise TypeError(
+                "ActivitysimPostprocessor.postprocess expects ActivitySimRunOutputs"
+            )
+        self.state.set_sub_stage_progress("postprocessor")
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
+    ) -> ActivitySimPostprocessOutputs:
         """
         Consolidates all postprocessing steps for ActivitySim.
         This involves taking the raw outputs from the ActivitySim run,
@@ -665,12 +867,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         models in the workflow (e.g., UrbanSim, BEAM).
 
         Args:
-            raw_outputs (RecordStore): The raw outputs from the model run.
+            raw_outputs (ActivitySimRunOutputs): The raw outputs from the model run.
             workspace (Workspace): The workspace object for path management.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: Postprocessed output data.
+            ActivitySimPostprocessOutputs: Postprocessed output data.
         """
         settings = self.state.full_settings
         year = self.state.year
@@ -703,27 +905,29 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         if not os.path.exists(os.path.abspath(inputs_folder_path)):
             os.makedirs(inputs_folder_path, exist_ok=True)
 
-        processed_records = []
+        processed_outputs: Dict[str, str] = {}
+        processed_output_hashes: Dict[str, str] = {}
+        usim_datastore_h5: Optional[str] = None
+        usim_datastore_key: Optional[str] = None
 
         def _build_content_hash_map() -> Dict[str, str]:
             hash_map: Dict[str, str] = {}
-            for record in raw_outputs.all_records():
-                path = record.get_absolute_path(base_path=workspace.full_path)
-                if not path:
-                    continue
-                record_hash = getattr(record, "content_hash", None)
+            for short_name, path in raw_outputs.raw_outputs.items():
+                record_hash = raw_outputs.raw_output_hashes.get(short_name)
                 if record_hash:
-                    hash_map[path] = record_hash
-            for store in (workspace.output_data or {}).values():
-                if not isinstance(store, RecordStore):
+                    hash_map[os.path.abspath(str(path))] = record_hash
+            source_input_paths = raw_outputs.source_input_paths
+            source_input_hashes = raw_outputs.source_input_hashes
+            if not source_input_paths and not source_input_hashes:
+                logger.warning(
+                    "ActivitySim postprocess raw outputs are missing source input metadata; "
+                    "archived input content hashes may be unavailable."
+                )
+            for short_name, source_path in source_input_paths.items():
+                record_hash = source_input_hashes.get(short_name)
+                if not record_hash or not source_path:
                     continue
-                for record in store.all_records():
-                    path = record.get_absolute_path(base_path=workspace.full_path)
-                    if not path:
-                        continue
-                    record_hash = getattr(record, "content_hash", None)
-                    if record_hash:
-                        hash_map[path] = record_hash
+                hash_map[os.path.abspath(str(source_path))] = record_hash
             return hash_map
 
         content_hash_map = _build_content_hash_map()
@@ -749,16 +953,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 shutil.copy(source_path, target_path)
                 content_hash = _resolve_content_hash(source_path)
 
-                processed_records.append(
-                    FileRecord(
-                        file_path=target_path,
-                        year=self.state.current_year,
-                        description=f"Archived ActivitySim input: {input_file}",
-                        short_name=f"asim_input_{input_file.replace('.', '_')}_archived",
-                        iteration=self.state.current_inner_iter,
-                        content_hash=content_hash,
-                    )
-                )
+                archived_key = f"asim_input_{input_file.replace('.', '_')}_archived"
+                processed_outputs[archived_key] = target_path
+                if content_hash:
+                    processed_output_hashes[archived_key] = content_hash
                 logger.info(f"Archived ActivitySim input: {input_file}")
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
@@ -780,16 +978,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 shutil.copy2(zarr_source_path, zarr_target_path)
             content_hash = _resolve_content_hash(zarr_source_path)
 
-            processed_records.append(
-                FileRecord(
-                    file_path=zarr_target_path,
-                    year=self.state.current_year,
-                    description="Archived ActivitySim input: skims.zarr (snapshot)",
-                    short_name="asim_input_skims_zarr_archived",
-                    iteration=self.state.current_inner_iter,
-                    content_hash=content_hash,
-                )
-            )
+            processed_outputs["asim_input_skims_zarr_archived"] = zarr_target_path
+            if content_hash:
+                processed_output_hashes["asim_input_skims_zarr_archived"] = content_hash
             logger.info("Archived ActivitySim input: skims.zarr")
         else:
             logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
@@ -807,11 +998,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             )
 
             # The raw output files are implicitly the source for all derived products in this post-processing step.
-            source_file_paths = [
-                getattr(r, "file_path")
-                for r in raw_outputs.all_records()
-                if hasattr(r, "file_path")
-            ]
+            source_file_paths = [str(path) for path in raw_outputs.raw_outputs.values()]
 
             # 2. Prepare tables for integration with UrbanSim
             tables_updated_by_asim = ["households", "persons"]
@@ -835,41 +1022,50 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
             )
             if usim_record:
-                processed_records.append(usim_record)
+                usim_datastore_h5 = next_usim_input_path
+                usim_datastore_key = getattr(usim_record, "short_name", None)
 
         # Record raw outputs as inputs to this post-processing run
-        for record in raw_outputs.all_records():
-            if hasattr(record, "file_path"):
-                source = record.get_absolute_path(base_path=workspace.full_path)
-                clean_name = re.sub(r"_asim_out_temp$", "", record.short_name)
-                output_key = normalize_asim_output_key(clean_name)
-                target = os.path.join(
-                    iteration_folder_path,
-                    clean_name + ".parquet",
-                )
-                if not source:
-                    continue
-                if os.path.abspath(source) == os.path.abspath(target):
-                    continue
-                if not os.path.exists(source):
-                    logger.debug("ASim output missing, skipping move: %s", source)
-                    continue
-                if os.path.exists(target):
-                    logger.debug("ASim output already archived: %s", target)
-                    continue
-                shutil.move(source, target)
-                content_hash = _resolve_content_hash(source)
-                processed_records.append(
-                    FileRecord(
-                        file_path=target,
-                        year=self.state.forecast_year,
-                        description=f"ActivitySim output file: {clean_name}",
-                        short_name=output_key,
-                        iteration=self.state.current_inner_iter,
-                        content_hash=content_hash,
+        for short_name, path in raw_outputs.raw_outputs.items():
+            source = os.path.abspath(str(path))
+            clean_name = re.sub(r"_asim_out_temp$", "", short_name)
+            output_key = normalize_asim_output_key(clean_name)
+            target = os.path.join(
+                iteration_folder_path,
+                clean_name + ".parquet",
+            )
+            content_hash = raw_outputs.raw_output_hashes.get(short_name)
+            if os.path.abspath(source) == os.path.abspath(target):
+                processed_outputs[output_key] = target
+                if content_hash:
+                    processed_output_hashes[output_key] = content_hash
+                continue
+            if os.path.exists(target):
+                logger.debug("ASim output already archived: %s", target)
+                processed_outputs[output_key] = target
+                if content_hash is None:
+                    content_hash = _resolve_content_hash(source) or _resolve_content_hash(
+                        target
                     )
-                )
+                if content_hash:
+                    processed_output_hashes[output_key] = content_hash
+                continue
+            if not os.path.exists(source):
+                logger.debug("ASim output missing, skipping move: %s", source)
+                continue
+            shutil.move(source, target)
+            if content_hash is None:
+                content_hash = _resolve_content_hash(source)
+            processed_outputs[output_key] = target
+            if content_hash:
+                processed_output_hashes[output_key] = content_hash
 
-        # Return a new RecordStore with the paths to the newly created/processed files.
-        processed_store = RecordStore(recordList=processed_records)
-        return processed_store
+        return ActivitySimPostprocessOutputs(
+            usim_datastore_h5=Path(usim_datastore_h5) if usim_datastore_h5 else None,
+            asim_output_dir=Path(workspace.get_asim_output_dir()),
+            processed_outputs={
+                key: Path(path) for key, path in processed_outputs.items()
+            },
+            processed_output_hashes=processed_output_hashes,
+            usim_datastore_key=usim_datastore_key,
+        )

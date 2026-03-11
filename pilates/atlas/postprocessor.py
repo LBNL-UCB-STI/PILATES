@@ -1,13 +1,15 @@
 from typing import Optional, Dict, Any
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
+from pilates.utils.coupler_helpers import enqueue_archive_copy
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.workflows.artifact_keys import USIM_H5_UPDATED
@@ -86,6 +88,24 @@ def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
     return datastore_name
 
 
+def resolve_atlas_usim_datastore_path(
+    settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+) -> Path:
+    """Resolve the UrbanSim datastore ATLAS should read/update for this subrun."""
+    explicit_path = getattr(state, "atlas_usim_datastore_h5", None)
+    if explicit_path:
+        return Path(explicit_path)
+
+    usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
+    if state.is_start_year():
+        usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
+    else:
+        usim_datastore_fname = get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        )
+    return Path(usim_mutable_data_dir) / usim_datastore_fname
+
+
 class AtlasPostprocessor(GenericPostprocessor):
     """
     ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.
@@ -100,11 +120,8 @@ class AtlasPostprocessor(GenericPostprocessor):
         """
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
-        usim_output_fname = get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        usim_output_path = resolve_atlas_usim_datastore_path(
+            settings, state, workspace
         )
         atlas_output_dir = workspace.get_atlas_output_dir()
         return {
@@ -112,7 +129,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 atlas_output_dir if os.path.exists(atlas_output_dir) else None
             ),
             "usim_datastore_h5": (
-                usim_output_path if os.path.exists(usim_output_path) else None
+                usim_output_path if usim_output_path.exists() else None
             ),
         }
 
@@ -133,11 +150,8 @@ class AtlasPostprocessor(GenericPostprocessor):
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
         """
-        usim_output_fname = get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        usim_output_path = resolve_atlas_usim_datastore_path(
+            settings, state, workspace
         )
         return {
             "atlas_output_dir": workspace.get_atlas_output_dir(),
@@ -148,27 +162,26 @@ class AtlasPostprocessor(GenericPostprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
 
     def _postprocess(
         self,
-        raw_outputs: RecordStore,
+        raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
-    ) -> RecordStore:
+    ) -> AtlasPostprocessOutputs:
         """
         Postprocess ATLAS outputs: update UrbanSim HDF5 with new vehicle ownership,
         and add vehicleTypeId to ATLAS vehicle outputs. Handles provenance tracking.
 
         Args:
-            raw_outputs (RecordStore): The raw outputs from the ATLAS model run.
+            raw_outputs (AtlasRunOutputs): The raw outputs from the ATLAS model run.
             workspace (Workspace): The workspace object for path management.
             model_run_hash (Optional[str]): The unique hash for this postprocessor run.
 
         Returns:
-            RecordStore: A RecordStore containing records for the generated output files.
+            AtlasPostprocessOutputs: Typed outputs for the generated files.
         """
         logger.info(
             "[AtlasPostprocessor] Starting postprocessing for ATLAS for year %s",
@@ -177,70 +190,96 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         settings = self.state.full_settings
         output_year = self.state.forecast_year
-        output_records = []
+        output_paths: Dict[str, Path] = {}
+        atlas_hh_path = raw_outputs.raw_outputs.get(f"householdv_{output_year}")
+        atlas_veh_path = raw_outputs.raw_outputs.get(f"vehicles_{output_year}")
+        if atlas_hh_path is None or not atlas_hh_path.exists():
+            raise RuntimeError(
+                "ATLAS postprocess requires the current-year householdv CSV from "
+                "AtlasRunOutputs"
+            )
+        if atlas_veh_path is None or not atlas_veh_path.exists():
+            raise RuntimeError(
+                "ATLAS postprocess requires the current-year vehicles CSV from "
+                "AtlasRunOutputs"
+            )
 
         # --- HDF5 Update and Provenance ---
-        usim_h5_path = workspace.get_usim_mutable_data_dir()
-        usim_h5_fname = get_usim_datastore_fname(
-            settings, io="output", year=output_year
+        usim_h5_file = resolve_atlas_usim_datastore_path(
+            settings, self.state, workspace
         )
-        usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
-        atlas_hh_file = os.path.join(
-            workspace.get_atlas_output_dir(), f"householdv_{output_year}.csv"
+        if not usim_h5_file.exists():
+            raise RuntimeError(
+                "ATLAS postprocess requires the UrbanSim datastore H5 selected for "
+                f"year {self.state.current_year}: {usim_h5_file}"
+            )
+
+        # Perform the update
+        update_succeeded = self.atlas_update_h5_vehicle(
+            settings, output_year, str(usim_h5_file), str(atlas_hh_path)
         )
-
-        if os.path.exists(usim_h5_file) and os.path.exists(atlas_hh_file):
-            # Define the table to be updated. TODO: Check table names and fall back to /year/households
-            table_name = (
-                "households"
-                if self.state.is_start_year()
-                else f"/{output_year}/households"
+        if not update_succeeded:
+            raise RuntimeError(
+                "ATLAS postprocess failed to update UrbanSim HDF5 with vehicle ownership"
             )
-
-            # Perform the update
-            self.atlas_update_h5_vehicle(
-                settings, output_year, usim_h5_file, atlas_hh_file
-            )
-            logger.info(
-                "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
-            )
-
-            output_records.append(
-                FileRecord(
-                    file_path=usim_h5_file,
-                    year=output_year,
-                    description="UrbanSim HDF5 updated with ATLAS vehicle ownership",
-                    short_name=USIM_H5_UPDATED,
-                    h5_tables_used=[table_name],
-                )
-            )
+        logger.info(
+            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
+        )
+        updated_usim_h5 = Path(usim_h5_file)
+        output_paths[USIM_H5_UPDATED] = updated_usim_h5
 
         # --- vehicleTypeId addition and Provenance ---
-        atlas_veh_file = os.path.join(
-            workspace.get_atlas_output_dir(), f"vehicles_{output_year}.csv"
-        )
         atlas_veh2_file = os.path.join(
             workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
         )
 
-        if os.path.exists(atlas_veh_file):
-            atlas_add_vehileTypeId(
-                settings, output_year, atlas_veh_file, atlas_veh2_file
+        atlas_add_vehileTypeId(
+            settings, output_year, str(atlas_veh_path), atlas_veh2_file
+        )
+        logger.info(
+            "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
+        )
+        if not os.path.exists(atlas_veh2_file):
+            raise RuntimeError(
+                "ATLAS postprocess did not produce vehicles2 output for year "
+                f"{output_year}"
             )
-            logger.info(
-                "[AtlasPostprocessor] Added vehicleTypeId to ATLAS vehicle outputs."
-            )
+        output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
 
-            if os.path.exists(atlas_veh2_file):
-                atlas_veh2_output_record = FileRecord(
-                    file_path=atlas_veh2_file,
-                    year=output_year,
-                    description="ATLAS vehicles2 CSV with vehicleTypeId",
-                    short_name="atlas_vehicles2_output",
+        # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
+        atlas_input_root = workspace.get_atlas_mutable_input_dir()
+        atlas_year_input_dir = os.path.join(atlas_input_root, f"year{output_year}")
+        enqueue_archive_copy(
+            key=f"atlas_input_year_dir_{output_year}",
+            path=atlas_year_input_dir,
+        )
+        for base_dir in (
+            atlas_year_input_dir,
+            atlas_input_root,
+            workspace.get_atlas_output_dir(),
+        ):
+            for filename in ("vehicles_output.RData", "households_output.RData"):
+                enqueue_archive_copy(
+                    key=f"atlas_rdata_{output_year}",
+                    path=os.path.join(base_dir, filename),
                 )
-                output_records.append(atlas_veh2_output_record)
 
-        return RecordStore(recordList=output_records)
+        return AtlasPostprocessOutputs(
+            atlas_output_dir=Path(workspace.get_atlas_output_dir()),
+            usim_datastore_h5=updated_usim_h5,
+            processed_outputs=output_paths,
+        )
+
+    def postprocess(
+        self,
+        raw_outputs: AtlasRunOutputs,
+        workspace: Workspace,
+        model_run_hash: Optional[str] = None,
+    ) -> AtlasPostprocessOutputs:
+        if not isinstance(raw_outputs, AtlasRunOutputs):
+            raise TypeError("AtlasPostprocessor.postprocess expects AtlasRunOutputs")
+        self.state.set_sub_stage_progress("postprocessor")
+        return self._postprocess(raw_outputs, workspace, model_run_hash)
 
     def atlas_update_h5_vehicle(
         self,
@@ -248,7 +287,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         output_year: int,
         h5_file_path: str,
         household_v_csv_path: str,
-    ):
+    ) -> bool:
         """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
 
         Reads vehicle ownership data from the given CSV file and updates the 'cars'
@@ -264,7 +303,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             logger.error(
                 f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
             )
-            return
+            return False
 
         logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
 
@@ -296,7 +335,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 olddf = h5[key]
             except KeyError:
                 logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
-                return
+                return False
 
             olddf.index = olddf.index.astype(int)
             olddf = olddf.reindex(df.index.astype(int))
@@ -305,6 +344,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 logger.error(
                     "ATLAS household_id mismatch found - NOT updating h5 datastore"
                 )
+                return False
             else:
                 olddf["cars"] = df["cars"].values
                 olddf["hh_cars"] = df["hh_cars"].values
@@ -314,3 +354,4 @@ class AtlasPostprocessor(GenericPostprocessor):
                         olddf[col] = olddf[col].astype(str)
                 h5[key] = olddf
                 logger.info(f"ATLAS update h5 datastore table {key} - done")
+                return True

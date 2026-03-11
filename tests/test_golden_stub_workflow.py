@@ -39,17 +39,30 @@ import pandas as pd
 import yaml
 
 from pilates.config import load_config
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.atlas.outputs import AtlasRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+    normalize_asim_output_key,
+)
+from pilates.beam.outputs import (
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
+from pilates.generic.records import RecordStore
+from pilates.urbansim.outputs import (
+    UrbanSimPostprocessOutputs,
+    UrbanSimPreprocessOutputs,
+    UrbanSimRunOutputs,
+)
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workspace import Workspace
-from pilates.activitysim.outputs import normalize_asim_output_key
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -133,9 +146,12 @@ class DummyPreprocessor:
         self._record_builder = record_builder
         self._state = state
 
-    def preprocess(self, workspace, previous_records=RecordStore()):
+    def preprocess(self, workspace, previous_records=None, **kwargs):
         return self._record_builder(
-            self.model_name, "preprocess", state=self._state, workspace=workspace
+            self.model_name,
+            "preprocess",
+            state=self._state,
+            workspace=workspace,
         )
 
 
@@ -147,9 +163,13 @@ class DummyRunner:
         self._record_builder = record_builder
         self._state = state
 
-    def run(self, input_store, workspace):
+    def run(self, input_store, workspace, **kwargs):
         return self._record_builder(
-            self.model_name, "run", state=self._state, workspace=workspace
+            self.model_name,
+            "run",
+            state=self._state,
+            workspace=workspace,
+            input_store=input_store,
         )
 
 
@@ -161,7 +181,7 @@ class DummyPostprocessor:
         self._record_builder = record_builder
         self._state = state
 
-    def postprocess(self, raw_outputs, workspace):
+    def postprocess(self, raw_outputs, workspace, **kwargs):
         return self._record_builder(
             self.model_name,
             "postprocess",
@@ -436,7 +456,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     _write_file(omx_path)
 
     zarr_path = asim_out_dir / "cache" / "skims.zarr"
+    sharrow_cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
     _write_file(zarr_path)
+    _write_file(sharrow_cache_dir / "compile-cache.bin")
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"
     )
@@ -552,10 +574,19 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     promoted_linkstats = Path(workspace.get_beam_output_dir()) / "promoted_linkstats.csv.gz"
     promoted_plans = Path(workspace.get_beam_output_dir()) / "promoted_plans.parquet"
+    final_skims_omx = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
     _write_file(promoted_linkstats)
     _write_file(promoted_plans)
+    _write_file(final_skims_omx)
 
-    def record_builder(model_name, phase, state=None, workspace=None, raw_outputs=None):
+    def record_builder(
+        model_name,
+        phase,
+        state=None,
+        workspace=None,
+        raw_outputs=None,
+        input_store=None,
+    ):
         """
         Build deterministic RecordStore responses for each model/phase pair.
 
@@ -565,67 +596,69 @@ def golden_stub_env(tmp_path, monkeypatch):
         - ``postprocess`` emits finalized artifacts consumed by downstream stages.
         """
         if phase == "preprocess":
+            if model_name == "urbansim":
+                assert workspace is not None
+                return UrbanSimPreprocessOutputs(
+                    usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+                    prepared_inputs={
+                        USIM_DATASTORE_BASE_H5: usim_input_path,
+                        USIM_DATASTORE_CURRENT_H5: usim_input_path,
+                    },
+                )
             if model_name == "activitysim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(land_use_path), short_name=ASIM_LAND_USE_IN),
-                        FileRecord(file_path=str(households_path), short_name=ASIM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(persons_path), short_name=ASIM_PERSONS_IN),
-                        FileRecord(file_path=str(omx_path), short_name=ASIM_OMX_SKIMS),
-                    ]
+                assert workspace is not None
+                return ActivitySimPreprocessOutputs(
+                    mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+                    land_use_table=land_use_path,
+                    households_table=households_path,
+                    persons_table=persons_path,
+                    omx_skims=omx_path,
                 )
             if model_name == "beam":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(beam_plans_path), short_name=BEAM_PLANS_IN),
-                        FileRecord(file_path=str(beam_households_path), short_name=BEAM_HOUSEHOLDS_IN),
-                        FileRecord(file_path=str(beam_persons_path), short_name=BEAM_PERSONS_IN),
-                        FileRecord(file_path=str(beam_linkstats_path), short_name=LINKSTATS_WARMSTART),
-                    ]
+                assert workspace is not None
+                return BeamPreprocessOutputs(
+                    beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+                    prepared_inputs={
+                        BEAM_PLANS_IN: beam_plans_path,
+                        BEAM_HOUSEHOLDS_IN: beam_households_path,
+                        BEAM_PERSONS_IN: beam_persons_path,
+                        LINKSTATS_WARMSTART: beam_linkstats_path,
+                    },
                 )
             return RecordStore()
         if phase == "run":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(usim_output_path), short_name=USIM_FORECAST_OUTPUT)
-                    ]
+                return UrbanSimRunOutputs(
+                    usim_datastore_h5=usim_output_path,
+                    raw_outputs={
+                        USIM_FORECAST_OUTPUT: usim_output_path,
+                    },
                 )
             if model_name == "activitysim_compile":
-                return RecordStore(
-                    recordList=[FileRecord(file_path=str(zarr_path), short_name=ZARR_SKIMS)]
+                return ActivitySimCompileOutputs(
+                    zarr_skims=zarr_path,
+                    sharrow_cache_dir=sharrow_cache_dir,
                 )
             if model_name == "activitysim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(asim_households_out_path),
-                            short_name="households_asim_out_temp",
-                        ),
-                        FileRecord(
-                            file_path=str(asim_persons_out_path),
-                            short_name="persons_asim_out_temp",
-                        ),
-                        FileRecord(
-                            file_path=str(asim_tours_out_path),
-                            short_name="tours_asim_out_temp",
-                        ),
-                        FileRecord(
-                            file_path=str(asim_trips_out_path),
-                            short_name="trips_asim_out_temp",
-                        ),
-                        FileRecord(
-                            file_path=str(asim_beam_plans_out_path),
-                            short_name="beam_plans_asim_out_temp",
-                        ),
-                    ]
+                assert workspace is not None
+                return ActivitySimRunOutputs(
+                    output_dir=Path(workspace.get_asim_output_dir()),
+                    raw_outputs={
+                        "households_asim_out_temp": asim_households_out_path,
+                        "persons_asim_out_temp": asim_persons_out_path,
+                        "tours_asim_out_temp": asim_tours_out_path,
+                        "trips_asim_out_temp": asim_trips_out_path,
+                        "beam_plans_asim_out_temp": asim_beam_plans_out_path,
+                    },
                 )
             if model_name == "beam":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(file_path=str(promoted_linkstats), short_name=LINKSTATS),
-                        FileRecord(file_path=str(promoted_plans), short_name=BEAM_PLANS_OUT),
-                    ]
+                assert workspace is not None
+                return BeamRunOutputs(
+                    beam_output_dir=Path(workspace.get_beam_output_dir()),
+                    raw_outputs={
+                        LINKSTATS: promoted_linkstats,
+                        BEAM_PLANS_OUT: promoted_plans,
+                    },
                 )
             if model_name == "atlas":
                 assert state is not None
@@ -653,57 +686,52 @@ def golden_stub_env(tmp_path, monkeypatch):
                     }
                 ).to_csv(veh_path, index=False)
 
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(hhv_path),
-                            short_name=f"householdv_{output_year}",
-                        ),
-                        FileRecord(
-                            file_path=str(veh_path),
-                            short_name=f"vehicles_{output_year}",
-                        ),
-                    ]
+                return AtlasRunOutputs(
+                    atlas_output_dir=atlas_output_dir,
+                    raw_outputs={
+                        f"householdv_{output_year}": hhv_path,
+                        f"vehicles_{output_year}": veh_path,
+                    },
                 )
             return RecordStore()
         if phase == "postprocess":
             if model_name == "urbansim":
-                return RecordStore(
-                    recordList=[
-                        FileRecord(
-                            file_path=str(usim_merged_path),
-                            short_name=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-                        )
-                    ]
+                return UrbanSimPostprocessOutputs(
+                    usim_datastore_h5=usim_merged_path,
+                    processed_outputs={
+                        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}": usim_merged_path,
+                    },
                 )
             if model_name == "activitysim":
                 assert state is not None
                 assert workspace is not None
                 assert raw_outputs is not None
+                assert isinstance(raw_outputs, ActivitySimRunOutputs)
 
                 iter_dir = Path(workspace.get_asim_output_dir()) / (
                     f"year-{state.current_year}-iteration-{state.current_inner_iter}"
                 )
                 iter_dir.mkdir(parents=True, exist_ok=True)
-                output_records = []
-                for rec in raw_outputs.all_records():
-                    source_path = Path(rec.file_path)
+                processed_outputs = {}
+                for short_name, source_path in raw_outputs.raw_outputs.items():
+                    source_path = Path(source_path)
                     if not source_path.is_absolute():
                         source_path = Path(workspace.full_path) / source_path
-                    clean_name = re.sub(r"_asim_out_temp$", "", rec.short_name or "")
+                    clean_name = re.sub(r"_asim_out_temp$", "", short_name or "")
                     target_path = iter_dir / f"{clean_name}.parquet"
                     if source_path.exists():
                         shutil.copy2(source_path, target_path)
-                    output_records.append(
-                        FileRecord(
-                            file_path=str(target_path),
-                            short_name=normalize_asim_output_key(clean_name),
-                            description=f"ActivitySim output file: {clean_name}",
-                            year=state.forecast_year,
-                            iteration=state.current_inner_iter,
-                        )
-                    )
-                return RecordStore(recordList=output_records)
+                    processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+                return ActivitySimPostprocessOutputs(
+                    usim_datastore_h5=None,
+                    asim_output_dir=Path(workspace.get_asim_output_dir()),
+                    processed_outputs=processed_outputs,
+                )
+            if model_name == "beam":
+                return BeamPostprocessOutputs(
+                    zarr_skims=zarr_path,
+                    final_skims_omx=final_skims_omx,
+                )
             return RecordStore()
         return RecordStore()
 
@@ -711,17 +739,17 @@ def golden_stub_env(tmp_path, monkeypatch):
     from pilates.atlas.preprocessor import AtlasPreprocessor
     from pilates.atlas.postprocessor import AtlasPostprocessor
 
-    def _make_preprocessor(self, model_name, state=None, major_stage=None):
+    def _make_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "atlas":
-            return AtlasPreprocessor(model_name, state, major_stage)
+            return AtlasPreprocessor(model_name, state)
         return DummyPreprocessor(model_name, record_builder, state=state)
 
-    def _make_runner(self, model_name, state=None, major_stage=None):
+    def _make_runner(self, model_name, state=None, *_args, **_kwargs):
         return DummyRunner(model_name, record_builder, state=state)
 
-    def _make_postprocessor(self, model_name, state=None, major_stage=None):
+    def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "atlas":
-            return AtlasPostprocessor(model_name, state, major_stage)
+            return AtlasPostprocessor(model_name, state)
         return DummyPostprocessor(model_name, record_builder, state=state)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _make_preprocessor)
@@ -757,6 +785,7 @@ def golden_stub_env(tmp_path, monkeypatch):
                     "usim_input_path": str(usim_input_path),
                     "usim_merged_path": str(usim_merged_path),
                     "zarr_path": str(zarr_path),
+                    "sharrow_cache_dir": str(sharrow_cache_dir),
                     "promoted_linkstats": str(promoted_linkstats),
                     "promoted_plans": str(promoted_plans),
                 }
@@ -1003,7 +1032,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
 
     zarr_meta = scenario_outputs[ZARR_SKIMS].meta or {}
     assert zarr_meta.get("year") == state.forecast_year
-    assert zarr_meta.get("iteration") == -1
+    assert zarr_meta.get("iteration") == 0
 
     linkstats_meta = scenario_outputs[LINKSTATS].meta or {}
     assert linkstats_meta.get("year") == state.forecast_year

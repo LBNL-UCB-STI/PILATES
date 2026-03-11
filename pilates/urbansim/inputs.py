@@ -13,6 +13,34 @@ if TYPE_CHECKING:
     from workflow_state import WorkflowState
 
 
+def _archive_fallback_path(
+    *,
+    state: "WorkflowState",
+    workspace: "Workspace",
+    local_path: Path,
+) -> Optional[Path]:
+    """
+    Map a local workspace path to its archive-run counterpart on restart.
+    """
+    run_info_path = getattr(state, "run_info_path", None)
+    if not run_info_path:
+        return None
+    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
+    local_root = Path(workspace.full_path).expanduser().resolve()
+    try:
+        rel = local_path.expanduser().resolve().relative_to(local_root)
+    except Exception:
+        return None
+    return archive_run_dir / rel
+
+
+def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
+    for path in paths:
+        if path is not None and path.exists():
+            return path
+    return None
+
+
 def build_urbansim_inputs(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -59,8 +87,13 @@ def build_urbansim_inputs(
     usim_data_dir = Path(workspace.get_usim_mutable_data_dir())
     usim_input_fname = usim_post.get_usim_datastore_fname(settings, io="input")
     usim_input_path = usim_data_dir / usim_input_fname
+    usim_input_archive_path = _archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=usim_input_path,
+    )
 
-    base_path: Optional[Path] = usim_input_path if usim_input_path.exists() else None
+    base_path: Optional[Path] = _first_existing_path(usim_input_path, usim_input_archive_path)
 
     current_path: Optional[Path] = None
     if state.is_start_year():
@@ -70,8 +103,17 @@ def build_urbansim_inputs(
             settings, io="output", year=year
         )
         usim_output_path = usim_data_dir / usim_output_fname
-        if usim_output_path.exists():
-            current_path = usim_output_path
+        usim_output_archive_path = _archive_fallback_path(
+            state=state,
+            workspace=workspace,
+            local_path=usim_output_path,
+        )
+        preferred_current = _first_existing_path(
+            usim_output_path,
+            usim_output_archive_path,
+        )
+        if preferred_current is not None:
+            current_path = preferred_current
         elif base_path is not None:
             # Fallback for workflows that intentionally operate from base only.
             current_path = base_path

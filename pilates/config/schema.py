@@ -79,6 +79,22 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "metadata",
         "description": "Copy logged outputs to archive root as they are produced",
     },
+    "run.restart_rehydrate_mode": {
+        "hash_scope": "metadata",
+        "description": "Restart hydration mode (bundle/full/off)",
+    },
+    "run.restart_strict": {
+        "hash_scope": "metadata",
+        "description": "Fail-fast strict restart preflight mode",
+    },
+    "run.consist_code_identity": {
+        "hash_scope": "metadata",
+        "description": "Consist cache code-identity mode override for step runs",
+    },
+    "run.consist_hashing_strategy": {
+        "hash_scope": "metadata",
+        "description": "Consist artifact hashing mode override for cache identity",
+    },
     # -------------------------------------------------------------------------
     # SHARED CONFIGURATION
     # -------------------------------------------------------------------------

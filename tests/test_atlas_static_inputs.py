@@ -31,6 +31,7 @@ def test_atlas_static_input_relpaths_are_deterministic_and_keep_adopt_series():
     assert "adopt/baseline/new_vehicles_biannual_values_2019.csv" in relpaths
     assert "adopt/baseline/new_vehicles_biannual_values_2021.csv" in relpaths
     assert "adopt/baseline/new_vehicles_biannual_values_2023.csv" in relpaths
+    assert "accessbility_2015.RData" in relpaths
 
 
 def test_atlas_static_input_keys_match_adopt_relpaths():

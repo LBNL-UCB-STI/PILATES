@@ -4,7 +4,8 @@ import os
 import shutil
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Optional, List, Tuple, Union, Dict
+from pathlib import Path
+from typing import Optional, List, Tuple, Union, Dict, TYPE_CHECKING
 
 import numpy as np
 import openmatrix as omx
@@ -16,8 +17,11 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from pilates.config import PilatesConfig
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
     load_canonical_zones,
@@ -26,6 +30,9 @@ from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +254,72 @@ def update_asim_config(
         if not modified:
             file.writelines("\n")
             file.writelines(config_header + ": " + str(config_value) + "\n")
+
+
+def _ensure_required_asim_config_dirs(
+    *,
+    configs_dest_dir: str,
+    main_configs_dir: str,
+) -> None:
+    """
+    Ensure expected ActivitySim config overlays exist in mutable configs.
+
+    Some region config bundles only ship ``configs``/``configs_extended``.
+    ActivitySim compile/run flows may still search ``configs_mp`` and
+    ``configs_sh_compile``. When missing, synthesize them by copying from a
+    stable base config directory.
+    """
+    required_dirs = required_asim_config_dirs(main_configs_dir)
+
+    base_candidates = [main_configs_dir, "configs_extended", "configs"]
+    base_dir = None
+    for candidate in base_candidates:
+        candidate_path = os.path.join(configs_dest_dir, candidate)
+        if os.path.isdir(candidate_path):
+            base_dir = candidate_path
+            break
+
+    if base_dir is None:
+        raise RuntimeError(
+            "ActivitySim mutable configs are missing all base directories. "
+            f"Expected one of: {base_candidates} under {configs_dest_dir}"
+        )
+
+    for dirname in required_dirs:
+        target_dir = os.path.join(configs_dest_dir, dirname)
+        if os.path.isdir(target_dir):
+            continue
+        logger.warning(
+            "ActivitySim config directory missing; synthesizing from base config. "
+            "missing=%s base=%s",
+            target_dir,
+            base_dir,
+        )
+        shutil.copytree(base_dir, target_dir, dirs_exist_ok=True)
+
+
+def required_asim_config_dirs(main_configs_dir: str) -> list[str]:
+    """
+    Return the canonical mutable ActivitySim config directories.
+
+    The mutable config tree may contain a scenario-specific main root plus the
+    standard overlay directories used by compile/run flows.
+    """
+    ordered = [
+        main_configs_dir,
+        "configs",
+        "configs_extended",
+        "configs_mp",
+        "configs_sh_compile",
+    ]
+    seen = set()
+    result = []
+    for dirname in ordered:
+        if not dirname or dirname in seen:
+            continue
+        seen.add(dirname)
+        result.append(dirname)
+    return result
 
 
 ####################################
@@ -1931,10 +2004,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
-        self.required_input_data = ["usim_datastore_h5", "beam_geoms"]
+        super().__init__(model_name, state)
 
     def copy_data_to_mutable_location(
         self,
@@ -1943,6 +2014,37 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
         return _copy_data_to_mutable_location(settings, output_dir)
+
+    def preprocess(
+        self,
+        workspace: "Workspace",
+        previous_records: Optional[RecordStore] = None,
+    ) -> ActivitySimPreprocessOutputs:
+        self.state.set_sub_stage_progress("preprocessor")
+        record_store = self._preprocess(
+            workspace,
+            previous_records if previous_records is not None else RecordStore(),
+        )
+        records_by_key = {
+            getattr(record, "short_name", None): record
+            for record in (record_store.all_records() if record_store is not None else [])
+        }
+        output_values: Dict[str, Union[Path, Dict[str, str]]] = {
+            "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
+        }
+        input_hashes: Dict[str, str] = {}
+        for field_name, record_key in ActivitySimPreprocessOutputs.record_keys.items():
+            record = records_by_key.get(record_key)
+            if record is None:
+                continue
+            record_path = artifact_to_path(getattr(record, "file_path", None), workspace)
+            if record_path is not None:
+                output_values[field_name] = Path(record_path)
+            content_hash = getattr(record, "content_hash", None)
+            if content_hash:
+                input_hashes[record_key] = content_hash
+        output_values["input_hashes"] = input_hashes
+        return ActivitySimPreprocessOutputs(**output_values)
 
     def _preprocess(
         self,
@@ -1998,23 +2100,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 )
             )
 
-        input_records = workspace.output_data.get("activitysim", RecordStore())
-        input_records_filtered = RecordStore(
-            recordList=[
-                rec
-                for rec in input_records.all_records()
-                if rec.short_name in self.required_input_data
-            ]
-        )
-
         if os.path.exists(
             path_to_beam_skims_in_current_run_workspace
         ):  # <--- This condition should now be true
-            input_skims_record = FileRecord(
-                file_path=path_to_beam_skims_in_current_run_workspace,
-                short_name="omx_skims",
-                description="Raw BEAM OD skims",
-            )
             skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
             os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
             if _should_refresh_skims_copy(
@@ -2031,7 +2119,6 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                     "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
                     skims_loc,
                 )
-            input_records.add_record(input_skims_record)
         else:
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             skims_loc = create_skims_from_beam(
@@ -2585,6 +2672,10 @@ def _copy_data_to_mutable_location(
     if os.path.exists(configs_dest_dir):
         shutil.rmtree(configs_dest_dir)
     shutil.copytree(configs_source_dir, configs_dest_dir)
+    _ensure_required_asim_config_dirs(
+        configs_dest_dir=configs_dest_dir,
+        main_configs_dir=get_setting(settings, "activitysim.main_configs_dir", "configs"),
+    )
 
     # ActivitySim configs are captured via the config adapter; no artifact logging here.
     return input_records, output_records
@@ -3013,6 +3104,40 @@ def _update_jobs_table(
     return num_reassigned, jobs
 
 
+def _validate_household_person_consistency(
+    households: pd.DataFrame,
+    persons: pd.DataFrame,
+) -> None:
+    """
+    Ensure ActivitySim household/person inputs satisfy the core membership invariant.
+
+    Every retained household must have at least one retained person, and every
+    retained person must point at a retained household.
+    """
+    if "household_id" not in persons.columns:
+        raise ValueError(
+            "ActivitySim preprocess produced persons data without a 'household_id' column."
+        )
+
+    household_ids = pd.Index(households.index)
+    person_household_ids = pd.Index(persons["household_id"]).astype(household_ids.dtype)
+
+    households_with_persons = pd.Index(person_household_ids.unique())
+    households_without_persons = household_ids.difference(households_with_persons)
+    orphan_person_refs = households_with_persons.difference(household_ids)
+
+    if len(households_without_persons) or len(orphan_person_refs):
+        missing_sample = [str(v) for v in households_without_persons[:10]]
+        orphan_sample = [str(v) for v in orphan_person_refs[:10]]
+        raise ValueError(
+            "ActivitySim preprocess produced inconsistent household/person inputs: "
+            f"households_without_persons={len(households_without_persons)} "
+            f"orphan_person_household_refs={len(orphan_person_refs)} "
+            f"households_sample={missing_sample} "
+            f"orphan_sample={orphan_sample}"
+        )
+
+
 def _update_blocks_table(
     settings: PilatesConfig,
     year: int,
@@ -3424,20 +3549,65 @@ def create_asim_data_from_h5(
     #     model_run_id=model_run_hash,
     # )
 
-    # Read tables from UrbanSim H5
-    store, prefix = read_datastore(
-        settings,
-        state.start_year,
-        mutable_data_dir=workspace.get_usim_mutable_data_dir(),
-        mode="r",
-    )
+    # Read tables from UrbanSim H5.
+    # Prefer the rolling UrbanSim input datastore path directly to avoid
+    # accidentally selecting a stale year-specific snapshot (e.g., *_2017.h5)
+    # when it exists alongside the current in-place updated input datastore.
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    usim_input_fname = settings.urbansim.input_file_template.format(region_id=region_id)
+    usim_input_path = os.path.join(workspace.get_usim_mutable_data_dir(), usim_input_fname)
+
+    if os.path.exists(usim_input_path):
+        logger.info(
+            "ActivitySim preprocess using UrbanSim rolling input datastore: %s",
+            usim_input_path,
+        )
+        store = pd.HDFStore(usim_input_path, mode="r")
+        prefix = ""
+        if "households" not in store:
+            start_year_prefix = str(state.start_year)
+            if f"{start_year_prefix}/households" in store:
+                prefix = start_year_prefix
+            else:
+                raise KeyError(
+                    "No households table found in rolling UrbanSim input datastore "
+                    f"{usim_input_path}. Tables: {store.keys()}"
+                )
+        logger.info(
+            "ActivitySim preprocess UrbanSim table prefix: %s",
+            prefix if prefix else "<root>",
+        )
+    else:
+        logger.warning(
+            "Rolling UrbanSim input datastore not found at %s; "
+            "falling back to legacy read_datastore(year=start_year) resolution.",
+            usim_input_path,
+        )
+        store, prefix = read_datastore(
+            settings,
+            state.start_year,
+            mutable_data_dir=workspace.get_usim_mutable_data_dir(),
+            mode="r",
+        )
     try:
-        households = store[prefix + "/households"]
-        persons = store[prefix + "/persons"]
-        jobs = store[prefix + "/jobs"]
-        blocks = store[prefix + "/blocks"]
+        resolved_h5_table_paths = {
+            "households": _activitysim_h5_table_path(prefix, "households"),
+            "persons": _activitysim_h5_table_path(prefix, "persons"),
+            "jobs": _activitysim_h5_table_path(prefix, "jobs"),
+            "blocks": _activitysim_h5_table_path(prefix, "blocks"),
+        }
+        households = store[resolved_h5_table_paths["households"]]
+        persons = store[resolved_h5_table_paths["persons"]]
+        jobs = store[resolved_h5_table_paths["jobs"]]
+        blocks = store[resolved_h5_table_paths["blocks"]]
     finally:
         store.close()
+    _log_activitysim_usim_input_tables(
+        h5_path=usim_input_path,
+        resolved_table_paths=resolved_h5_table_paths,
+        start_year=getattr(state, "start_year", None),
+    )
 
     # Add zone id to blocks table
     blocks[asim_zone_id_col] = blocks.index.map(block_to_zone_map)
@@ -3461,6 +3631,8 @@ def create_asim_data_from_h5(
         settings, state.year, blocks, households, jobs, asim_zone_id_col, workspace
     )
 
+    _validate_household_person_consistency(households, persons)
+
     # Create land use table
     land_use = _create_land_use_table(
         settings, zones, households, persons, jobs, blocks, asim_zone_id_col
@@ -3483,3 +3655,47 @@ def create_asim_data_from_h5(
         )
 
     return output_records
+
+
+def _activitysim_h5_table_path(prefix: Optional[Union[str, int]], table_name: str) -> str:
+    normalized_prefix = str(prefix).strip("/") if prefix not in (None, "") else ""
+    if normalized_prefix:
+        return f"/{normalized_prefix}/{table_name}"
+    return f"/{table_name}"
+
+
+def _activitysim_preprocess_h5_input_key(
+    table_name: str,
+    *,
+    table_path: str,
+    start_year: Optional[Union[str, int]],
+) -> str:
+    normalized = table_path if table_path.startswith("/") else f"/{table_path}"
+    parent = normalized.rsplit("/", 1)[0].strip("/")
+    if parent and start_year is not None and parent == str(start_year):
+        return f"activitysim_preprocess_usim_{table_name}_table_start_year_input"
+    return f"activitysim_preprocess_usim_{table_name}_table_input"
+
+
+def _log_activitysim_usim_input_tables(
+    *,
+    h5_path: str,
+    resolved_table_paths: Dict[str, str],
+    start_year: Optional[Union[str, int]],
+) -> None:
+    for table_name, table_path in resolved_table_paths.items():
+        cr.log_h5_table(
+            h5_path,
+            key=_activitysim_preprocess_h5_input_key(
+                table_name,
+                table_path=table_path,
+                start_year=start_year,
+            ),
+            table_path=table_path,
+            direction="input",
+            description=(
+                f"UrbanSim {table_name} table consumed by ActivitySim preprocess"
+            ),
+            profile_file_schema=True,
+            h5_table_name=table_name,
+        )

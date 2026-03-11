@@ -76,8 +76,7 @@ from __future__ import annotations
 #   - adopt_<scenario>_used_vehicles_<year>
 #
 # atlas_postprocess               atlas_run raw outputs (all keys above)                       Processed outputs:
-#                                                                                              - usim_h5_updated
-#                                                                                              - atlas_vehicles2_output
+#                               + usim_datastore_h5 (forecast datastore read directly)        - atlas_vehicles2_output
 #
 #                                                                                              Additionally logs:
 #                                                                                              - usim_datastore_h5 (if updated H5 exists)
@@ -125,7 +124,6 @@ from __future__ import annotations
 #                                                                                              - BEAM_HOUSEHOLDS_IN
 #                                                                                              - BEAM_PERSONS_IN
 #                                                                                              - LINKSTATS_WARMSTART
-#                                                                                              - ATLAS_VEHICLES2_INPUT (if present)
 #                                                                                              - vehicles_beam_in (derived from ATLAS vehicles2)
 #                                                                                              - plus any {file_stem}_beam_in created by
 #                                                                                                preprocessor for other copied files
@@ -203,59 +201,47 @@ from typing import (
     TYPE_CHECKING,
     Type,
     TypeVar,
+    cast,
 )
 
+import h5py
 from consist import define_step
+from sqlalchemy import inspect
 
-from pilates.generic.model_factory import ModelFactory
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.beam_warmstart import find_last_run_output_plans
+from pilates.utils.beam_warmstart import (
+    find_last_run_output_plans as find_last_run_output_plans,
+)
+from pilates.utils.consist_types import CouplerProtocol  # noqa: F401
 from pilates.utils.coupler_helpers import (
-    artifact_to_path,
-    log_and_set_input,
-    log_and_set_output,
-    log_input_only,
-    log_output_only,
-    record_store_to_outputs,
-    resolve_artifact_from_value,
-    update_coupler_from_beam_outputs,
+    artifact_to_path,  # noqa: F401
+    log_and_set_input as log_and_set_input,
+    log_and_set_output as log_and_set_output,
+    log_input_only as log_input_only,
+    log_output_only as log_output_only,
+    resolve_artifact_from_value as resolve_artifact_from_value,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_OMX_SKIMS,
-    BEAM_HOUSEHOLDS_IN,
-    BEAM_PERSONS_IN,
-    BEAM_PLANS_IN,
-    BEAM_EXPERIENCED_PLANS_XML,
-    BEAM_PLANS_OUT,
-    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-    BEAM_OUTPUT_PLANS_XML,
+    ASIM_HOUSEHOLDS_IN as ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN as ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS as ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN as ASIM_PERSONS_IN,
+    BEAM_EXPERIENCED_PLANS_XML as BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML as BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML as BEAM_OUTPUT_PLANS_XML,
+    BEAM_PLANS_OUT as BEAM_PLANS_OUT,
     BEAM_R5_OSM_FILE,
-    LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_CURRENT_H5 as USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_H5_UPDATED,
+    USIM_H5_UPDATED as USIM_H5_UPDATED,
     USIM_INPUT_ARCHIVE_PREFIX,
     USIM_INPUT_MERGED_PREFIX,
     USIM_FORECAST_OUTPUT,
     ZARR_SKIMS,
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_PERSONS_IN,
-    ASIM_LAND_USE_IN,
 )
-from pilates.workflows.step_exec import (
-    Postprocessor,
-    Preprocessor,
-    Runner,
-    run_postprocessor,
-    run_preprocessor,
-    run_runner,
-    warm_start_activities,
-)
+from pilates.workflows.step_exec import warm_start_activities as warm_start_activities
 from pilates.workflows.outputs_base import (
-    ValidationContext,
     declared_outputs_for_step_outputs_class,
 )
 from pilates.activitysim.outputs import (
@@ -280,6 +266,8 @@ from pilates.atlas.outputs import (
     AtlasRunOutputs,
 )
 from pilates.workflows.catalog import (
+    WORKFLOW_STEP_SPECS,
+    runtime_step_dependencies_from_catalog,
     step_dependencies_from_catalog,
     step_outputs_classes_from_catalog,
 )
@@ -288,37 +276,20 @@ from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
     from pilates.config.models import PilatesConfig
-    from pilates.generic.records import RecordStore
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
 
-def _warn_missing_coupler_inputs(
-    coupler: Optional[CouplerProtocol],
-    input_store: Optional[RecordStore],
-    context: str,
-) -> None:
-    if coupler is None or input_store is None:
-        return
-    keys_attr = getattr(coupler, "keys", None)
-    if not callable(keys_attr):
-        return
-    try:
-        coupler_keys = set(keys_attr())
-    except Exception:
-        return
-    missing = []
-    for record in input_store.all_records():
-        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
-        if key and key not in coupler_keys:
-            missing.append(key)
-    if missing:
-        logger.warning(
-            "[%s] Input RecordStore keys missing from coupler: %s",
-            context,
-            sorted(set(missing)),
-        )
+def _artifact_content_hash(value: Any) -> Optional[str]:
+    """Extract a content hash from an artifact-like mapping value."""
+    if value is None:
+        return None
+    for attr_name in ("content_hash", "hash"):
+        content_hash = getattr(value, attr_name, None)
+        if content_hash:
+            return str(content_hash)
+    return None
 
 
 def _log_step_records(
@@ -352,12 +323,8 @@ def _log_step_records(
     for short_name, path, description in record_items:
         path_str = str(path)
         meta: Dict[str, Any] = {}
-        if (
-            short_name in profile_schema_keys
-            or (
-                profile_schema_suffixes
-                and path_str.endswith(profile_schema_suffixes)
-            )
+        if short_name in profile_schema_keys or (
+            profile_schema_suffixes and path_str.endswith(profile_schema_suffixes)
         ):
             meta["profile_file_schema"] = profile_schema_value
         if extra_meta_fn is not None:
@@ -372,7 +339,72 @@ def _log_step_records(
         )
 
 
-def _parse_prefixed_iteration_key(short_name: str, prefix: str) -> Optional[Dict[str, Any]]:
+def _log_named_h5_tables(
+    *,
+    path: str,
+    direction: str,
+    table_keys: Dict[str, str],
+    description_by_table: Optional[Dict[str, str]] = None,
+    extra_meta_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+) -> None:
+    """
+    Log selected HDF5 datasets as individual ``h5_table`` artifacts.
+
+    Parameters
+    ----------
+    path : str
+        HDF5 container path.
+    direction : str
+        Consist artifact direction, usually ``"input"`` or ``"output"``.
+    table_keys : dict
+        Mapping of HDF5 table paths to artifact keys.
+    description_by_table : dict, optional
+        Optional mapping of HDF5 table paths to descriptions.
+    extra_meta_fn : callable, optional
+        Callback returning extra metadata for each `(artifact_key, table_path)`.
+    """
+    description_by_table = description_by_table or {}
+    try:
+        with h5py.File(path, "r") as h5_file:
+            for table_path, artifact_key in table_keys.items():
+                normalized_path = (
+                    table_path if str(table_path).startswith("/") else f"/{table_path}"
+                )
+                if normalized_path not in h5_file:
+                    logger.debug(
+                        "Skipping HDF5 table log for missing dataset %s in %s",
+                        normalized_path,
+                        path,
+                    )
+                    continue
+                meta: Dict[str, Any] = {
+                    "profile_file_schema": True,
+                    "h5_parent_key": artifact_key.rsplit("_table_", 1)[0]
+                    if "_table_" in artifact_key
+                    else artifact_key,
+                    "h5_table_name": normalized_path.split("/")[-1],
+                }
+                if extra_meta_fn is not None:
+                    extra_meta = extra_meta_fn(artifact_key, normalized_path)
+                    if extra_meta:
+                        meta.update(extra_meta)
+                cr.log_h5_table(
+                    path,
+                    key=artifact_key,
+                    table_path=normalized_path,
+                    direction=direction,
+                    description=description_by_table.get(
+                        table_path, f"HDF5 table {normalized_path}"
+                    ),
+                    **meta,
+                )
+    except OSError:
+        logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
+
+
+def _parse_prefixed_iteration_key(
+    short_name: str, prefix: str
+) -> Optional[Dict[str, Any]]:
     marker = f"{prefix}_"
     if not short_name.startswith(marker):
         return None
@@ -426,9 +458,7 @@ def _beam_artifact_facets(short_name: str) -> Optional[Dict[str, Any]]:
                     return None
             elif token.startswith("phys_sim_iter"):
                 try:
-                    payload["phys_sim_iteration"] = int(
-                        token[len("phys_sim_iter") :]
-                    )
+                    payload["phys_sim_iteration"] = int(token[len("phys_sim_iter") :])
                 except ValueError:
                     return None
             elif token.startswith("beam_sub_iter"):
@@ -616,9 +646,32 @@ def _log_beam_r5_osm_input(
     run_id = getattr(current_run, "id", None) if current_run else None
     if not run_id or tracker.db is None:
         return
+    beam_settings = settings.beam
+    if beam_settings is None:
+        return
 
     try:
+        inspector = inspect(tracker.db.engine)
+        required_tables = (
+            "beam_config_cache",
+            "beam_config_ingest_run_link",
+        )
+        missing_tables = [
+            table_name
+            for table_name in required_tables
+            if not inspector.has_table(table_name, schema="global_tables")
+        ]
+        if missing_tables:
+            logger.debug(
+                "Skipping BEAM OSM config logging; missing Consist tables: %s",
+                ", ".join(missing_tables),
+            )
+            return
         with Session(tracker.db.engine) as session:
+            ingest_join = cast(
+                Any,
+                BeamConfigCache.content_hash == BeamConfigIngestRunLink.content_hash,
+            )
             base_stmt = (
                 select(
                     BeamConfigCache.value_str,
@@ -626,20 +679,17 @@ def _log_beam_r5_osm_input(
                 )
                 .join(
                     BeamConfigIngestRunLink,
-                    BeamConfigCache.content_hash
-                    == BeamConfigIngestRunLink.content_hash,
+                    ingest_join,
                 )
                 .where(BeamConfigIngestRunLink.run_id == run_id)
             )
-            config_name = settings.beam.config
+            config_name = beam_settings.config
             if config_name:
                 base_stmt = base_stmt.where(
                     BeamConfigIngestRunLink.config_name == config_name
                 )
             osm_rows = session.exec(
-                base_stmt.where(
-                    BeamConfigCache.key == "beam.routing.r5.osmFile"
-                )
+                base_stmt.where(BeamConfigCache.key == "beam.routing.r5.osmFile")
             ).all()
             if len(osm_rows) > 1:
                 logger.warning(
@@ -658,6 +708,11 @@ def _log_beam_r5_osm_input(
                 osm_hash,
             )
             if osm_value == "/":
+                cache_join = cast(
+                    Any,
+                    BeamConfigCache.content_hash
+                    == BeamConfigIngestRunLink.content_hash,
+                )
                 all_osm_rows = session.exec(
                     select(
                         BeamConfigIngestRunLink.config_name,
@@ -666,8 +721,7 @@ def _log_beam_r5_osm_input(
                     )
                     .join(
                         BeamConfigCache,
-                        BeamConfigCache.content_hash
-                        == BeamConfigIngestRunLink.content_hash,
+                        cache_join,
                     )
                     .where(BeamConfigIngestRunLink.run_id == run_id)
                     .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
@@ -681,17 +735,14 @@ def _log_beam_r5_osm_input(
             if osm_value and "${" not in osm_value:
                 resolved_osm_path = osm_value
                 if not os.path.isabs(resolved_osm_path):
-                    resolved_osm_path = str(
-                        (config_root / resolved_osm_path).resolve()
-                    )
+                    resolved_osm_path = str((config_root / resolved_osm_path).resolve())
                 if not os.path.exists(resolved_osm_path):
                     resolved_osm_path = None
 
             if resolved_osm_path is None:
                 mapdb_row = session.exec(
                     base_stmt.where(
-                        BeamConfigCache.key
-                        == "beam.routing.r5.osmMapdbFile"
+                        BeamConfigCache.key == "beam.routing.r5.osmMapdbFile"
                     )
                 ).first()
                 mapdb_value = mapdb_row[0] if mapdb_row else None
@@ -712,15 +763,14 @@ def _log_beam_r5_osm_input(
                 cr.log_input(
                     resolved_osm_path,
                     key=BEAM_R5_OSM_FILE,
-                    description=(
-                        "BEAM R5 OSM input referenced by config"
-                    ),
+                    description=("BEAM R5 OSM input referenced by config"),
                 )
     except Exception:
         logger.debug(
             "Failed to resolve/log BEAM R5 OSM file from config.",
             exc_info=True,
         )
+
 
 StepOutputsT = TypeVar("StepOutputsT")
 InputLogger = Callable[
@@ -837,7 +887,9 @@ def _upstream_outputs_view(
         Mapping of holder field name to output object for populated entries.
     """
     current_attr = (
-        current_step_name.replace("-", "_") if isinstance(current_step_name, str) else None
+        current_step_name.replace("-", "_")
+        if isinstance(current_step_name, str)
+        else None
     )
     upstream: Dict[str, Any] = {}
     for holder_field in fields(StepOutputsHolder):
@@ -853,6 +905,7 @@ STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
 
 
 STEP_DEPENDENCIES = step_dependencies_from_catalog()
+STEP_RUNTIME_DEPENDENCIES = runtime_step_dependencies_from_catalog()
 
 DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
 
@@ -871,7 +924,7 @@ def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> No
     outputs_holder : StepOutputsHolder
         Holder containing upstream outputs.
     """
-    spec = STEP_DEPENDENCIES.get(step_name)
+    spec = STEP_RUNTIME_DEPENDENCIES.get(step_name)
     if not spec:
         logger.warning("No dependency spec for %s; skipping validation", step_name)
         return
@@ -922,7 +975,9 @@ def validate_workflow_step_contracts(
     holder_fields = {f.name for f in fields(StepOutputsHolder)}
     output_class_keys = set(STEP_OUTPUTS_CLASSES.keys())
     dependency_keys = set(STEP_DEPENDENCIES.keys())
+    runtime_dependency_keys = set(STEP_RUNTIME_DEPENDENCIES.keys())
     tracked_step_names = holder_fields | output_class_keys | dependency_keys
+    declared_step_names = {spec.step_name for spec in WORKFLOW_STEP_SPECS}
 
     missing_output_class = holder_fields - output_class_keys
     if missing_output_class:
@@ -950,7 +1005,19 @@ def validate_workflow_step_contracts(
             + ", ".join(sorted(extra_dependency_spec))
         )
 
-    for step_name, spec in STEP_DEPENDENCIES.items():
+    if declared_step_names - runtime_dependency_keys:
+        errors.append(
+            "Missing runtime dependency specs for declared steps: "
+            + ", ".join(sorted(declared_step_names - runtime_dependency_keys))
+        )
+
+    if runtime_dependency_keys - declared_step_names:
+        errors.append(
+            "Runtime dependency specs reference undeclared steps: "
+            + ", ".join(sorted(runtime_dependency_keys - declared_step_names))
+        )
+
+    for step_name, spec in STEP_RUNTIME_DEPENDENCIES.items():
         if not isinstance(spec, Mapping):
             errors.append(
                 f"Dependency spec for {step_name!r} must be a mapping, got {type(spec).__name__}"
@@ -969,7 +1036,7 @@ def validate_workflow_step_contracts(
             )
             holder_inputs = []
 
-        unknown_depends_on = set(depends_on) - tracked_step_names
+        unknown_depends_on = set(depends_on) - declared_step_names
         if unknown_depends_on:
             errors.append(
                 f"STEP_DEPENDENCIES[{step_name!r}] depends_on unknown steps: "
@@ -1004,8 +1071,7 @@ def validate_workflow_step_contracts(
         )
         if duplicate_declared:
             errors.append(
-                "Duplicate declared step model names: "
-                + ", ".join(duplicate_declared)
+                "Duplicate declared step model names: " + ", ".join(duplicate_declared)
             )
 
         declared_names = set(declared_counts.keys())
@@ -1036,7 +1102,9 @@ def validate_workflow_step_contracts(
                 continue
             canonical = list(declared_outputs_for_step_outputs_class(outputs_class))
             step_meta = getattr(step_func, "__consist_step__", None)
-            metadata_outputs = _normalize_output_keys(getattr(step_meta, "outputs", None))
+            metadata_outputs = _normalize_output_keys(
+                getattr(step_meta, "outputs", None)
+            )
             if canonical != metadata_outputs:
                 errors.append(
                     f"Step '{step_name}': canonical outputs {canonical} conflict with metadata outputs "
@@ -1082,7 +1150,9 @@ def require_common_runtime(
     return cr.require_runtime_kwargs("settings", "state", "workspace", *names)
 
 
-def _schema_outputs_from_class(outputs_class: Type[StepOutputsT]) -> Optional[list[str]]:
+def _schema_outputs_from_class(
+    outputs_class: Type[StepOutputsT],
+) -> Optional[list[str]]:
     record_keys = getattr(outputs_class, "record_keys", None) or {}
     values = [value for value in record_keys.values() if isinstance(value, str)]
     unique = sorted(set(values))
@@ -1110,7 +1180,7 @@ def _decorate_step_with_consist(
     step_func: Callable[..., Any],
     step_model: str,
     description: str,
-    schema_outputs: Optional[list[str]] = None,
+    schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:
@@ -1132,616 +1202,3 @@ def _decorate_step_with_consist(
     if outputs:
         kwargs["outputs"] = outputs
     return define_step(**kwargs)(step_func)
-
-
-def _make_generic_step_function(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., RecordStore],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[InputLogger] = None,
-    output_logger: Optional[OutputLogger] = None,
-) -> Callable[..., None]:
-    """
-    Build a step function with common RecordStore-to-StepOutputs plumbing.
-
-    The returned function executes a model component (preprocess/run/postprocess),
-    converts its RecordStore outputs into a typed outputs dataclass, validates
-    the outputs, logs any configured inputs/outputs for provenance, and stores
-    the results in the shared outputs holder.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-    outputs_holder : StepOutputsHolder
-        Holder used to store outputs for downstream steps.
-    model_name : str
-        Model identifier for logging.
-    phase : str
-        Step phase name (preprocess/run/postprocess).
-    outputs_class : type
-        StepOutputs dataclass type.
-    component_getter : callable
-        Callable that returns the component instance.
-    component_executor : callable
-        Callable that executes the component.
-    outputs_holder_setter : callable
-        Callback that stores outputs on the holder.
-    input_logger : callable, optional
-        Optional hook for logging step inputs.
-    output_logger : callable, optional
-        Optional hook for logging step outputs.
-
-    Returns
-    -------
-    callable
-        Step function compatible with Consist scenario execution.
-    """
-
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        logger.debug("Starting %s %s step", model_name, phase)
-        factory = ModelFactory()
-        component = component_getter(factory, state)
-
-        extra_kwargs: Dict[str, Any] = {}
-        if input_logger is not None:
-            extra_kwargs = (
-                input_logger(settings, state, workspace, outputs_holder) or {}
-            )
-            logger.debug(
-                "%s %s input logger keys: %s",
-                model_name,
-                phase,
-                list(extra_kwargs.keys()),
-            )
-
-        record_store = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if record_store is not None:
-            try:
-                record_keys = list(record_store.to_mapping().keys())
-            except AttributeError:
-                record_keys = []
-            logger.debug(
-                "%s %s record store keys: %s",
-                model_name,
-                phase,
-                record_keys,
-            )
-
-        step_outputs = record_store_to_outputs(
-            record_store=record_store,
-            output_class=outputs_class,
-            workspace=workspace,
-        )
-        validation_context = ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name=f"{model_name}_{phase}",
-            upstream_outputs=_upstream_outputs_view(
-                outputs_holder, current_step_name=f"{model_name}_{phase}"
-            ),
-        )
-        step_outputs.validate(context=validation_context)
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-        logger.info("%s %s completed successfully", model_name, phase)
-
-    step_model = f"{model_name}_{phase}"
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=step_model,
-        description=f"{model_name} {phase} workflow step",
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=_declared_outputs_from_class(outputs_class),
-        tags=[model_name, phase],
-    )
-
-
-def _execute_preprocess(
-    preprocessor: Preprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute a preprocessor using only the workspace.
-
-    This phase typically prepares model-specific inputs (copying, formatting,
-    or deriving tables) in the mutable workspace for the runner.
-
-    Parameters
-    ----------
-    preprocessor : object
-        Preprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder for upstream outputs (unused).
-
-    Returns
-    -------
-    RecordStore
-        Preprocessor outputs.
-    """
-    return run_preprocessor(preprocessor, workspace)
-
-
-def _build_required_input_store(
-    *,
-    outputs_holder: StepOutputsHolder,
-    upstream_attr: str,
-    missing_message: str,
-    context: str,
-    coupler: Optional[CouplerProtocol] = None,
-    extra_inputs: Optional[RecordStore] = None,
-    warn_missing_coupler_inputs: bool = True,
-) -> RecordStore:
-    """
-    Build a RecordStore from required upstream step outputs.
-
-    Parameters
-    ----------
-    outputs_holder : StepOutputsHolder
-        Holder containing typed step outputs.
-    upstream_attr : str
-        Attribute name on ``outputs_holder`` to resolve.
-    missing_message : str
-        RuntimeError message when upstream outputs are missing.
-    context : str
-        Context label for warning logs.
-    coupler : CouplerProtocol, optional
-        Coupler used for missing-input key warning checks.
-    extra_inputs : RecordStore, optional
-        Additional records merged into the upstream input store.
-    warn_missing_coupler_inputs : bool, default True
-        Whether to emit warnings for RecordStore keys not present in coupler.
-
-    Returns
-    -------
-    RecordStore
-        Input store for runner/postprocessor execution.
-    """
-    upstream = getattr(outputs_holder, upstream_attr, None)
-    if upstream is None:
-        raise RuntimeError(missing_message)
-    input_store = upstream.to_record_store()
-    if extra_inputs is not None:
-        input_store += extra_inputs
-    if warn_missing_coupler_inputs:
-        _warn_missing_coupler_inputs(coupler, input_store, context)
-    return input_store
-
-
-def _execute_run(
-    runner: Runner,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "runner",
-    extra_inputs: Optional[RecordStore] = None,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute a runner using upstream preprocess outputs.
-
-    This phase performs the core model simulation (e.g., activity demand,
-    land use, or traffic assignment) using the prepared inputs.
-
-    Parameters
-    ----------
-    runner : object
-        Runner instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with preprocess outputs.
-    extra_inputs : RecordStore, optional
-        Additional inputs to merge into the runner input store.
-
-    Returns
-    -------
-    RecordStore
-        Runner outputs.
-    """
-    input_store = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context=context,
-        coupler=coupler,
-        extra_inputs=extra_inputs,
-    )
-    return run_runner(runner, input_store, workspace)
-
-
-def _execute_postprocess(
-    postprocessor: Postprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute a postprocessor using upstream run outputs.
-
-    This phase adapts raw model outputs for downstream consumption (e.g.,
-    updating HDF5 inputs, producing summary outputs, or deriving skims).
-
-    Parameters
-    ----------
-    postprocessor : object
-        Postprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with run outputs.
-
-    Returns
-    -------
-    RecordStore
-        Postprocessor outputs.
-    """
-    raw_outputs = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="activitysim_run",
-        missing_message="ActivitySim run must complete first",
-        context="activitysim_postprocess",
-        coupler=None,
-        warn_missing_coupler_inputs=False,
-    )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
-
-
-def _execute_beam_preprocess(
-    preprocessor: Preprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "beam_preprocess",
-    activity_demand_outputs: Optional[RecordStore] = None,
-    previous_beam_outputs: Optional[RecordStore] = None,
-    beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the BEAM preprocessor with upstream RecordStore inputs.
-
-    BEAM preprocess builds the runnable scenario inputs by combining
-    ActivitySim demand outputs with warm-start data and optional ATLAS
-    vehicle ownership inputs.
-
-    Parameters
-    ----------
-    preprocessor : object
-        BEAM preprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder for upstream outputs (unused).
-    activity_demand_outputs : RecordStore, optional
-        ActivitySim postprocess outputs.
-    previous_beam_outputs : RecordStore, optional
-        Previous BEAM outputs for warm starts.
-
-    Returns
-    -------
-    RecordStore
-        Preprocessor outputs.
-    """
-    combined = RecordStore()
-    if activity_demand_outputs is not None:
-        combined += activity_demand_outputs
-    if previous_beam_outputs is not None:
-        combined += previous_beam_outputs
-    if beam_preprocess_inputs:
-        # Bridge orchestration-level fallback inputs into the legacy BEAM
-        # preprocessor contract, which expects ActivitySim-style short names.
-        key_aliases = {
-            BEAM_PLANS_IN: "beam_plans",
-            BEAM_HOUSEHOLDS_IN: "households",
-            BEAM_PERSONS_IN: "persons",
-            LINKSTATS_WARMSTART: "linkstats",
-        }
-        for key, value in beam_preprocess_inputs.items():
-            path = artifact_to_path(value, workspace)
-            if path is None and isinstance(value, (str, os.PathLike)):
-                path = os.fspath(value)
-            if not path:
-                continue
-            combined.add_record(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key_aliases.get(key, key),
-                    description=f"BEAM preprocess provided input: {key}",
-                )
-            )
-    _warn_missing_coupler_inputs(coupler, combined, context)
-    return preprocessor.preprocess(workspace, combined)
-
-
-def _execute_beam_run(
-    runner: Runner,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "beam_run",
-    extra_inputs: Optional[RecordStore] = None,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the BEAM runner using preprocess outputs.
-
-    BEAM run performs the traffic assignment simulation, producing linkstats,
-    skims, plans, and event outputs.
-
-    Parameters
-    ----------
-    runner : object
-        BEAM runner instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with preprocess outputs.
-    extra_inputs : RecordStore, optional
-        Additional inputs (e.g., zarr skims).
-
-    Returns
-    -------
-    RecordStore
-        Runner outputs.
-    """
-    input_store = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="beam_preprocess",
-        missing_message="BEAM preprocess must complete first",
-        context=context,
-        coupler=coupler,
-        extra_inputs=extra_inputs,
-    )
-    return run_runner(runner, input_store, workspace)
-
-
-def _execute_beam_postprocess(
-    postprocessor: Postprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the BEAM postprocessor using run outputs.
-
-    BEAM postprocess merges updated skims and writes final skim artifacts for
-    downstream models.
-
-    Parameters
-    ----------
-    postprocessor : object
-        BEAM postprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with run outputs.
-
-    Returns
-    -------
-    RecordStore
-        Postprocessor outputs.
-    """
-    raw_outputs = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="beam_run",
-        missing_message="BEAM run must complete first",
-        context="beam_postprocess",
-        coupler=None,
-        warn_missing_coupler_inputs=False,
-    )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
-
-
-def _execute_beam_full_skim(
-    runner: Runner,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "beam_full_skim_run",
-    previous_beam_outputs: Optional[RecordStore] = None,
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the BEAM full-skim runner using preprocess outputs.
-
-    The full-skim runner consumes canonical BEAM inputs plus optional
-    previous BEAM outputs (for linkstats warm-start selection).
-    """
-    input_store = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="beam_preprocess",
-        missing_message="BEAM preprocess must complete first",
-        context=context,
-        coupler=coupler,
-        extra_inputs=previous_beam_outputs,
-    )
-    return run_runner(runner, input_store, workspace)
-
-
-def _execute_urbansim_run(
-    runner: Runner,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "urbansim_run",
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the UrbanSim runner using preprocess outputs.
-
-    UrbanSim run performs the land-use forecast between the base year and
-    forecast year, writing the UrbanSim datastore for downstream steps.
-
-    Parameters
-    ----------
-    runner : object
-        UrbanSim runner instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with preprocess outputs.
-
-    Returns
-    -------
-    RecordStore
-        Runner outputs.
-    """
-    input_store = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="urbansim_preprocess",
-        missing_message="UrbanSim preprocess must complete first",
-        context=context,
-        coupler=coupler,
-    )
-    return run_runner(runner, input_store, workspace)
-
-
-def _execute_urbansim_postprocess(
-    postprocessor: Postprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "urbansim_postprocess",
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the UrbanSim postprocessor using run outputs.
-
-    UrbanSim postprocess prepares an updated input datastore for subsequent
-    model stages (ActivitySim/ATLAS).
-
-    Parameters
-    ----------
-    postprocessor : object
-        UrbanSim postprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with run outputs.
-
-    Returns
-    -------
-    RecordStore
-        Postprocessor outputs.
-    """
-    raw_outputs = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="urbansim_run",
-        missing_message="UrbanSim run must complete first",
-        context=context,
-        coupler=coupler,
-    )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)
-
-
-def _execute_atlas_run(
-    runner: Runner,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "atlas_run",
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the ATLAS runner using preprocess outputs.
-
-    ATLAS run simulates vehicle ownership evolution for the sub-year and
-    produces household vehicle ownership outputs.
-
-    Parameters
-    ----------
-    runner : object
-        ATLAS runner instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with preprocess outputs.
-
-    Returns
-    -------
-    RecordStore
-        Runner outputs.
-    """
-    input_store = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="atlas_preprocess",
-        missing_message="ATLAS preprocess must complete first",
-        context=context,
-        coupler=coupler,
-    )
-    return run_runner(runner, input_store, workspace)
-
-
-def _execute_atlas_postprocess(
-    postprocessor: Postprocessor,
-    workspace: "Workspace",
-    outputs_holder: StepOutputsHolder,
-    *,
-    coupler: Optional[CouplerProtocol] = None,
-    context: str = "atlas_postprocess",
-    **kwargs: Any,
-) -> RecordStore:
-    """
-    Execute the ATLAS postprocessor using run outputs.
-
-    ATLAS postprocess updates the UrbanSim HDF5 datastore and derives
-    vehicles2 outputs for downstream BEAM runs.
-
-    Parameters
-    ----------
-    postprocessor : object
-        ATLAS postprocessor instance.
-    workspace : Workspace
-        Workspace used to resolve paths.
-    outputs_holder : StepOutputsHolder
-        Holder with run outputs.
-
-    Returns
-    -------
-    RecordStore
-        Postprocessor outputs.
-    """
-    raw_outputs = _build_required_input_store(
-        outputs_holder=outputs_holder,
-        upstream_attr="atlas_run",
-        missing_message="ATLAS run must complete first",
-        context=context,
-        coupler=coupler,
-    )
-    return run_postprocessor(postprocessor, raw_outputs, workspace)

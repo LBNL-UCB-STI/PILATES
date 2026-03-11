@@ -20,7 +20,6 @@ import pandas as pd
 import pytest
 from consist.types import CacheOptions, ExecutionOptions
 
-from pilates.generic.model import provenance_logging
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
@@ -41,6 +40,10 @@ def make_unique_id(file_path: str) -> str:
     import hashlib
 
     return hashlib.md5(file_path.encode()).hexdigest()[:16]
+
+
+def _log_store(store: RecordStore, *, direction: str) -> None:
+    cr.log_artifacts(store.to_mapping(), direction=direction)
 
 
 class DummyWorkflowState:
@@ -135,10 +138,12 @@ class DummyModelAPreprocessor(GenericPreprocessor):
 
         return input_records, output_records
 
-    @provenance_logging
     def _preprocess(
-        self, workspace: DummyWorkspace, previous_records: RecordStore = RecordStore()
+        self,
+        workspace: DummyWorkspace,
+        previous_records: RecordStore | None = None,
     ) -> RecordStore:
+        previous_records = previous_records or RecordStore()
         csv_record = get_record_by_short_name(previous_records, "data.csv")
         h5_record = get_record_by_short_name(previous_records, "data.h5")
         if not csv_record or not h5_record:
@@ -170,7 +175,6 @@ class DummyModelARunner(GenericRunner):
         super().__init__(model_name, state)
         self.config = config
 
-    @provenance_logging
     def _run(self, store: RecordStore, workspace: DummyWorkspace) -> RecordStore:
         csv_record = get_record_by_short_name(store, "preprocessed_data.csv")
         h5_record = get_record_by_short_name(store, "preprocessed_data.h5")
@@ -218,12 +222,10 @@ class DummyModelAPostprocessor(GenericPostprocessor):
         super().__init__(model_name, state)
         self.config = config
 
-    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year
@@ -288,10 +290,12 @@ class DummyModelBPreprocessor(GenericPreprocessor):
     ) -> Tuple[RecordStore, RecordStore]:
         return RecordStore(), RecordStore()
 
-    @provenance_logging
     def _preprocess(
-        self, workspace: DummyWorkspace, previous_records: RecordStore = RecordStore()
+        self,
+        workspace: DummyWorkspace,
+        previous_records: RecordStore | None = None,
     ) -> RecordStore:
+        previous_records = previous_records or RecordStore()
         csv_record = get_record_by_short_name(
             previous_records, f"model_a_final_output_{self.state.current_year}.csv"
         )
@@ -309,7 +313,6 @@ class DummyModelBRunner(GenericRunner):
         super().__init__(model_name, state)
         self.config = config
 
-    @provenance_logging
     def _run(self, store: RecordStore, workspace: DummyWorkspace) -> RecordStore:
         year = self.state.current_year
         csv_record = get_record_by_short_name(store, f"model_a_final_output_{year}.csv")
@@ -357,12 +360,10 @@ class DummyModelBPostprocessor(GenericPostprocessor):
         super().__init__(model_name, state)
         self.config = config
 
-    @provenance_logging
     def _postprocess(
         self,
         raw_outputs: RecordStore,
         workspace: DummyWorkspace,
-        runInfo=None,
         model_run_hash=None,
     ) -> RecordStore:
         year = self.state.current_year
@@ -458,7 +459,9 @@ def _run_model_a_step(
     runner: DummyModelARunner,
     output_holder: dict,
 ) -> None:
+    _log_store(store, direction="input")
     output_holder["outputs"] = runner.run(store, workspace)
+    _log_store(output_holder["outputs"], direction="output")
 
 
 def test_dummy_workflow_end_to_end(setup_workflow):
@@ -488,11 +491,13 @@ def test_dummy_workflow_end_to_end(setup_workflow):
                 inputs, mutable = model_a_pre.copy_data_to_mutable_location(
                     model_config, str(output_dir)
                 )
-                cr.log_artifacts(inputs.to_mapping(), direction="input")
-                cr.log_artifacts(mutable.to_mapping(), direction="output")
+                _log_store(inputs, direction="input")
+                _log_store(mutable, direction="output")
 
             with scenario.trace("preprocess_a"):
+                _log_store(mutable, direction="input")
                 recs = model_a_pre.preprocess(workspace, previous_records=mutable)
+                _log_store(recs, direction="output")
 
             # Use scenario.run once to show the preferred Consist entrypoint
             # (trace is still useful for inline orchestration steps).
@@ -514,16 +519,24 @@ def test_dummy_workflow_end_to_end(setup_workflow):
             recs = run_a_holder["outputs"]
 
             with scenario.trace("postprocess_a"):
+                _log_store(recs, direction="input")
                 recs = model_a_post.postprocess(recs, workspace)
+                _log_store(recs, direction="output")
 
             with scenario.trace("preprocess_b"):
+                _log_store(recs, direction="input")
                 recs = model_b_pre.preprocess(workspace, previous_records=recs)
+                _log_store(recs, direction="output")
 
             with scenario.trace("run_b"):
+                _log_store(recs, direction="input")
                 recs = model_b_run.run(recs, workspace)
+                _log_store(recs, direction="output")
 
             with scenario.trace("postprocess_b"):
-                model_b_post.postprocess(recs, workspace)
+                _log_store(recs, direction="input")
+                final_outputs = model_b_post.postprocess(recs, workspace)
+                _log_store(final_outputs, direction="output")
 
     assert (output_dir / f"model_a_final_output_{year}.csv").exists()
     assert (output_dir / f"model_a_final_output_{year}.h5").exists()
@@ -557,17 +570,23 @@ def test_dummy_workflow_lineage(setup_workflow):
                 inputs, mutable = model_a_pre.copy_data_to_mutable_location(
                     model_config, str(output_dir)
                 )
-                cr.log_artifacts(inputs.to_mapping(), direction="input")
-                cr.log_artifacts(mutable.to_mapping(), direction="output")
+                _log_store(inputs, direction="input")
+                _log_store(mutable, direction="output")
 
             with scenario.trace("preprocess_a"):
+                _log_store(mutable, direction="input")
                 recs = model_a_pre.preprocess(workspace, previous_records=mutable)
+                _log_store(recs, direction="output")
 
             with scenario.trace("run_a"):
+                _log_store(recs, direction="input")
                 recs = model_a_run.run(recs, workspace)
+                _log_store(recs, direction="output")
 
             with scenario.trace("postprocess_a"):
-                model_a_post.postprocess(recs, workspace)
+                _log_store(recs, direction="input")
+                final_outputs = model_a_post.postprocess(recs, workspace)
+                _log_store(final_outputs, direction="output")
 
     runs = tracker.find_runs(tags=["dummy_lineage"])
     assert len(runs) >= 1

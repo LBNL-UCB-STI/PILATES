@@ -7,68 +7,128 @@ from __future__ import annotations
 from typing import Dict, List
 
 
+# UrbanSim
+USIM_DATASTORE_CURRENT_H5 = "usim_datastore_h5"
+USIM_DATASTORE_BASE_H5 = "usim_datastore_base_h5"
+USIM_DATASTORE_H5 = USIM_DATASTORE_CURRENT_H5
+USIM_H5_UPDATED = "usim_h5_updated"
+USIM_MUTABLE_DATA_DIR = "usim_mutable_data_dir"
+USIM_FORECAST_OUTPUT = "usim_forecast_output"
+USIM_INPUT_MERGED_PREFIX = "usim_input_merged_"
+USIM_INPUT_ARCHIVE_PREFIX = "usim_input_archive_"
+
+# ATLAS
+ATLAS_OUTPUT_DIR = "atlas_output_dir"
+ATLAS_VEHICLES2_INPUT = "atlas_vehicles2_input"
+
+# ActivitySim
+ASIM_MUTABLE_DATA_DIR = "asim_mutable_data_dir"
+ASIM_OUTPUT_DIR = "asim_output_dir"
+ASIM_LAND_USE_IN = "land_use_asim_in"
+ASIM_HOUSEHOLDS_IN = "households_asim_in"
+ASIM_PERSONS_IN = "persons_asim_in"
+ASIM_OMX_SKIMS = "omx_skims"
+ASIM_SHARROW_CACHE_DIR = "asim_sharrow_cache_dir"
+
+# BEAM
+BEAM_OUTPUT_DIR = "beam_output_dir"
+BEAM_MUTABLE_DATA_DIR = "beam_mutable_data_dir"
+LINKSTATS = "linkstats"
+BEAM_PLANS_OUT = "beam_plans_out"
+BEAM_OUTPUT_PLANS_XML = "beam_output_plans_xml"
+BEAM_EXPERIENCED_PLANS_XML = "beam_experienced_plans_xml"
+BEAM_OUTPUT_EXPERIENCED_PLANS_XML = "beam_experienced_plans_xml"
+BEAM_CONFIG_FILE = "beam_config_file"
+BEAM_R5_OSM_FILE = "beam_r5_osm_file"
+BEAM_PLANS_IN = "plans_beam_in"
+BEAM_HOUSEHOLDS_IN = "households_beam_in"
+BEAM_PERSONS_IN = "persons_beam_in"
+LINKSTATS_WARMSTART = "linkstats_warmstart"
+
+# Cross-model skims
+ZARR_SKIMS = "zarr_skims"
+FINAL_SKIMS_OMX = "final_skims_omx"
+BEAM_FULL_SKIMS = "beam_full_skims"
+
+ARTIFACT_KEYS: Dict[str, str] = {
+    "USIM_DATASTORE_CURRENT_H5": USIM_DATASTORE_CURRENT_H5,
+    "USIM_DATASTORE_BASE_H5": USIM_DATASTORE_BASE_H5,
+    "USIM_DATASTORE_H5": USIM_DATASTORE_H5,
+    "USIM_H5_UPDATED": USIM_H5_UPDATED,
+    "USIM_MUTABLE_DATA_DIR": USIM_MUTABLE_DATA_DIR,
+    "USIM_FORECAST_OUTPUT": USIM_FORECAST_OUTPUT,
+    "USIM_INPUT_MERGED_PREFIX": USIM_INPUT_MERGED_PREFIX,
+    "USIM_INPUT_ARCHIVE_PREFIX": USIM_INPUT_ARCHIVE_PREFIX,
+    "ATLAS_OUTPUT_DIR": ATLAS_OUTPUT_DIR,
+    "ATLAS_VEHICLES2_INPUT": ATLAS_VEHICLES2_INPUT,
+    "ASIM_MUTABLE_DATA_DIR": ASIM_MUTABLE_DATA_DIR,
+    "ASIM_OUTPUT_DIR": ASIM_OUTPUT_DIR,
+    "ASIM_LAND_USE_IN": ASIM_LAND_USE_IN,
+    "ASIM_HOUSEHOLDS_IN": ASIM_HOUSEHOLDS_IN,
+    "ASIM_PERSONS_IN": ASIM_PERSONS_IN,
+    "ASIM_OMX_SKIMS": ASIM_OMX_SKIMS,
+    "ASIM_SHARROW_CACHE_DIR": ASIM_SHARROW_CACHE_DIR,
+    "BEAM_OUTPUT_DIR": BEAM_OUTPUT_DIR,
+    "BEAM_MUTABLE_DATA_DIR": BEAM_MUTABLE_DATA_DIR,
+    "LINKSTATS": LINKSTATS,
+    "BEAM_PLANS_OUT": BEAM_PLANS_OUT,
+    "BEAM_OUTPUT_PLANS_XML": BEAM_OUTPUT_PLANS_XML,
+    "BEAM_EXPERIENCED_PLANS_XML": BEAM_EXPERIENCED_PLANS_XML,
+    "BEAM_OUTPUT_EXPERIENCED_PLANS_XML": BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    "BEAM_CONFIG_FILE": BEAM_CONFIG_FILE,
+    "BEAM_R5_OSM_FILE": BEAM_R5_OSM_FILE,
+    "BEAM_PLANS_IN": BEAM_PLANS_IN,
+    "BEAM_HOUSEHOLDS_IN": BEAM_HOUSEHOLDS_IN,
+    "BEAM_PERSONS_IN": BEAM_PERSONS_IN,
+    "LINKSTATS_WARMSTART": LINKSTATS_WARMSTART,
+    "ZARR_SKIMS": ZARR_SKIMS,
+    "FINAL_SKIMS_OMX": FINAL_SKIMS_OMX,
+    "BEAM_FULL_SKIMS": BEAM_FULL_SKIMS,
+}
+
+
 class ArtifactKeys:
-    # UrbanSim
-    USIM_DATASTORE_CURRENT_H5 = "usim_datastore_h5"
-    USIM_DATASTORE_BASE_H5 = "usim_datastore_base_h5"
-    USIM_DATASTORE_H5 = USIM_DATASTORE_CURRENT_H5
-    USIM_H5_UPDATED = "usim_h5_updated"
-    USIM_MUTABLE_DATA_DIR = "usim_mutable_data_dir"
-    USIM_FORECAST_OUTPUT = "usim_forecast_output"
-    USIM_INPUT_MERGED_PREFIX = "usim_input_merged_"
-    USIM_INPUT_ARCHIVE_PREFIX = "usim_input_archive_"
-
-    # ATLAS
-    ATLAS_OUTPUT_DIR = "atlas_output_dir"
-    ATLAS_VEHICLES2_INPUT = "atlas_vehicles2_input"
-
-    # ActivitySim
-    ASIM_MUTABLE_DATA_DIR = "asim_mutable_data_dir"
-    ASIM_OUTPUT_DIR = "asim_output_dir"
-    ASIM_LAND_USE_IN = "land_use_asim_in"
-    ASIM_HOUSEHOLDS_IN = "households_asim_in"
-    ASIM_PERSONS_IN = "persons_asim_in"
-    ASIM_OMX_SKIMS = "omx_skims"
-    ASIM_SHARROW_CACHE_DIR = "asim_sharrow_cache_dir"
-
-    # BEAM
-    BEAM_OUTPUT_DIR = "beam_output_dir"
-    BEAM_MUTABLE_DATA_DIR = "beam_mutable_data_dir"
-    LINKSTATS = "linkstats"
-    BEAM_PLANS_OUT = "beam_plans_out"
-    BEAM_OUTPUT_PLANS_XML = "beam_output_plans_xml"
-    BEAM_EXPERIENCED_PLANS_XML = "beam_experienced_plans_xml"
-    BEAM_OUTPUT_EXPERIENCED_PLANS_XML = "beam_output_experienced_plans_xml"
-    BEAM_R5_OSM_FILE = "beam_r5_osm_file"
-    BEAM_PLANS_IN = "plans_beam_in"
-    BEAM_HOUSEHOLDS_IN = "households_beam_in"
-    BEAM_PERSONS_IN = "persons_beam_in"
-    LINKSTATS_WARMSTART = "linkstats_warmstart"
-
-    # Cross-model skims
-    ZARR_SKIMS = "zarr_skims"
-    FINAL_SKIMS_OMX = "final_skims_omx"
-    BEAM_FULL_SKIMS = "beam_full_skims"
+    USIM_DATASTORE_CURRENT_H5 = USIM_DATASTORE_CURRENT_H5
+    USIM_DATASTORE_BASE_H5 = USIM_DATASTORE_BASE_H5
+    USIM_DATASTORE_H5 = USIM_DATASTORE_H5
+    USIM_H5_UPDATED = USIM_H5_UPDATED
+    USIM_MUTABLE_DATA_DIR = USIM_MUTABLE_DATA_DIR
+    USIM_FORECAST_OUTPUT = USIM_FORECAST_OUTPUT
+    USIM_INPUT_MERGED_PREFIX = USIM_INPUT_MERGED_PREFIX
+    USIM_INPUT_ARCHIVE_PREFIX = USIM_INPUT_ARCHIVE_PREFIX
+    ATLAS_OUTPUT_DIR = ATLAS_OUTPUT_DIR
+    ATLAS_VEHICLES2_INPUT = ATLAS_VEHICLES2_INPUT
+    ASIM_MUTABLE_DATA_DIR = ASIM_MUTABLE_DATA_DIR
+    ASIM_OUTPUT_DIR = ASIM_OUTPUT_DIR
+    ASIM_LAND_USE_IN = ASIM_LAND_USE_IN
+    ASIM_HOUSEHOLDS_IN = ASIM_HOUSEHOLDS_IN
+    ASIM_PERSONS_IN = ASIM_PERSONS_IN
+    ASIM_OMX_SKIMS = ASIM_OMX_SKIMS
+    ASIM_SHARROW_CACHE_DIR = ASIM_SHARROW_CACHE_DIR
+    BEAM_OUTPUT_DIR = BEAM_OUTPUT_DIR
+    BEAM_MUTABLE_DATA_DIR = BEAM_MUTABLE_DATA_DIR
+    LINKSTATS = LINKSTATS
+    BEAM_PLANS_OUT = BEAM_PLANS_OUT
+    BEAM_OUTPUT_PLANS_XML = BEAM_OUTPUT_PLANS_XML
+    BEAM_EXPERIENCED_PLANS_XML = BEAM_EXPERIENCED_PLANS_XML
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+    BEAM_CONFIG_FILE = BEAM_CONFIG_FILE
+    BEAM_R5_OSM_FILE = BEAM_R5_OSM_FILE
+    BEAM_PLANS_IN = BEAM_PLANS_IN
+    BEAM_HOUSEHOLDS_IN = BEAM_HOUSEHOLDS_IN
+    BEAM_PERSONS_IN = BEAM_PERSONS_IN
+    LINKSTATS_WARMSTART = LINKSTATS_WARMSTART
+    ZARR_SKIMS = ZARR_SKIMS
+    FINAL_SKIMS_OMX = FINAL_SKIMS_OMX
+    BEAM_FULL_SKIMS = BEAM_FULL_SKIMS
 
     @classmethod
     def as_dict(cls) -> Dict[str, str]:
-        return {
-            name: value
-            for name, value in vars(cls).items()
-            if name.isupper() and isinstance(value, str)
-        }
+        return dict(ARTIFACT_KEYS)
 
     @classmethod
     def all(cls) -> List[str]:
         return list(cls.as_dict().values())
 
 
-# Backward-compatible module-level constants for direct imports, e.g.:
-# `from pilates.workflows.artifact_keys import USIM_DATASTORE_H5`
-for _name, _value in ArtifactKeys.as_dict().items():
-    globals()[_name] = _value
-
-del _name
-del _value
-
-__all__ = ["ArtifactKeys", *ArtifactKeys.as_dict().keys()]
+__all__ = ["ARTIFACT_KEYS", "ArtifactKeys", *ARTIFACT_KEYS.keys()]

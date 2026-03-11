@@ -2,49 +2,50 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-import os
 from datetime import datetime
 from pathlib import Path
 import warnings
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
-    record_store_to_outputs,
     resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.activitysim.outputs import normalize_asim_output_key, has_asim_run_marker
+from pilates.atlas.outputs import (
+    AtlasPreprocessOutputs,
+)
+from pilates.beam.outputs import (
+    BeamPreprocessOutputs,
+)
+from pilates.urbansim.outputs import (
+    UrbanSimPreprocessOutputs,
+)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
+    step_output_mapping,
     serialize_step_outputs,
 )
 from pilates.workflows.step_runner import common_runtime_kwargs
 from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
+    shared as steps_shared,
     StepOutputsHolder,
     validate_step_ready,
     validate_workflow_step_contracts,
@@ -69,8 +70,8 @@ class StepRef:
     load_inputs: Optional[bool] = None
     required_outputs: Optional[Sequence[str]] = None
     required_outputs_rationale: Optional[str] = None
-    output_missing: Optional[str] = None
-    output_mismatch: Optional[str] = None
+    output_missing: Optional[Literal["warn", "error", "ignore"]] = None
+    output_mismatch: Optional[Literal["warn", "error", "ignore"]] = None
     model: Optional[str] = None
     year: Optional[int] = None
     iteration: Optional[int] = None
@@ -84,9 +85,29 @@ def _infer_phase(step_name: str) -> Optional[str]:
     return step_name.rsplit("_", 1)[-1] or None
 
 
+def _resolved_step_epoch_identity(
+    *,
+    step: StepRef,
+    state: Any,
+    default_iteration: int,
+) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    model_name = step.model
+    if model_name is None:
+        step_meta = getattr(step.step_func, "__consist_step__", None)
+        raw_model = getattr(step_meta, "model", None)
+        if raw_model is not None:
+            model_name = str(raw_model)
+    year = step.year
+    if year is None:
+        year = getattr(state, "year", None)
+    iteration = step.iteration if step.iteration is not None else default_iteration
+    return model_name, year, iteration
+
+
 def _build_step_run_kwargs(
     *,
     step: StepRef,
+    settings: Any,
     state: Any,
     runtime_kwargs: Mapping[str, Any],
     stage_name: str,
@@ -129,11 +150,19 @@ def _build_step_run_kwargs(
         load_inputs=step.load_inputs,
     )
 
-    if step.cache_hydration is not None or step.cache_mode is not None:
+    run_cfg = getattr(settings, "run", None)
+    code_identity = getattr(run_cfg, "consist_code_identity", None)
+    if (
+        step.cache_hydration is not None
+        or step.cache_mode is not None
+        or code_identity is not None
+    ):
         run_kwargs["cache_options"] = CacheOptions(
             cache_hydration=step.cache_hydration,
             cache_mode=step.cache_mode,
+            code_identity=code_identity,
         )
+
     def _normalize_output_keys(values: Any) -> Optional[list[str]]:
         if not isinstance(values, Sequence) or isinstance(values, str):
             return None
@@ -239,6 +268,118 @@ class ManifestConfig:
     path: Path
 
 
+def _publish_recovered_outputs(
+    *,
+    step_func: Callable[..., Any],
+    outputs: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+) -> None:
+    replayer = getattr(step_func, "__pilates_output_replayer__", None)
+    if callable(replayer):
+        replayer(outputs, settings, state, workspace, outputs_holder)
+        return
+    _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+
+
+def _finalize_recovered_step_outputs(
+    *,
+    step_name: str,
+    step_func: Callable[..., Any],
+    outputs: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    publish_outputs: bool,
+) -> Any:
+    validate = getattr(outputs, "validate", None)
+    if callable(validate):
+        validate()
+    outputs_holder.set_attribute(step_name, outputs)
+    if publish_outputs:
+        _publish_recovered_outputs(
+            step_func=step_func,
+            outputs=outputs,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+        )
+    return outputs
+
+
+def _recover_step_outputs(
+    *,
+    step_name: str,
+    step_func: Callable[..., Any],
+    outputs_holder: StepOutputsHolder,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    step_inputs: Optional[Mapping[str, Any]] = None,
+    cached_outputs: Optional[Mapping[str, Any]] = None,
+    run_id: Optional[str] = None,
+    publish_outputs: bool = True,
+) -> Optional[Any]:
+    recoverer = getattr(step_func, "__pilates_output_recoverer__", None)
+    if callable(recoverer):
+        outputs = recoverer(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            step_inputs=step_inputs,
+            cached_outputs=cached_outputs,
+            run_id=run_id,
+        )
+        if outputs is not None:
+            return _finalize_recovered_step_outputs(
+                step_name=step_name,
+                step_func=step_func,
+                outputs=outputs,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                coupler=coupler,
+                outputs_holder=outputs_holder,
+                publish_outputs=publish_outputs,
+            )
+
+    outputs = _recover_cached_outputs(
+        step_name=step_name,
+        outputs_holder=outputs_holder,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=step_inputs,
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        publish_outputs=False,
+    )
+    if outputs is not None:
+        if publish_outputs:
+            _publish_recovered_outputs(
+                step_func=step_func,
+                outputs=outputs,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                coupler=coupler,
+                outputs_holder=outputs_holder,
+            )
+        return outputs
+    return None
+
+
 def run_manifested_steps(
     *,
     stage_name: str,
@@ -262,6 +403,11 @@ def run_manifested_steps(
     manifest = load_step_manifest(manifest_config.path) or {}
     stale_steps = _detect_stale_steps(manifest, outputs_holder, workspace)
     if stale_steps:
+        stale_steps = _expand_stale_manifest_steps(
+            manifest_step_names=list(manifest.keys()),
+            steps=steps,
+            stale_steps=stale_steps,
+        )
         for step_name in stale_steps:
             manifest.pop(step_name, None)
         save_step_manifest(manifest, manifest_config.path)
@@ -275,6 +421,11 @@ def run_manifested_steps(
 
     for raw_step in steps:
         spec = raw_step
+        model_name, resolved_year, resolved_iteration = _resolved_step_epoch_identity(
+            step=spec,
+            state=state,
+            default_iteration=iteration,
+        )
         if spec.name in manifest:
             logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
             outputs = outputs_holder.get_attribute(spec.name)
@@ -283,14 +434,31 @@ def run_manifested_steps(
                 if outputs is not None:
                     outputs_holder.set_attribute(spec.name, outputs)
             if outputs is not None:
-                _update_coupler_from_outputs(
-                    outputs, coupler=coupler, workspace=workspace
+                _publish_recovered_outputs(
+                    step_func=spec.step_func,
+                    outputs=outputs,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                )
+            remember_restored_run_id = getattr(
+                scenario, "remember_restored_run_id", None
+            )
+            if callable(remember_restored_run_id):
+                remember_restored_run_id(
+                    model_name=model_name,
+                    year=resolved_year,
+                    iteration=resolved_iteration,
+                    run_id=manifest.get(spec.name, {}).get("run_id"),
                 )
             continue
 
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
+            settings=settings,
             state=state,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
@@ -299,8 +467,9 @@ def run_manifested_steps(
         result = scenario.run(**run_kwargs)
         outputs = outputs_holder.get_attribute(spec.name)
         if outputs is None and getattr(result, "cache_hit", False):
-            outputs = _recover_cached_outputs(
+            outputs = _recover_step_outputs(
                 step_name=spec.name,
+                step_func=spec.step_func,
                 outputs_holder=outputs_holder,
                 settings=settings,
                 state=state,
@@ -309,6 +478,7 @@ def run_manifested_steps(
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
                 run_id=getattr(getattr(result, "run", None), "id", None),
+                publish_outputs=True,
             )
         if outputs is None and getattr(result, "cache_hit", False):
             logger.warning(
@@ -321,8 +491,9 @@ def run_manifested_steps(
             result = scenario.run(**rerun_kwargs)
             outputs = outputs_holder.get_attribute(spec.name)
             if outputs is None and getattr(result, "cache_hit", False):
-                outputs = _recover_cached_outputs(
+                outputs = _recover_step_outputs(
                     step_name=spec.name,
+                    step_func=spec.step_func,
                     outputs_holder=outputs_holder,
                     settings=settings,
                     state=state,
@@ -331,12 +502,14 @@ def run_manifested_steps(
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
                     run_id=getattr(getattr(result, "run", None), "id", None),
+                    publish_outputs=True,
                 )
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
             "cache_hit": bool(getattr(result, "cache_hit", False)),
+            "run_id": getattr(getattr(result, "run", None), "id", None),
             "outputs": serialize_step_outputs(outputs),
         }
         save_step_manifest(manifest, manifest_config.path)
@@ -390,15 +563,17 @@ def run_workflow(
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
+            settings=settings,
             state=state,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
             default_iteration=iteration,
         )
         coupler_keys = None
-        if hasattr(coupler, "keys"):
+        coupler_keys_fn = getattr(coupler, "keys", None)
+        if callable(coupler_keys_fn):
             try:
-                coupler_keys = list(coupler.keys())
+                coupler_keys = list(coupler_keys_fn())
             except TypeError:
                 coupler_keys = None
         logger.debug(
@@ -418,12 +593,12 @@ def run_workflow(
             )
 
         result = scenario.run(**run_kwargs)
-        if (
-            outputs_holder.get_attribute(spec.name) is None
-            and getattr(result, "cache_hit", False)
+        if outputs_holder.get_attribute(spec.name) is None and getattr(
+            result, "cache_hit", False
         ):
-            _recover_cached_outputs(
+            _recover_step_outputs(
                 step_name=spec.name,
+                step_func=spec.step_func,
                 outputs_holder=outputs_holder,
                 settings=settings,
                 state=state,
@@ -432,10 +607,10 @@ def run_workflow(
                 step_inputs=spec.inputs,
                 cached_outputs=getattr(result, "outputs", None),
                 run_id=getattr(getattr(result, "run", None), "id", None),
+                publish_outputs=True,
             )
-        if (
-            outputs_holder.get_attribute(spec.name) is None
-            and getattr(result, "cache_hit", False)
+        if outputs_holder.get_attribute(spec.name) is None and getattr(
+            result, "cache_hit", False
         ):
             logger.warning(
                 "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
@@ -445,12 +620,12 @@ def run_workflow(
             rerun_kwargs = dict(run_kwargs)
             rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
             result = scenario.run(**rerun_kwargs)
-            if (
-                outputs_holder.get_attribute(spec.name) is None
-                and getattr(result, "cache_hit", False)
+            if outputs_holder.get_attribute(spec.name) is None and getattr(
+                result, "cache_hit", False
             ):
-                _recover_cached_outputs(
+                _recover_step_outputs(
                     step_name=spec.name,
+                    step_func=spec.step_func,
                     outputs_holder=outputs_holder,
                     settings=settings,
                     state=state,
@@ -459,15 +634,19 @@ def run_workflow(
                     step_inputs=spec.inputs,
                     cached_outputs=getattr(result, "outputs", None),
                     run_id=getattr(getattr(result, "run", None), "id", None),
+                    publish_outputs=True,
                 )
 
         if coupler_keys is not None:
             try:
+                current_coupler_keys_fn = getattr(coupler, "keys", None)
+                if not callable(current_coupler_keys_fn):
+                    raise TypeError
                 logger.debug(
                     "[%s] Coupler keys after %s: %s",
                     stage_name,
                     spec.name,
-                    list(coupler.keys()),
+                    list(current_coupler_keys_fn()),
                 )
             except TypeError:
                 logger.debug(
@@ -507,6 +686,46 @@ def _detect_stale_steps(
     return stale
 
 
+def _expand_stale_manifest_steps(
+    *,
+    manifest_step_names: Sequence[str],
+    steps: Sequence[StepRef],
+    stale_steps: Set[str],
+) -> Set[str]:
+    """
+    Invalidate later manifest entries after any stale upstream step.
+
+    ``run_manifested_steps`` may reuse one manifest across multiple ordered
+    invocations in the same stage. If an upstream manifest entry is stale,
+    keeping later entries would allow a mixture of fresh upstream outputs with
+    stale downstream artifacts from the old manifest. To keep restore behavior
+    correct, invalidate the stale step and every later entry in the manifest
+    sequence, not just the current invocation slice.
+    """
+    if not stale_steps:
+        return set()
+
+    scope = set(manifest_step_names)
+    scope.update(step.name for step in steps)
+
+    dependents: Dict[str, Set[str]] = {}
+    for step_name, spec in steps_shared.STEP_DEPENDENCIES.items():
+        for upstream in spec.get("depends_on", ()):
+            dependents.setdefault(str(upstream), set()).add(step_name)
+
+    expanded: Set[str] = set()
+    pending = [step_name for step_name in stale_steps if step_name in scope]
+    while pending:
+        step_name = pending.pop()
+        if step_name in expanded:
+            continue
+        expanded.add(step_name)
+        for dependent in sorted(dependents.get(step_name, ())):
+            if dependent in scope and dependent not in expanded:
+                pending.append(dependent)
+    return expanded
+
+
 def _recover_cached_outputs(
     *,
     step_name: str,
@@ -518,6 +737,7 @@ def _recover_cached_outputs(
     step_inputs: Optional[Mapping[str, Any]] = None,
     cached_outputs: Optional[Mapping[str, Any]] = None,
     run_id: Optional[str] = None,
+    publish_outputs: bool = True,
 ) -> Optional[Any]:
     """
     Best-effort output recovery for cache hits that skip step execution.
@@ -553,10 +773,7 @@ def _recover_cached_outputs(
             _cached_run_outputs_by_key[canonical_key] = value
         return _cached_run_outputs_by_key
 
-    def _recover_from_cached_artifacts() -> Optional[RecordStore]:
-        output_class = STEP_OUTPUTS_CLASSES.get(step_name)
-        if output_class is None:
-            return None
+    def _recovered_cached_paths() -> Dict[str, Path]:
         merged: Dict[str, Any] = {}
         if cached_outputs:
             for raw_key, value in cached_outputs.items():
@@ -567,23 +784,29 @@ def _recover_cached_outputs(
                 merged[resolve_artifact_key(local_key)] = value
         for key, value in _cached_run_outputs().items():
             merged[key] = value
-        if not merged:
-            return None
-        record_store = RecordStore()
+        recovered_paths: Dict[str, Path] = {}
         for key, value in merged.items():
             path = _existing_path(value)
             if path is None:
                 continue
-            record_store.add_record(
-                FileRecord(
-                    file_path=str(path),
-                    short_name=key,
-                    description=f"Recovered cached output: {key}",
-                )
-            )
-        if not record_store.all_records():
+            recovered_paths[key] = Path(path)
+        return recovered_paths
+
+    def _recover_from_cached_artifacts() -> Optional[Any]:
+        recovered_paths = _recovered_cached_paths()
+        if not recovered_paths:
             return None
-        return record_store
+        if step_name == "urbansim_preprocess":
+            return UrbanSimPreprocessOutputs(
+                usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+                prepared_inputs=recovered_paths,
+            )
+        if step_name == "atlas_preprocess":
+            return AtlasPreprocessOutputs(
+                atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
+                prepared_inputs=recovered_paths,
+            )
+        return None
 
     def _resolve_cached_value(key: str) -> Any:
         if cached_outputs:
@@ -616,178 +839,36 @@ def _recover_cached_outputs(
             materialize_from_archive=True,
         )
 
-    if step_name == "activitysim_preprocess":
-        asim_dir = Path(workspace.get_asim_mutable_data_dir())
-        candidates = {
-            ASIM_HOUSEHOLDS_IN: asim_dir / "households.csv",
-            ASIM_PERSONS_IN: asim_dir / "persons.csv",
-            ASIM_LAND_USE_IN: asim_dir / "land_use.csv",
-            ASIM_OMX_SKIMS: asim_dir / "skims.omx",
-        }
-        record_store = RecordStore()
-        for key, path in candidates.items():
-            cached_value = _resolve_cached_value(key)
-            cached_path = _existing_path(cached_value)
-            if cached_path:
-                path = Path(cached_path)
-            resolved_candidate = _existing_path_str(path)
-            if resolved_candidate:
-                path = Path(resolved_candidate)
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(path),
-                        short_name=key,
-                        description=f"Recovered ActivitySim input: {path.name}",
-                    )
-                )
-        if not record_store.all_records():
-            return None
-    elif step_name == "activitysim_run":
-        record_store = RecordStore()
-        asim_output_dir = Path(workspace.get_asim_output_dir())
-        final_pipeline = Path(
-            _existing_path_str(asim_output_dir / "final_pipeline")
-            or (asim_output_dir / "final_pipeline")
+    def _resolved_content_hash(
+        value: Any,
+        *,
+        key: str,
+        fallback_path: Any = None,
+    ) -> Optional[str]:
+        candidate = value if value is not None else fallback_path
+        artifact = resolve_artifact_from_value(
+            candidate,
+            key=key,
+            workspace=workspace,
         )
-        allow_final_pipeline = has_asim_run_marker(
-            asim_output_dir, state.year, state.iteration
+        content_hash = getattr(artifact, "content_hash", None) or getattr(
+            artifact, "hash", None
         )
-        if final_pipeline.exists() and allow_final_pipeline:
-            for child in final_pipeline.iterdir():
-                fpath = child / "final.parquet"
-                if fpath.is_file():
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=f"{child.name}_asim_out_temp",
-                            description=f"ActivitySim raw output: {child.name}",
-                        )
-                    )
-        elif final_pipeline.exists() and not allow_final_pipeline:
-            logger.warning(
-                "Skipping ActivitySim final_pipeline cache recovery for year %s iteration %s "
-                "because success marker is missing.",
-                state.year,
-                state.iteration,
-            )
-        if not record_store.all_records():
-            iter_dir = Path(
-                _existing_path_str(
-                    asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
-                )
-                or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
-            )
-            if iter_dir.exists():
-                for fpath in iter_dir.glob("*.parquet"):
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=f"{fpath.stem}_asim_out_temp",
-                            description=f"ActivitySim raw output: {fpath.stem}",
-                        )
-                    )
-        if not record_store.all_records():
-            return None
-    elif step_name == "activitysim_postprocess":
-        record_store = RecordStore()
-        asim_output_dir = Path(workspace.get_asim_output_dir())
-        iter_dir = Path(
-            _existing_path_str(
-                asim_output_dir / f"year-{state.year}-iteration-{state.iteration}"
-            )
-            or (asim_output_dir / f"year-{state.year}-iteration-{state.iteration}")
-        )
-        if iter_dir.exists():
-            required_outputs = {
-                "persons_asim_out",
-                "households_asim_out",
-                "beam_plans_asim_out",
-            }
-            available_outputs = {
-                normalize_asim_output_key(path.stem)
-                for path in iter_dir.glob("*.parquet")
-            }
-            if not required_outputs.issubset(available_outputs):
-                return None
-            for fpath in iter_dir.glob("*.parquet"):
-                short_name = normalize_asim_output_key(fpath.stem)
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(fpath),
-                        short_name=short_name,
-                        description=f"ActivitySim output file: {fpath.stem}",
-                    )
-                )
-        else:
-            return None
+        if content_hash:
+            return str(content_hash)
+        return None
 
-        inputs_dir = Path(
-            _existing_path_str(
-                asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}"
-            )
-            or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
-        )
-        if inputs_dir.exists():
-            archived_inputs = {
-                "households.csv": "asim_input_households_csv_archived",
-                "persons.csv": "asim_input_persons_csv_archived",
-                "land_use.csv": "asim_input_land_use_csv_archived",
-                "skims.omx": "asim_input_skims_omx_archived",
-            }
-            for fname, short_name in archived_inputs.items():
-                fpath = inputs_dir / fname
-                if fpath.exists():
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(fpath),
-                            short_name=short_name,
-                            description=f"Archived ActivitySim input: {fname}",
-                        )
-                    )
-            zarr_path = inputs_dir / "skims.zarr"
-            if zarr_path.exists():
-                record_store.add_record(
-                    FileRecord(
-                        file_path=str(zarr_path),
-                        short_name="asim_input_skims_zarr_archived",
-                        description="Archived ActivitySim input: skims.zarr (snapshot)",
-                    )
-                )
+    def _finalize_recovered_outputs(outputs: Any) -> Any:
+        validate = getattr(outputs, "validate", None)
+        if callable(validate):
+            validate()
+        outputs_holder.set_attribute(step_name, outputs)
+        if publish_outputs:
+            _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+        return outputs
 
-        usim_path = None
-        if step_inputs and USIM_DATASTORE_BASE_H5 in step_inputs:
-            usim_path = artifact_to_existing_path(
-                step_inputs[USIM_DATASTORE_BASE_H5], workspace
-            )
-        if not usim_path and step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs:
-            usim_path = artifact_to_existing_path(
-                step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
-            )
-        if not usim_path:
-            region_id = settings.urbansim.region_id
-            if not region_id:
-                region_map = settings.urbansim.region_mappings.get(
-                    "region_to_region_id", {}
-                )
-                region_id = region_map.get(settings.run.region)
-            if region_id:
-                usim_path = os.path.join(
-                    workspace.get_usim_mutable_data_dir(),
-                    settings.urbansim.input_file_template.format(region_id=region_id),
-                )
-        usim_existing = _existing_path_str(usim_path)
-        if usim_existing:
-            record_store.add_record(
-                FileRecord(
-                    file_path=str(usim_existing),
-                    short_name=f"usim_input_{state.forecast_year}",
-                    description="New UrbanSim input data for next iteration",
-                )
-            )
-        if not record_store.all_records():
-            return None
-    elif step_name == "beam_preprocess":
-        record_store = RecordStore()
+    if step_name == "beam_preprocess":
+        prepared_inputs: Dict[str, Path] = {}
         has_warmstart = False
         if step_inputs:
             allowed_keys = {
@@ -803,13 +884,7 @@ def _recover_cached_outputs(
                 if path:
                     if key == LINKSTATS_WARMSTART:
                         has_warmstart = True
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(path),
-                            short_name=key,
-                            description=f"Recovered BEAM preprocess input: {key}",
-                        )
-                    )
+                    prepared_inputs[key] = Path(path)
         if step_inputs and not has_warmstart:
             # If we have any linkstats-like input, recover a warmstart alias.
             candidate_keys = []
@@ -831,35 +906,22 @@ def _recover_cached_outputs(
             for key in candidate_keys:
                 path = _existing_path(step_inputs.get(key))
                 if path:
-                    record_store.add_record(
-                        FileRecord(
-                            file_path=str(path),
-                            short_name=LINKSTATS_WARMSTART,
-                            description=(
-                                "Recovered BEAM preprocess warmstart from cached "
-                                f"input {key}"
-                            ),
-                        )
-                    )
+                    prepared_inputs[LINKSTATS_WARMSTART] = Path(path)
                     has_warmstart = True
                     break
-        if not record_store.all_records():
+        if not prepared_inputs:
             return None
+        return _finalize_recovered_outputs(
+            BeamPreprocessOutputs(
+                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+                prepared_inputs=prepared_inputs,
+            )
+        )
     else:
-        record_store = _recover_from_cached_artifacts()
-        if record_store is None:
+        outputs = _recover_from_cached_artifacts()
+        if outputs is None:
             return None
-
-    output_class = STEP_OUTPUTS_CLASSES.get(step_name)
-    if output_class is None:
-        return None
-    outputs = record_store_to_outputs(record_store, output_class, workspace)
-    validate = getattr(outputs, "validate", None)
-    if callable(validate):
-        validate()
-    outputs_holder.set_attribute(step_name, outputs)
-    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
-    return outputs
+        return _finalize_recovered_outputs(outputs)
 
 
 def _update_coupler_from_outputs(
@@ -868,22 +930,21 @@ def _update_coupler_from_outputs(
     coupler: CouplerProtocol,
     workspace: Any,
 ) -> None:
-    to_record_store = getattr(outputs, "to_record_store", None)
-    if not callable(to_record_store):
-        return
-    record_store = to_record_store()
-    _update_coupler_from_record_store(record_store, coupler=coupler, workspace=workspace)
+    _update_coupler_from_mapping(
+        step_output_mapping(outputs),
+        coupler=coupler,
+        workspace=workspace,
+    )
 
 
-def _update_coupler_from_record_store(
-    record_store: RecordStore,
+def _update_coupler_from_mapping(
+    mapping: Mapping[str, Any],
     *,
     coupler: CouplerProtocol,
     workspace: Any,
 ) -> None:
-    if record_store is None:
+    if not mapping:
         return
-    mapping = record_store.to_mapping()
     for key, value in mapping.items():
         canonical_key = resolve_artifact_key(key)
         resolved = resolve_artifact_from_value(
@@ -896,10 +957,7 @@ def _update_coupler_from_record_store(
             continue
         artifact = (
             resolved
-            if (
-                hasattr(resolved, "container_uri")
-                or hasattr(resolved, "uri")
-            )
+            if (hasattr(resolved, "container_uri") or hasattr(resolved, "uri"))
             else None
         )
         set_coupler_from_artifact(

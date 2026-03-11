@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Union
+from typing import Dict, Optional, Union, cast
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -9,6 +9,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 from pilates.utils.formatting import formatted_print
+from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.step_io import merge_model_expected_inputs
@@ -19,6 +20,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -67,19 +69,18 @@ def run_land_use_stage(
     Dict[str, Union[str, PathLike]]
         Updated UrbanSim input mapping, including the latest datastore path.
     """
-    formatted_print(f"LAND USE MODEL FOR YEAR {state.forecast_year}")
+    formatted_print(f"LAND USE MODEL FOR YEAR {year}")
 
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(
         settings, state, workspace, year
     )
-    log_inputs(usim_inputs, usim_input_descriptions)
+    log_inputs(usim_inputs, cast(Dict[str, Optional[str]], usim_input_descriptions))
     usim_inputs = merge_model_expected_inputs(
         "urbansim", usim_inputs, settings, state, workspace
     )
     preprocess_inputs = dict(usim_inputs)
-    if (
-        preprocess_inputs.get(USIM_DATASTORE_BASE_H5)
-        == preprocess_inputs.get(USIM_DATASTORE_CURRENT_H5)
+    if preprocess_inputs.get(USIM_DATASTORE_BASE_H5) == preprocess_inputs.get(
+        USIM_DATASTORE_CURRENT_H5
     ):
         preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
     preprocess_resolution = resolve_step_inputs(
@@ -115,12 +116,18 @@ def run_land_use_stage(
     if upstream_preprocess is None:
         raise RuntimeError("UrbanSim preprocess must complete first")
 
-    run_inputs = upstream_preprocess.to_record_store().to_mapping()
+    run_inputs = step_output_mapping(upstream_preprocess)
+    for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5):
+        value = usim_inputs.get(key)
+        if value is not None:
+            run_inputs.setdefault(key, value)
     if not run_inputs:
         # Some preprocessors materialize key artifacts via explicit logging rather
         # than RecordStore outputs; fall back to declared UrbanSim inputs so run
         # identity/provenance still reflects true dependencies.
-        run_inputs = {key: value for key, value in usim_inputs.items() if value is not None}
+        run_inputs = {
+            key: value for key, value in usim_inputs.items() if value is not None
+        }
     run_resolution = resolve_step_inputs(
         keys=run_inputs.keys(),
         explicit_inputs=run_inputs,
@@ -186,4 +193,28 @@ def run_land_use_stage(
     ):
         usim_inputs[USIM_DATASTORE_BASE_H5] = usim_inputs[USIM_DATASTORE_CURRENT_H5]
 
-    return usim_inputs
+    # Keep restart-critical UrbanSim H5 artifacts durable at stage boundaries.
+    enqueue_archive_copy(
+        key=USIM_DATASTORE_BASE_H5,
+        path=usim_inputs.get(USIM_DATASTORE_BASE_H5),
+    )
+    enqueue_archive_copy(
+        key=USIM_DATASTORE_CURRENT_H5,
+        path=usim_inputs.get(USIM_DATASTORE_CURRENT_H5),
+    )
+    urbansim_settings = settings.urbansim
+    if urbansim_settings is None:
+        raise RuntimeError("UrbanSim config is required for the land use stage.")
+
+    forecast_year = state.forecast_year if state.forecast_year is not None else year
+    usim_forecast_output_path = os.path.join(
+        workspace.get_usim_mutable_data_dir(),
+        urbansim_settings.output_file_template.format(year=forecast_year),
+    )
+    enqueue_archive_copy(
+        key=f"usim_year_output_h5_{forecast_year}",
+        path=usim_forecast_output_path,
+    )
+    flush_archive_queue(timeout=300, fail_on_timeout=True)
+
+    return dict(usim_inputs)

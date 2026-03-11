@@ -1,14 +1,18 @@
 import logging
 import os
-from typing import Tuple, Optional, Dict, Any
+import shutil
+from pathlib import Path
+from typing import Tuple, Optional, Dict, Any, Mapping
 
 from pilates.config import PilatesConfig
-from pilates.generic.records import RecordStore, FileRecord
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
+    ActivitySimCompileOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
     write_asim_run_marker,
     clear_asim_run_marker,
 )
@@ -56,6 +60,29 @@ def _dir_contains_files(path: str) -> bool:
         if files:
             return True
     return False
+
+
+def _stage_runtime_input_path(
+    *,
+    key: str,
+    input_path: str,
+    workspace: Workspace,
+) -> str:
+    if key != "zarr_skims":
+        return input_path
+
+    runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+    if os.path.abspath(input_path) == os.path.abspath(runtime_path):
+        return runtime_path
+
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    if os.path.isdir(input_path):
+        if os.path.exists(runtime_path):
+            shutil.rmtree(runtime_path)
+        shutil.copytree(input_path, runtime_path)
+    else:
+        shutil.copyfile(input_path, runtime_path)
+    return runtime_path
 
 
 class ActivitysimCompileRunner(GenericRunner):
@@ -123,9 +150,8 @@ class ActivitysimCompileRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_files = [
             ASIM_OMX_SKIMS,
             "asim_geoms",
@@ -134,11 +160,24 @@ class ActivitysimCompileRunner(GenericRunner):
             ASIM_LAND_USE_IN,
         ]
 
+    def run(
+        self,
+        inputs: ActivitySimPreprocessOutputs,
+        workspace: Workspace,
+    ) -> ActivitySimCompileOutputs:
+        if not isinstance(inputs, ActivitySimPreprocessOutputs):
+            raise TypeError(
+                "ActivitysimCompileRunner.run expects ActivitySimPreprocessOutputs"
+            )
+        self.state.set_sub_stage_progress("runner")
+        return self._run(inputs, workspace)
+
     def _run(
         self,
-        store: RecordStore,
+        inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> RecordStore:
+    ) -> ActivitySimCompileOutputs:
+        del inputs
         settings = self.state.full_settings
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
@@ -202,7 +241,7 @@ class ActivitysimCompileRunner(GenericRunner):
         if not success:
             raise RuntimeError("ASim Compilation failed")
 
-        output_records = []
+        zarr_skims_path = None
         if os.path.exists(all_skims_path):
             try:
                 ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
@@ -215,33 +254,16 @@ class ActivitysimCompileRunner(GenericRunner):
                     "Failed to correct initial Zarr skims, cannot proceed."
                 ) from e
 
-            zarr_skims_rec = FileRecord(
-                file_path=all_skims_path,
-                year=self.state.current_year,
-                iteration=-1,
-                description="Zarr skims initialized from omx.",
-                short_name="zarr_skims",
-            )
-            output_records.append(zarr_skims_rec)
+            zarr_skims_path = all_skims_path
             logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
         else:
             logger.warning("ASIM compilation succeeded but skims.zarr was not found.")
 
+        sharrow_cache_dir = None
         if persist_sharrow_cache_enabled(settings):
             cache_dir = asim_sharrow_cache_dir(workspace)
             if _dir_contains_files(cache_dir):
-                output_records.append(
-                    FileRecord(
-                        file_path=cache_dir,
-                        year=self.state.current_year,
-                        iteration=-1,
-                        description=(
-                            "ActivitySim persisted compile cache directory "
-                            "(numba/sharrow)."
-                        ),
-                        short_name=ASIM_SHARROW_CACHE_DIR,
-                    )
-                )
+                sharrow_cache_dir = cache_dir
                 logger.info(
                     "ActivitySim compile cache directory is available: %s", cache_dir
                 )
@@ -264,7 +286,12 @@ class ActivitysimCompileRunner(GenericRunner):
                 )
 
         self.state.compile_asim()
-        return RecordStore(recordList=output_records)
+        return ActivitySimCompileOutputs(
+            zarr_skims=Path(zarr_skims_path) if zarr_skims_path is not None else None,
+            sharrow_cache_dir=(
+                Path(sharrow_cache_dir) if sharrow_cache_dir is not None else None
+            ),
+        )
 
 
 class ActivitysimRunner(GenericRunner):
@@ -305,9 +332,8 @@ class ActivitysimRunner(GenericRunner):
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,
     ):
-        super().__init__(model_name, state, major_stage)
+        super().__init__(model_name, state)
         self.required_input_files = [
             ASIM_PERSONS_IN,
             ASIM_HOUSEHOLDS_IN,
@@ -316,6 +342,34 @@ class ActivitysimRunner(GenericRunner):
             "zarr_skims",
             "asim_geoms",
         ]
+
+    def run(
+        self,
+        inputs: ActivitySimPreprocessOutputs,
+        workspace: Workspace,
+        *,
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> ActivitySimRunOutputs:
+        if not isinstance(inputs, ActivitySimPreprocessOutputs):
+            raise TypeError(
+                "ActivitysimRunner.run expects ActivitySimPreprocessOutputs"
+            )
+        self.state.set_sub_stage_progress("runner")
+        staged_extra_inputs: Dict[str, Any] = {}
+        for key, value in (extra_inputs or {}).items():
+            input_path = value if isinstance(value, str) else getattr(value, "path", value)
+            if input_path is None:
+                continue
+            staged_extra_inputs[key] = _stage_runtime_input_path(
+                key=key,
+                input_path=str(input_path),
+                workspace=workspace,
+            )
+        return self._run(
+            inputs,
+            workspace,
+            extra_inputs=staged_extra_inputs,
+        )
 
     @staticmethod
     def get_base_asim_cmd(
@@ -337,20 +391,36 @@ class ActivitysimRunner(GenericRunner):
         if settings.activitysim.file_format == "parquet":
             if persist_sharrow_cache_enabled(settings):
                 additional_args.append("--persist-sharrow-cache")
+            data_dirs = []
+            output_dirs = []
+            main_config_dirs = []
+            mp_config_dirs = []
+            compile_config_dirs = []
             for local, d in asim_docker_vols.items():
                 if "data" in d["bind"]:
-                    additional_args.append("-d")
-                    additional_args.append(d["bind"])
+                    data_dirs.append(d["bind"])
                 elif "output" in d["bind"]:
-                    additional_args.append("-o")
-                    additional_args.append(d["bind"])
+                    output_dirs.append(d["bind"])
+                elif "configs_mp" in d["bind"]:
+                    mp_config_dirs.append(d["bind"])
                 elif "compile" in d["bind"]:
-                    if compile:
-                        additional_args.append("-c")
-                        additional_args.append(d["bind"])
+                    compile_config_dirs.append(d["bind"])
                 elif "configs" in d["bind"]:
-                    additional_args.append("-c")
-                    additional_args.append(d["bind"])
+                    main_config_dirs.append(d["bind"])
+            for bind in data_dirs:
+                additional_args.extend(["-d", bind])
+            for bind in output_dirs:
+                additional_args.extend(["-o", bind])
+            if compile:
+                for bind in compile_config_dirs:
+                    additional_args.extend(["-c", bind])
+                for bind in main_config_dirs:
+                    additional_args.extend(["-c", bind])
+            else:
+                for bind in main_config_dirs:
+                    additional_args.extend(["-c", bind])
+                for bind in mp_config_dirs:
+                    additional_args.extend(["-c", bind])
         return additional_args
 
     @staticmethod
@@ -381,6 +451,13 @@ class ActivitysimRunner(GenericRunner):
                     "configs_sh_compile",
                 )
             )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    working_dir,
+                    settings.activitysim.local_mutable_configs_folder,
+                    "configs_mp",
+                )
+            )
         else:
             asim_local_mutable_data_folder = os.path.abspath(
                 settings.activitysim.local_mutable_data_folder
@@ -400,18 +477,30 @@ class ActivitysimRunner(GenericRunner):
                     "configs_sh_compile",
                 )
             )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    settings.activitysim.local_configs_folder,
+                    region,
+                    "configs_mp",
+                )
+            )
         asim_remote_input_folder = os.path.join(asim_remote_workdir, "data")
         asim_remote_output_folder = os.path.join(asim_remote_workdir, "output")
         asim_remote_configs_folder = os.path.join(asim_remote_workdir, "configs")
         asim_remote_configs_compile_folder = os.path.join(
             asim_remote_workdir, "configs_sh_compile"
         )
+        asim_remote_configs_mp_folder = os.path.join(asim_remote_workdir, "configs_mp")
         asim_docker_vols = {
             asim_local_mutable_data_folder: {
                 "bind": asim_remote_input_folder,
                 "mode": "rw",
             },
             asim_local_output_folder: {"bind": asim_remote_output_folder, "mode": "rw"},
+            asim_local_configs_mp_folder: {
+                "bind": asim_remote_configs_mp_folder,
+                "mode": "rw",
+            },
             asim_local_configs_compile_folder: {
                 "bind": asim_remote_configs_compile_folder,
                 "mode": "rw",
@@ -436,25 +525,27 @@ class ActivitysimRunner(GenericRunner):
 
     def _run(
         self,
-        store: RecordStore,
+        inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> RecordStore:
+        *,
+        extra_inputs: Optional[Mapping[str, Any]] = None,
+    ) -> ActivitySimRunOutputs:
         """
         Do the model run
 
         Args:
-            store (RecordStore): The input data generated by the preprocessor.
+            inputs (ActivitySimPreprocessOutputs): The typed input data generated
+                by the preprocessor.
             workspace (Workspace): The workspace object for path management.
+            extra_inputs (Mapping[str, Any], optional): Additional runtime inputs.
 
         Returns:
-            RecordStore: The raw output files that have been prepared to run the model.
+            ActivitySimRunOutputs: The raw output files prepared by the model run.
         """
         settings = self.state.full_settings
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
-
-        # self.setup_container_cache_dirs(settings) # Handled by Consist
 
         # Get from your config
         # Create shared cache and tmp inside the run workspace
@@ -482,14 +573,6 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
-        filtered_store = RecordStore(
-            recordList=[
-                rec
-                for rec in store.all_records()
-                if rec.short_name in self.required_input_files
-            ]
-        )
-
         all_skims_path = os.path.join(
             workspace.get_asim_output_dir(), "cache", "skims.zarr"
         )
@@ -502,34 +585,18 @@ class ActivitysimRunner(GenericRunner):
             os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
         )
 
-        zarr_skims_rec = None
-        for record in store.all_records():
-            short_name = getattr(record, "short_name", "") or ""
-            if short_name == "zarr_skims" or short_name.startswith("zarr_skims_"):
-                zarr_skims_rec = record
-                break
+        zarr_input_path = None
+        for key, value in (extra_inputs or {}).items():
+            input_path = value if isinstance(value, str) else getattr(value, "path", value)
+            if input_path is None or key != "zarr_skims":
+                continue
+            zarr_input_path = str(input_path)
+            break
 
-        if not zarr_skims_rec and os.path.exists(all_skims_path):
-            zarr_skims_rec = FileRecord(
-                file_path=all_skims_path,
-                year=self.state.current_year,
-                description="Zarr skims from existing ASIM cache.",
-                short_name="zarr_skims",
-            )
+        if zarr_input_path is None and os.path.exists(all_skims_path):
+            zarr_input_path = all_skims_path
 
-        if zarr_skims_rec:
-            filtered_store.remove_record_type(ASIM_OMX_SKIMS)
-            if zarr_skims_rec.short_name != "zarr_skims":
-                zarr_skims_rec = FileRecord(
-                    file_path=zarr_skims_rec.file_path,
-                    year=zarr_skims_rec.year,
-                    iteration=zarr_skims_rec.iteration,
-                    description=zarr_skims_rec.description,
-                    short_name="zarr_skims",
-                    metadata=dict(zarr_skims_rec.metadata or {}),
-                )
-            filtered_store.add_record(zarr_skims_rec)
-        else:
+        if zarr_input_path is None:
             logger.warning(
                 "No ASIM skims cache found at: {0}. OMX skims will be used.".format(
                     all_skims_path
@@ -567,38 +634,29 @@ class ActivitysimRunner(GenericRunner):
         )
 
         if not success:
-            logger.error(
-                "ASIM run failed for year {0} iteration {1}".format(
-                    self.state.current_year, self.state.current_inner_iter
-                )
+            message = "ASIM run failed for year {0} iteration {1}".format(
+                self.state.current_year, self.state.current_inner_iter
             )
-            return RecordStore()
+            logger.error(message)
+            raise RuntimeError(message)
 
-        # Assemble outputs: find the expected output files and return as a RecordStore
+        # Assemble outputs from final_pipeline parquet files.
         output_dir = os.path.join(workspace.get_asim_output_dir(), "final_pipeline")
-        output_records = []
+        raw_outputs: Dict[str, Path] = {}
         if os.path.exists(output_dir):
             for fname in os.listdir(output_dir):
                 fpath = os.path.join(output_dir, fname, "final.parquet")
                 if os.path.isfile(fpath):
-                    # Record output files for this full run
-                    output_rec = FileRecord(
-                        file_path=fpath,
-                        year=self.state.forecast_year,
-                        description=f"ActivitySim output file: {fname}",
-                        short_name=fname + "_asim_out_temp",
-                        iteration=self.state.current_inner_iter,
-                    )
-                    output_records.append(output_rec)
+                    raw_outputs[fname + "_asim_out_temp"] = Path(fpath)
 
-        if output_records:
+        if raw_outputs:
             write_asim_run_marker(
                 workspace.get_asim_output_dir(),
                 self.state.current_year,
                 self.state.current_inner_iter,
                 meta={
                     "model": "activitysim",
-                    "output_tables": [r.short_name for r in output_records],
+                    "output_tables": list(raw_outputs),
                 },
             )
         else:
@@ -609,5 +667,7 @@ class ActivitysimRunner(GenericRunner):
                 self.state.current_inner_iter,
             )
 
-        output_store = RecordStore(recordList=output_records)
-        return output_store
+        return ActivitySimRunOutputs(
+            output_dir=Path(workspace.get_asim_output_dir()),
+            raw_outputs=raw_outputs,
+        )

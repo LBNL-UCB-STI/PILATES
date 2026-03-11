@@ -41,7 +41,7 @@ class DummyPreprocessor:
 class DummyModelFactory:
     """ModelFactory stub that returns DummyPreprocessor for any model."""
 
-    def get_preprocessor(self, model_name, state, major_stage=None):
+    def get_preprocessor(self, model_name, state, **_kwargs):
         return DummyPreprocessor()
 
 
@@ -137,19 +137,10 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     # Run initialization – should not raise any exception
     init.run(settings, workspace)
 
-    # After run, records should be stored in workspace dicts
-    # Two records per model (input + output)
-    assert "beam" in workspace.input_data
-    assert "beam" in workspace.output_data
-    assert "urbansim" in workspace.input_data
-    assert "urbansim" in workspace.output_data
-
-    # Verify that the stored records are FileRecord instances
-    for model_key in ("beam", "urbansim"):
-        for rec in workspace.input_data[model_key].all_records():
-            assert isinstance(rec, FileRecord)
-        for rec in workspace.output_data[model_key].all_records():
-            assert isinstance(rec, FileRecord)
+    # Initialization returns the copied records and does not maintain a
+    # duplicate runtime cache on the workspace.
+    assert workspace.input_data == {}
+    assert workspace.output_data == {}
 
 
 def test_initialization_handles_missing_models_gracefully(monkeypatch):
@@ -238,7 +229,7 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
             self.input_path = input_path
             self.output_path = output_path
 
-        def get_preprocessor(self, model_name, state, major_stage=None):
+        def get_preprocessor(self, model_name, state, **_kwargs):
             return DummyLoggingPreprocessor(self.input_path, self.output_path)
 
     input_path = tmp_path / "source.txt"
@@ -298,19 +289,28 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
 
 def test_build_bootstrap_artifact_summary_counts_records_by_model():
     workspace = DummyWorkspace()
-    workspace.input_data["beam"] = RecordStore(
-        recordList=[FileRecord(unique_id="in1", short_name="beam_in", file_path="/tmp/in")]
-    )
-    workspace.output_data["beam"] = RecordStore(
+    copied_records = RecordStore(
         recordList=[
-            FileRecord(unique_id="out1", short_name="beam_out1", file_path="/tmp/out1"),
-            FileRecord(unique_id="out2", short_name="beam_out2", file_path="/tmp/out2"),
+            FileRecord(
+                unique_id="in1",
+                short_name="beam_in",
+                file_path="/tmp/in",
+                metadata={"model": "beam", "bootstrap_direction": "input"},
+            ),
+            FileRecord(
+                unique_id="out1",
+                short_name="beam_out1",
+                file_path="/tmp/out1",
+                metadata={"model": "beam", "bootstrap_direction": "output"},
+            ),
+            FileRecord(
+                unique_id="out2",
+                short_name="beam_out2",
+                file_path="/tmp/out2",
+                metadata={"model": "beam", "bootstrap_direction": "output"},
+            ),
         ]
     )
-
-    copied_records = RecordStore()
-    copied_records += workspace.input_data["beam"]
-    copied_records += workspace.output_data["beam"]
 
     summary = build_bootstrap_artifact_summary(workspace, copied_records)
 
@@ -320,3 +320,110 @@ def test_build_bootstrap_artifact_summary_counts_records_by_model():
     assert summary["input_records_total"] == 1
     assert summary["output_records_total"] == 2
     assert summary["copied_records_total"] == 3
+
+
+def test_initialization_summary_counts_canonical_zones_under_activitysim(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", DummyModelFactory
+    )
+
+    workspace = DummyWorkspace()
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    workspace.beam_mutable_dir = str(tmp_path / "beam")
+    workspace.usim_mutable_dir = str(tmp_path / "usim")
+    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
+    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
+
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones_path.write_text("{}")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="beam",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use="urbansim",
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            skims=SimpleNamespace(zone_type="block_group"),
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(zones_path),
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key",
+                )
+            ),
+        ),
+    )
+
+    init = Initialization("init", None)
+    copied_records = init.run(settings, workspace)
+    summary = build_bootstrap_artifact_summary(workspace, copied_records)
+
+    assert summary["input_records_by_model"]["activitysim"] >= 1
+    assert summary["output_records_by_model"]["activitysim"] >= 1
+    assert "activitysim" in summary["models"]
+
+
+def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_activitysim_enabled(
+    monkeypatch, tmp_path
+):
+    class _CountingPreprocessor:
+        def __init__(self, model_name, calls):
+            self.model_name = model_name
+            self.calls = calls
+
+        def copy_data_to_mutable_location(self, settings, output_dir):
+            self.calls.append((self.model_name, output_dir))
+            record = FileRecord(
+                unique_id=f"{self.model_name}-out",
+                short_name=f"{self.model_name}_output",
+                file_path=str(tmp_path / f"{self.model_name}.txt"),
+            )
+            return RecordStore(), RecordStore(recordList=[record])
+
+    class _CountingFactory:
+        def __init__(self):
+            self.calls = []
+
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            return _CountingPreprocessor(model_name, self.calls)
+
+    factory = _CountingFactory()
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", lambda: factory
+    )
+
+    workspace = DummyWorkspace()
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    workspace.usim_mutable_dir = str(tmp_path / "usim")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="none",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use="urbansim",
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(zones=None),
+        ),
+    )
+
+    init = Initialization("init", None)
+    init.run(settings, workspace)
+
+    urbansim_calls = [call for call in factory.calls if call[0] == "urbansim"]
+    activitysim_calls = [call for call in factory.calls if call[0] == "activitysim"]
+
+    assert len(urbansim_calls) == 1
+    assert len(activitysim_calls) == 1

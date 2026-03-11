@@ -4,8 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 from consist import define_step
-from consist.types import OutputPolicyOptions
+from consist.types import CacheOptions, OutputPolicyOptions
 
+import run as run_module
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.artifact_keys import ASIM_LAND_USE_IN, ASIM_PERSONS_IN
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
@@ -14,7 +15,9 @@ from pilates.workflows.orchestration import StepRef, WorkflowStage
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
+    make_beam_postprocess_step,
     make_activitysim_preprocess_step,
+    make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
 
@@ -154,6 +157,37 @@ def test_workflow_stage_uses_top_level_runtime_kwargs_with_load_inputs_option():
         "workspace": workspace,
     }
     assert call["execution_options"].load_inputs is True
+
+
+def test_workflow_stage_propagates_consist_code_identity_override():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(consist_code_identity="callable_module")
+    )
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(model="dummy_step")
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(name="dummy_step", step_func=_decorated_step)
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["cache_options"] == CacheOptions(code_identity="callable_module")
 
 
 def test_workflow_stage_infers_strict_output_enforcement_from_step_outputs_metadata():
@@ -369,6 +403,20 @@ def test_build_coupler_schema_collects_step_metadata_and_extras():
     assert "urbansim/usim_datastore_h5" in schema
 
 
+def test_build_coupler_schema_declares_urbansim_geoid_to_zone_output():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    preprocess_step = make_urbansim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    schema = build_coupler_schema([preprocess_step], settings=SimpleNamespace())
+
+    assert "geoid_to_zone" in schema
+
+
 def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(
     tmp_path,
 ):
@@ -414,3 +462,136 @@ def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(
     assert second.cache_hit is True
     assert third.cache_hit is False
     assert calls["count"] == 2
+
+
+class _FakeEpochTaggingScenario:
+    def __init__(self, run_ids):
+        self.calls = []
+        self._run_ids = list(run_ids)
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        index = len(self.calls) - 1
+        run_id = self._run_ids[index] if index < len(self._run_ids) else None
+        run_obj = SimpleNamespace(id=run_id) if run_id is not None else None
+        return SimpleNamespace(cache_hit=False, run=run_obj)
+
+
+def _step_with_model(model_name: str):
+    def _step():
+        return None
+
+    _step.__consist_step__ = SimpleNamespace(model=model_name)
+    return _step
+
+
+def test_epoch_tagging_proxy_injects_required_facet_and_tag_keys():
+    scenario = _FakeEpochTaggingScenario(run_ids=["asim-r1"])
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(
+        fn=_step_with_model("activitysim_run"),
+        name="activitysim_run",
+        year=2035,
+        iteration=2,
+        tags=["existing"],
+        facet={"existing_key": "existing_value"},
+    )
+
+    call = scenario.calls[0]
+    assert call["model"] == "activitysim_run"
+    assert "existing" in call["tags"]
+    assert "scenario_id:scenario-alpha" in call["tags"]
+    assert "seed:777" in call["tags"]
+    assert "model:activitysim_run" in call["tags"]
+    assert "year:2035" in call["tags"]
+    assert "iteration:2" in call["tags"]
+    assert call["facet"]["existing_key"] == "existing_value"
+    assert call["facet"]["scenario_id"] == "scenario-alpha"
+    assert call["facet"]["seed"] == 777
+    assert call["facet"]["model"] == "activitysim_run"
+    assert call["facet"]["year"] == 2035
+    assert call["facet"]["iteration"] == 2
+
+
+def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
+    scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(model="activitysim_run", year=2030, iteration=1)
+    proxy.run(model="beam_run", year=2030, iteration=1)
+
+    beam_call = scenario.calls[1]
+    assert beam_call["parent_run_id"] == "asim-2030-i1"
+
+
+def test_epoch_tagging_proxy_sets_activitysim_parent_to_previous_beam_iteration():
+    scenario = _FakeEpochTaggingScenario(run_ids=["beam-2030-i0", "asim-2030-i1"])
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(model="beam_run", year=2030, iteration=0)
+    proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    activitysim_call = scenario.calls[1]
+    assert activitysim_call["parent_run_id"] == "beam-2030-i0"
+
+
+def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar():
+    scenario = _FakeEpochTaggingScenario(
+        run_ids=["beam-2030-i0", "beam-fullskim-2030-i0", "asim-2030-i1"]
+    )
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(model="beam_run", year=2030, iteration=0)
+    proxy.run(model="beam_full_skim", year=2030, iteration=0)
+    proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    activitysim_call = scenario.calls[2]
+    assert activitysim_call["parent_run_id"] == "beam-2030-i0"
+
+
+@pytest.mark.parametrize(
+    ("model", "year", "iteration"),
+    [
+        ("beam_run", 2030, 0),
+        ("activitysim_run", 2030, 1),
+    ],
+)
+def test_epoch_tagging_proxy_missing_parent_does_not_raise(model, year, iteration):
+    scenario = _FakeEpochTaggingScenario(run_ids=["run-1"])
+    proxy = run_module._EpochTaggingScenarioProxy(
+        scenario,
+        scenario_id="scenario-alpha",
+        seed=777,
+    )
+
+    proxy.run(model=model, year=year, iteration=iteration)
+
+    call = scenario.calls[0]
+    assert "parent_run_id" not in call
+
+
+def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    step = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    assert meta.outputs == ["zarr_skims"]

@@ -196,6 +196,46 @@ def test_activitysim_run_metadata_adapter_is_none_when_config_root_missing(
     assert meta.adapter(ctx) is None
 
 
+def test_activitysim_run_metadata_adapter_includes_overlay_config_roots_when_present(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+    from consist.integrations.activitysim import ActivitySimConfigAdapter
+
+    configs_root = tmp_path / "asim_configs"
+    (configs_root / "base").mkdir(parents=True)
+    (configs_root / "configs_mp").mkdir(parents=True)
+    (configs_root / "configs_sh_compile").mkdir(parents=True)
+
+    (configs_root / "base" / "settings.yaml").write_text("models: []\n")
+    (configs_root / "configs_mp" / "settings.yaml").write_text("models: []\n")
+    (configs_root / "configs_sh_compile" / "settings.yaml").write_text("models: []\n")
+
+    workspace = DummyWorkspace(configs_root, tmp_path / "asim_data")
+    settings = _make_settings()
+    _wire_common(monkeypatch)
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    adapter = meta.adapter(ctx)
+    assert isinstance(adapter, ActivitySimConfigAdapter)
+    assert adapter.root_dirs == [
+        configs_root / "base",
+        configs_root / "configs_mp",
+        configs_root / "configs_sh_compile",
+    ]
+
+
 def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
     monkeypatch, tmp_path
 ):

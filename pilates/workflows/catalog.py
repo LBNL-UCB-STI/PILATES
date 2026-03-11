@@ -155,6 +155,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=80,
         outputs_class=None,
         tracked=False,
+        depends_on=("activitysim_preprocess",),
+        holder_inputs=("activitysim_preprocess",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
     ),
@@ -349,6 +351,23 @@ def step_outputs_classes_from_catalog() -> Dict[str, Type[Any]]:
 def step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str]]]:
     dependencies: Dict[str, Dict[str, Sequence[str]]] = {}
     for spec in tracked_step_specs():
+        dependencies[spec.step_name] = {
+            "depends_on": list(spec.depends_on),
+            "holder_inputs": list(spec.holder_inputs),
+        }
+    return dependencies
+
+
+def runtime_step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str]]]:
+    """
+    Return runtime dependency specs for all declared workflow steps.
+
+    Unlike ``step_dependencies_from_catalog()``, this includes intentional
+    untracked steps such as ``activitysim_compile`` that still need startup
+    ordering checks but do not participate in typed output reconstruction.
+    """
+    dependencies: Dict[str, Dict[str, Sequence[str]]] = {}
+    for spec in WORKFLOW_STEP_SPECS:
         dependencies[spec.step_name] = {
             "depends_on": list(spec.depends_on),
             "holder_inputs": list(spec.holder_inputs),

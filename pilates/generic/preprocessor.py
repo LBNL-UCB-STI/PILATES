@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import logging
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Generic, Optional, Tuple, TYPE_CHECKING, TypeVar
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -12,22 +11,22 @@ if TYPE_CHECKING:
     from workflow_state import WorkflowState
     from pilates.workspace import Workspace
 
-logger = logging.getLogger(__name__)
+
+PreprocessInputsT = TypeVar("PreprocessInputsT")
+PreprocessOutputsT = TypeVar("PreprocessOutputsT")
 
 
-class GenericPreprocessor(ABC, Model):
-    """
-    Abstract base class for all model preprocessors.
-    Subclasses should implement the preprocess() and copy_data_to_mutable_location() methods.
-    """
+class GenericPreprocessor(
+    Model, ABC, Generic[PreprocessInputsT, PreprocessOutputsT]
+):
+    """Base class for preprocessors with model-specific staged outputs."""
 
     def __init__(
         self,
         model_name: str,
         state: "WorkflowState",
-        major_stage: Optional["WorkflowState.Stage"] = None,  # new
     ):
-        super().__init__(model_name, state, major_stage)  # new
+        super().__init__(model_name, state)
         self.required_input_data: list[str] = []
 
     @abstractmethod
@@ -36,20 +35,15 @@ class GenericPreprocessor(ABC, Model):
         settings: PilatesConfig,
         output_dir: str,
     ) -> Tuple[RecordStore, RecordStore]:
-        """
-        Copy initial data into a mutable location.
-        Returns a tuple (input_record_store, output_record_store).
-        """
+        """Copy immutable seed inputs into the mutable workspace."""
         raise NotImplementedError
 
     def preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
-    ) -> RecordStore:
-        """
-        Preprocess input data for the model.
-        """
+        previous_records: Optional[PreprocessInputsT] = None,
+    ) -> PreprocessOutputsT:
+        """Run preprocessing using optional prior records and return staged outputs."""
         self.state.set_sub_stage_progress("preprocessor")
         return self._preprocess(workspace, previous_records)
 
@@ -57,11 +51,7 @@ class GenericPreprocessor(ABC, Model):
     def _preprocess(
         self,
         workspace: "Workspace",
-        previous_records: RecordStore = RecordStore(),
-    ) -> RecordStore:
-        """
-        Preprocess input data for the model.
-
-        Subclasses should return a RecordStore of outputs without provenance side effects.
-        """
+        previous_records: Optional[PreprocessInputsT],
+    ) -> PreprocessOutputsT:
+        """Implement preprocessing and return model-specific staged outputs."""
         raise NotImplementedError

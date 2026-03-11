@@ -1,31 +1,22 @@
 import os
 import logging
+import re
 import atexit
 import fnmatch
-import re
 import queue
 import shutil
 import threading
 import time
-from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Type, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Union
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.artifact_key_migrations import (
-    canonicalize_artifact_mapping,
-    resolve_artifact_key,
-)
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
-    BEAM_PLANS_OUT,
-    FINAL_SKIMS_OMX,
-    LINKSTATS,
-    LINKSTATS_WARMSTART,
-    ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,14 +25,23 @@ _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
 _ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
 _ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
 _ARCHIVE_ALLOWED_DIR_PATTERNS = (
+    "urbansim_bootstrap_data_root",
     "zarr_skims",
     "zarr_skims_*",
     "asim_input_skims_zarr_archived",
     ASIM_SHARROW_CACHE_DIR,
+    "activitysim_bootstrap_data_root",
+    "activitysim_bootstrap_configs_root",
+    "atlas_input_year_dir",
+    "atlas_input_year_dir_*",
 )
-_archive_queue: Optional["queue.Queue[Optional[tuple[str, str, str, bool]]]"] = None
+_archive_queue: Optional[
+    "queue.Queue[Optional[tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]]]"
+] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
+_archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
+_archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
 
 
 def _archive_enabled() -> bool:
@@ -129,6 +129,14 @@ def _archive_dir_allowed(key: str) -> bool:
     return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
 
 
+def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int, bool]]:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
+
+
 def _archive_worker() -> None:
     while True:
         task = _archive_queue.get() if _archive_queue is not None else None
@@ -136,15 +144,24 @@ def _archive_worker() -> None:
             if _archive_queue is not None:
                 _archive_queue.task_done()
             break
-        key, src, dest, is_dir = task
+        key, src, dest, is_dir, signature = task
         try:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if is_dir:
                 shutil.copytree(src, dest, dirs_exist_ok=True)
             else:
                 shutil.copy2(src, dest)
+            if signature is not None:
+                with _archive_lock:
+                    if _archive_inflight_signature.get(dest) == signature:
+                        _archive_inflight_signature.pop(dest, None)
+                    _archive_last_copied_signature[dest] = signature
             logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
         except Exception as exc:
+            if signature is not None:
+                with _archive_lock:
+                    if _archive_inflight_signature.get(dest) == signature:
+                        _archive_inflight_signature.pop(dest, None)
             logger.warning(
                 "[Archive] Failed to copy %s -> %s (key=%s): %s",
                 src,
@@ -194,30 +211,80 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
     dest = _resolve_archive_path(path, local_root, archive_root)
     if dest is None or dest == path:
         return
+    signature = _archive_path_signature(path, is_dir)
+    if signature is not None:
+        with _archive_lock:
+            if _archive_inflight_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
+                    path,
+                    key,
+                )
+                return
+            if _archive_last_copied_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (already copied): %s (key=%s)",
+                    path,
+                    key,
+                )
+                return
+            _archive_inflight_signature[dest] = signature
     _ensure_archive_worker()
     logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
     if _archive_queue is not None:
-        _archive_queue.put((key, path, dest, is_dir))
+        _archive_queue.put((key, path, dest, is_dir, signature))
 
 
-def flush_archive_queue(timeout: Optional[float] = None) -> None:
-    if _archive_queue is None:
+def enqueue_archive_copy(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> None:
+    """
+    Public wrapper to enqueue archive copy work for a file or allowlisted directory.
+
+    Parameters
+    ----------
+    key : str
+        Artifact key associated with ``path``.
+    path : str or PathLike, optional
+        Local or workspace URI path to enqueue.
+    workspace : Workspace, optional
+        Workspace used to resolve ``workspace://`` paths.
+    """
+    if path is None:
         return
+    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
+    if not resolved:
+        return
+    _enqueue_archive_copy(key, resolved)
+
+
+def flush_archive_queue(
+    timeout: Optional[float] = None,
+    *,
+    fail_on_timeout: bool = False,
+) -> bool:
+    if _archive_queue is None:
+        return True
     pending = _archive_queue.unfinished_tasks
     logger.info("[Archive] Flushing queue (pending=%s)", pending)
     if timeout is None:
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
-        return
+        return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
-            return
+            return True
         time.sleep(0.1)
-    logger.warning(
-        "[Archive] Flush timed out (pending=%s)", _archive_queue.unfinished_tasks
-    )
+    message = f"[Archive] Flush timed out (pending={_archive_queue.unfinished_tasks})"
+    if fail_on_timeout:
+        raise TimeoutError(message)
+    logger.warning(message)
+    return False
 
 
 def stop_archive_worker(timeout: Optional[float] = None) -> None:
@@ -241,7 +308,6 @@ def stop_archive_worker(timeout: Optional[float] = None) -> None:
 atexit.register(stop_archive_worker)
 
 if TYPE_CHECKING:
-    from pilates.generic.records import RecordStore
     from pilates.workspace import Workspace
 
 
@@ -507,152 +573,6 @@ def log_coupler_value(
         path,
         container_uri,
         db_hit,
-    )
-
-
-def update_coupler_from_beam_outputs(
-    output_store: Optional["RecordStore"],
-    coupler: CouplerProtocol,
-    workspace: "Workspace",
-) -> None:
-    """
-    Log and propagate BEAM output artifacts into the workflow coupler.
-
-    Parameters
-    ----------
-    output_store : RecordStore
-        Output store from BEAM run + postprocess outputs.
-    coupler : CouplerProtocol
-        Consist coupler or compatible interface.
-    workspace : Workspace
-        Workspace used to resolve output paths.
-    """
-    if not output_store:
-        return
-    linkstats_record = None
-    beam_plans_record = None
-    linkstats_parquet_records = []
-    linkstats_unmodified_phys_sim_records = []
-    for record in output_store.all_records():
-        if record.short_name == ZARR_SKIMS:
-            zarr_path = artifact_to_path(record.file_path, workspace)
-            if zarr_path and os.path.exists(zarr_path):
-                log_and_set_output(
-                    key=ZARR_SKIMS,
-                    path=zarr_path,
-                    description="Zarr skims updated with BEAM outputs",
-                    coupler=coupler,
-                )
-        elif record.short_name == FINAL_SKIMS_OMX:
-            omx_path = artifact_to_path(record.file_path, workspace)
-            if omx_path and os.path.exists(omx_path):
-                log_and_set_output(
-                    key=FINAL_SKIMS_OMX,
-                    path=omx_path,
-                    description="Final skims OMX for downstream models",
-                    coupler=coupler,
-                )
-        elif record.short_name and record.short_name.startswith("linkstats_parquet_"):
-            linkstats_parquet_records.append(record)
-        elif _is_linkstats_unmodified_phys_sim_key(getattr(record, "short_name", None)):
-            linkstats_unmodified_phys_sim_records.append(record)
-        elif (
-            record.short_name
-            and record.short_name.startswith(LINKSTATS)
-            and not record.short_name.startswith("linkstats_unmodified")
-        ):
-            linkstats_record = _select_beam_output_record(
-                linkstats_record, record, LINKSTATS
-            )
-        elif record.short_name and record.short_name.startswith(BEAM_PLANS_OUT):
-            beam_plans_record = _select_beam_output_record(
-                beam_plans_record, record, BEAM_PLANS_OUT
-            )
-
-    _log_and_set_beam_record(
-        linkstats_record,
-        key=LINKSTATS,
-        description="BEAM linkstats output for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
-        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
-    )
-    _log_and_set_beam_record(
-        linkstats_record,
-        key=LINKSTATS_WARMSTART,
-        description="BEAM warm-start linkstats for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
-        **_beam_linkstats_facet_meta(getattr(linkstats_record, "short_name", None), family="linkstats"),
-    )
-    for record in linkstats_parquet_records:
-        linkstats_meta = _beam_linkstats_facet_meta(
-            record.short_name, family="linkstats_parquet"
-        )
-        if _is_sub_iteration_key(record.short_name):
-            _log_beam_record_only(
-                record,
-                key=record.short_name,
-                description="BEAM linkstats parquet output for downstream runs",
-                workspace=workspace,
-                profile_file_schema=True,
-                **linkstats_meta,
-            )
-        else:
-            _log_and_set_beam_record(
-                record,
-                key=record.short_name,
-                description="BEAM linkstats parquet output for downstream runs",
-                coupler=coupler,
-                workspace=workspace,
-                profile_file_schema=True,
-                **linkstats_meta,
-            )
-    for record in linkstats_unmodified_phys_sim_records:
-        record_meta = dict(getattr(record, "metadata", None) or {})
-        facets = record_meta.get("facet")
-        if facets is None:
-            facets = _parse_linkstats_unmodified_phys_sim_facets(record.short_name)
-        log_meta = {
-            "facet_schema_version": record_meta.get(
-                "facet_schema_version", "v1"
-            ),
-            "facet_index": bool(record_meta.get("facet_index", True)),
-        }
-        if facets:
-            log_meta["facet"] = facets
-        if _is_sub_iteration_key(record.short_name):
-            _log_beam_record_only(
-                record,
-                key=record.short_name,
-                description=(
-                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
-                ),
-                workspace=workspace,
-                profile_file_schema=True,
-                **log_meta,
-            )
-        else:
-            _log_and_set_beam_record(
-                record,
-                key=record.short_name,
-                description=(
-                    "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
-                ),
-                coupler=coupler,
-                workspace=workspace,
-                profile_file_schema=True,
-                **log_meta,
-            )
-    _log_and_set_beam_record(
-        beam_plans_record,
-        key=BEAM_PLANS_OUT,
-        description="BEAM plans output for downstream runs",
-        coupler=coupler,
-        workspace=workspace,
-        profile_file_schema=True,
     )
 
 
@@ -994,15 +914,15 @@ def _log_with_optional_h5_container(
     """
     def _is_internal_h5_table(table_name: str) -> bool:
         leaf = table_name.rsplit("/", 1)[-1]
-        if re.match(r"^axis\d+$", leaf):
+        normalized_leaf = leaf.lower()
+        # Pandas HDF internals can appear either as leaf names (e.g. axis1,
+        # block0_items, level0) or flattened into larger table names
+        # (e.g. travel_data_axis1_level0).
+        if re.fullmatch(r"(axis|block|level|label)\d+(?:_.*)?", normalized_leaf):
             return True
-        if re.match(r"^block\d+_(items|values)$", leaf):
-            return True
-        if re.match(r"^level\d+$", leaf):
-            return True
-        if re.match(r".*label\d*$", leaf):
-            return True
-        return False
+        return bool(
+            re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf)
+        )
 
     def _table_filter_to_callable(
         table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]
@@ -1036,6 +956,16 @@ def _log_with_optional_h5_container(
     requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        if tables_used:
+            normalized_paths = sorted(
+                {
+                    name if str(name).startswith("/") else f"/{name}"
+                    for name in tables_used
+                    if name
+                }
+            )
+            meta.setdefault("h5_table_paths", normalized_paths)
+            meta.setdefault("h5_table_count", len(normalized_paths))
         base_filter = (
             _h5_table_filter_from_list(tables_used)
             if tables_used
@@ -1044,10 +974,8 @@ def _log_with_optional_h5_container(
         if requested_filter is None:
             table_filter = base_filter
         else:
-            table_filter = (
-                lambda table_name: base_filter(table_name)
-                and requested_filter(table_name)
-            )
+            def table_filter(table_name: str) -> bool:
+                return base_filter(table_name) and requested_filter(table_name)
         return cr.log_h5_container(
             path,
             key=key,
@@ -1183,44 +1111,3 @@ def log_input_only(
         description=description,
         meta=meta,
     )
-
-
-def record_store_to_outputs(
-    record_store: "RecordStore",
-    output_class: Type[Any],
-    workspace: "Workspace",
-) -> Any:
-    """
-    Convert a RecordStore into a typed StepOutputs dataclass.
-
-    Parameters
-    ----------
-    record_store : RecordStore
-        RecordStore returned by a component execution.
-    output_class : type
-        Dataclass type to instantiate.
-    workspace : Workspace
-        Workspace used to resolve relative paths.
-    """
-    if hasattr(output_class, "from_record_store"):
-        return output_class.from_record_store(record_store, workspace)
-    if not is_dataclass(output_class):
-        raise TypeError(
-            "output_class must be a dataclass or implement from_record_store"
-        )
-
-    mapping = record_store.to_mapping() if record_store is not None else {}
-    mapping = canonicalize_artifact_mapping(mapping)
-    record_keys = getattr(output_class, "record_keys", {}) or {}
-    values: Dict[str, Any] = {}
-
-    for field in fields(output_class):
-        key = record_keys.get(field.name, field.name)
-        if key not in mapping:
-            continue
-        path = artifact_to_path(mapping[key], workspace)
-        if path is None:
-            continue
-        values[field.name] = Path(path)
-
-    return output_class(**values)

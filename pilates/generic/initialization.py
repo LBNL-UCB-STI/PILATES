@@ -1,4 +1,4 @@
-from typing import Optional, Iterator, Tuple, Dict, Any
+from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -15,10 +15,30 @@ import shutil
 logger = logging.getLogger(__name__)
 
 
-def _record_count(record_store: object) -> int:
-    if isinstance(record_store, RecordStore):
-        return len(record_store.all_records())
-    return 0
+if TYPE_CHECKING:
+    from workflow_state import WorkflowState
+
+
+_BOOTSTRAP_DIRECTION_KEY = "bootstrap_direction"
+
+
+def _counts_by_model_from_records(
+    copied_records: Optional[RecordStore],
+    *,
+    direction: str,
+) -> Dict[str, int]:
+    if not isinstance(copied_records, RecordStore):
+        return {}
+    counts: Dict[str, int] = {}
+    for record in copied_records.all_records():
+        metadata = getattr(record, "metadata", None) or {}
+        if metadata.get(_BOOTSTRAP_DIRECTION_KEY) != direction:
+            continue
+        model_name = metadata.get("model")
+        if not model_name:
+            continue
+        counts[model_name] = counts.get(model_name, 0) + 1
+    return counts
 
 
 def build_bootstrap_artifact_summary(
@@ -29,25 +49,19 @@ def build_bootstrap_artifact_summary(
 
     This summary is intentionally lightweight for Phase 1 bootstrap reporting.
     """
-    input_counts = {
-        model_name: _record_count(records)
-        for model_name, records in getattr(workspace, "input_data", {}).items()
-        if _record_count(records) > 0
-    }
-    output_counts = {
-        model_name: _record_count(records)
-        for model_name, records in getattr(workspace, "output_data", {}).items()
-        if _record_count(records) > 0
-    }
+    input_counts = _counts_by_model_from_records(
+        copied_records,
+        direction="input",
+    )
+    output_counts = _counts_by_model_from_records(
+        copied_records,
+        direction="output",
+    )
 
     models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
     input_total = sum(input_counts.values())
     output_total = sum(output_counts.values())
-    copied_total = (
-        len(copied_records.all_records())
-        if isinstance(copied_records, RecordStore)
-        else input_total + output_total
-    )
+    copied_total = len(copied_records.all_records()) if isinstance(copied_records, RecordStore) else 0
 
     return {
         "models": models,
@@ -59,13 +73,20 @@ def build_bootstrap_artifact_summary(
     }
 
 
-def _tag_record_store(record_store: RecordStore, model_name: Optional[str]) -> None:
+def _tag_record_store(
+    record_store: RecordStore,
+    model_name: Optional[str],
+    *,
+    direction: Optional[str] = None,
+) -> None:
     if not model_name:
         return
     for record in record_store.all_records():
         metadata = getattr(record, "metadata", None)
         if isinstance(metadata, dict):
             metadata.setdefault("model", model_name)
+            if direction is not None:
+                metadata.setdefault(_BOOTSTRAP_DIRECTION_KEY, direction)
 
 
 def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
@@ -189,6 +210,16 @@ def _log_record_store(
             meta["profile_file_schema"] = "if_changed"
         tables_used = getattr(record, "h5_tables_used", None)
         if tables_used:
+            normalized_tables = sorted(
+                {
+                    name if name.startswith("/") else f"/{name}"
+                    for name in tables_used
+                    if name
+                }
+            )
+            if normalized_tables:
+                meta["h5_table_paths"] = normalized_tables
+                meta["h5_table_count"] = len(normalized_tables)
             artifact = cr.log_h5_container(
                 path,
                 key=key,
@@ -209,30 +240,12 @@ def _log_record_store(
             if record_hash:
                 record.content_hash = record_hash
 
-
-def _merge_workspace_records(
-    workspace: Workspace, model_key: str, rec_in: RecordStore, rec_out: RecordStore
-) -> None:
-    """Store copied records under the model key, appending if already present."""
-    if model_key in workspace.input_data:
-        workspace.input_data[model_key] += rec_in
-    else:
-        workspace.input_data[model_key] = rec_in
-
-    if model_key in workspace.output_data:
-        workspace.output_data[model_key] += rec_out
-    else:
-        workspace.output_data[model_key] = rec_out
-
-
 def _accumulate_copy_result(
     *,
     result: Optional[Tuple[RecordStore, RecordStore]],
     model_name: str,
     initialization_records_in: RecordStore,
     initialization_records_out: RecordStore,
-    workspace: Optional[Workspace] = None,
-    workspace_model_key: Optional[str] = None,
 ) -> bool:
     """
     Tag and append copy outputs, optionally storing them on workspace caches.
@@ -246,18 +259,10 @@ def _accumulate_copy_result(
         return False
 
     rec_in, rec_out = result
-    _tag_record_store(rec_in, model_name)
-    _tag_record_store(rec_out, model_name)
+    _tag_record_store(rec_in, model_name, direction="input")
+    _tag_record_store(rec_out, model_name, direction="output")
     initialization_records_in += rec_in
     initialization_records_out += rec_out
-
-    if workspace is not None:
-        _merge_workspace_records(
-            workspace,
-            workspace_model_key or model_name,
-            rec_in,
-            rec_out,
-        )
     return True
 
 
@@ -284,6 +289,7 @@ class Initialization(Model):
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
+        urbansim_enabled = settings.run.models.land_use == "urbansim"
         model_factory = ModelFactory()
 
         try:
@@ -300,8 +306,6 @@ class Initialization(Model):
                     model_name="beam",
                     initialization_records_in=initialization_records_in,
                     initialization_records_out=initialization_records_out,
-                    workspace=workspace,
-                    workspace_model_key="beam",
                 )
 
             if settings.run.models.travel == "beam":
@@ -357,8 +361,12 @@ class Initialization(Model):
                                 )
                             ]
                         )
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
+                        _accumulate_copy_result(
+                            result=(rec_in, rec_out),
+                            model_name="activitysim",
+                            initialization_records_in=initialization_records_in,
+                            initialization_records_out=initialization_records_out,
+                        )
                     else:
                         logger.warning(
                             "Canonical zone source file not found at %s, skipping copy.",
@@ -386,7 +394,9 @@ class Initialization(Model):
 
                 # UrbanSim data copy (once)
                 if model_name == "urbansim" or (
-                    model_name == "activitysim" and have_not_copied_usim_data
+                    model_name == "activitysim"
+                    and have_not_copied_usim_data
+                    and not urbansim_enabled
                 ):
 
                     output_dir = workspace.get_usim_mutable_data_dir()
@@ -402,8 +412,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
                     have_not_copied_usim_data = False
 
@@ -422,8 +430,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
 
@@ -444,8 +450,6 @@ class Initialization(Model):
                         model_name=model_name,
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
-                        workspace=workspace,
-                        workspace_model_key=model_name,
                     )
 
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed

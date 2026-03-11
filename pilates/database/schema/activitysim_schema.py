@@ -125,6 +125,89 @@ class LandUseAsimIn(SQLModel, table=True):
     area_type: Optional[int] = Field(default=None, sa_column=Column('area_type', BigInteger, nullable=True))
     county__2: Optional[int] = Field(default=None, sa_column=Column('COUNTY', BigInteger, nullable=True))
 
+
+class LandUseAsimOut(SQLModel, table=True):
+    __tablename__ = 'LandUseAsimOut'
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    zone_id: Optional[int] = Field(
+        default=None,
+        description='Traffic analysis zone identifier for ActivitySim land-use output.',
+        sa_column=Column('zone_id', BigInteger, nullable=True, index=True),
+    )
+    geometry: Optional[str] = Field(
+        default=None,
+        description='Serialized geometry carried through the land-use pipeline.',
+        sa_column=Column('geometry', String, nullable=True),
+    )
+    county_id: Optional[int] = Field(default=None, sa_column=Column('county_id', BigInteger, nullable=True))
+    tothh: Optional[float] = Field(default=None, sa_column=Column('TOTHH', Float, nullable=True))
+    totpop: Optional[float] = Field(default=None, sa_column=Column('TOTPOP', Float, nullable=True))
+    totacre: Optional[float] = Field(default=None, sa_column=Column('TOTACRE', Float, nullable=True))
+    totemp: Optional[int] = Field(default=None, sa_column=Column('TOTEMP', BigInteger, nullable=True))
+    age0519: Optional[float] = Field(default=None, sa_column=Column('AGE0519', Float, nullable=True))
+    retempn: Optional[int] = Field(default=None, sa_column=Column('RETEMPN', BigInteger, nullable=True))
+    fpsempn: Optional[int] = Field(default=None, sa_column=Column('FPSEMPN', BigInteger, nullable=True))
+    herempn: Optional[int] = Field(default=None, sa_column=Column('HEREMPN', BigInteger, nullable=True))
+    othempn: Optional[int] = Field(default=None, sa_column=Column('OTHEMPN', BigInteger, nullable=True))
+    agrempn: Optional[int] = Field(default=None, sa_column=Column('AGREMPN', BigInteger, nullable=True))
+    mwtempn: Optional[int] = Field(default=None, sa_column=Column('MWTEMPN', BigInteger, nullable=True))
+    prkcst: Optional[float] = Field(default=None, sa_column=Column('PRKCST', Float, nullable=True))
+    oprkcst: Optional[float] = Field(default=None, sa_column=Column('OPRKCST', Float, nullable=True))
+    area_type: Optional[int] = Field(default=None, sa_column=Column('area_type', BigInteger, nullable=True))
+    hsenroll: Optional[float] = Field(default=None, sa_column=Column('HSENROLL', Float, nullable=True))
+    collfte: Optional[float] = Field(default=None, sa_column=Column('COLLFTE', Float, nullable=True))
+    collpte: Optional[float] = Field(default=None, sa_column=Column('COLLPTE', Float, nullable=True))
+    topology: Optional[int] = Field(default=None, sa_column=Column('TOPOLOGY', BigInteger, nullable=True))
+    terminal: Optional[int] = Field(default=None, sa_column=Column('TERMINAL', BigInteger, nullable=True))
+    original_zone_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column('_original_zone_id', BigInteger, nullable=True),
+    )
+    household_density: Optional[float] = Field(default=None, sa_column=Column('household_density', Float, nullable=True))
+    employment_density: Optional[float] = Field(default=None, sa_column=Column('employment_density', Float, nullable=True))
+    density_index: Optional[float] = Field(default=None, sa_column=Column('density_index', Float, nullable=True))
+    is_cbd: Optional[bool] = Field(default=None, sa_column=Column('is_cbd', Boolean, nullable=True))
+    totenr_univ: Optional[float] = Field(default=None, sa_column=Column('TOTENR_univ', Float, nullable=True))
+    ext_work_share: Optional[float] = Field(default=None, sa_column=Column('ext_work_share', Float, nullable=True))
+    retempn_scaled: Optional[float] = Field(default=None, sa_column=Column('RETEMPN_scaled', Float, nullable=True))
+    fpsempn_scaled: Optional[float] = Field(default=None, sa_column=Column('FPSEMPN_scaled', Float, nullable=True))
+    herempn_scaled: Optional[float] = Field(default=None, sa_column=Column('HEREMPN_scaled', Float, nullable=True))
+    othempn_scaled: Optional[float] = Field(default=None, sa_column=Column('OTHEMPN_scaled', Float, nullable=True))
+    agrempn_scaled: Optional[float] = Field(default=None, sa_column=Column('AGREMPN_scaled', Float, nullable=True))
+    mwtempn_scaled: Optional[float] = Field(default=None, sa_column=Column('MWTEMPN_scaled', Float, nullable=True))
+    totemp_scaled: Optional[float] = Field(default=None, sa_column=Column('TOTEMP_scaled', Float, nullable=True))
+
+
+class AccessibilityAsimOut(SQLModel, table=True):
+    __tablename__ = 'AccessibilityAsimOut'
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    zone_id: Optional[int] = Field(
+        default=None,
+        description='Traffic analysis zone identifier for ActivitySim accessibility output.',
+        sa_column=Column(
+            'zone_id',
+            BigInteger,
+            ForeignKey('LandUseAsimIn.TAZ'),
+            nullable=True,
+            index=True,
+        ),
+    )
+    aupkretail: Optional[float] = Field(default=None, sa_column=Column('auPkRetail', Float, nullable=True))
+    aupktotal: Optional[float] = Field(default=None, sa_column=Column('auPkTotal', Float, nullable=True))
+    auopretail: Optional[float] = Field(default=None, sa_column=Column('auOpRetail', Float, nullable=True))
+    auoptotal: Optional[float] = Field(default=None, sa_column=Column('auOpTotal', Float, nullable=True))
+    trpkretail: Optional[float] = Field(default=None, sa_column=Column('trPkRetail', Float, nullable=True))
+    trpktotal: Optional[float] = Field(default=None, sa_column=Column('trPkTotal', Float, nullable=True))
+    tropretail: Optional[float] = Field(default=None, sa_column=Column('trOpRetail', Float, nullable=True))
+    troptotal: Optional[float] = Field(default=None, sa_column=Column('trOpTotal', Float, nullable=True))
+    nmretail: Optional[float] = Field(default=None, sa_column=Column('nmRetail', Float, nullable=True))
+    nmtotal: Optional[float] = Field(default=None, sa_column=Column('nmTotal', Float, nullable=True))
+
+
 class PersonsAsimIn(SQLModel, table=True):
     __tablename__ = 'PersonsAsimIn'
     __table_args__ = {"extend_existing": True}
@@ -244,12 +327,24 @@ class BeamPlansAsimOut(SQLModel, table=True):
     tour_id: Optional[int] = Field(
         default=None,
         description='Tour identifier in ActivitySim outputs.',
-        sa_column=Column('tour_id', BigInteger, nullable=True, index=True),
+        sa_column=Column(
+            'tour_id',
+            BigInteger,
+            ForeignKey('ToursAsimOut.tour_id'),
+            nullable=True,
+            index=True,
+        ),
     )
     trip_id: Optional[int] = Field(
         default=None,
         description='Trip identifier in ActivitySim outputs.',
-        sa_column=Column('trip_id', BigInteger, nullable=True, index=True),
+        sa_column=Column(
+            'trip_id',
+            BigInteger,
+            ForeignKey('tripsAsimOut.trip_id'),
+            nullable=True,
+            index=True,
+        ),
     )
     person_id: Optional[int] = Field(
         default=None,
@@ -652,3 +747,53 @@ class ToursAsimOut(SQLModel, table=True):
     )
     stop_frequency: Optional[str] = Field(default=None, sa_column=Column('stop_frequency', String, nullable=True))
     primary_purpose: Optional[str] = Field(default=None, sa_column=Column('primary_purpose', String, nullable=True))
+
+
+class JointTourParticipantsAsimOut(SQLModel, table=True):
+    __tablename__ = 'JointTourParticipantsAsimOut'
+    __table_args__ = {"extend_existing": True}
+    __abstract__ = True
+
+    tour_id: Optional[int] = Field(
+        default=None,
+        description='Tour identifier for the joint-tour participation record.',
+        sa_column=Column(
+            'tour_id',
+            BigInteger,
+            ForeignKey('ToursAsimOut.tour_id'),
+            nullable=True,
+            index=True,
+        ),
+    )
+    household_id: Optional[float] = Field(
+        default=None,
+        description='Household identifier associated with the joint tour.',
+        sa_column=Column('household_id', Float, nullable=True),
+    )
+    person_id: Optional[int] = Field(
+        default=None,
+        description='Person identifier recorded on the joint-tour participation row.',
+        sa_column=Column(
+            'person_id',
+            BigInteger,
+            ForeignKey('PersonsAsimOut.person_id'),
+            nullable=True,
+            index=True,
+        ),
+    )
+    participant_num: Optional[int] = Field(
+        default=None,
+        description='Participant sequence number within the joint tour.',
+        sa_column=Column('participant_num', BigInteger, nullable=True),
+    )
+    participant_id: Optional[int] = Field(
+        default=None,
+        description='Participant identifier carried by ActivitySim joint-tour outputs.',
+        sa_column=Column(
+            'participant_id',
+            BigInteger,
+            ForeignKey('PersonsAsimOut.person_id'),
+            nullable=True,
+            index=True,
+        ),
+    )
