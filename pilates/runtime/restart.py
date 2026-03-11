@@ -147,6 +147,26 @@ def restart_required_local_artifacts(
             }
         )
 
+    requires_beam_locals = (
+        getattr(model_cfg, "traffic_assignment", None) == "beam"
+        and current_stage
+        in {
+            workflow_stage.supply_demand_loop,
+            workflow_stage.traffic_assignment,
+        }
+    )
+    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+    if requires_beam_locals and callable(get_beam_input_dir) and region:
+        required.append(
+            {
+                "key": "beam_region_input_dir",
+                "path": os.path.join(get_beam_input_dir(), region),
+                "reason": (
+                    "BEAM mutable input tree required for resumed traffic assignment"
+                ),
+            }
+        )
+
     requires_atlas_locals = (
         getattr(model_cfg, "vehicle_ownership", None) == "atlas"
         and current_stage == workflow_stage.vehicle_ownership_model

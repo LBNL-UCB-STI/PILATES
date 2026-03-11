@@ -191,6 +191,33 @@ def _add_urbansim_candidates(
             )
 
 
+def _add_beam_candidates(
+    artifacts: List[Dict[str, Any]],
+    *,
+    settings: Any,
+    workspace: Any,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> None:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "traffic_assignment", None) != "beam":
+        return
+
+    get_beam_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+    region = getattr(getattr(settings, "run", None), "region", None)
+    if not callable(get_beam_dir) or not region:
+        return
+
+    _append_local_candidate(
+        artifacts,
+        key="beam_region_input_dir",
+        local_path=os.path.join(get_beam_dir(), region),
+        reason=f"BEAM mutable input directory for region {region}",
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+
+
 def _add_atlas_year_dir_candidates(
     artifacts: List[Dict[str, Any]],
     *,
@@ -330,6 +357,13 @@ def build_restart_bundle_manifest(
         )
 
     _add_activitysim_candidates(
+        artifacts,
+        settings=settings,
+        workspace=workspace,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_root,
+    )
+    _add_beam_candidates(
         artifacts,
         settings=settings,
         workspace=workspace,

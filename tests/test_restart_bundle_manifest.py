@@ -30,6 +30,9 @@ class _WorkspaceStub:
     def get_usim_mutable_data_dir(self):
         return self._usim_base_dir
 
+    def get_beam_mutable_data_dir(self):
+        return f"{self._asim_base_dir}/../beam/input" if self._asim_base_dir else None
+
 
 def _settings_with_atlas_vehicle_ownership():
     return SimpleNamespace(
@@ -62,6 +65,7 @@ def _settings_with_activitysim():
                 land_use=None,
                 vehicle_ownership="none",
                 activity_demand="activitysim",
+                traffic_assignment="beam",
             ),
             region="test",
             start_year=2017,
@@ -188,6 +192,13 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     zarr_archive.mkdir(parents=True, exist_ok=True)
     (zarr_archive / "values").write_text("x", encoding="utf-8")
 
+    beam_local = local_run_dir / "beam" / "input" / "test"
+    beam_local.mkdir(parents=True, exist_ok=True)
+    (beam_local / "beam.conf").write_text("x", encoding="utf-8")
+    beam_archive = archive_run_dir / "beam" / "input" / "test"
+    beam_archive.mkdir(parents=True, exist_ok=True)
+    (beam_archive / "beam.conf").write_text("x", encoding="utf-8")
+
     usim_local = usim_base_dir / "usim_000.h5"
     usim_local.write_text("x", encoding="utf-8")
     usim_archive = archive_run_dir / "urbansim" / "data" / "usim_000.h5"
@@ -211,6 +222,7 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     assert "usim_datastore_base_h5" in keys
     assert "zarr_skims" in keys
     assert "asim_sharrow_cache_dir" in keys
+    assert "beam_region_input_dir" in keys
     assert "activitysim_config_dir_configs" in keys
     assert "activitysim_config_dir_configs_extended" in keys
     assert "activitysim_config_dir_configs_mp" in keys

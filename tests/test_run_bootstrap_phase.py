@@ -35,6 +35,9 @@ class DummyWorkspace:
     def get_atlas_mutable_input_dir(self):
         return os.path.join(self.full_path, "atlas", "atlas_input")
 
+    def get_beam_mutable_data_dir(self):
+        return os.path.join(self.full_path, "beam", "input")
+
 
 class DummyInitialization:
     def __init__(self, *_args, **_kwargs):
@@ -326,7 +329,11 @@ def _restart_settings():
     return SimpleNamespace(
         run=SimpleNamespace(
             region="test",
-            models=SimpleNamespace(activity_demand="activitysim", vehicle_ownership="atlas"),
+            models=SimpleNamespace(
+                activity_demand="activitysim",
+                vehicle_ownership="atlas",
+                traffic_assignment="beam",
+            ),
         ),
         atlas=SimpleNamespace(scenario="baseline"),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
@@ -633,6 +640,27 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     paths = {item["path"] for item in missing}
     assert "zarr_skims" in keys
     assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
+
+
+def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        asim_compiled=False,
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    keys = {item["key"] for item in missing}
+    paths = {item["path"] for item in missing}
+    assert "beam_region_input_dir" in keys
+    assert any(path.endswith("beam/input/test") for path in paths)
 
 
 def test_restart_repair_rewinds_stale_supply_demand_state_when_atlas_outputs_incomplete(
