@@ -17,6 +17,7 @@ from pilates.utils.coupler_helpers import (
     enqueue_archive_copy,
     flush_archive_queue,
     resolve_artifact_from_value,
+    set_coupler_from_artifact,
 )
 from pilates.workflows.input_resolution import (
     ResolvedStepInputs,
@@ -467,6 +468,26 @@ def _run_activity_demand_phase(
                     return cache_path
         return None
 
+    def _republish_existing_compile_artifacts() -> None:
+        zarr_path = _resolved_existing_zarr_skims_path()
+        if zarr_path:
+            set_coupler_from_artifact(
+                coupler,
+                ZARR_SKIMS,
+                None,
+                fallback=zarr_path,
+            )
+
+        if requires_numba_cache:
+            cache_path = _resolved_existing_numba_cache_path()
+            if cache_path:
+                set_coupler_from_artifact(
+                    coupler,
+                    ASIM_SHARROW_CACHE_DIR,
+                    None,
+                    fallback=cache_path,
+                )
+
     activitysim_cfg = getattr(settings, "activitysim", None)
     requires_numba_cache = bool(
         getattr(activitysim_cfg, "num_processes", 1) > 1
@@ -559,6 +580,8 @@ def _run_activity_demand_phase(
                 "expected_outputs": expected_compile_outputs,
             },
         )
+    else:
+        _republish_existing_compile_artifacts()
     final_zarr_path = _resolved_existing_zarr_skims_path()
     final_cache_path = (
         _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"

@@ -691,6 +691,13 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
 def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     stage_env, tmp_path
 ):
+    beam_config_path = (
+        Path(stage_env["workspace"].get_beam_mutable_data_dir())
+        / stage_env["settings"].run.region
+        / stage_env["settings"].beam.config
+    )
+    _write_file(beam_config_path)
+
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     usim_inputs = {
@@ -733,6 +740,54 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
         call for call in stage_env["scenario"].calls if call.get("model") == "activitysim_compile"
     ]
     assert compile_calls, "Expected forced ActivitySim compile when numba cache is missing."
+
+
+def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
+    stage_env, tmp_path
+):
+    beam_config_path = (
+        Path(stage_env["workspace"].get_beam_mutable_data_dir())
+        / stage_env["settings"].run.region
+        / stage_env["settings"].beam.config
+    )
+    _write_file(beam_config_path)
+
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+    state.compile_asim()
+
+    zarr_path = Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    stage_env["coupler"]._values.pop(ZARR_SKIMS, None)
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_republish_zarr_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    compile_calls = [
+        call for call in stage_env["scenario"].calls if call.get("model") == "activitysim_compile"
+    ]
+    assert not compile_calls, "Did not expect ActivitySim compile when local artifacts already exist."
+    assert stage_env["coupler"].get(ZARR_SKIMS) is not None
 
 
 def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):
