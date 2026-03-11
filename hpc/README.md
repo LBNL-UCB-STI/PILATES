@@ -101,8 +101,9 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 `job.sh` installs `consist` as follows:
 
 1. If local source exists at `CONSIST_SRC_DIR` (default `$PILATES_DIR/consist`), install editable (`pip install -e`).
-2. Otherwise, install from PyPI package name in `CONSIST_PYPI_PACKAGE` (default `consist`) if not already importable.
-3. Validate with `from consist import create_tracker`.
+2. Otherwise, install from the PyPI package spec in `CONSIST_PYPI_PACKAGE` (default `consist==0.1.0`).
+3. Cache the selected install spec in `$VENV_PATH/.last_consist_install_spec` so jobs can refresh when the local checkout revision or PyPI spec changes.
+4. Validate with `from consist import create_tracker`.
 
 Override examples:
 
@@ -111,7 +112,7 @@ CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh 
 ```
 
 ```bash
-CONSIST_PYPI_PACKAGE=consist==0.5.2 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+CONSIST_PYPI_PACKAGE=consist==0.1.0 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
 ```
 
 ## Dependency Gates

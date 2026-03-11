@@ -10,7 +10,7 @@ VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
-CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
+CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist==0.1.0}"
 MIGRATED_CONFIG_PATH=""
 
 show_system_info() {
@@ -52,6 +52,11 @@ install_python_deps() {
 
 install_consist() {
     local marker="$VENV_PATH/.last_consist_install_spec"
+    local install_needed=false
+
+    if ! python3 -c "from consist import create_tracker" >/dev/null 2>&1; then
+        install_needed=true
+    fi
 
     if [ -d "$CONSIST_SRC_DIR" ]; then
         local consist_spec="editable:$CONSIST_SRC_DIR"
@@ -62,17 +67,29 @@ install_consist() {
         fi
 
         if [ ! -f "$marker" ] || [ "$consist_spec" != "$(cat "$marker")" ]; then
+            install_needed=true
+        fi
+
+        if [ "$install_needed" = true ]; then
             echo "Installing local editable consist from $CONSIST_SRC_DIR ..."
             python3 -m pip install -e "$CONSIST_SRC_DIR"
             printf '%s\n' "$consist_spec" > "$marker"
         else
             echo "Editable consist is up to date; skipping reinstall."
         fi
-    elif ! python3 -c "from consist import create_tracker" >/dev/null 2>&1; then
-        echo "Installing consist from PyPI package '$CONSIST_PYPI_PACKAGE' ..."
-        python3 -m pip install "$CONSIST_PYPI_PACKAGE"
     else
-        echo "consist already installed."
+        local consist_spec="pypi:$CONSIST_PYPI_PACKAGE"
+        if [ ! -f "$marker" ] || [ "$consist_spec" != "$(cat "$marker")" ]; then
+            install_needed=true
+        fi
+
+        if [ "$install_needed" = true ]; then
+            echo "Installing consist from PyPI package '$CONSIST_PYPI_PACKAGE' ..."
+            python3 -m pip install "$CONSIST_PYPI_PACKAGE"
+            printf '%s\n' "$consist_spec" > "$marker"
+        else
+            echo "PyPI consist install is up to date; skipping reinstall."
+        fi
     fi
 
     python3 -c "from consist import create_tracker" >/dev/null
