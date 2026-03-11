@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
 
 import pandas as pd
 
+from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
@@ -911,14 +912,13 @@ def make_atlas_postprocess_step(
             raise RuntimeError(
                 "UrbanSim config is required for ATLAS postprocess logging."
             )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(),
-            urbansim_settings.output_file_template.format(year=forecast_year),
+        usim_output_path = resolve_atlas_usim_datastore_path(
+            settings, state, workspace
         )
-        if os.path.exists(usim_output_path):
+        if usim_output_path.exists():
             log_input_only(
                 key=USIM_DATASTORE_H5,
-                path=usim_output_path,
+                path=str(usim_output_path),
                 description=(
                     "UrbanSim datastore consumed by ATLAS postprocess "
                     f"for year {forecast_year}"
@@ -936,7 +936,7 @@ def make_atlas_postprocess_step(
                 else f"/{forecast_year}/households"
             )
             _log_named_h5_tables(
-                path=usim_output_path,
+                path=str(usim_output_path),
                 direction="input",
                 table_keys={
                     households_table_path: "atlas_postprocess_usim_households_table_input"

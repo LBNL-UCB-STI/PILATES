@@ -88,6 +88,24 @@ def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
     return datastore_name
 
 
+def resolve_atlas_usim_datastore_path(
+    settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+) -> Path:
+    """Resolve the UrbanSim datastore ATLAS should read/update for this subrun."""
+    explicit_path = getattr(state, "atlas_usim_datastore_h5", None)
+    if explicit_path:
+        return Path(explicit_path)
+
+    usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
+    if state.is_start_year():
+        usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
+    else:
+        usim_datastore_fname = get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        )
+    return Path(usim_mutable_data_dir) / usim_datastore_fname
+
+
 class AtlasPostprocessor(GenericPostprocessor):
     """
     ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.
@@ -102,11 +120,8 @@ class AtlasPostprocessor(GenericPostprocessor):
         """
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
-        usim_output_fname = get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        usim_output_path = resolve_atlas_usim_datastore_path(
+            settings, state, workspace
         )
         atlas_output_dir = workspace.get_atlas_output_dir()
         return {
@@ -114,7 +129,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 atlas_output_dir if os.path.exists(atlas_output_dir) else None
             ),
             "usim_datastore_h5": (
-                usim_output_path if os.path.exists(usim_output_path) else None
+                usim_output_path if usim_output_path.exists() else None
             ),
         }
 
@@ -135,11 +150,8 @@ class AtlasPostprocessor(GenericPostprocessor):
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
         """
-        usim_output_fname = get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
+        usim_output_path = resolve_atlas_usim_datastore_path(
+            settings, state, workspace
         )
         return {
             "atlas_output_dir": workspace.get_atlas_output_dir(),
@@ -193,19 +205,18 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
         # --- HDF5 Update and Provenance ---
-        usim_h5_path = workspace.get_usim_mutable_data_dir()
-        usim_h5_fname = get_usim_datastore_fname(
-            settings, io="output", year=output_year
+        usim_h5_file = resolve_atlas_usim_datastore_path(
+            settings, self.state, workspace
         )
-        usim_h5_file = os.path.join(usim_h5_path, usim_h5_fname)
-        if not os.path.exists(usim_h5_file):
+        if not usim_h5_file.exists():
             raise RuntimeError(
-                "ATLAS postprocess requires the current-year UrbanSim datastore H5"
+                "ATLAS postprocess requires the UrbanSim datastore H5 selected for "
+                f"year {self.state.current_year}: {usim_h5_file}"
             )
 
         # Perform the update
         update_succeeded = self.atlas_update_h5_vehicle(
-            settings, output_year, usim_h5_file, str(atlas_hh_path)
+            settings, output_year, str(usim_h5_file), str(atlas_hh_path)
         )
         if not update_succeeded:
             raise RuntimeError(
@@ -215,7 +226,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
         )
         updated_usim_h5 = Path(usim_h5_file)
-        output_paths[USIM_H5_UPDATED] = Path(usim_h5_file)
+        output_paths[USIM_H5_UPDATED] = updated_usim_h5
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh2_file = os.path.join(
