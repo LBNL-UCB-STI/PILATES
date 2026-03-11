@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from consist.core.step_context import StepContext
+
+from pilates.utils.consist_config import build_step_consist_kwargs
+
+
+def consist_step_meta(model: str) -> Dict[str, Any]:
+    """
+    Build StepContext-callable metadata for Consist step defaults.
+
+    The callables mirror kwargs typically passed to `scenario.run(...)` and let
+    Consist resolve per-step config/facet/identity input metadata at execution
+    time.
+    """
+
+    cache_attr = "_pilates_step_meta_cache"
+
+    def _runtime_value(ctx: StepContext, name: str) -> Any:
+        return ctx.get_runtime(name, default=None)
+
+    def _settings(ctx: StepContext) -> Any:
+        return _runtime_value(ctx, "settings")
+
+    def _workspace_path_from_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+
+        full_path = getattr(value, "full_path", None)
+        if isinstance(full_path, (Path, str)):
+            return str(full_path)
+
+        if isinstance(value, (Path, str)):
+            return str(value)
+
+        return None
+
+    def _workspace(ctx: StepContext) -> Any:
+        return _runtime_value(ctx, "workspace")
+
+    def _workspace_path(ctx: StepContext) -> Optional[str]:
+        return _workspace_path_from_value(_workspace(ctx))
+
+    def _activitysim_adapter(ctx: StepContext) -> Any:
+        settings = _settings(ctx)
+        if settings is None:
+            return None
+        activitysim_settings = getattr(settings, "activitysim", None)
+        if activitysim_settings is None:
+            return None
+
+        try:
+            from consist.integrations.activitysim import ActivitySimConfigAdapter
+        except Exception:
+            return None
+
+        workspace_obj = _workspace(ctx)
+        config_root: Optional[Path] = None
+        if workspace_obj is not None and hasattr(
+            workspace_obj, "get_asim_mutable_configs_dir"
+        ):
+            config_root = (
+                Path(workspace_obj.get_asim_mutable_configs_dir())
+                / activitysim_settings.main_configs_dir
+            )
+        else:
+            ws_path = _workspace_path(ctx)
+            if ws_path:
+                config_root = (
+                    Path(ws_path)
+                    / activitysim_settings.local_mutable_configs_folder
+                    / activitysim_settings.main_configs_dir
+                )
+        if config_root is None or not config_root.exists():
+            return None
+
+        return ActivitySimConfigAdapter(root_dirs=[config_root])
+
+    def _beam_adapter(ctx: StepContext) -> Any:
+        settings = _settings(ctx)
+        if settings is None:
+            return None
+        run_settings = getattr(settings, "run", None)
+        beam_settings = getattr(settings, "beam", None)
+        if run_settings is None or beam_settings is None:
+            return None
+
+        try:
+            from consist.integrations.beam import BeamConfigAdapter
+        except Exception:
+            return None
+
+        workspace_obj = _workspace(ctx)
+        config_root: Optional[Path] = None
+        if workspace_obj is not None and hasattr(
+            workspace_obj, "get_beam_mutable_data_dir"
+        ):
+            config_root = Path(workspace_obj.get_beam_mutable_data_dir()) / run_settings.region
+        else:
+            ws_path = _workspace_path(ctx)
+            if ws_path:
+                config_root = (
+                    Path(ws_path)
+                    / beam_settings.local_mutable_data_folder
+                    / run_settings.region
+                )
+        if config_root is None:
+            return None
+
+        primary_config = config_root / beam_settings.config
+        if not primary_config.exists():
+            return None
+
+        beam_input_root = config_root.resolve()
+        pwd_candidates = [
+            beam_input_root.parent,
+            beam_input_root,
+            beam_input_root.parent.parent,
+        ]
+        expected_suffix = Path("input") / run_settings.region
+        pwd_root = next(
+            (root for root in pwd_candidates if (root / expected_suffix).exists()),
+            beam_input_root.parent,
+        )
+        env_overrides = {"PWD": str(pwd_root)}
+        return BeamConfigAdapter(
+            root_dirs=[config_root],
+            primary_config=primary_config,
+            env_overrides=env_overrides,
+        )
+
+    def _adapter(ctx: StepContext) -> Any:
+        if model.startswith("activitysim_"):
+            return _activitysim_adapter(ctx)
+        if model.startswith("beam_"):
+            return _beam_adapter(ctx)
+        return None
+
+    def _resolve(ctx: StepContext) -> Dict[str, Any]:
+        cache: Optional[Dict[str, Dict[str, Any]]] = getattr(ctx, cache_attr, None)
+        if not isinstance(cache, dict):
+            cache = {}
+            try:
+                setattr(ctx, cache_attr, cache)
+            except Exception:
+                cache = None
+
+        if cache is not None and model in cache:
+            return cache[model]
+        settings = _settings(ctx)
+        if settings is None:
+            if cache is not None:
+                cache[model] = {}
+            return {}
+        workspace_path = _workspace_path(ctx)
+        resolved = build_step_consist_kwargs(
+            model=model,
+            settings=settings,
+            workspace_path=workspace_path,
+        )
+        adapter = _adapter(ctx)
+        if adapter is not None:
+            resolved["adapter"] = adapter
+        if cache is not None:
+            cache[model] = resolved
+        return resolved
+
+    return {
+        "adapter": lambda ctx: _resolve(ctx).get("adapter"),
+        "config": lambda ctx: _resolve(ctx).get("config"),
+        "facet": lambda ctx: _resolve(ctx).get("facet"),
+        "facet_index": lambda ctx: _resolve(ctx).get("facet_index"),
+        "facet_schema_version": lambda ctx: _resolve(ctx).get("facet_schema_version"),
+        "identity_inputs": lambda ctx: _resolve(ctx).get("identity_inputs"),
+    }

@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import MagicMock
 
 from pilates.utils.consist_config import (
-    build_activitysim_hash_inputs,
-    build_beam_hash_inputs,
+    build_activitysim_identity_inputs,
+    build_beam_identity_inputs,
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
@@ -21,28 +21,28 @@ def test_build_scenario_consist_kwargs_includes_run_facet():
     assert kwargs["facet_schema_version"] == "pilates_scenario_v1"
 
 
-def test_build_activitysim_hash_inputs_requires_dir(tmp_path):
+def test_build_activitysim_identity_inputs_requires_dir(tmp_path):
     settings = MagicMock()
     settings.activitysim = MagicMock()
     settings.activitysim.local_mutable_configs_folder = "activitysim/configs"
 
     (tmp_path / "activitysim" / "configs").mkdir(parents=True)
-    hash_inputs = build_activitysim_hash_inputs(settings, str(tmp_path))
-    assert len(hash_inputs) == 1
-    assert hash_inputs[0][0] == "asim_mutable_configs"
-    assert hash_inputs[0][1] == (tmp_path / "activitysim" / "configs")
+    identity_inputs = build_activitysim_identity_inputs(settings, str(tmp_path))
+    assert len(identity_inputs) == 1
+    assert identity_inputs[0][0] == "asim_mutable_configs"
+    assert identity_inputs[0][1] == (tmp_path / "activitysim" / "configs")
 
 
-def test_build_activitysim_hash_inputs_missing_dir_raises(tmp_path):
+def test_build_activitysim_identity_inputs_missing_dir_raises(tmp_path):
     settings = MagicMock()
     settings.activitysim = MagicMock()
     settings.activitysim.local_mutable_configs_folder = "activitysim/configs"
 
     with pytest.raises(FileNotFoundError):
-        build_activitysim_hash_inputs(settings, str(tmp_path))
+        build_activitysim_identity_inputs(settings, str(tmp_path))
 
 
-def test_build_beam_hash_inputs_discovers_conf_files(tmp_path):
+def test_build_beam_identity_inputs_discovers_conf_files(tmp_path):
     settings = MagicMock()
     settings.beam = MagicMock()
     settings.beam.local_mutable_data_folder = "beam/input"
@@ -53,15 +53,15 @@ def test_build_beam_hash_inputs_discovers_conf_files(tmp_path):
     (root / "sub" / "b.conf").write_text("b=2")
     (root / "sub" / "ignore.txt").write_text("nope")
 
-    hash_inputs = build_beam_hash_inputs(settings, str(tmp_path))
-    labels = [lbl for (lbl, _) in hash_inputs]
-    paths = [p for (_, p) in hash_inputs]
+    identity_inputs = build_beam_identity_inputs(settings, str(tmp_path))
+    labels = [lbl for (lbl, _) in identity_inputs]
+    paths = [p for (_, p) in identity_inputs]
 
     assert labels == ["beam_conf/a.conf", "beam_conf/sub/b.conf"]
     assert paths == [root / "a.conf", root / "sub" / "b.conf"]
 
 
-def test_build_step_consist_kwargs_beam_includes_hash_inputs(tmp_path):
+def test_build_step_consist_kwargs_beam_includes_identity_inputs(tmp_path):
     settings = MagicMock()
     settings.beam = MagicMock()
     settings.beam.local_mutable_data_folder = "beam/input"
@@ -82,4 +82,4 @@ def test_build_step_consist_kwargs_beam_includes_hash_inputs(tmp_path):
     kwargs = build_step_consist_kwargs("beam", settings, workspace_path=str(tmp_path))
     assert kwargs["facet_schema_version"] == "beam_v1"
     assert kwargs["facet"] == {"sample": 1.0}
-    assert kwargs["hash_inputs"][0][0] == "beam_conf/main.conf"
+    assert kwargs["identity_inputs"][0][0] == "beam_conf/main.conf"

@@ -2,7 +2,10 @@ import os
 
 from types import SimpleNamespace
 
-from pilates.generic.initialization import Initialization
+from pilates.generic.initialization import (
+    Initialization,
+    build_bootstrap_artifact_summary,
+)
 from pilates.generic.records import RecordStore, FileRecord
 import json
 
@@ -291,3 +294,29 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
 
     assert (str(input_path), "bad_key") in logged_inputs
     assert (str(output_path), "output_ok") in logged_outputs
+
+
+def test_build_bootstrap_artifact_summary_counts_records_by_model():
+    workspace = DummyWorkspace()
+    workspace.input_data["beam"] = RecordStore(
+        recordList=[FileRecord(unique_id="in1", short_name="beam_in", file_path="/tmp/in")]
+    )
+    workspace.output_data["beam"] = RecordStore(
+        recordList=[
+            FileRecord(unique_id="out1", short_name="beam_out1", file_path="/tmp/out1"),
+            FileRecord(unique_id="out2", short_name="beam_out2", file_path="/tmp/out2"),
+        ]
+    )
+
+    copied_records = RecordStore()
+    copied_records += workspace.input_data["beam"]
+    copied_records += workspace.output_data["beam"]
+
+    summary = build_bootstrap_artifact_summary(workspace, copied_records)
+
+    assert summary["models"] == ["beam"]
+    assert summary["input_records_by_model"] == {"beam": 1}
+    assert summary["output_records_by_model"] == {"beam": 2}
+    assert summary["input_records_total"] == 1
+    assert summary["output_records_total"] == 2
+    assert summary["copied_records_total"] == 3

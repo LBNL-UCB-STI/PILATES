@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any
 import re
 
@@ -19,7 +18,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
@@ -267,6 +266,59 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
         self.settings = self.state.full_settings
 
+    def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        """
+        Resolve the BEAM exchange scenario folder from the active mutable config.
+
+        Falls back to ``settings.beam.scenario_folder`` if no explicit exchange folder
+        can be read from the config file.
+        """
+        base_input_dir = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+        )
+        default_folder = os.path.join(base_input_dir, self.settings.beam.scenario_folder)
+
+        config_path = os.path.join(base_input_dir, self.settings.beam.config)
+        if not os.path.exists(config_path):
+            return default_folder
+
+        try:
+            with open(config_path, "r") as config_file:
+                for raw_line in config_file:
+                    line = raw_line.split("#", 1)[0].strip()
+                    if not line or "=" not in line:
+                        continue
+                    key, value = [part.strip() for part in line.split("=", 1)]
+                    # In BEAM HOCON this is typically nested under beam.exchange.scenario:
+                    #   folder = ${beam.inputDirectory}"/urbansim/2018"
+                    if key != "folder":
+                        continue
+                    if "${beam.inputDirectory}" not in value:
+                        continue
+
+                    resolved = value.replace("${beam.inputDirectory}", base_input_dir)
+                    resolved = resolved.replace('"', "")
+                    resolved = os.path.normpath(resolved)
+                    if resolved:
+                        if os.path.normpath(resolved) != os.path.normpath(default_folder):
+                            logger.info(
+                                "[BEAM Preprocessor] Using exchange.scenario.folder from config: %s "
+                                "(default scenario_folder resolves to %s)",
+                                resolved,
+                                default_folder,
+                            )
+                        return resolved
+        except Exception as exc:
+            logger.warning(
+                "[BEAM Preprocessor] Could not parse exchange.scenario.folder from %s: %s. "
+                "Falling back to settings.beam.scenario_folder.",
+                config_path,
+                exc,
+            )
+
+        return default_folder
+
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -375,21 +427,8 @@ class BeamPreprocessor(GenericPreprocessor):
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns(".git", ".git*"),
         )
-        input_records.append(
-            FileRecord(
-                file_path=beam_production_path,
-                short_name="beam_prod_source",
-                description="Beam Production Data Repo source",
-            )
-        )
-
-        output_records.append(
-            FileRecord(
-                file_path=dest_region,
-                short_name="beam_prod",
-                description="Beam Production Data Repo",
-            )
-        )
+        # Note: BEAM input directories are captured via the BEAM config adapter;
+        # we intentionally avoid tracking them as separate artifacts.
 
         # Optionally copy 'common' configs if present
         common_config_path = os.path.join(
@@ -403,20 +442,7 @@ class BeamPreprocessor(GenericPreprocessor):
                 dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns(".git", ".git*"),
             )
-            input_records.append(
-                FileRecord(
-                    file_path=common_config_path,
-                    short_name="beam_common_source",
-                    description="Beam Common Data Repo source",
-                )
-            )
-            output_records.append(
-                FileRecord(
-                    file_path=dest_common,
-                    short_name="beam_common",
-                    description="Beam Common Data Repo",
-                )
-            )
+            # Note: BEAM common directory is not tracked as a separate artifact.
 
         if hasattr(settings.beam, "skims_shapefile"):
             logger.info(
@@ -483,11 +509,8 @@ class BeamPreprocessor(GenericPreprocessor):
         tuple of FileRecord or None
             (input_record, output_record) for lineage tracking.
         """
-        beam_scenario_folder = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
-            self.settings.beam.scenario_folder,
-        )
+        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
+        os.makedirs(beam_scenario_folder, exist_ok=True)
         beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
         if self.state.run_info_path and os.path.exists(self.state.run_info_path):
@@ -545,6 +568,9 @@ class BeamPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
     ) -> RecordStore:
         """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
+        if self.state.full_settings.activitysim is None:
+            return RecordStore()
+
         logger.info("Attempting to copy final ASIM plans from input records.")
         file_format = self.settings.activitysim.file_format
 
@@ -687,11 +713,8 @@ class BeamPreprocessor(GenericPreprocessor):
             ("households", "households"),
             ("persons", "persons"),
         ]
-        beam_scenario_folder = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
-            self.settings.beam.scenario_folder,
-        )
+        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
+        os.makedirs(beam_scenario_folder, exist_ok=True)
 
         for asim_name, beam_name in asim_to_beam_mapping:
             asim_file_path, asim_file_record = asim_file_paths.get(
@@ -709,6 +732,7 @@ class BeamPreprocessor(GenericPreprocessor):
                     record_list.extend(records)
             else:
                 logger.warning(f"ActivitySim output file not found: {asim_name}")
+
         return record_list
 
     def _merge_replanned_asim_files(
@@ -719,11 +743,8 @@ class BeamPreprocessor(GenericPreprocessor):
     ) -> List[FileRecord]:
         """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
         logger.info("Merging asim outputs with existing beam input scenario files.")
-        beam_scenario_folder = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
-            self.settings.beam.scenario_folder,
-        )
+        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
+        os.makedirs(beam_scenario_folder, exist_ok=True)
 
         asim_plans_path, asim_plans_rec = asim_file_paths.get(
             "beam_plans", (None, None)
@@ -806,10 +827,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if file_format == "parquet":
                 df.to_parquet(path, index=True)
             else:
-                df.to_csv(path, index=(name != "plans"), compression="gzip")
-
-            # Re-enforce CSV behavior from original
-            if file_format != "parquet":
                 df.to_csv(path, index=False, compression="gzip")
 
             record_list.extend(
@@ -931,28 +948,43 @@ class BeamPreprocessor(GenericPreprocessor):
                 os.path.join(str(workspace.full_path), rec.file_path)
             )
 
-        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`), which is
-        # named like `linkstats_<year>_<inner_iter>` by BeamRunner.gather_outputs().
+        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`).
+        # Supported warm-start record keys:
+        #   - linkstats_<year>_<inner_iter>                 (csv.gz)
+        #   - linkstats_parquet_<year>_<inner_iter>         (parquet)
         beam_output_linkstats = None
-        pattern = re.compile(r"^linkstats_\d+_\d+$")
+        csv_pattern = re.compile(r"^linkstats_\d+_\d+$")
+        parquet_pattern = re.compile(r"^linkstats_parquet_\d+_\d+$")
         for rec in previous_beam_records or []:
             sn = getattr(rec, "short_name", "") or ""
             if "_sub" in sn:
                 continue
-            if pattern.match(sn):
+            if csv_pattern.match(sn):
                 beam_output_linkstats = rec
                 break
 
-        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
-        # record, use it, but make it very obvious that this is not ideal.
         if beam_output_linkstats is None:
             for rec in previous_beam_records or []:
                 sn = getattr(rec, "short_name", "") or ""
-                if sn == "linkstats":
+                if "_sub" in sn:
+                    continue
+                if parquet_pattern.match(sn):
+                    beam_output_linkstats = rec
+                    break
+
+        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
+        # (or `linkstats_parquet`) record, use it, but make it very obvious that
+        # this is not ideal.
+        if beam_output_linkstats is None:
+            for rec in previous_beam_records or []:
+                sn = getattr(rec, "short_name", "") or ""
+                if sn in {"linkstats", "linkstats_parquet"}:
                     beam_output_linkstats = rec
                     logger.warning(
-                        "[NOT IDEAL] Using an unversioned `linkstats` record as warm-start input. "
-                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` so lineage is unambiguous."
+                        "[NOT IDEAL] Using an unversioned `%s` record as warm-start input. "
+                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` "
+                        "or `linkstats_parquet_<year>_<inner_iter>` so lineage is unambiguous.",
+                        sn,
                     )
                     break
 
@@ -1124,16 +1156,35 @@ class BeamPreprocessor(GenericPreprocessor):
             lines = file.readlines()
 
         modified = False
-        with open(beam_config_path, "w") as file:
-            for line in lines:
-                if line.strip().startswith(config_header):
-                    if not modified:  # Write only the first occurrence
-                        file.write(f"{config_header} = {config_value}\n")
-                        modified = True
+        changed = False
+        replacement = f"{config_header} = {config_value}\n"
+        rewritten_lines: List[str] = []
+        for line in lines:
+            if line.strip().startswith(config_header):
+                if not modified:  # Keep only the first occurrence.
+                    rewritten_lines.append(replacement)
+                    modified = True
+                    if line != replacement:
+                        changed = True
                 else:
-                    file.write(line)
-            if not modified:
-                file.write(f"\n{config_header} = {config_value}\n")
+                    # Drop duplicate definitions for the same key.
+                    changed = True
+                continue
+            rewritten_lines.append(line)
+        if not modified:
+            rewritten_lines.append(f"\n{replacement}")
+            changed = True
+
+        if not changed:
+            logger.info(
+                "[BEAM Preprocessor] Config already up to date for %s in %s",
+                config_header,
+                beam_config_path,
+            )
+            return
+
+        with open(beam_config_path, "w") as file:
+            file.writelines(rewritten_lines)
 
         logger.info(
             f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from pilates.config.models import PilatesConfig
-from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
-from pilates.workflows.step_runner import build_step_config, common_runtime_kwargs
-from pilates.utils.consist_config import build_step_consist_kwargs
-from pilates.workflows.steps import make_postprocessing_step
+from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.steps import StepOutputsHolder, make_postprocessing_step
 
 
 def run_postprocessing_stage(
@@ -16,6 +15,7 @@ def run_postprocessing_stage(
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
+    coupler: CouplerProtocol,
     year: int,
 ) -> None:
     """
@@ -36,22 +36,33 @@ def run_postprocessing_stage(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
+    coupler : CouplerProtocol
+        Coupler forwarded to shared orchestration utilities.
     year : int
         Forecast year being postprocessed.
     """
-    postprocessing_step = make_postprocessing_step()
-    postprocessing_config = build_step_config(
-        fn=postprocessing_step,
-        name=f"postprocessing_{year}",
-        model="postprocessing",
+    outputs_holder = StepOutputsHolder()
+    postprocess_steps = [
+        StepRef(
+            name="postprocessing",
+            step_func=make_postprocessing_step(),
+            cache_mode="overwrite",
+            load_inputs=False,
+            model="postprocessing",
+            year=year,
+            iteration=getattr(state, "iteration", None),
+            phase="postprocess",
+        )
+    ]
+    run_workflow(
+        stage_name="postprocessing",
+        steps=postprocess_steps,
+        scenario=scenario,
         state=state,
-        cache_mode="overwrite",
-        load_inputs=False,
-        runtime_kwargs=common_runtime_kwargs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-        ),
-        consist_kwargs=build_step_consist_kwargs("postprocessing", settings),
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix=str(year),
+        iteration=getattr(state, "iteration", 0),
     )
-    scenario.run(**postprocessing_config.to_kwargs())

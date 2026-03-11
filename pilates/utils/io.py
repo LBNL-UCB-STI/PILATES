@@ -250,6 +250,7 @@ def read_datastore(
     year: Optional[int] = None,
     warm_start: bool = False,
     mutable_data_dir: Optional[str] = None,
+    mode: str = "r",
 ) -> Tuple[pd.HDFStore, str]:
     """
     Opens and returns an UrbanSim H5 data store (pd.HDFStore) along with its table prefix.
@@ -268,6 +269,7 @@ def read_datastore(
         mutable_data_dir (Optional[str]): An optional directory to use as the
             base for the data store. If None, it defaults to the path specified
             in `settings.urbansim.local_data_input_folder`. Defaults to None.
+        mode (str): HDFStore open mode. Defaults to read-only ("r").
 
     Returns:
         Tuple[pd.HDFStore, str]: A tuple containing:
@@ -312,7 +314,7 @@ def read_datastore(
 
             if os.path.exists(usim_datastore_year_fpath):
                 logger.info(f"Using year-specific input file: {usim_datastore_year}")
-                store = pd.HDFStore(usim_datastore_year_fpath)
+                store = pd.HDFStore(usim_datastore_year_fpath, mode=mode)
                 # Year-specific files typically have year-prefixed tables (e.g., '2018/households').
                 table_prefix_yr = str(year)
                 if f"{table_prefix_yr}/households" not in store:
@@ -341,7 +343,7 @@ def read_datastore(
                 settings, "urbansim.input_file_template"
             ).format(region_id=region_id)
             usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
-            store = pd.HDFStore(usim_datastore_fpath)
+            store = pd.HDFStore(usim_datastore_fpath, mode=mode)
             # Check for households table with and without year prefix.
             if "households" not in store:
                 table_prefix_yr = str(year)
@@ -361,7 +363,7 @@ def read_datastore(
             year
         )  # UrbanSim output tables are typically year-prefixed.
         usim_datastore_fpath = os.path.join(data_loc, usim_datastore)
-        store = pd.HDFStore(usim_datastore_fpath)
+        store = pd.HDFStore(usim_datastore_fpath, mode=mode)
 
     logger.info(f"Opening urbansim datastore at {usim_datastore_fpath}")
 

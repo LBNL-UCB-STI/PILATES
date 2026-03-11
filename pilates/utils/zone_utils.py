@@ -16,6 +16,7 @@ import xarray as xr
 import shutil
 
 from pilates.config import PilatesConfig
+from pilates.utils.path_utils import find_project_root
 
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
@@ -41,10 +42,10 @@ def load_canonical_zones(
     """
     logger.info("--- Loading Canonical Zone Geometries ---")
     zone_config = settings.shared.geography.zones
-    id_col = zone_config.canonical_id_col
 
+    id_col = zone_config.canonical_id_col
     source_file = None
-    # When activitysim is configured, zones are copied to the asim data dir
+
     if settings.activitysim is not None:
         source_file_basename = os.path.basename(zone_config.source_file)
         candidate = os.path.join(
@@ -53,18 +54,16 @@ def load_canonical_zones(
         if os.path.exists(candidate):
             source_file = candidate
 
-    # Fall back to the original source file from settings
     if source_file is None:
         source_file = zone_config.source_file
         if not os.path.isabs(source_file):
-            from pilates.utils.path_utils import find_project_root
             project_root = find_project_root(start_path=os.path.dirname(__file__))
             if project_root:
                 source_file = os.path.join(project_root, source_file)
 
     if not os.path.exists(source_file):
         raise FileNotFoundError(
-            f"Canonical zone source file not found: {source_file}. It should have been copied by the ActivitySim preprocessor is ActivitySim is enabled."
+            f"Canonical zone source file not found: {source_file}"
         )
 
     logger.info(f"Reading canonical zones from '{source_file}'")
@@ -223,7 +222,7 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                     skims_ds[name].encoding = {}
                 try:
                     skims_ds.to_zarr(
-                        temp_path, mode="w", consolidated=True, zarr_version=2
+                        temp_path, mode="w", consolidated=True, zarr_format=2
                     )
                 except Exception as e:
                     raise RuntimeError(

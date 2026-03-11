@@ -1,58 +1,31 @@
 """
 pilates/utils/consist_runtime.py
 
-Optional Consist runtime wrappers.
-These helpers provide no-op fallbacks when Consist is unavailable.
+Consist runtime wrappers.
+
+Consist is a mandatory dependency for PILATES. This module keeps a thin,
+test-friendly layer around the public Consist API while preserving local
+helpers (path normalization and schema hints).
 """
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 from contextlib import contextmanager
-from importlib import import_module
-from types import ModuleType
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, Mapping, Optional, cast
 
 from pilates.utils.consist_types import (
     ArtifactLike,
-    RunResultLike,
-    ScenarioLike,
+    ScenarioWithCoupler,
     TrackerLike,
 )
 
 logger = logging.getLogger(__name__)
 
-consist: Optional[ModuleType]
-try:
-    consist = import_module("consist")
-except ImportError:  # Consist optional dependency
-    consist = None
+import consist
 
-_warned_disabled = False
 _enabled_override: Optional[bool] = None
-
-
-def _consist_enabled(settings: Any) -> bool:
-    return bool(getattr(settings.shared.database, "use_consist", False))
-
-
-def consist_available(settings: Optional[Any] = None) -> bool:
-    if consist is None:
-        return False
-    if settings is not None:
-        return _consist_enabled(settings)
-    if _enabled_override is not None:
-        return _enabled_override
-    return True
-
-
-def _warn_disabled() -> None:
-    global _warned_disabled
-    if not _warned_disabled:
-        _warned_disabled = True
-        logger.warning("Consist disabled/unavailable; provenance is skipped.")
 
 
 def _is_enabled(enabled: Optional[bool] = None) -> bool:
@@ -75,13 +48,8 @@ def create_tracker(
     tracker_factory: Optional[Callable[[], TrackerLike]] = None,
     **tracker_kwargs: Any,
 ) -> Optional[TrackerLike]:
-    resolved_enabled = _consist_enabled(settings) if enabled is None else enabled
+    resolved_enabled = _is_enabled(enabled)
     set_enabled(resolved_enabled)
-
-    if consist is None:
-        if resolved_enabled:
-            _warn_disabled()
-        return None
     if "hashing_strategy" not in tracker_kwargs:
         # Avoid expensive full-directory hashing by default.
         tracker_kwargs["hashing_strategy"] = "fast"
@@ -89,18 +57,34 @@ def create_tracker(
     if tracker_factory is None:
         tracker_factory = lambda: consist.Tracker(**tracker_kwargs)
 
-    return consist.create_tracker(
-        enabled=bool(resolved_enabled),
+    tracker = consist.create_tracker(
+        enabled=resolved_enabled,
         tracker_factory=tracker_factory,
     )
+    if resolved_enabled and _is_noop_tracker(tracker):
+        repaired = _repair_tracker_db_schema_compatibility(tracker_kwargs)
+        if repaired:
+            logger.warning(
+                "Applied compatibility migration for Consist artifact URI columns; "
+                "retrying tracker initialization."
+            )
+            tracker = consist.create_tracker(
+                enabled=resolved_enabled,
+                tracker_factory=tracker_factory,
+            )
+    if resolved_enabled and _is_noop_tracker(tracker):
+        logger.error(
+            "Consist tracker initialization returned %s while enabled=True. "
+            "PILATES requires an active tracker; check preceding Consist tracker "
+            "initialization errors for API/version mismatches.",
+            type(tracker).__name__,
+        )
+        return None
+    return tracker
 
 
 @contextmanager
 def use_tracker(tracker: Optional[TrackerLike]) -> Iterator[Optional[TrackerLike]]:
-    if consist is None:
-        _warn_disabled()
-        yield None
-        return
     with consist.use_tracker(tracker) as tr:
         yield tr
 
@@ -111,19 +95,17 @@ def scenario(
     tracker: Optional[TrackerLike] = None,
     *,
     enabled: Optional[bool] = None,
-    **kwargs,
-) -> Iterator[ScenarioLike]:
-    if consist is None:
-        _warn_disabled()
-        yield _NoopScenario()
-        return
+    **kwargs: Any,
+) -> Iterator[ScenarioWithCoupler]:
     resolved_enabled = _is_enabled(enabled)
-    if not resolved_enabled:
-        _warn_disabled()
     with consist.scenario(
-        name, tracker=tracker, enabled=resolved_enabled, **kwargs
+        name,
+        tracker=tracker,
+        enabled=resolved_enabled,
+        **kwargs,
     ) as sc:
-        yield sc
+        # Narrow for callers: PILATES requires a coupler-capable scenario.
+        yield cast(ScenarioWithCoupler, sc)
 
 
 def log_input(
@@ -140,12 +122,13 @@ def log_input(
             meta = {**meta, "schema": schema}
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
-    if consist is None:
-        _warn_disabled()
-        return _NoopArtifact(path)
     if not resolved_enabled:
-        _warn_disabled()
-    return consist.log_input(path, key=key, enabled=resolved_enabled, **meta)
+        return consist.log_input(path, key=key, enabled=False, **meta)
+    try:
+        return consist.log_input(path, key=key, enabled=True, **meta)
+    except RuntimeError:
+        logger.debug("Skipping input artifact logging outside active Consist run.")
+        return consist.log_input(path, key=key, enabled=False, **meta)
 
 
 def log_output(
@@ -162,16 +145,16 @@ def log_output(
             meta = {**meta, "schema": schema}
     path = _normalize_path(path)
     meta = _maybe_fast_hash_h5(path, meta)
-    if not resolved_enabled or consist is None:
+    if not resolved_enabled:
         resolved_path = _resolve_artifact_path(path)
         if resolved_path and not os.path.exists(resolved_path):
             raise FileNotFoundError(f"Output path does not exist: {resolved_path}")
-        if consist is None:
-            _warn_disabled()
-            return _NoopArtifact(resolved_path or path)
-        if not resolved_enabled:
-            _warn_disabled()
-    return consist.log_output(path, key=key, enabled=resolved_enabled, **meta)
+        return consist.log_output(path, key=key, enabled=False, **meta)
+    try:
+        return consist.log_output(path, key=key, enabled=True, **meta)
+    except RuntimeError:
+        logger.debug("Skipping output artifact logging outside active Consist run.")
+        return consist.log_output(path, key=key, enabled=False, **meta)
 
 
 def log_h5_container(
@@ -188,11 +171,17 @@ def log_h5_container(
     Falls back to log_input/log_output if the Tracker method is unavailable.
     """
     resolved_enabled = _is_enabled(enabled)
-    if not resolved_enabled or consist is None:
-        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    if not resolved_enabled:
+        return (
+            log_output(path, key=key, enabled=False, **meta)
+            if direction == "output"
+            else log_input(path, key=key, enabled=False, **meta)
+        )
     tracker = current_tracker()
     if tracker is None or not hasattr(tracker, "log_h5_container"):
-        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+        if direction == "output":
+            return log_output(path, key=key, enabled=resolved_enabled, **meta)
+        return log_input(path, key=key, enabled=resolved_enabled, **meta)
     return tracker.log_h5_container(path, key=key, direction=direction, **meta)
 
 
@@ -212,12 +201,21 @@ def log_h5_table(
     if the Tracker method is unavailable.
     """
     resolved_enabled = _is_enabled(enabled)
-    if not resolved_enabled or consist is None:
-        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
+    if not resolved_enabled:
+        return (
+            log_output(path, key=key, enabled=False, **meta)
+            if direction == "output"
+            else log_input(path, key=key, enabled=False, **meta)
+        )
     tracker = current_tracker()
     if tracker is None or not hasattr(tracker, "log_h5_table"):
-        return log_output(path, key=key, enabled=resolved_enabled, **meta) if direction == "output" else log_input(path, key=key, enabled=resolved_enabled, **meta)
-    return tracker.log_h5_table(path, key=key, table_path=table_path, direction=direction, **meta)
+        if direction == "output":
+            return log_output(path, key=key, enabled=resolved_enabled, **meta)
+        return log_input(path, key=key, enabled=resolved_enabled, **meta)
+    artifact = tracker.log_h5_table(
+        path, key=key, table_path=table_path, direction=direction, **meta
+    )
+    return _ensure_legacy_table_path_meta(artifact, table_path=table_path)
 
 
 def log_artifacts(
@@ -228,15 +226,23 @@ def log_artifacts(
 ) -> Optional[Dict[str, ArtifactLike]]:
     resolved_enabled = _is_enabled(enabled)
     normalized = {key: _normalize_path(value) for key, value in mapping.items()}
-    if consist is None:
-        _warn_disabled()
-        return {
-            key: _NoopArtifact(_resolve_artifact_path(value) or value)
-            for key, value in normalized.items()
-        }
     if not resolved_enabled:
-        _warn_disabled()
-    return consist.log_artifacts(normalized, enabled=resolved_enabled, **meta)
+        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
+    try:
+        return _log_artifacts_with_enabled(normalized, enabled=True, **meta)
+    except RuntimeError:
+        logger.debug("Skipping artifact logging outside active Consist run.")
+        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
+
+
+def _log_artifacts_with_enabled(
+    outputs: Mapping[str, Any], *, enabled: bool, **meta: Any
+) -> Optional[Dict[str, ArtifactLike]]:
+    try:
+        return consist.log_artifacts(outputs=outputs, enabled=enabled, **meta)
+    except TypeError:
+        # Legacy compatibility for older Consist call forms.
+        return consist.log_artifacts(outputs, enabled=enabled, **meta)
 
 
 def _schema_for_key(key: str) -> Optional[Any]:
@@ -248,22 +254,26 @@ def _schema_for_key(key: str) -> Optional[Any]:
 
 
 def log_meta(**meta: Any) -> None:
-    if not _is_enabled() or consist is None:
-        _warn_disabled()
+    if not _is_enabled():
         return None
-    return consist.log_meta(**meta)
+    try:
+        return consist.log_meta(**meta)
+    except RuntimeError:
+        logger.debug("Skipping metadata logging outside active Consist run.")
+        return None
 
 
 def current_run() -> Optional[Any]:
-    if not _is_enabled() or consist is None:
+    if not _is_enabled():
         return None
-    return consist.current_run()
+    try:
+        return consist.current_run()
+    except RuntimeError:
+        return None
 
 
 def set_tracker(tracker: Optional[TrackerLike]) -> None:
     """Set a global tracker for Consist API entrypoints."""
-    if consist is None:
-        return
     if hasattr(consist, "set_current_tracker"):
         consist.set_current_tracker(tracker)
     else:
@@ -272,36 +282,79 @@ def set_tracker(tracker: Optional[TrackerLike]) -> None:
 
 def current_tracker() -> Optional[TrackerLike]:
     """Get the current global tracker (or None if not set)."""
-    if not _is_enabled() or consist is None:
-        return None
     try:
         return consist.current_tracker()
     except Exception:
         return None
 
 
+def _is_noop_tracker(tracker: Optional[Any]) -> bool:
+    if tracker is None:
+        return False
+    tracker_type = type(tracker)
+    name = getattr(tracker_type, "__name__", "").lower()
+    module = getattr(tracker_type, "__module__", "").lower()
+    return "nooptracker" in name or ".noop" in module
+
+
+def _repair_tracker_db_schema_compatibility(tracker_kwargs: Mapping[str, Any]) -> bool:
+    db_path = tracker_kwargs.get("db_path")
+    if not db_path:
+        return False
+    try:
+        db_path_str = os.fspath(db_path)
+    except TypeError:
+        return False
+    if not db_path_str:
+        return False
+    if not os.path.exists(db_path_str):
+        return False
+
+    try:
+        import duckdb
+    except Exception:
+        logger.exception(
+            "DuckDB not available to apply Consist schema compatibility migration."
+        )
+        return False
+
+    conn = None
+    try:
+        conn = duckdb.connect(db_path_str)
+        columns = conn.execute("PRAGMA table_info('artifact')").fetchall()
+        if not columns:
+            return False
+        names = {str(row[1]) for row in columns if len(row) > 1}
+        migrated = False
+        if "uri" in names and "container_uri" not in names:
+            conn.execute("ALTER TABLE artifact ADD COLUMN container_uri VARCHAR")
+            conn.execute(
+                "UPDATE artifact SET container_uri = uri WHERE container_uri IS NULL"
+            )
+            migrated = True
+        if "container_uri" in names and "uri" not in names:
+            conn.execute("ALTER TABLE artifact ADD COLUMN uri VARCHAR")
+            conn.execute("UPDATE artifact SET uri = container_uri WHERE uri IS NULL")
+            migrated = True
+        return migrated
+    except Exception:
+        logger.exception(
+            "Failed applying Consist artifact URI schema compatibility migration for %s.",
+            db_path_str,
+        )
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def require_runtime_kwargs(
     *names: str,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    if consist is None or not hasattr(consist, "require_runtime_kwargs"):
-        return _noop_require_runtime_kwargs(*names)
     return consist.require_runtime_kwargs(*names)
-
-
-def _noop_require_runtime_kwargs(
-    *names: str,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    if not names:
-        raise ValueError("require_runtime_kwargs requires at least one name.")
-    for name in names:
-        if not isinstance(name, str) or not name:
-            raise ValueError("require_runtime_kwargs expects non-empty string names.")
-
-    def decorator(func):
-        func.__consist_runtime_required__ = tuple(names)
-        return func
-
-    return decorator
 
 
 def _normalize_path(value: Any) -> Any:
@@ -348,116 +401,32 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
     return None
 
 
-class _NoopArtifact:
-    def __init__(self, path: Any) -> None:
-        self._path = str(path)
+def _ensure_legacy_table_path_meta(
+    artifact: Optional[ArtifactLike], *, table_path: str
+) -> Optional[ArtifactLike]:
+    """
+    Backward-compatibility shim for callers/tests that read table_path from meta.
 
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def container_uri(self) -> str:
-        return self._path
-
-    @property
-    def uri(self) -> str:
-        return self._path
-
-
-class _NoopCoupler:
-    def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
-
-    def set(self, key: str, value: Any) -> None:
-        self._store[key] = value
-
-    def get(self, key: str, default: Optional[Any] = None) -> Any:
-        return self._store.get(key, default)
-
-    def update(self, mapping: Dict[str, Any]) -> None:
-        self._store.update(mapping)
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
+    Newer Consist builds may keep table_path as a first-class field without
+    duplicating it in artifact.meta.
+    """
+    if artifact is None:
         return None
-
-    def collect_by_keys(
-        self,
-        artifacts: Dict[str, Any],
-        *keys: str,
-        prefix: str = "",
-    ) -> Dict[str, Any]:
-        collected: Dict[str, Any] = {}
-        for key in keys:
-            if key not in artifacts:
-                raise KeyError(f"Missing artifact for key {key!r}.")
-            coupler_key = f"{prefix}{key}"
-            artifact = artifacts[key]
-            self.set(coupler_key, artifact)
-            collected[coupler_key] = artifact
-        return collected
-
-
-class _NoopScenario:
-    def __init__(self) -> None:
-        self.coupler = _NoopCoupler()
-
-    @contextmanager
-    def trace(self, *args: Any, **kwargs: Any) -> Iterator[None]:
-        yield None
-
-    def declare_outputs(self, *args, **kwargs) -> None:
-        return None
-
-    def coupler_schema(self, schema: Any) -> Any:
-        return schema(self.coupler)
-
-    def run(
-        self,
-        fn: Optional[Callable[..., Any]] = None,
-        name: Optional[str] = None,
-        **kwargs: Any,
-    ) -> RunResultLike:
-        if fn is None:
-            return _NoopRunResult()
-        runtime_kwargs = kwargs.get("runtime_kwargs") or {}
-        required = getattr(fn, "__consist_runtime_required__", None)
-        if required:
-            missing = [name for name in required if name not in runtime_kwargs]
-            if missing:
-                raise ValueError(
-                    "Missing runtime_kwargs for noop scenario: " f"{', '.join(missing)}"
-                )
-        sig = inspect.signature(fn)
+    artifact_meta = getattr(artifact, "meta", None)
+    if isinstance(artifact_meta, dict):
+        artifact_meta.setdefault("table_path", table_path)
+        return artifact
+    if hasattr(artifact, "model_copy"):
         try:
-            sig.bind_partial(**runtime_kwargs)
-        except TypeError as exc:
-            raise TypeError(
-                f"Noop scenario could not bind arguments for {fn.__name__!r}: {exc}"
-            ) from exc
-        result = fn(**runtime_kwargs)
-
-        outputs: Dict[str, Any] = {}
-        output_paths = kwargs.get("output_paths")
-        if output_paths:
-            outputs = {
-                key: _NoopArtifact(value) for key, value in dict(output_paths).items()
-            }
-        elif hasattr(result, "to_mapping") and callable(result.to_mapping):
-            outputs = {
-                key: _NoopArtifact(value)
-                for key, value in dict(result.to_mapping()).items()
-            }
-
-        return _NoopRunResult(outputs=outputs)
-
-    def collect_by_keys(
-        self, artifacts: Dict[str, Any], *keys: str, prefix: str = ""
-    ) -> Dict[str, Any]:
-        return self.coupler.collect_by_keys(artifacts, *keys, prefix=prefix)
-
-
-class _NoopRunResult:
-    def __init__(self, outputs: Optional[Dict[str, Any]] = None) -> None:
-        self.outputs = outputs or {}
-        self.cache_hit = False
+            normalized_meta = {}
+            if isinstance(artifact_meta, Mapping):
+                normalized_meta = dict(artifact_meta)
+            normalized_meta.setdefault("table_path", table_path)
+            return artifact.model_copy(update={"meta": normalized_meta})
+        except Exception:
+            return artifact
+    try:
+        setattr(artifact, "meta", {"table_path": table_path})
+    except Exception:
+        pass
+    return artifact

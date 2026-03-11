@@ -1,33 +1,22 @@
 #!/bin/bash
-#
-# PILATES HPC Job Script
-# Handles environment setup, dependency installation, and execution
-#
-# Usage: sbatch job.sh <config_file> <scenario>
-#
-# Note: Do NOT set PYTHONPATH manually. The environment handles imports
-# automatically. Setting PYTHONPATH can leak system packages into your environment.
-#
 
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
+# HPC execution entrypoint for a scheduled Slurm job.
+# Full usage and design notes: hpc/README.md
 
-PILATES_DIR="/global/scratch/users/$USER/sources/PILATES"
-VENV_PATH="$PILATES_DIR/PILATES-env"
-CONDA_ENV_DIR="$HOME/.conda/envs/pilates"
+set -euo pipefail
 
-# Minimum conda version that has fast libmamba solver built-in
-MIN_FAST_CONDA_VERSION="23.10.0"
-
-# ==============================================================================
-# FUNCTION DEFINITIONS
-# ==============================================================================
+PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
+VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
+REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
+FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
+CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
+CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
     free -h
     grep MemTotal /proc/meminfo || true
+    grep -i numa /proc/cpuinfo | head -n 8 || true
     echo "=========================="
 
     echo "=== NODE USAGE INFORMATION ==="
@@ -35,214 +24,139 @@ show_system_info() {
     echo "=========================="
 }
 
-# Compare version strings: returns 0 if $1 >= $2
-version_gte() {
-    [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
-}
+install_python_deps() {
+    local req_file="$1"
+    local marker="$VENV_PATH/.last_requirements_hash"
+    local current_hash
+    current_hash="$(sha256sum "$req_file" | awk '{print $1}')"
 
-# Setup using venv + pip (fast, always works)
-setup_venv() {
-    echo "Using venv + pip approach..."
-
-    if [ ! -d "$VENV_PATH" ]; then
-        echo "Creating Python virtual environment..."
-        python3 -m venv "$VENV_PATH"
-    fi
-
-    echo "Activating virtual environment at $VENV_PATH..."
-    source "$VENV_PATH/bin/activate"
-
-    if [ "$VIRTUAL_ENV" != "$VENV_PATH" ]; then
-        echo "ERROR: Failed to activate virtual environment"
-        exit 1
-    fi
-
-    UPDATE_MARKER="$VENV_PATH/.last_update"
-    if [ ! -f "$UPDATE_MARKER" ] || [ requirements.txt -nt "$UPDATE_MARKER" ]; then
-        echo "Installing/updating dependencies from requirements.txt..."
-        pip install --upgrade pip
-        if ! pip install -r requirements.txt; then
-            echo "ERROR: Failed to install dependencies"
-            exit 1
-        fi
-        touch "$UPDATE_MARKER"
+    if [ ! -f "$marker" ] || [ "$current_hash" != "$(cat "$marker")" ]; then
+        echo "Installing/updating Python dependencies from $req_file ..."
+        python3 -m pip install --upgrade pip setuptools wheel
+        python3 -m pip install -r "$req_file"
+        printf "%s\n" "$current_hash" > "$marker"
     else
-        echo "Dependencies up to date, skipping install"
+        echo "Python dependencies are up to date; skipping pip install."
     fi
 }
 
-# Setup using conda with fast libmamba solver
-setup_conda_fast() {
-    echo "Using conda with libmamba solver (fast)..."
-
-    # Load miniconda module only for conda approach
-    module load miniconda3/22.11.1-gcc-11.4.0
-
-    CONDA_BASE=$(conda info --base 2>/dev/null)
-    source "$CONDA_BASE/etc/profile.d/conda.sh"
-    CONDA_EXE="$CONDA_BASE/bin/conda"
-
-    if [ ! -d "$CONDA_ENV_DIR" ]; then
-        echo "Creating conda environment from environment.yml..."
-        "$CONDA_EXE" env create -f environment.yml --prefix "$CONDA_ENV_DIR"
-    fi
-
-    UPDATE_MARKER="$CONDA_ENV_DIR/.last_update"
-    if [ ! -f "$UPDATE_MARKER" ] || [ environment.yml -nt "$UPDATE_MARKER" ]; then
-        echo "Updating conda environment..."
-        if ! "$CONDA_EXE" env update -f environment.yml --prefix "$CONDA_ENV_DIR" --prune; then
-            echo "ERROR: Failed to update conda environment"
-            exit 1
+install_consist() {
+    local marker="$VENV_PATH/.last_consist_install_spec"
+    if [ -d "$CONSIST_SRC_DIR" ]; then
+        local consist_spec="editable:$CONSIST_SRC_DIR"
+        if command -v git >/dev/null 2>&1 && [ -d "$CONSIST_SRC_DIR/.git" ]; then
+            local consist_rev
+            consist_rev="$(git -C "$CONSIST_SRC_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")"
+            consist_spec="${consist_spec}@${consist_rev}"
         fi
-        touch "$UPDATE_MARKER"
+
+        if [ ! -f "$marker" ] || [ "$consist_spec" != "$(cat "$marker")" ]; then
+            echo "Installing local editable consist from $CONSIST_SRC_DIR ..."
+            if ! python3 -c "import uv" >/dev/null 2>&1; then
+                python3 -m pip install uv
+            fi
+            python3 -m pip install -e "$CONSIST_SRC_DIR"
+            printf "%s\n" "$consist_spec" > "$marker"
+        else
+            echo "Editable consist is up to date; skipping reinstall."
+        fi
+    elif ! python3 -c "from consist import create_tracker" >/dev/null 2>&1; then
+        echo "Installing consist from PyPI package '$CONSIST_PYPI_PACKAGE' ..."
+        python3 -m pip install "$CONSIST_PYPI_PACKAGE"
     else
-        echo "Environment up to date, skipping update"
+        echo "consist already installed."
     fi
 
-    echo "Activating conda environment at $CONDA_ENV_DIR..."
-    conda activate "$CONDA_ENV_DIR"
+    python3 -c "from consist import create_tracker" >/dev/null
+    echo "consist import check passed."
+}
 
-    if [ "$CONDA_PREFIX" != "$CONDA_ENV_DIR" ]; then
-        echo "ERROR: Failed to activate conda environment"
-        exit 1
+normalize_path() {
+    local path_arg="$1"
+    if [ -z "$path_arg" ]; then
+        echo "$path_arg"
+        return
+    fi
+    if [ "${path_arg#/}" != "$path_arg" ]; then
+        echo "$path_arg"
+    else
+        echo "$PILATES_DIR/$path_arg"
     fi
 }
 
-# ==============================================================================
-# ENVIRONMENT SETUP
-# ==============================================================================
+if [ "${1:-}" = "" ] || [ "${2:-}" = "" ]; then
+    echo "Usage: $0 <settings_file> <stage_file>"
+    exit 2
+fi
 
-echo "Setting up environment..."
+CONFIG_FILE="$(normalize_path "$1")"
+STAGE_FILE="$(normalize_path "$2")"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
 
-# Load required modules
+echo "Setting up HPC runtime environment..."
 module load gcc/11.4.0
 module load proj/9.2.1
-module load python/3.11.6  # Load Python LAST to ensure it takes precedence
+module load python/3.11.6
 
-# Configure system libraries
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:$LD_LIBRARY_PATH
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
-cd "$PILATES_DIR" || exit 1
+cd "$PILATES_DIR"
 
-# ==============================================================================
-# CHOOSE ENVIRONMENT STRATEGY
-# ==============================================================================
+if [ ! -x "$VENV_PATH/bin/python3" ]; then
+    echo "Creating virtual environment at $VENV_PATH ..."
+    python3 -m venv "$VENV_PATH"
+fi
+source "$VENV_PATH/bin/activate"
 
-USE_CONDA=false
-
-# Check if conda is available and has fast solver
-if command -v conda &> /dev/null; then
-    CONDA_VERSION=$(conda --version 2>/dev/null | awk '{print $2}')
-    echo "Detected conda version: $CONDA_VERSION"
-
-    if version_gte "$CONDA_VERSION" "$MIN_FAST_CONDA_VERSION"; then
-        echo "Conda $CONDA_VERSION >= $MIN_FAST_CONDA_VERSION, using fast conda solver"
-        USE_CONDA=true
-    else
-        echo "Conda $CONDA_VERSION < $MIN_FAST_CONDA_VERSION, using venv+pip instead"
-    fi
-else
-    echo "Conda not available, using venv+pip"
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    REQUIREMENTS_FILE="$FALLBACK_REQUIREMENTS_FILE"
+fi
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    echo "ERROR: requirements file not found at '$REQUIREMENTS_FILE'"
+    exit 1
 fi
 
-# Setup environment based on strategy
-if [ "$USE_CONDA" = true ]; then
-    setup_conda_fast
-else
-    setup_venv
-fi
+install_python_deps "$REQUIREMENTS_FILE"
+install_consist
 
-echo "Environment setup complete!"
-
-# ==============================================================================
-# CONSIST LIBRARY SETUP
-# ==============================================================================
-
-CONSIST_DIR="$PILATES_DIR/consist"
-if [ ! -d "$CONSIST_DIR" ]; then
-    echo "Cloning consist library..."
-    git clone https://github.com/LBNL-UCB-STI/consist.git "$CONSIST_DIR"
-fi
-
-# Consist uses uv_build as its build backend; ensure uv is available
-if ! python3 -c "import uv" 2>/dev/null; then
-    echo "Installing uv (required build backend for consist)..."
-    pip install uv
-fi
-
-# Check that consist is installed AND functional (has create_tracker)
-if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
-    echo "Installing consist library..."
-    # Remove any broken/empty previous install
-    pip uninstall -y consist 2>/dev/null || true
-    pip install -e "$CONSIST_DIR"
-
-    # Verify the install actually worked
-    if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
-        echo "ERROR: consist installed but 'create_tracker' not found."
-        echo "Trying non-editable install as fallback..."
-        pip uninstall -y consist 2>/dev/null || true
-        pip install "$CONSIST_DIR"
-    fi
-
-    if ! python3 -c "from consist import create_tracker" 2>/dev/null; then
-        echo "ERROR: Failed to install consist library with functional create_tracker."
-        echo "consist module contents:"
-        python3 -c "import consist; print(dir(consist))" 2>&1 || true
-        exit 1
-    fi
-    echo "consist library installed successfully"
-else
-    echo "consist library already installed and functional"
-fi
-
-# Verify environment
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
+echo "Config: $CONFIG_FILE"
+echo "Stage: $STAGE_FILE"
 
-# ==============================================================================
-# EXECUTION
-# ==============================================================================
+show_system_info
 
-echo "Starting PILATES execution..."
+export DLT__RUNTIME__DLTHUB_TELEMETRY=false
 
-cd "$PILATES_DIR" || exit 1
+# Cap implicit native thread pools used by NumPy/BLAS/OpenMP-backed libraries.
+# This avoids oversubscription/lock contention while still requesting full node
+# resources for containerized model runs. Override per job with PILATES_THREADS.
+THREADS="${PILATES_THREADS:-8}"
+export OMP_NUM_THREADS="$THREADS"
+export MKL_NUM_THREADS="$THREADS"
+export OPENBLAS_NUM_THREADS="$THREADS"
+export NUMEXPR_NUM_THREADS="$THREADS"
+export BLIS_NUM_THREADS="$THREADS"
+export VECLIB_MAXIMUM_THREADS="$THREADS"
+echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
 
-# ==============================================================================
-# CONFIG MIGRATION (if needed)
-# ==============================================================================
-
-CONFIG_FILE="$1"
-
-# Check if config needs migration
-# New format has: run:, shared:, infrastructure: as top-level keys
-# Old format has: region, start_year, etc. at top level (not nested)
 is_new_format() {
     grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
 }
 
 if ! is_new_format "$CONFIG_FILE"; then
-    echo "Detected legacy config format. Migrating to new format..."
+    echo "Detected legacy settings format; migrating..."
     MIGRATED_CONFIG="${CONFIG_FILE%.yaml}_migrated.yaml"
-
     if python3 scripts/migrate_config.py "$CONFIG_FILE" "$MIGRATED_CONFIG" --no-validate; then
-        echo "Config migration successful: $MIGRATED_CONFIG"
         CONFIG_FILE="$MIGRATED_CONFIG"
+        echo "Using migrated config: $CONFIG_FILE"
     else
-        echo "WARNING: Config migration failed. Attempting to run with original config..."
+        echo "WARNING: migration failed, continuing with original config"
     fi
-else
-    echo "Config already in new format, no migration needed."
 fi
 
-echo "Config: $CONFIG_FILE"
-echo "Scenario: $2"
-echo ""
-
-show_system_info
-
-echo ""
-echo "Running PILATES model..."
-
-python3 run.py -c "$CONFIG_FILE" -S "$2"
+python3 run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"

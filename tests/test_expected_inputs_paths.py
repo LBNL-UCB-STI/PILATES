@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.beam.postprocessor import BeamPostprocessor
-from pilates.workflows.artifact_constants import ZARR_SKIMS
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 
 
 class DummyWorkspace:

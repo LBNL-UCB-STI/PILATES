@@ -10,7 +10,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.workflows.artifact_constants import USIM_H5_UPDATED
+from pilates.workflows.artifact_keys import USIM_H5_UPDATED
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                     year=output_year,
                     description="UrbanSim HDF5 updated with ATLAS vehicle ownership",
                     short_name=USIM_H5_UPDATED,
+                    h5_tables_used=[table_name],
                 )
             )
 

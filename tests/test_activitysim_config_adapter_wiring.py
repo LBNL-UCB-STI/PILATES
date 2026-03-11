@@ -1,16 +1,22 @@
 from pathlib import Path
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from consist.core.step_context import StepContext
 
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
 )
-from pilates.workflows.steps import StepOutputsHolder, make_activitysim_preprocess_step, make_activitysim_run_step
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    make_activitysim_preprocess_step,
+    make_activitysim_run_step,
+)
 
 
 class DummyCoupler:
@@ -60,6 +66,7 @@ class DummyWorkspace:
     def __init__(self, configs_dir: Path, data_dir: Path) -> None:
         self._configs_dir = Path(configs_dir)
         self._data_dir = Path(data_dir)
+        self.full_path = str(configs_dir.parent)
 
     def get_asim_mutable_configs_dir(self) -> str:
         return str(self._configs_dir)
@@ -67,8 +74,14 @@ class DummyWorkspace:
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._data_dir)
 
-    def get_asim_output_dir(self) -> str:
-        return str(self._data_dir / "output")
+
+def _fixture_root() -> Path:
+    return (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "consist"
+        / "activitysim_small"
+    )
 
 
 def _make_settings() -> SimpleNamespace:
@@ -76,138 +89,177 @@ def _make_settings() -> SimpleNamespace:
     return SimpleNamespace(activitysim=activitysim)
 
 
-def _setup_config(tmp_path: Path) -> tuple:
-    """Create ActivitySim config directory structure for testing."""
-    asim_root = tmp_path / "asim_configs"
-    config_root = asim_root / "base"
-    config_root.mkdir(parents=True, exist_ok=True)
-
-    # Create a dummy config file
-    (config_root / "settings.yaml").write_text("models: []\\n")
-
-    return asim_root
-
-
 def _make_state() -> SimpleNamespace:
     return SimpleNamespace(year=2020, iteration=0)
 
 
-def _wire_step(monkeypatch, tracker, run_id) -> None:
+def _wire_common(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [("shim", Path("/tmp/identity"))],
+        },
+    )
+
+
+def _make_step_context(
+    *,
+    step_fn,
+    model,
+    context_settings,
+    runtime_workspace,
+    runtime_settings_override=None,
+):
+    sig = inspect.signature(StepContext)
+    kwargs = {
+        "func_name": step_fn.__name__,
+        "model": model,
+        "runtime_kwargs": {"workspace": runtime_workspace},
+    }
+    if runtime_settings_override is not None:
+        kwargs["runtime_kwargs"]["settings"] = runtime_settings_override
+
+    if "settings" in sig.parameters:
+        kwargs["settings"] = context_settings
+    if "runtime_settings" in sig.parameters:
+        kwargs["runtime_settings"] = (
+            runtime_settings_override
+            if runtime_settings_override is not None
+            else context_settings
+        )
+    if "runtime_workspace" in sig.parameters:
+        kwargs["runtime_workspace"] = runtime_workspace
+    if "consist_settings" in sig.parameters:
+        kwargs["consist_settings"] = SimpleNamespace()
+    if "consist_workspace" in sig.parameters:
+        kwargs["consist_workspace"] = Path(runtime_workspace.full_path)
+    return StepContext(**kwargs)
+
+
+def test_activitysim_run_metadata_emits_adapter_and_identity_inputs(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+    from consist.integrations.activitysim import ActivitySimConfigAdapter
+
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    settings = _make_settings()
+    _wire_common(monkeypatch)
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    resolved_config = meta.config(ctx)
+    resolved_adapter = meta.adapter(ctx)
+    resolved_identity_inputs = meta.identity_inputs(ctx)
+    assert getattr(meta, "config_plan", None) is None
+    assert getattr(meta, "hash_inputs", None) is None
+    adapter = resolved_adapter
+    assert isinstance(adapter, ActivitySimConfigAdapter)
+    assert adapter.root_dirs == [fixture_root / "base"]
+    assert resolved_config["model"] == "activitysim_run"
+    assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
+
+
+def test_activitysim_run_metadata_adapter_is_none_when_config_root_missing(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
+    settings = _make_settings()
+    _wire_common(monkeypatch)
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    assert meta.adapter(ctx) is None
+
+
+def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
     from pilates.utils import consist_runtime as cr
     from pilates.workflows import steps as steps_module
 
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    settings = _make_settings()
+    state = _make_state()
+    tracker = MagicMock()
+
     monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(cr, "current_run", lambda: None)
     monkeypatch.setattr(
-        cr,
-        "current_run",
-        lambda: SimpleNamespace(id=run_id) if run_id is not None else None,
-    )
-    monkeypatch.setattr(
-        cr,
-        "log_output",
-        lambda path, **kwargs: SimpleNamespace(path=path),
+        cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path)
     )
     monkeypatch.setattr(
-        cr,
-        "log_input",
-        lambda path, **kwargs: SimpleNamespace(path=path),
+        cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path)
     )
 
-    dummy_preprocessor = DummyPreprocessor(Path(tracker._asim_output_dir))
-
-    def _get_preprocessor(self, *args, **kwargs):
-        return dummy_preprocessor
-
-    monkeypatch.setattr(steps_module.ModelFactory, "get_preprocessor", _get_preprocessor)
-
-
-def test_activitysim_canonicalize_config_with_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist.integrations.activitysim")
-
-    asim_configs_root = _setup_config(tmp_path)
-    workspace = DummyWorkspace(asim_configs_root, tmp_path / "asim_data")
-    settings = _make_settings()
-    state = _make_state()
-    outputs_holder = StepOutputsHolder()
-    coupler = DummyCoupler()
-
-    tracker = MagicMock()
-    tracker._asim_output_dir = workspace.get_asim_mutable_data_dir()
-
-    _wire_step(monkeypatch, tracker, run_id="run-123")
-
-    # Set up activitysim_preprocess prerequisite output
-    from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
-    from pathlib import Path
-    data_dir = Path(workspace.get_asim_mutable_data_dir())
-    data_dir.mkdir(parents=True, exist_ok=True)
-    output_dir = Path(workspace.get_asim_output_dir())
-    output_dir.mkdir(parents=True, exist_ok=True)
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=data_dir,
-        land_use_table=data_dir / "land_use.csv",
-        households_table=data_dir / "households.csv",
-        persons_table=data_dir / "persons.csv"
+    dummy_preprocessor = DummyPreprocessor(tmp_path / "asim_preprocess")
+    Path(workspace.get_asim_mutable_data_dir()).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        steps_module.ModelFactory,
+        "get_preprocessor",
+        lambda self, *args, **kwargs: dummy_preprocessor,
     )
+
+    step_fn = make_activitysim_preprocess_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    step_fn(settings=settings, state=state, workspace=workspace)
+
+    assert tracker.canonicalize_config.call_count == 0
+    assert tracker.prepare_config.call_count == 0
+    assert tracker.prepare_config_resolver.call_count == 0
+
+
+def test_activitysim_metadata_uses_runtime_settings_over_ctx_settings(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    _wire_common(monkeypatch)
 
     step_fn = make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=SimpleNamespace(),
+        runtime_workspace=workspace,
+        runtime_settings_override=_make_settings(),
     )
 
-    # Mock the runner to avoid actual ActivitySim execution
-    from pilates.activitysim.runner import ActivitysimRunner
-    with monkeypatch.context() as m:
-        m.setattr(ActivitysimRunner, "run", lambda self, *args, **kwargs: None)
-        step_fn(settings=settings, state=state, workspace=workspace)
-
-    assert tracker.canonicalize_config.call_count == 1
-    args, kwargs = tracker.canonicalize_config.call_args
-    assert kwargs.get("run_id") == "run-123"
-    config_dirs = args[1]
-    assert Path(config_dirs[0]) == asim_configs_root / "base"
-
-
-def test_activitysim_canonicalize_config_without_run_id(monkeypatch, tmp_path):
-    pytest.importorskip("consist.integrations.activitysim")
-
-    asim_configs_root = _setup_config(tmp_path)
-    workspace = DummyWorkspace(asim_configs_root, tmp_path / "asim_data")
-    settings = _make_settings()
-    state = _make_state()
-    outputs_holder = StepOutputsHolder()
-    coupler = DummyCoupler()
-
-    tracker = MagicMock()
-    tracker._asim_output_dir = workspace.get_asim_mutable_data_dir()
-
-    _wire_step(monkeypatch, tracker, run_id=None)
-
-    # Set up activitysim_preprocess prerequisite output
-    from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
-    from pathlib import Path
-    data_dir = Path(workspace.get_asim_mutable_data_dir())
-    data_dir.mkdir(parents=True, exist_ok=True)
-    output_dir = Path(workspace.get_asim_output_dir())
-    output_dir.mkdir(parents=True, exist_ok=True)
-    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
-        mutable_data_dir=data_dir,
-        land_use_table=data_dir / "land_use.csv",
-        households_table=data_dir / "households.csv",
-        persons_table=data_dir / "persons.csv"
-    )
-
-    step_fn = make_activitysim_run_step(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-    )
-
-    # Mock the runner to avoid actual ActivitySim execution
-    from pilates.activitysim.runner import ActivitysimRunner
-    with monkeypatch.context() as m:
-        m.setattr(ActivitysimRunner, "run", lambda self, *args, **kwargs: None)
-        step_fn(settings=settings, state=state, workspace=workspace)
-
-    assert tracker.canonicalize_config.call_count == 1
-    _, kwargs = tracker.canonicalize_config.call_args
-    assert "run_id" not in kwargs
+    resolved_adapter = meta.adapter(ctx)
+    resolved_identity_inputs = meta.identity_inputs(ctx)
+    assert resolved_adapter is not None
+    assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]

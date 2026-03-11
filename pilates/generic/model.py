@@ -14,6 +14,98 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_H5_INTERNAL_TOKENS = ("_axis", "_block", "_level", "_label")
+
+
+def _normalize_h5_table_name(name: str) -> str:
+    if name.startswith("/"):
+        return name
+    return f"/{name}"
+
+
+def _h5_table_filter_from_list(tables_used):
+    normalized = {_normalize_h5_table_name(name) for name in tables_used if name}
+
+    def _filter(table_name: str) -> bool:
+        if any(tok in table_name for tok in _H5_INTERNAL_TOKENS):
+            return False
+        return table_name in normalized
+
+    return _filter
+
+
+def _log_record_store(record_store: "RecordStore", *, direction: str) -> None:
+    from pilates.generic.records import RecordStore as _RecordStore
+
+    if not isinstance(record_store, _RecordStore):
+        return
+
+    bulk_mapping = {}
+    metadata_by_key = {}
+    facets_by_key = {}
+    facet_schema_versions_by_key = {}
+    facet_index_enabled = False
+    for record in record_store.all_records():
+        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
+        if not key:
+            continue
+
+        tables_used = getattr(record, "h5_tables_used", None)
+        if tables_used:
+            path = getattr(record, "file_path", None) or getattr(
+                record, "repo_path", None
+            )
+        else:
+            path = getattr(record, "container_uri", None) or getattr(record, "uri", None)
+            if not path:
+                path = getattr(record, "file_path", None) or getattr(
+                    record, "repo_path", None
+                )
+        if not path:
+            continue
+
+        description = getattr(record, "description", None)
+        meta = dict(getattr(record, "metadata", None) or {})
+        if tables_used:
+            table_filter = _h5_table_filter_from_list(tables_used)
+            cr.log_h5_container(
+                path,
+                key=key,
+                direction=direction,
+                table_filter=table_filter,
+                description=description,
+                **meta,
+            )
+        else:
+            bulk_mapping[key] = path
+            facet = meta.pop("facet", None)
+            facet_schema_version = meta.pop("facet_schema_version", None)
+            facet_index = bool(meta.pop("facet_index", False))
+
+            if description and "description" not in meta:
+                meta["description"] = description
+            if meta:
+                metadata_by_key[key] = meta
+            if facet is not None:
+                facets_by_key[key] = facet
+            if facet_schema_version is not None:
+                facet_schema_versions_by_key[key] = facet_schema_version
+            if facet_index:
+                facet_index_enabled = True
+
+    if bulk_mapping:
+        kwargs = {"direction": direction}
+        if metadata_by_key:
+            kwargs["metadata_by_key"] = metadata_by_key
+        if facets_by_key:
+            kwargs["facets_by_key"] = facets_by_key
+        if facet_schema_versions_by_key:
+            kwargs["facet_schema_versions_by_key"] = facet_schema_versions_by_key
+        if facet_index_enabled:
+            kwargs["facet_index"] = True
+        cr.log_artifacts(bulk_mapping, **kwargs)
+
+
 def provenance_logging(func):
     """
     Thin PILATES-specific provenance bridge.
@@ -65,9 +157,9 @@ def provenance_logging(func):
                 "Ensure Model was instantiated with a valid WorkflowState."
             )
 
-        if cr.consist_available(self.state.full_settings) and cr.current_run() is None:
+        if cr.current_run() is None:
             raise RuntimeError(
-                f"[{self.model_name}] Consist enabled but no active run context. "
+                f"[{self.model_name}] No active Consist run context. "
                 "Ensure this method is called within `scenario.run(...)` or `scenario.trace(...)`."
             )
 
@@ -90,13 +182,13 @@ def provenance_logging(func):
                 ),
             )
             if input_record_store:
-                cr.log_artifacts(input_record_store.to_mapping(), direction="input")
+                _log_record_store(input_record_store, direction="input")
 
         func_result = func(self, *args, **kwargs)
 
         if cr.current_run():
             if isinstance(func_result, RecordStore):
-                cr.log_artifacts(func_result.to_mapping(), direction="output")
+                _log_record_store(func_result, direction="output")
             elif func_result is not None:
                 logger.warning(
                     f"Decorated method {func.__name__} returned unexpected type: "

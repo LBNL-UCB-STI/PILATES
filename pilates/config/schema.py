@@ -71,6 +71,14 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "metadata",
         "description": "Human-readable run name - only for organization",
     },
+    "run.local_workspace_root": {
+        "hash_scope": "metadata",
+        "description": "Optional node-local workspace root - affects file locations",
+    },
+    "run.enable_archive_copy": {
+        "hash_scope": "metadata",
+        "description": "Copy logged outputs to archive root as they are produced",
+    },
     # -------------------------------------------------------------------------
     # SHARED CONFIGURATION
     # -------------------------------------------------------------------------

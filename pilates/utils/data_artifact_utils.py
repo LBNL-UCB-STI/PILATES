@@ -6,12 +6,10 @@ Includes helpers for computing hashes, extracting metadata, and copying artifact
 import hashlib
 import logging
 import shutil
-import os
 from pathlib import Path
 from typing import Dict, Optional, Any
 
 import xarray as xr
-import zarr
 
 logger = logging.getLogger(__name__)
 

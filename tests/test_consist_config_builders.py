@@ -4,7 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from pilates.utils import consist_config as consist_config_module
 from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
+from pilates.workflows import catalog
 
 
 def _make_settings():
@@ -72,7 +74,7 @@ def test_builders_expose_required_methods():
     required = {
         "build_identity_config",
         "build_facet",
-        "build_hash_inputs",
+        "build_identity_inputs",
         "get_facet_schema_version",
         "requires_workspace_path",
     }
@@ -108,7 +110,7 @@ def test_urbansim_no_workspace_path_needed():
     assert "facet" in result
 
 
-def test_hash_inputs_included_for_activitysim(tmp_path):
+def test_identity_inputs_included_for_activitysim(tmp_path):
     settings = _make_settings()
     asim_dir = tmp_path / "activitysim" / "configs"
     asim_dir.mkdir(parents=True)
@@ -118,14 +120,14 @@ def test_hash_inputs_included_for_activitysim(tmp_path):
         settings,
         workspace_path=str(tmp_path),
     )
-    assert "hash_inputs" in result
-    assert len(result["hash_inputs"]) > 0
+    assert "identity_inputs" in result
+    assert len(result["identity_inputs"]) > 0
 
 
-def test_no_hash_inputs_for_urbansim():
+def test_no_identity_inputs_for_urbansim():
     settings = _make_settings()
     result = build_step_consist_kwargs("urbansim_run", settings)
-    assert "hash_inputs" not in result
+    assert "identity_inputs" not in result
 
 
 def test_initialization_model_special_case():
@@ -160,3 +162,101 @@ def test_facet_schema_version_routing(tmp_path):
 
     result = build_step_consist_kwargs("urbansim_run", settings)
     assert result["facet_schema_version"] == "urbansim_run_v1"
+
+
+def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
+    settings = _make_settings()
+
+    asim_dir = tmp_path / "activitysim" / "configs"
+    asim_dir.mkdir(parents=True)
+    beam_root = tmp_path / "beam" / "input"
+    beam_root.mkdir(parents=True)
+    (beam_root / "main.conf").write_text("x=1")
+
+    models = [
+        spec.model_name
+        for spec in catalog.WORKFLOW_STEP_SPECS
+        if catalog.provenance_builder_key_for_model_name(spec.model_name) is not None
+    ]
+    for model_name in models:
+        result = build_step_consist_kwargs(
+            model_name,
+            settings,
+            workspace_path=str(tmp_path),
+        )
+        legacy_key = model_name.split("_")[0]
+        expected_schema_version = _CONFIG_BUILDERS[legacy_key].get_facet_schema_version(
+            model_name
+        )
+        assert result["facet_schema_version"] == expected_schema_version
+
+
+def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_path):
+    settings = _make_settings()
+
+    asim_dir = tmp_path / "activitysim" / "configs"
+    asim_dir.mkdir(parents=True)
+
+    # activitysim_compile intentionally has no catalog provenance metadata.
+    result = build_step_consist_kwargs(
+        "activitysim_compile",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+    assert result["facet_schema_version"] == "activitysim_compile_v1"
+
+    # Non-catalog models still use legacy prefix fallback dispatch.
+    result = build_step_consist_kwargs(
+        "activitysim_custom_step",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+    assert result["facet_schema_version"] == "activitysim_v1"
+
+
+def test_catalog_provenance_builder_keys_are_registered():
+    catalog_builder_keys = {
+        spec.provenance.builder_key
+        for spec in catalog.WORKFLOW_STEP_SPECS
+        if spec.provenance is not None
+    }
+    assert catalog_builder_keys.issubset(set(_CONFIG_BUILDERS.keys()))
+
+
+def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):
+    settings = _make_settings()
+
+    # Force a non-legacy builder selection for this model.
+    monkeypatch.setattr(
+        consist_config_module,
+        "provenance_builder_key_for_model_name",
+        lambda model_name: "atlas" if model_name == "urbansim_run" else None,
+    )
+
+    result = build_step_consist_kwargs("urbansim_run", settings)
+    assert result["facet_schema_version"] == _CONFIG_BUILDERS[
+        "atlas"
+    ].get_facet_schema_version("urbansim_run")
+
+
+def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
+    settings = _make_settings()
+
+    monkeypatch.setattr(
+        consist_config_module,
+        "provenance_builder_key_for_model_name",
+        lambda _model_name: "not_registered",
+    )
+
+    with pytest.raises(ValueError, match="Unknown provenance builder key"):
+        build_step_consist_kwargs("urbansim_run", settings)
+
+
+def test_activitysim_identity_inputs_missing_configs_dir_raises(tmp_path):
+    settings = _make_settings()
+    with pytest.raises(FileNotFoundError, match="ActivitySim mutable configs dir"):
+        build_step_consist_kwargs(
+            "activitysim_run",
+            settings,
+            workspace_path=str(tmp_path),
+        )

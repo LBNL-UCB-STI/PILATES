@@ -8,13 +8,18 @@ import json
 
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import (
+from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
 )
-from pilates.workflows.outputs_base import StepOutputsBase
+from pilates.workflows.outputs_base import (
+    OutputValidator,
+    StepOutputsBase,
+    ValidationContext,
+    ValidationResult,
+)
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -91,6 +96,48 @@ def write_asim_run_marker(
     return path
 
 
+class _UrbanSimToActivitySimBoundaryValidator:
+    """
+    Warn when ActivitySim preprocess table outputs drift from mutable-data layout.
+    """
+
+    name = "activitysim_preprocess_urbansim_boundary"
+    level = "warning"
+
+    def validate(
+        self,
+        outputs: "ActivitySimPreprocessOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        upstream = context.upstream_outputs or {}
+        if "urbansim_postprocess" not in upstream and "urbansim_run" not in upstream:
+            return []
+
+        mutable_data_dir = Path(outputs.mutable_data_dir)
+        expected_fields = ("land_use_table", "households_table", "persons_table")
+        results: list[ValidationResult] = []
+        for field_name in expected_fields:
+            path_value = getattr(outputs, field_name, None)
+            if path_value is None:
+                continue
+            table_path = Path(path_value)
+            if table_path.parent != mutable_data_dir:
+                results.append(
+                    ValidationResult(
+                        message=(
+                            f"{field_name} should be written under mutable_data_dir "
+                            "for the UrbanSim->ActivitySim boundary."
+                        ),
+                        metadata={
+                            "field": field_name,
+                            "expected_parent": str(mutable_data_dir),
+                            "actual_parent": str(table_path.parent),
+                        },
+                    )
+                )
+        return results
+
+
 @dataclass
 class ActivitySimPreprocessOutputs(StepOutputsBase):
     """
@@ -111,6 +158,11 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "mutable_data_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+    )
     record_keys: ClassVar[Dict[str, str]] = {
         "land_use_table": ASIM_LAND_USE_IN,
         "households_table": ASIM_HOUSEHOLDS_IN,
@@ -130,6 +182,9 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         "persons_table",
     )
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("omx_skims",)
+    validators: ClassVar[Tuple[OutputValidator, ...]] = (
+        _UrbanSimToActivitySimBoundaryValidator(),
+    )
 
     mutable_data_dir: Path
     land_use_table: Path
@@ -268,7 +323,10 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
-    optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5", "asim_output_dir")
+    optional_path_fields: ClassVar[Tuple[str, ...]] = (
+        "usim_datastore_h5",
+        "asim_output_dir",
+    )
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
     usim_datastore_h5: Optional[Path]
     asim_output_dir: Optional[Path] = None

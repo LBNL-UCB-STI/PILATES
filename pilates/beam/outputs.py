@@ -6,10 +6,15 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_constants import (
-    FINAL_SKIMS_OMX,
-    ZARR_SKIMS,
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    BEAM_PERSONS_IN,
+    FINAL_SKIMS_OMX,
+    LINKSTATS,
+    ZARR_SKIMS,
 )
 from pilates.workflows.outputs_base import StepOutputsBase
 
@@ -31,6 +36,11 @@ class BeamPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "beam_mutable_data_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     beam_mutable_data_dir: Path
@@ -89,15 +99,81 @@ class BeamRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "beam_output_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (LINKSTATS, BEAM_PLANS_OUT)
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     beam_output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
 
+    @staticmethod
+    def _record_rank(short_name: str, prefix: str) -> Optional[Tuple[int, int, int]]:
+        if short_name == prefix:
+            return (0, 0, 0)
+        marker = f"{prefix}_"
+        if not short_name.startswith(marker):
+            return None
+        tail = short_name[len(marker) :]
+        parts = tail.split("_")
+        if len(parts) < 2:
+            return None
+        try:
+            year = int(parts[0])
+            iteration = int(parts[1])
+        except ValueError:
+            return None
+        if len(parts) == 2:
+            return (year, iteration, 10_000)
+        if len(parts) == 3 and parts[2].startswith("sub"):
+            try:
+                sub_iteration = int(parts[2][3:])
+            except ValueError:
+                return None
+            return (year, iteration, sub_iteration)
+        return None
+
+    def _latest_raw_output_for_prefix(
+        self, prefix: str
+    ) -> Optional[Tuple[str, Path]]:
+        best_key: Optional[str] = None
+        best_path: Optional[Path] = None
+        best_rank: Optional[Tuple[int, int, int]] = None
+        for short_name, path in self.raw_outputs.items():
+            rank = self._record_rank(short_name, prefix)
+            if rank is None:
+                continue
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_key = short_name
+                best_path = path
+        if best_key is None or best_path is None:
+            return None
+        return best_key, best_path
+
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
         Yield BEAM raw output records.
         """
+        latest_linkstats = self._latest_raw_output_for_prefix(LINKSTATS)
+        if latest_linkstats is None:
+            # BEAM can emit only parquet linkstats in some configs. Promote the
+            # latest parquet artifact to canonical `linkstats` so the step output
+            # contract remains stable for downstream workflow steps.
+            latest_linkstats = self._latest_raw_output_for_prefix("linkstats_parquet")
+        if latest_linkstats is not None:
+            _, path = latest_linkstats
+            yield (
+                LINKSTATS,
+                path,
+                "BEAM linkstats output for downstream runs",
+            )
+        latest_plans = self._latest_raw_output_for_prefix(BEAM_PLANS_OUT)
+        if latest_plans is not None:
+            _, path = latest_plans
+            yield (
+                BEAM_PLANS_OUT,
+                path,
+                "BEAM plans output for downstream runs",
+            )
         for key, path in self.raw_outputs.items():
             yield key, path, f"BEAM raw output: {key}"
 
@@ -152,6 +228,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (LINKSTATS, BEAM_PLANS_OUT)
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "zarr_skims",
         "final_skims_omx",
@@ -230,6 +307,7 @@ class BeamFullSkimOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "full_skims"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (BEAM_FULL_SKIMS,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ("full_skims",)
 
     full_skims: Path

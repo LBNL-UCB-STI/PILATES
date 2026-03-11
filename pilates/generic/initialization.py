@@ -1,4 +1,4 @@
-from typing import Optional, Iterator, Tuple
+from typing import Optional, Iterator, Tuple, Dict, Any
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -13,6 +13,60 @@ import logging
 import shutil
 
 logger = logging.getLogger(__name__)
+
+
+def _record_count(record_store: object) -> int:
+    if isinstance(record_store, RecordStore):
+        return len(record_store.all_records())
+    return 0
+
+
+def build_bootstrap_artifact_summary(
+    workspace: Workspace, copied_records: Optional[RecordStore] = None
+) -> Dict[str, Any]:
+    """
+    Build a compact summary of initialization artifacts staged into workspace.
+
+    This summary is intentionally lightweight for Phase 1 bootstrap reporting.
+    """
+    input_counts = {
+        model_name: _record_count(records)
+        for model_name, records in getattr(workspace, "input_data", {}).items()
+        if _record_count(records) > 0
+    }
+    output_counts = {
+        model_name: _record_count(records)
+        for model_name, records in getattr(workspace, "output_data", {}).items()
+        if _record_count(records) > 0
+    }
+
+    models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
+    input_total = sum(input_counts.values())
+    output_total = sum(output_counts.values())
+    copied_total = (
+        len(copied_records.all_records())
+        if isinstance(copied_records, RecordStore)
+        else input_total + output_total
+    )
+
+    return {
+        "models": models,
+        "input_records_by_model": input_counts,
+        "output_records_by_model": output_counts,
+        "input_records_total": input_total,
+        "output_records_total": output_total,
+        "copied_records_total": copied_total,
+    }
+
+
+def _tag_record_store(record_store: RecordStore, model_name: Optional[str]) -> None:
+    if not model_name:
+        return
+    for record in record_store.all_records():
+        metadata = getattr(record, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata.setdefault("model", model_name)
+
 
 def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
     used_keys = set()
@@ -50,19 +104,46 @@ def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, objec
             key = sanitized
 
         if key in used_keys:
-            fallback = getattr(record, "unique_id", None)
-            if not fallback or fallback in used_keys:
+            metadata = getattr(record, "metadata", {}) or {}
+            model_name = metadata.get("model")
+            if model_name:
+                namespaced = f"{model_name}/{key}"
+                namespaced = sanitize_artifact_key(namespaced) or namespaced
+                if namespaced not in used_keys:
+                    logger.warning(
+                        "Duplicate initialization key '%s' detected; using namespaced key '%s'.",
+                        key,
+                        namespaced,
+                    )
+                    key = namespaced
+                else:
+                    fallback = getattr(record, "unique_id", None)
+                    if not fallback or fallback in used_keys:
+                        logger.warning(
+                            "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                            key,
+                        )
+                        continue
+                    logger.warning(
+                        "Duplicate initialization key '%s' detected; using unique_id '%s'.",
+                        key,
+                        fallback,
+                    )
+                    key = fallback
+            else:
+                fallback = getattr(record, "unique_id", None)
+                if not fallback or fallback in used_keys:
+                    logger.warning(
+                        "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                        key,
+                    )
+                    continue
                 logger.warning(
-                    "Duplicate initialization key '%s' with no safe fallback; skipping.",
+                    "Duplicate initialization key '%s' detected; using unique_id '%s'.",
                     key,
+                    fallback,
                 )
-                continue
-            logger.warning(
-                "Duplicate initialization key '%s' detected; using unique_id '%s'.",
-                key,
-                fallback,
-            )
-            key = fallback
+                key = fallback
 
         used_keys.add(key)
         yield key, record
@@ -75,6 +156,16 @@ def _log_record_store(
     workspace: Workspace,
     direction: str,
 ) -> None:
+    def _h5_table_filter_from_list(tables_used):
+        normalized = {name if name.startswith("/") else f"/{name}" for name in tables_used if name}
+
+        def _filter(table_name: str) -> bool:
+            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+                return False
+            return table_name in normalized
+
+        return _filter
+
     schema_keys = {"canonical_zones_source", "omx_skims"}
     for key, record in _iter_unique_records(record_store):
         path = record.get_absolute_path(base_path=workspace.full_path)
@@ -96,16 +187,78 @@ def _log_record_store(
         meta = {}
         if key in schema_keys:
             meta["profile_file_schema"] = "if_changed"
-        artifact = log_fn(
-            path,
-            key=key,
-            description=getattr(record, "description", None),
-            **meta,
-        )
+        tables_used = getattr(record, "h5_tables_used", None)
+        if tables_used:
+            artifact = cr.log_h5_container(
+                path,
+                key=key,
+                direction=direction,
+                table_filter=_h5_table_filter_from_list(tables_used),
+                description=getattr(record, "description", None),
+                **meta,
+            )
+        else:
+            artifact = log_fn(
+                path,
+                key=key,
+                description=getattr(record, "description", None),
+                **meta,
+            )
         if artifact is not None and hasattr(record, "content_hash"):
             record_hash = getattr(artifact, "hash", None)
             if record_hash:
                 record.content_hash = record_hash
+
+
+def _merge_workspace_records(
+    workspace: Workspace, model_key: str, rec_in: RecordStore, rec_out: RecordStore
+) -> None:
+    """Store copied records under the model key, appending if already present."""
+    if model_key in workspace.input_data:
+        workspace.input_data[model_key] += rec_in
+    else:
+        workspace.input_data[model_key] = rec_in
+
+    if model_key in workspace.output_data:
+        workspace.output_data[model_key] += rec_out
+    else:
+        workspace.output_data[model_key] = rec_out
+
+
+def _accumulate_copy_result(
+    *,
+    result: Optional[Tuple[RecordStore, RecordStore]],
+    model_name: str,
+    initialization_records_in: RecordStore,
+    initialization_records_out: RecordStore,
+    workspace: Optional[Workspace] = None,
+    workspace_model_key: Optional[str] = None,
+) -> bool:
+    """
+    Tag and append copy outputs, optionally storing them on workspace caches.
+
+    Returns
+    -------
+    bool
+        True when records were added; False when `result` was empty.
+    """
+    if not result:
+        return False
+
+    rec_in, rec_out = result
+    _tag_record_store(rec_in, model_name)
+    _tag_record_store(rec_out, model_name)
+    initialization_records_in += rec_in
+    initialization_records_out += rec_out
+
+    if workspace is not None:
+        _merge_workspace_records(
+            workspace,
+            workspace_model_key or model_name,
+            rec_in,
+            rec_out,
+        )
+    return True
 
 
 class Initialization(Model):
@@ -142,18 +295,21 @@ class Initialization(Model):
                 result = beam_preprocessor.copy_data_to_mutable_location(
                     settings, beam_input_dir
                 )
-                if result:
-                    rec_in, rec_out = result
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
-                    # Make available to later preprocess()
-                    workspace.input_data["beam"] = rec_in
-                    workspace.output_data["beam"] = rec_out
+                _accumulate_copy_result(
+                    result=result,
+                    model_name="beam",
+                    initialization_records_in=initialization_records_in,
+                    initialization_records_out=initialization_records_out,
+                    workspace=workspace,
+                    workspace_model_key="beam",
+                )
 
             if settings.run.models.travel == "beam":
                 zones_config = settings.shared.geography.zones
-                if zones_config is not None and settings.run.models.activity_demand is not None:
-                    # Zones configured and ActivitySim enabled: copy zones to asim data dir
+                if (
+                    zones_config is not None
+                    and settings.run.models.activity_demand is not None
+                ):
                     project_root = find_project_root(start_path=os.path.dirname(__file__))
                     if not project_root:
                         project_root = os.path.realpath(os.getcwd())
@@ -171,8 +327,9 @@ class Initialization(Model):
                     if os.path.exists(zone_source_path):
                         zone_fname = os.path.basename(zone_source_path)
                         dest_path = os.path.join(asim_input_dir, zone_fname)
-                        # Only copy if source and destination are different
-                        if os.path.abspath(zone_source_path) != os.path.abspath(dest_path):
+                        if os.path.abspath(zone_source_path) != os.path.abspath(
+                            dest_path
+                        ):
                             logger.info(
                                 "Copying canonical zones from %s to %s",
                                 zone_source_path,
@@ -181,7 +338,8 @@ class Initialization(Model):
                             shutil.copy(zone_source_path, dest_path)
                         else:
                             logger.info(
-                                "Canonical zones already at destination: %s", dest_path
+                                "Canonical zones already at destination: %s",
+                                dest_path,
                             )
                         rec_in = RecordStore(
                             recordList=[
@@ -239,21 +397,15 @@ class Initialization(Model):
                     result = usim_preprocessor.copy_data_to_mutable_location(
                         settings, output_dir
                     )
-                    if result:
-                        rec_in, rec_out = result
-                        if model_name in workspace.input_data:
-                            workspace.input_data[model_name] += rec_in
-                        else:
-                            workspace.input_data[model_name] = rec_in
-                        if model_name in workspace.output_data:
-                            workspace.output_data[model_name] += rec_out
-                        else:
-                            workspace.output_data[model_name] = rec_out
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
                     have_not_copied_usim_data = False
-                    if result:
-                        rec_in, rec_out = result
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
 
                 # Atlas data copy
                 if model_name == "atlas":
@@ -265,18 +417,14 @@ class Initialization(Model):
                     result = atlas_preprocessor.copy_data_to_mutable_location(
                         settings, input_dir
                     )
-                    if result:
-                        rec_in, rec_out = result
-                        if model_name in workspace.input_data:
-                            workspace.input_data[model_name] += rec_in
-                        else:
-                            workspace.input_data[model_name] = rec_in
-                        if model_name in workspace.output_data:
-                            workspace.output_data[model_name] += rec_out
-                        else:
-                            workspace.output_data[model_name] = rec_out
-                        initialization_records_in += rec_in
-                        initialization_records_out += rec_out
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
                     os.makedirs(workspace.get_atlas_output_dir(), exist_ok=True)
 
                 # ActivitySim config copy
@@ -291,16 +439,14 @@ class Initialization(Model):
                             settings, asim_input_dir
                         )
                     )
-                    initialization_records_in += rec_in
-                    initialization_records_out += rec_out
-                    if model_name in workspace.input_data:
-                        workspace.input_data[model_name] += rec_in
-                    else:
-                        workspace.input_data[model_name] = rec_in
-                    if model_name in workspace.output_data:
-                        workspace.output_data[model_name] += rec_out
-                    else:
-                        workspace.output_data[model_name] = rec_out
+                    _accumulate_copy_result(
+                        result=(rec_in, rec_out),
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                        workspace=workspace,
+                        workspace_model_key=model_name,
+                    )
 
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 

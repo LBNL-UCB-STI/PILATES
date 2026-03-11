@@ -1,9 +1,7 @@
 import logging
 import os
-import re
 from datetime import datetime
 
-import sys
 from typing import List, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
@@ -14,8 +12,8 @@ from pilates.beam.postprocessor import (
     find_beam_iterations,
     find_iteration_file,
 )
+from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
 from pilates.workspace import Workspace
-from pilates.workflows.artifact_constants import BEAM_FULL_SKIMS
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
@@ -24,47 +22,25 @@ logger = logging.getLogger(__name__)
 
 def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     """
-    Calculate optimal parallelism for skim generation based on available resources.
-
-    Parameters
-    ----------
-    cpu_ratio : float
-        Ratio of CPU cores to use (0.0-1.0). Default is 0.8 (80%).
-
-    Returns
-    -------
-    int
-        Recommended number of parallel threads
+    Calculate a conservative thread count for FullSkimsCreatorApp.
     """
-    import multiprocessing
-    import psutil
-
-    # Get available CPU cores
-    cpu_count = multiprocessing.cpu_count()
-
-    # Get available memory in GB
-    memory_gb = psutil.virtual_memory().available / (1024 ** 3)
-
-    # Calculate based on CPU using the specified ratio
+    cpu_count = os.cpu_count() or 1
     cpu_based = max(1, int(cpu_count * cpu_ratio))
 
-    # Calculate based on memory (assume ~2 GB per thread)
-    memory_based = max(1, int(memory_gb / 2))
+    memory_based = cpu_based
+    try:
+        import psutil  # type: ignore
 
-    # Take the minimum to avoid oversubscription
-    optimal = min(cpu_based, memory_based)
+        memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+        memory_based = max(1, int(memory_gb / 2))
+    except Exception:
+        pass
 
-    # Cap at reasonable maximum (diminishing returns beyond this)
-    optimal = min(optimal, 128)
-
-    # Ensure minimum of 4 threads (unless severely resource constrained)
-    optimal = max(optimal, min(4, cpu_count))
-
+    optimal = min(cpu_based, memory_based, 128)
+    optimal = max(1, min(optimal, cpu_count))
     logger.info(
-        f"Auto-calculated parallelism: {optimal} ({cpu_ratio:.1%} of {cpu_count} cores, "
-        f"Memory: {memory_gb:.1f} GB available)"
+        "Calculated full-skim parallelism=%s from cpu_ratio=%.2f", optimal, cpu_ratio
     )
-
     return optimal
 
 
@@ -72,7 +48,7 @@ def _map_host_path_to_container(
     host_path: str, abs_beam_input: str, abs_beam_output: str
 ) -> str:
     """
-    Map a host path into the BEAM container namespace.
+    Map host paths into the BEAM container namespace.
     """
     if host_path.startswith(abs_beam_output):
         rel = os.path.relpath(host_path, abs_beam_output)
@@ -89,41 +65,52 @@ def _select_latest_linkstats_path(
     abs_beam_output: str,
 ) -> Optional[str]:
     """
-    Select the best linkstats file from a RecordStore and map it to container path.
+    Select the newest linkstats artifact and map it to a container path.
     """
     if records is None:
         return None
 
-    best = None
-    best_year = -1
-    best_iter = -1
-    pattern = re.compile(r"^linkstats_(\d+)_(\d+)$")
-    for rec in records.all_records():
-        short_name = getattr(rec, "short_name", "") or ""
+    def _linkstats_rank(short_name: str) -> Optional[tuple[int, int, int]]:
         if "_sub" in short_name:
-            continue
-        match = pattern.match(short_name)
-        if not match:
-            continue
-        year = int(match.group(1))
-        it = int(match.group(2))
-        if (year, it) >= (best_year, best_iter):
-            best_year, best_iter = year, it
-            best = rec
+            return None
+        if short_name == "linkstats":
+            return (0, 0, 1)
+        if short_name == "linkstats_parquet":
+            return (0, 0, 0)
 
-    if best is None:
-        for rec in records.all_records():
-            short_name = getattr(rec, "short_name", "") or ""
-            if short_name == "linkstats":
-                best = rec
-                break
-
-    if best is None:
+        for prefix, format_priority in (
+            ("linkstats_", 1),
+            ("linkstats_parquet_", 0),
+        ):
+            if not short_name.startswith(prefix):
+                continue
+            tail = short_name[len(prefix) :]
+            parts = tail.split("_")
+            if len(parts) != 2:
+                continue
+            try:
+                year = int(parts[0])
+                iteration = int(parts[1])
+            except ValueError:
+                continue
+            return (year, iteration, format_priority)
         return None
 
-    path = getattr(best, "file_path", None)
-    if not path:
+    best_record: Optional[FileRecord] = None
+    best_rank: Optional[tuple[int, int, int]] = None
+    for record in records.all_records():
+        short_name = getattr(record, "short_name", "") or ""
+        rank = _linkstats_rank(short_name)
+        if rank is None:
+            continue
+        if best_rank is None or rank >= best_rank:
+            best_rank = rank
+            best_record = record
+
+    if best_record is None:
         return None
+
+    path = best_record.file_path
     if not os.path.isabs(path):
         path = os.path.abspath(path)
     return _map_host_path_to_container(path, abs_beam_input, abs_beam_output)
@@ -162,6 +149,39 @@ def rename_beam_output_directory(
     return beam_run_output_dir, new_iteration_output_directory
 
 
+def find_iteration_phys_sim_linkstats_parquet(
+    iteration_path: str, iteration: int
+) -> List[tuple[int, str]]:
+    """
+    Discover BEAM sub-iteration unmodified linkstats parquet files.
+
+    Matches files like:
+      {iteration}.linkstats_unmodified_physSimIter1.parquet
+      {iteration}.linkstats_unmodified_physSimIter2.parquet
+    """
+    prefix = f"{iteration}.linkstats_unmodified_physSimIter"
+    suffix = ".parquet"
+    found: List[tuple[int, str]] = []
+
+    try:
+        filenames = os.listdir(iteration_path)
+    except OSError:
+        return found
+
+    for filename in filenames:
+        if not filename.startswith(prefix) or not filename.endswith(suffix):
+            continue
+        iter_token = filename[len(prefix) : -len(suffix)]
+        try:
+            phys_sim_iter = int(iter_token)
+        except ValueError:
+            continue
+        found.append((phys_sim_iter, os.path.join(iteration_path, filename)))
+
+    found.sort(key=lambda item: item[0])
+    return found
+
+
 class BeamRunner(GenericRunner):
     """
     Runner for the BEAM model.
@@ -176,7 +196,9 @@ class BeamRunner(GenericRunner):
         """
         zarr_path = None
         if getattr(settings, "activitysim", None) is not None:
-            candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+            candidate = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
             if os.path.exists(candidate):
                 zarr_path = candidate
         return {
@@ -307,6 +329,45 @@ class BeamRunner(GenericRunner):
                         )
                     )
 
+            for phys_sim_iter, full_path in find_iteration_phys_sim_linkstats_parquet(
+                path, it
+            ):
+                facet = {
+                    "artifact_family": "linkstats_unmodified_phys_sim_iter_parquet",
+                    "year": self.state.forecast_year,
+                    "iteration": self.state.iteration,
+                    "phys_sim_iteration": phys_sim_iter,
+                    # Keep sub-iteration facet on promoted final artifacts too.
+                    # This preserves existing key semantics while improving facet-only analysis.
+                    "beam_sub_iteration": it,
+                }
+                if it == last_iter:
+                    dataset_name = (
+                        "linkstats_unmodified_parquet__"
+                        f"y{self.state.forecast_year}__i{self.state.iteration}"
+                        f"__phys_sim_iter{phys_sim_iter}"
+                    )
+                else:
+                    dataset_name = (
+                        "linkstats_unmodified_parquet__"
+                        f"y{self.state.forecast_year}__i{self.state.iteration}"
+                        f"__phys_sim_iter{phys_sim_iter}__beam_sub_iter{it}"
+                    )
+                output_records.append(
+                    FileRecord(
+                        file_path=full_path,
+                        year=self.state.forecast_year,
+                        sub_iteration=None if it == last_iter else it,
+                        short_name=dataset_name,
+                        description=f"BEAM output artifact: {dataset_name}",
+                        metadata={
+                            "facet": facet,
+                            "facet_schema_version": "v1",
+                            "facet_index": True,
+                        },
+                    )
+                )
+
         for short_name, (file_name, extension) in top_level_files.items():
             full_path = os.path.join(
                 beam_local_output_folder, f"{file_name}{extension}"
@@ -337,7 +398,7 @@ class BeamRunner(GenericRunner):
             beam_local_input_folder: {"bind": "/app/input", "mode": "rw"},
             beam_local_output_folder: {"bind": "/app/output", "mode": "rw"},
         }
-        if settings.activitysim is not None:
+        if getattr(settings, "activitysim", None) is not None:
             asim_local_output_folder = workspace.get_asim_output_dir()
             vols[asim_local_output_folder] = {
                 "bind": "/app/activitysim-output",
@@ -411,79 +472,6 @@ class BeamRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
-        # Determine if full-skim mode is enabled via configuration
-        environment = {"JAVA_OPTS": java_opts}
-        command = f"--config={path_to_beam_config}"
-        beam_cfg = getattr(settings, "beam", None)
-        full_skim_cfg = beam_cfg.full_skim if beam_cfg else None
-        full_skim_mode = getattr(full_skim_cfg, "run_schedule", "standalone")
-        if full_skim_cfg and full_skim_mode == "standalone":
-            # Override main class for full-skim mode (FullSkimsCreatorApp)
-            environment["BEAM_MAIN_CLASS"] = "scripts.FullSkimsCreatorApp"
-            skim_cfg = full_skim_cfg
-
-            # Calculate parallelism based on CPU ratio (default 0.8 = 80% if not specified)
-            cpu_ratio = (
-                skim_cfg.parallelism_thread_ratio
-                if skim_cfg.parallelism_thread_ratio is not None
-                else 0.8
-            )
-            parallelism = _calculate_optimal_parallelism(cpu_ratio)
-
-            # Build command arguments for the FullSkimsCreatorApp
-            output_dir = os.path.join(
-                abs_beam_output,
-                region,
-                f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
-            )
-            os.makedirs(output_dir, exist_ok=True)
-            host_output_file = os.path.join(output_dir, "skimsODFull.csv.gz")
-            container_output_file = _map_host_path_to_container(
-                host_output_file, abs_beam_input, abs_beam_output
-            )
-            cmd_parts = [
-                f"--configPath={path_to_beam_config}",
-                f"--output={container_output_file}",
-                f"--parallelism={parallelism}",
-                f"--routerType={skim_cfg.router_type}",
-                f"--skimsGeoType={skim_cfg.skims_geo_type}",
-                f"--skimsKind={skim_cfg.skims_kind}",
-            ]
-
-            # Format peak hours as comma-separated list
-            peak_hours_str = ",".join(str(h) for h in skim_cfg.peak_hours)
-            cmd_parts.append(f"--peakHours={peak_hours_str}")
-
-            # Format modes to build as comma-separated list of enabled modes
-            enabled_modes = [mode for mode, enabled in skim_cfg.modes_to_build.items() if enabled]
-            if enabled_modes:
-                modes_str = ",".join(enabled_modes)
-                cmd_parts.append(f"--modesToBuild={modes_str}")
-
-            linkstats_path = _select_latest_linkstats_path(
-                store, abs_beam_input, abs_beam_output
-            )
-            if linkstats_path is None:
-                router_dir = getattr(settings.beam, "router_directory", None)
-                if router_dir:
-                    init_parquet = os.path.join(
-                        abs_beam_input, region, router_dir, "init.linkstats.parquet"
-                    )
-                    init_csv = os.path.join(
-                        abs_beam_input, region, router_dir, "init.linkstats.csv.gz"
-                    )
-                    if os.path.exists(init_parquet):
-                        linkstats_path = _map_host_path_to_container(
-                            init_parquet, abs_beam_input, abs_beam_output
-                        )
-                    elif os.path.exists(init_csv):
-                        linkstats_path = _map_host_path_to_container(
-                            init_csv, abs_beam_input, abs_beam_output
-                        )
-            if linkstats_path is not None:
-                cmd_parts.append(f"--linkstatsPath={linkstats_path}")
-            command = " ".join(cmd_parts)
-
         # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
         # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
         from pilates.generic.records import FileRecord
@@ -500,10 +488,10 @@ class BeamRunner(GenericRunner):
                 abs_beam_input: {"bind": "/app/input", "mode": "rw"},
                 abs_beam_output: {"bind": "/app/output", "mode": "rw"},
             },
-            command=command,
+            command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
-            environment=environment,
+            environment={"JAVA_OPTS": java_opts},
             input_artifacts=input_paths,
             output_paths=[abs_beam_output],
             lineage_mode="none",
@@ -551,7 +539,7 @@ class BeamRunner(GenericRunner):
 
 class BeamFullSkimRunner(GenericRunner):
     """
-    Runner for BEAM full-skim mode as a dedicated step.
+    Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
 
     def __init__(
@@ -573,8 +561,12 @@ class BeamFullSkimRunner(GenericRunner):
 
         beam_cfg = getattr(settings, "beam", None)
         skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
-        if not skim_cfg or getattr(skim_cfg, "run_schedule", "disabled") == "disabled":
-            raise RuntimeError("Full-skim run requested but beam.full_skim.run_schedule=disabled.")
+        if skim_cfg is None:
+            raise RuntimeError("BEAM full skim requested but beam.full_skim is not set.")
+        if getattr(skim_cfg, "run_schedule", "disabled") == "disabled":
+            raise RuntimeError(
+                "BEAM full skim requested but beam.full_skim.run_schedule is disabled."
+            )
 
         abs_beam_input = workspace.get_beam_mutable_data_dir()
         abs_beam_output = workspace.get_beam_output_dir()
@@ -585,13 +577,9 @@ class BeamFullSkimRunner(GenericRunner):
             f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
         )
         os.makedirs(output_dir, exist_ok=True)
-
-        # Make sure there's a temp dir for the JVM to use
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
-        travel_model, travel_model_image = self.get_model_and_image(
-            settings, "travel_model"
-        )
+        _, travel_model_image = self.get_model_and_image(settings, "travel_model")
         beam_config = settings.beam.config
         path_to_beam_config = f"/app/input/{region}/{beam_config}"
 
@@ -622,8 +610,6 @@ class BeamFullSkimRunner(GenericRunner):
             "-Djna.tmpdir=/app/output/tmp"
         )
 
-        environment = {"JAVA_OPTS": java_opts, "BEAM_MAIN_CLASS": "scripts.FullSkimsCreatorApp"}
-
         cpu_ratio = (
             skim_cfg.parallelism_thread_ratio
             if skim_cfg.parallelism_thread_ratio is not None
@@ -643,16 +629,18 @@ class BeamFullSkimRunner(GenericRunner):
             f"--routerType={skim_cfg.router_type}",
             f"--skimsGeoType={skim_cfg.skims_geo_type}",
             f"--skimsKind={skim_cfg.skims_kind}",
+            f"--peakHours={','.join(str(hour) for hour in skim_cfg.peak_hours)}",
         ]
 
-        peak_hours_str = ",".join(str(h) for h in skim_cfg.peak_hours)
-        cmd_parts.append(f"--peakHours={peak_hours_str}")
-
-        enabled_modes = [mode for mode, enabled in skim_cfg.modes_to_build.items() if enabled]
+        enabled_modes = [
+            mode for mode, enabled in skim_cfg.modes_to_build.items() if enabled
+        ]
         if enabled_modes:
             cmd_parts.append(f"--modesToBuild={','.join(enabled_modes)}")
 
-        linkstats_path = _select_latest_linkstats_path(store, abs_beam_input, abs_beam_output)
+        linkstats_path = _select_latest_linkstats_path(
+            store, abs_beam_input, abs_beam_output
+        )
         if linkstats_path is None:
             router_dir = getattr(settings.beam, "router_directory", None)
             if router_dir:
@@ -673,10 +661,10 @@ class BeamFullSkimRunner(GenericRunner):
         if linkstats_path is not None:
             cmd_parts.append(f"--linkstatsPath={linkstats_path}")
 
-        command = " ".join(cmd_parts)
-
         input_paths = [
-            r.file_path for r in store.all_records() if isinstance(r, FileRecord)
+            record.file_path
+            for record in store.all_records()
+            if isinstance(record, FileRecord)
         ]
 
         success = self.run_container(
@@ -687,19 +675,25 @@ class BeamFullSkimRunner(GenericRunner):
                 abs_beam_input: {"bind": "/app/input", "mode": "rw"},
                 abs_beam_output: {"bind": "/app/output", "mode": "rw"},
             },
-            command=command,
+            command=" ".join(cmd_parts),
             model_name=self.model_name,
             working_dir="/app",
-            environment=environment,
+            environment={
+                "JAVA_OPTS": java_opts,
+                "BEAM_MAIN_CLASS": "scripts.FullSkimsCreatorApp",
+            },
             input_artifacts=input_paths,
             output_paths=[abs_beam_output],
             lineage_mode="none",
         )
-
         if not success:
-            raise RuntimeError("BEAM full-skim run failed after container execution.")
+            raise RuntimeError("BEAM full skim run failed after container execution.")
+        if not os.path.exists(host_output_file):
+            raise RuntimeError(
+                f"BEAM full skim completed but output was not found: {host_output_file}"
+            )
 
-        output_store = RecordStore(
+        return RecordStore(
             recordList=[
                 FileRecord(
                     file_path=host_output_file,
@@ -709,4 +703,3 @@ class BeamFullSkimRunner(GenericRunner):
                 )
             ]
         )
-        return output_store

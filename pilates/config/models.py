@@ -65,6 +65,85 @@ class RunConfig(BaseModel):
     # Output configuration (METADATA scope)
     output_directory: str = Field(..., description="Where to write outputs")
     output_run_name: str = Field(..., description="Human-readable run name")
+    local_workspace_root: Optional[str] = Field(
+        None,
+        description=(
+            "Optional node-local workspace root (defaults to output_directory)"
+        ),
+    )
+    enable_archive_copy: bool = Field(
+        False, description="Copy logged outputs to archive root as they are produced"
+    )
+    bootstrap_cache_enabled: bool = Field(
+        True,
+        description=(
+            "Enable cache probing for the pre-scenario bootstrap initialization phase"
+        ),
+    )
+    consist_db_local_run: bool = Field(
+        True,
+        description=(
+            "Store Consist provenance DB in the node-local run directory and mirror it "
+            "to the archive run directory at shutdown"
+        ),
+    )
+    consist_db_filename: str = Field(
+        "provenance.duckdb",
+        description=(
+            "Filename to use for the run-local Consist DB when consist_db_local_run "
+            "is enabled"
+        ),
+    )
+    consist_db_snapshot_enabled: bool = Field(
+        True,
+        description="Enable periodic checkpoint snapshots of the run-local Consist DB",
+    )
+    consist_db_snapshot_interval_seconds: int = Field(
+        600,
+        description=(
+            "Minimum seconds between interval-based Consist DB snapshots at safe points"
+        ),
+        ge=0,
+    )
+    consist_db_snapshot_on_outer_iteration: bool = Field(
+        True,
+        description=(
+            "Create a Consist DB snapshot at each supply-demand outer iteration boundary"
+        ),
+    )
+    consist_db_snapshot_keep_last: int = Field(
+        3,
+        description="Number of historical Consist DB snapshots to retain per run",
+        ge=1,
+    )
+    consist_db_restore_on_start: bool = Field(
+        True,
+        description=(
+            "Restore run-local Consist DB from latest archived snapshot when local DB is "
+            "missing at startup"
+        ),
+    )
+    consist_db_restore_strict: bool = Field(
+        False,
+        description=(
+            "Fail startup if Consist DB restore from archive snapshot fails when restore "
+            "is enabled"
+        ),
+    )
+    consist_db_seed_from_shared_on_start: bool = Field(
+        False,
+        description=(
+            "When run-local DB mode is enabled and local DB is missing, seed it from "
+            "shared.database.path if no run snapshot restore is available"
+        ),
+    )
+    consist_db_seed_strict: bool = Field(
+        False,
+        description=(
+            "Fail startup if seed-from-shared is enabled but seeding the local Consist "
+            "DB from shared.database.path fails"
+        ),
+    )
 
     # Model selection (GLOBAL scope)
     models: ModelSelection = Field(..., description="Which models are enabled")
@@ -74,6 +153,24 @@ class RunConfig(BaseModel):
     def expand_env_vars(cls, v):
         """Expand environment variables in output_directory."""
         return os.path.expandvars(v)
+
+    @field_validator("local_workspace_root")
+    @classmethod
+    def expand_local_workspace_root(cls, v):
+        """Expand environment variables in local_workspace_root."""
+        if v is None:
+            return v
+        return os.path.expandvars(v)
+
+    @field_validator("consist_db_filename")
+    @classmethod
+    def validate_consist_db_filename(cls, v):
+        """Require a basename-only filename for local run DB placement."""
+        if not v:
+            raise ValueError("consist_db_filename must not be empty")
+        if os.path.basename(v) != v:
+            raise ValueError("consist_db_filename must be a filename, not a path")
+        return v
 
     @field_validator("end_year")
     @classmethod
@@ -151,8 +248,11 @@ class DatabaseConfig(BaseModel):
         description="Alias for shapshot_path (preferred spelling).",
     )
     use_consist: bool = Field(
-        False,
-        description="Use Consist library for provenance tracking",
+        True,
+        description=(
+            "Deprecated toggle retained for config compatibility. "
+            "Consist is mandatory and this value is ignored."
+        ),
     )
 
     @model_validator(mode="after")
@@ -278,6 +378,13 @@ class ActivitySimConfig(BaseModel):
     file_format: Literal["parquet", "csv"] = Field(
         "parquet", description="Output file format"
     )
+    persist_sharrow_cache: Optional[bool] = Field(
+        None,
+        description=(
+            "Persist ActivitySim sharrow/numba compile cache directory. "
+            "When unset, defaults to enabled for parquet format."
+        ),
+    )
     local_input_folder: str
     local_mutable_data_folder: str
     local_output_folder: str
@@ -326,6 +433,7 @@ class ActivitySimConfig(BaseModel):
             "chunk_size": self.chunk_size,
             "num_processes": self.num_processes,
             "file_format": self.file_format,
+            "persist_sharrow_cache": self.persist_sharrow_cache,
             "warm_start_activities": self.warm_start_activities,
             "replan_iters": self.replan_iters,
             "replan_hh_samp_size": self.replan_hh_samp_size,
@@ -365,11 +473,13 @@ class FullSkimsCreatorConfig(BaseModel):
     )
     parallelism_thread_ratio: Optional[float] = Field(
         None,
-        description="Ratio of CPU cores to use (0.0-1.0). Default: 0.8 (80%) if not specified",
+        description=(
+            "Ratio of CPU cores to use (0.0-1.0). "
+            "Default behavior is auto-compute when unset."
+        ),
         ge=0.0,
-        le=1.0
+        le=1.0,
     )
-
 
 
 class BeamConfig(BaseModel):
@@ -408,8 +518,18 @@ class BeamConfig(BaseModel):
     ridehail_path_map: Dict[str, str] = Field(
         default_factory=dict, description="Ridehail path mappings"
     )
+    skim_previous_weight: float = Field(
+        0.9,
+        description=(
+            "Weight on previous skims when blending trip counts. "
+            "New counts are always fully applied."
+        ),
+        ge=0.0,
+        le=1.0,
+    )
     full_skim: Optional[FullSkimsCreatorConfig] = Field(
-        None, description="Full-skim mode configuration (runs FullSkimsCreatorApp)"
+        None,
+        description="Optional full-skim mode configuration.",
     )
 
 
