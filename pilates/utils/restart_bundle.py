@@ -89,6 +89,7 @@ def _add_activitysim_candidates(
     *,
     settings: Any,
     workspace: Any,
+    state: Any,
     local_run_dir: str,
     archive_run_dir: str,
 ) -> None:
@@ -125,6 +126,26 @@ def _add_activitysim_candidates(
             local_run_dir=local_run_dir,
             archive_run_dir=archive_run_dir,
         )
+        current_stage = getattr(state, "current_major_stage", None)
+        current_sub_stage = getattr(state, "current_sub_stage", None)
+        workflow_stage = getattr(state, "Stage", None)
+        if (
+            workflow_stage is not None
+            and current_stage == workflow_stage.supply_demand_loop
+            and current_sub_stage == workflow_stage.traffic_assignment
+        ):
+            _append_local_candidate(
+                artifacts,
+                key="activitysim_iteration_output_dir",
+                local_path=os.path.join(
+                    get_output_dir(),
+                    f"year-{getattr(state, 'current_year', 'unknown')}-iteration-"
+                    f"{getattr(state, 'current_inner_iter', 0)}",
+                ),
+                reason="ActivitySim iteration outputs for resumed BEAM traffic assignment",
+                local_run_dir=local_run_dir,
+                archive_run_dir=archive_run_dir,
+            )
 
     _append_local_candidate(
         artifacts,
@@ -360,6 +381,7 @@ def build_restart_bundle_manifest(
         artifacts,
         settings=settings,
         workspace=workspace,
+        state=state,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_root,
     )

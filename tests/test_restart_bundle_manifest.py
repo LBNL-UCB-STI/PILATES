@@ -205,6 +205,17 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     usim_archive.parent.mkdir(parents=True, exist_ok=True)
     usim_archive.write_text("x", encoding="utf-8")
 
+    state = SimpleNamespace(
+        current_year=2023,
+        current_inner_iter=0,
+        current_major_stage=SimpleNamespace(),
+        current_sub_stage=None,
+    )
+    state.Stage = SimpleNamespace(
+        supply_demand_loop=state.current_major_stage,
+        traffic_assignment=object(),
+    )
+
     manifest = build_restart_bundle_manifest(
         archive_run_dir=str(archive_run_dir),
         local_run_dir=str(local_run_dir),
@@ -214,7 +225,7 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
             str(asim_base_dir),
             str(usim_base_dir),
         ),
-        state=SimpleNamespace(current_year=2023),
+        state=state,
         local_consist_db_path=None,
     )
 
@@ -227,6 +238,62 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     assert "activitysim_config_dir_configs_extended" in keys
     assert "activitysim_config_dir_configs_mp" in keys
     assert "activitysim_config_dir_configs_sh_compile" in keys
+
+
+def test_restart_bundle_includes_activitysim_iteration_outputs_for_traffic_assignment(
+    tmp_path,
+):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    atlas_input_dir = local_run_dir / "atlas" / "atlas_input"
+    asim_base_dir = local_run_dir / "activitysim"
+    usim_base_dir = local_run_dir / "urbansim" / "data"
+    atlas_input_dir.mkdir(parents=True, exist_ok=True)
+    usim_base_dir.mkdir(parents=True, exist_ok=True)
+    (archive_run_dir / "run_state.yaml").parent.mkdir(parents=True, exist_ok=True)
+    (archive_run_dir / "run_state.yaml").write_text("year: 2017\n", encoding="utf-8")
+
+    iter_local = asim_base_dir / "output" / "year-2017-iteration-0"
+    iter_local.mkdir(parents=True, exist_ok=True)
+    (iter_local / "beam_plans.parquet").write_text("x", encoding="utf-8")
+    iter_archive = archive_run_dir / "activitysim" / "output" / "year-2017-iteration-0"
+    iter_archive.mkdir(parents=True, exist_ok=True)
+    (iter_archive / "beam_plans.parquet").write_text("x", encoding="utf-8")
+
+    usim_local = usim_base_dir / "usim_000.h5"
+    usim_local.write_text("x", encoding="utf-8")
+    usim_archive = archive_run_dir / "urbansim" / "data" / "usim_000.h5"
+    usim_archive.parent.mkdir(parents=True, exist_ok=True)
+    usim_archive.write_text("x", encoding="utf-8")
+
+    stage = SimpleNamespace()
+    traffic = object()
+    state = SimpleNamespace(
+        current_year=2017,
+        current_inner_iter=0,
+        current_major_stage=stage,
+        current_sub_stage=traffic,
+    )
+    state.Stage = SimpleNamespace(
+        supply_demand_loop=stage,
+        traffic_assignment=traffic,
+    )
+
+    manifest = build_restart_bundle_manifest(
+        archive_run_dir=str(archive_run_dir),
+        local_run_dir=str(local_run_dir),
+        settings=_settings_with_activitysim(),
+        workspace=_WorkspaceStub(
+            str(atlas_input_dir),
+            str(asim_base_dir),
+            str(usim_base_dir),
+        ),
+        state=state,
+        local_consist_db_path=None,
+    )
+
+    keys = {item["key"] for item in manifest["artifacts"]}
+    assert "activitysim_iteration_output_dir" in keys
 
 
 def test_restart_bundle_skips_urbansim_candidates_when_land_use_not_urbansim(

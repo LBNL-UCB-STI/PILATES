@@ -146,6 +146,24 @@ def restart_required_local_artifacts(
                 "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
             }
         )
+        current_sub_stage = getattr(state, "current_sub_stage", None)
+        if current_stage == workflow_stage.supply_demand_loop and (
+            current_sub_stage == workflow_stage.traffic_assignment
+        ):
+            required.append(
+                {
+                    "key": "activitysim_iteration_output_dir",
+                    "path": os.path.join(
+                        get_asim_output_dir(),
+                        f"year-{getattr(state, 'current_year', 'unknown')}-iteration-"
+                        f"{getattr(state, 'current_inner_iter', 0)}",
+                    ),
+                    "reason": (
+                        "ActivitySim iteration outputs required to resume BEAM from "
+                        "traffic assignment"
+                    ),
+                }
+            )
 
     requires_beam_locals = (
         getattr(model_cfg, "traffic_assignment", None) == "beam"

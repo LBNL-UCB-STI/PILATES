@@ -851,6 +851,7 @@ def _restore_activity_demand_outputs_for_resume(
     coupler: CouplerProtocol,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
+    state: WorkflowState,
 ) -> Optional[Dict[str, str]]:
     """
     Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
@@ -888,6 +889,29 @@ def _restore_activity_demand_outputs_for_resume(
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
             usim_datastore_h5=None,
             asim_output_dir=None,
+            processed_outputs={
+                key: Path(path) for key, path in restored_outputs.items()
+            },
+        )
+        return restored_outputs
+
+    iter_dir = Path(workspace.get_asim_output_dir()) / (
+        f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    filesystem_candidates = {
+        "beam_plans_asim_out": iter_dir / "beam_plans.parquet",
+        "households_asim_out": iter_dir / "households.parquet",
+        "persons_asim_out": iter_dir / "persons.parquet",
+    }
+    restored_outputs = {
+        key: str(path)
+        for key, path in filesystem_candidates.items()
+        if path.exists()
+    }
+    if restored_outputs:
+        outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=iter_dir,
             processed_outputs={
                 key: Path(path) for key, path in restored_outputs.items()
             },
@@ -1404,6 +1428,7 @@ def run_supply_demand_stage(
                 coupler=coupler,
                 workspace=workspace,
                 outputs_holder=outputs_holder,
+                state=state,
             )
 
         # C2. TRAFFIC ASSIGNMENT
