@@ -233,6 +233,7 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     assert "usim_datastore_base_h5" in keys
     assert "zarr_skims" in keys
     assert "asim_sharrow_cache_dir" in keys
+    assert "beam_mutable_data_dir" in keys
     assert "beam_region_input_dir" in keys
     assert "activitysim_config_dir_configs" in keys
     assert "activitysim_config_dir_configs_extended" in keys

@@ -175,10 +175,21 @@ def restart_required_local_artifacts(
     )
     get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
     if requires_beam_locals and callable(get_beam_input_dir) and region:
+        beam_input_dir = get_beam_input_dir()
+        required.append(
+            {
+                "key": "beam_mutable_data_dir",
+                "path": beam_input_dir,
+                "reason": (
+                    "BEAM mutable data root required for restart metadata and "
+                    "resumed traffic assignment"
+                ),
+            }
+        )
         required.append(
             {
                 "key": "beam_region_input_dir",
-                "path": os.path.join(get_beam_input_dir(), region),
+                "path": os.path.join(beam_input_dir, region),
                 "reason": (
                     "BEAM mutable input tree required for resumed traffic assignment"
                 ),

@@ -659,7 +659,9 @@ def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
 
     keys = {item["key"] for item in missing}
     paths = {item["path"] for item in missing}
+    assert "beam_mutable_data_dir" in keys
     assert "beam_region_input_dir" in keys
+    assert any(path.endswith("beam/input") for path in paths)
     assert any(path.endswith("beam/input/test") for path in paths)
 
 

@@ -83,3 +83,11 @@ def test_build_step_consist_kwargs_beam_includes_identity_inputs(tmp_path):
     assert kwargs["facet_schema_version"] == "beam_v1"
     assert kwargs["facet"] == {"sample": 1.0}
     assert kwargs["identity_inputs"][0][0] == "beam_conf/main.conf"
+
+
+def test_build_beam_identity_inputs_missing_dir_returns_empty(tmp_path):
+    settings = MagicMock()
+    settings.beam = MagicMock()
+    settings.beam.local_mutable_data_folder = "beam/input"
+
+    assert build_beam_identity_inputs(settings, str(tmp_path)) == []

@@ -229,10 +229,19 @@ def _add_beam_candidates(
     if not callable(get_beam_dir) or not region:
         return
 
+    beam_root = get_beam_dir()
+    _append_local_candidate(
+        artifacts,
+        key="beam_mutable_data_dir",
+        local_path=beam_root,
+        reason="BEAM mutable data root for restart metadata and traffic assignment",
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
     _append_local_candidate(
         artifacts,
         key="beam_region_input_dir",
-        local_path=os.path.join(get_beam_dir(), region),
+        local_path=os.path.join(beam_root, region),
         reason=f"BEAM mutable input directory for region {region}",
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
