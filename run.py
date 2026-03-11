@@ -928,19 +928,6 @@ def main():
                     workspace=workspace,
                 )
             )
-            if restart_missing_artifacts_after_rehydrate and is_restart_run:
-                if _repair_restart_beam_inputs_from_source(
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                ):
-                    restart_missing_artifacts_after_rehydrate = (
-                        _find_missing_restart_local_artifacts(
-                            settings=settings,
-                            state=state,
-                            workspace=workspace,
-                        )
-                    )
             if restart_missing_artifacts_after_rehydrate:
                 logger.warning(
                     "Restart preflight still missing required local workspace inputs "
@@ -957,6 +944,16 @@ def main():
                             restart_missing_artifacts_after_rehydrate
                         )
                     )
+    if is_restart_run and _repair_restart_beam_inputs_from_source(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    ):
+        restart_missing_artifacts_after_rehydrate = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     if is_restart_run:
         _run_resume_doctor_diagnostics(
             state=state,
