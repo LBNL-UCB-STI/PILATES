@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-RANDOM_PART="$(tr -dc A-Z0-9 </dev/urandom | head -c 8)"
+# Generate random ID (avoid SIGPIPE from urandom pipe)
+RANDOM_PART="$(head -c 32 /dev/urandom | base64 | tr -dc A-Z0-9 | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
 JOB_NAME="$RANDOM_PART.$DATETIME"
 
