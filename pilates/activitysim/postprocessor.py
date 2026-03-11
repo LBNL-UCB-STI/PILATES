@@ -16,7 +16,6 @@ from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
 )
-from pilates.utils.io import read_datastore
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -124,6 +123,86 @@ def get_usim_datastore_fname(settings, io, year=None):
     return datastore_name
 
 
+def _normalized_h5_keys(store: pd.HDFStore) -> Dict[str, str]:
+    return {key.strip("/"): key for key in store.keys()}
+
+
+def _detect_h5_prefix(
+    store: pd.HDFStore,
+    required_tables,
+    preferred_prefix=None,
+) -> Optional[str]:
+    normalized_keys = _normalized_h5_keys(store)
+    candidate_prefixes = []
+    if preferred_prefix not in (None, ""):
+        candidate_prefixes.append(str(preferred_prefix))
+    candidate_prefixes.append("")
+
+    discovered_prefixes = []
+    for key in normalized_keys:
+        if "/" in key:
+            discovered_prefixes.append(key.split("/", 1)[0])
+    for candidate in discovered_prefixes:
+        if candidate not in candidate_prefixes:
+            candidate_prefixes.append(candidate)
+
+    for candidate_prefix in candidate_prefixes:
+        if all(
+            (
+                f"{candidate_prefix}/{table_name}"
+                if candidate_prefix
+                else table_name
+            )
+            in normalized_keys
+            for table_name in required_tables
+        ):
+            return candidate_prefix
+    return None
+
+
+def _resolve_usim_store_path_and_prefix(
+    settings,
+    state: WorkflowState,
+    workspace: Workspace,
+    required_tables,
+    preferred_prefix=None,
+):
+    data_dir = workspace.get_usim_mutable_data_dir()
+    forecast_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(
+            settings, io="output", year=state.forecast_year
+        ),
+    )
+    current_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(settings, io="input"),
+    )
+
+    for candidate_path, label in (
+        (forecast_store_path, "forecast output"),
+        (current_store_path, "current input"),
+    ):
+        if not os.path.exists(candidate_path):
+            continue
+        with pd.HDFStore(candidate_path, mode="r") as store:
+            resolved_prefix = _detect_h5_prefix(
+                store,
+                required_tables=required_tables,
+                preferred_prefix=preferred_prefix,
+            )
+        if resolved_prefix is not None:
+            return candidate_path, resolved_prefix
+        logger.warning(
+            "UrbanSim %s datastore exists but is missing required tables %s: %s",
+            label,
+            list(required_tables),
+            candidate_path,
+        )
+
+    return None, None
+
+
 def _prepare_updated_tables(
     settings,
     state: WorkflowState,
@@ -139,16 +218,48 @@ def _prepare_updated_tables(
 
     data_dir = workspace.get_usim_mutable_data_dir()
 
-    # e.g. model_data_2012.h5
-    usim_output_store_name = get_usim_datastore_fname(
-        settings, io="output", year=state.forecast_year
+    usim_output_store_path, resolved_prefix = _resolve_usim_store_path_and_prefix(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        required_tables=tables_updated_by_asim,
+        preferred_prefix=prefix,
     )
-    usim_output_store_path = os.path.join(data_dir, usim_output_store_name)
-    if not os.path.exists(usim_output_store_path):
+    if not usim_output_store_path:
+        forecast_path = os.path.join(
+            data_dir,
+            get_usim_datastore_fname(settings, io="output", year=state.forecast_year),
+        )
         raise ValueError(
-            "No output data store found at {0}".format(usim_output_store_path)
+            "No output data store found at {0}".format(forecast_path)
+        )
+    if resolved_prefix != prefix:
+        logger.info(
+            "Using UrbanSim datastore %s with table prefix %r for ActivitySim postprocess "
+            "(requested prefix %r).",
+            usim_output_store_path,
+            resolved_prefix,
+            prefix,
         )
     usim_output_store = pd.HDFStore(usim_output_store_path)
+    normalized_usim_keys = _normalized_h5_keys(usim_output_store)
+
+    def _resolve_h5_key(table_name: str) -> str:
+        candidates = []
+        if resolved_prefix not in (None, ""):
+            candidates.append(f"{resolved_prefix}/{table_name}")
+        candidates.append(table_name)
+        for candidate in candidates:
+            actual = normalized_usim_keys.get(candidate.strip("/"))
+            if actual:
+                return actual
+        raise KeyError(
+            "UrbanSim datastore {0} does not contain table '{1}'. Available keys: {2}".format(
+                usim_output_store_path,
+                table_name,
+                sorted(normalized_usim_keys),
+            )
+        )
 
     # ensure we preserve all columns originally in the urbansim outputs
     required_cols = {}
@@ -195,16 +306,12 @@ def _prepare_updated_tables(
 
     def _get_usim_table(table_name: str) -> pd.DataFrame:
         if table_name not in usim_tables:
-            h5_key = table_name
-            if prefix:
-                h5_key = os.path.join(str(prefix), h5_key)
+            h5_key = _resolve_h5_key(table_name)
             usim_tables[table_name] = usim_output_store[h5_key].copy()
         return usim_tables[table_name]
 
     for table_name in tables_updated_by_asim:
-        h5_key = table_name
-        if prefix:
-            h5_key = os.path.join(str(prefix), h5_key)
+        h5_key = _resolve_h5_key(table_name)
         logger.info("Reading h5 table {0}".format(h5_key))
         required_cols[table_name] = list(usim_output_store[h5_key].columns)
 
@@ -355,9 +462,7 @@ def _prepare_updated_tables(
     else:
         logger.warning("Household table not found in ASim outputs!")
     for table_name in tables_updated_by_asim:
-        h5_key = table_name
-        if prefix:
-            h5_key = os.path.join(str(prefix), h5_key)
+        h5_key = _resolve_h5_key(table_name)
         logger.info("Validating data schemas for table {0}.".format(table_name))
 
         # make sure all required columns are present
@@ -459,6 +564,20 @@ def create_usim_input_data(
     archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
     archive_path = input_store_path.replace(input_datastore_name, archive_fname)
 
+    forecast_output_store_path = os.path.join(
+        data_dir,
+        get_usim_datastore_fname(settings, "output", forecast_year),
+    )
+    fallback_to_current_input = not os.path.exists(forecast_output_store_path)
+    source_store_path = (
+        input_store_path if fallback_to_current_input else forecast_output_store_path
+    )
+    source_store_label = (
+        "current UrbanSim input datastore"
+        if fallback_to_current_input
+        else "UrbanSim forecast output datastore"
+    )
+
     if os.path.exists(input_store_path):
         logger.info(
             "Moving urbansim inputs from the previous iteration to {0}".format(
@@ -466,6 +585,8 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
+        if fallback_to_current_input:
+            source_store_path = archive_path
     elif not os.path.exists(archive_path):
         logger.warning(
             "No input data found at {0} or {1}. Cannot create next iteration inputs.".format(
@@ -474,30 +595,61 @@ def create_usim_input_data(
         )
         return None, None
 
-    # 3. Previous UrbanSim output data
-    usim_output_datastore_name = get_usim_datastore_fname(
-        settings, "output", forecast_year
-    )
-    usim_output_store_path = os.path.join(data_dir, usim_output_datastore_name)
+    source_prefix = None
+    if os.path.exists(source_store_path):
+        with pd.HDFStore(source_store_path, mode="r") as source_store:
+            source_prefix = _detect_h5_prefix(
+                source_store,
+                required_tables=["households"],
+                preferred_prefix=forecast_year,
+            )
+
+    if source_prefix is None:
+        logger.warning(
+            "No UrbanSim source data found at %s. Cannot create next iteration inputs.",
+            source_store_path,
+        )
+        return None, None
+
+    if fallback_to_current_input:
+        logger.info(
+            "Falling back to %s for ActivitySim postprocess because forecast output is missing: %s",
+            source_store_label,
+            source_store_path,
+        )
+
+    # 3. Previous UrbanSim output/current data
+    usim_output_datastore_name = os.path.basename(source_store_path)
+    usim_output_store_path = source_store_path
     if not os.path.exists(usim_output_store_path):
         logger.warning(
-            "No UrbanSim output data found at {0}. Cannot create next iteration inputs.".format(
+            "No UrbanSim source data found at {0}. Cannot create next iteration inputs.".format(
                 usim_output_store_path
             )
         )
         return None, None
-    # --- Perform Transformation ---
+
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
     # load last iter UrbanSim input data
-    og_input_store = pd.HDFStore(archive_path)
+    og_input_store = pd.HDFStore(archive_path, mode="r")
 
-    # load last iter UrbanSim output data
-    usim_output_store, table_prefix_year = read_datastore(
-        settings, forecast_year, mutable_data_dir=workspace.get_usim_mutable_data_dir()
+    # load last iter UrbanSim output/current data
+    same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
+        archive_path
     )
+    usim_output_store = (
+        og_input_store
+        if same_source_as_archive
+        else pd.HDFStore(usim_output_store_path, mode="r")
+    )
+    table_prefix_year = str(source_prefix)
 
-    logger.info("Merging results back into UrbanSim format and storing as .h5!")
+    logger.info(
+        "Merging results back into UrbanSim format and storing as .h5 using %s (%s).",
+        usim_output_store_path,
+        source_store_label,
+    )
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
     new_input_store = pd.HDFStore(input_store_path)
@@ -563,7 +715,8 @@ def create_usim_input_data(
 
     og_input_store.close()
     new_input_store.close()
-    usim_output_store.close()
+    if not same_source_as_archive:
+        usim_output_store.close()
     logger.info("Closing all open h5 files")
 
     output_record = FileRecord(
