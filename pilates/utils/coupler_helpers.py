@@ -26,6 +26,8 @@ _ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
 _ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
 _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "urbansim_bootstrap_data_root",
+    "beam_mutable_data_dir",
+    "beam_region_input_dir",
     "zarr_skims",
     "zarr_skims_*",
     "asim_input_skims_zarr_archived",

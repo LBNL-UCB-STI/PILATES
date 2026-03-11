@@ -266,9 +266,10 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
         run=SimpleNamespace(
             bootstrap_cache_enabled=True,
             region="test",
-            models=SimpleNamespace(activity_demand="activitysim"),
+            models=SimpleNamespace(activity_demand="activitysim", traffic_assignment="beam"),
         ),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
             input_file_template="usim_{region_id}.h5",
@@ -289,6 +290,7 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
     assert ("bootstrap_usim_datastore_base_h5", os.path.join(workspace.get_usim_mutable_data_dir(), "usim_000.h5")) in enqueued
     assert ("activitysim_bootstrap_data_root", workspace.get_asim_mutable_data_dir()) in enqueued
     assert ("activitysim_bootstrap_configs_root", workspace.get_asim_mutable_configs_dir()) in enqueued
+    assert ("beam_mutable_data_dir", workspace.get_beam_mutable_data_dir()) in enqueued
     assert flushed == [(300, True)]
 
 
@@ -337,6 +339,7 @@ def _restart_settings():
         ),
         atlas=SimpleNamespace(scenario="baseline"),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
             input_file_template="usim_{region_id}.h5",
@@ -661,8 +664,53 @@ def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
     paths = {item["path"] for item in missing}
     assert "beam_mutable_data_dir" in keys
     assert "beam_region_input_dir" in keys
+    assert "beam_primary_config_file" in keys
     assert any(path.endswith("beam/input") for path in paths)
     assert any(path.endswith("beam/input/test") for path in paths)
+    assert any(path.endswith("beam/input/test/beam.conf") for path in paths)
+
+
+def test_repair_restart_beam_inputs_from_source_repopulates_missing_primary_config(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    settings = _restart_settings()
+    state = SimpleNamespace()
+
+    calls = []
+
+    class _BeamPreprocessor:
+        def copy_data_to_mutable_location(self, settings_arg, output_dir):
+            calls.append((settings_arg, output_dir))
+            target = (
+                Path(output_dir)
+                / settings_arg.run.region
+                / settings_arg.beam.config
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("beam", encoding="utf-8")
+
+    class _Factory:
+        def get_preprocessor(self, model_name, state_arg):
+            assert model_name == "beam"
+            assert state_arg is state
+            return _BeamPreprocessor()
+
+    monkeypatch.setattr(run_module, "ModelFactory", lambda: _Factory())
+
+    repaired = run_module._repair_restart_beam_inputs_from_source(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    assert repaired is True
+    assert calls == [(settings, workspace.get_beam_mutable_data_dir())]
+    assert (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    ).exists()
 
 
 def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_assignment(

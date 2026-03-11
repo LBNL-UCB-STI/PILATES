@@ -85,6 +85,17 @@ def archive_bootstrap_restart_artifacts(
                 path=asim_configs_dir,
             )
 
+    beam_model = getattr(model_cfg, "traffic_assignment", None) or getattr(
+        model_cfg, "travel", None
+    )
+    if beam_model == "beam":
+        beam_data_dir = workspace.get_beam_mutable_data_dir()
+        if os.path.isdir(beam_data_dir):
+            enqueue_archive_copy_fn(
+                key="beam_mutable_data_dir",
+                path=beam_data_dir,
+            )
+
     flush_archive_queue_fn(timeout=300, fail_on_timeout=True)
 
 

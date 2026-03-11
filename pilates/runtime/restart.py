@@ -195,6 +195,18 @@ def restart_required_local_artifacts(
                 ),
             }
         )
+        beam_cfg = getattr(settings, "beam", None)
+        beam_config_name = getattr(beam_cfg, "config", None)
+        if beam_config_name:
+            required.append(
+                {
+                    "key": "beam_primary_config_file",
+                    "path": os.path.join(beam_input_dir, region, beam_config_name),
+                    "reason": (
+                        "BEAM primary config required for resumed traffic assignment"
+                    ),
+                }
+            )
 
     requires_atlas_locals = (
         getattr(model_cfg, "vehicle_ownership", None) == "atlas"

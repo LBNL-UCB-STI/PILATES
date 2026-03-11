@@ -246,6 +246,17 @@ def _add_beam_candidates(
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
     )
+    beam_cfg = getattr(settings, "beam", None)
+    beam_config_name = getattr(beam_cfg, "config", None)
+    if beam_config_name:
+        _append_local_candidate(
+            artifacts,
+            key="beam_primary_config_file",
+            local_path=os.path.join(beam_root, region, beam_config_name),
+            reason=f"BEAM primary config file for region {region}",
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
 
 
 def _add_atlas_year_dir_candidates(

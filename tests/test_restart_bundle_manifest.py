@@ -72,6 +72,7 @@ def _settings_with_activitysim():
             end_year=2050,
         ),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
         urbansim=SimpleNamespace(
             input_file_template="usim_{region_id}.h5",
             region_mappings={"region_to_region_id": {"test": "000"}},
@@ -235,6 +236,7 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     assert "asim_sharrow_cache_dir" in keys
     assert "beam_mutable_data_dir" in keys
     assert "beam_region_input_dir" in keys
+    assert "beam_primary_config_file" in keys
     assert "activitysim_config_dir_configs" in keys
     assert "activitysim_config_dir_configs_extended" in keys
     assert "activitysim_config_dir_configs_mp" in keys
