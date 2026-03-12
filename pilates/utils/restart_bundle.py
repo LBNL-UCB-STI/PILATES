@@ -195,6 +195,37 @@ def _add_urbansim_candidates(
         )
 
     if land_use_model == "urbansim":
+        region = getattr(getattr(settings, "run", None), "region", None)
+        urbansim_cfg = getattr(settings, "urbansim", None)
+        region_id = None
+        if region and urbansim_cfg is not None:
+            region_id = (
+                getattr(urbansim_cfg, "region_mappings", {})
+                .get("region_to_region_id", {})
+                .get(region)
+            )
+        if region_id:
+            for key, rel_name, reason in (
+                ("omx_skims", f"skims_mpo_{region_id}.omx", "UrbanSim mutable OMX skims"),
+                ("hh_size", f"hsize_ct_{region_id}.csv", "UrbanSim household-size lookup"),
+                ("income_rates", f"income_rates_{region_id}.csv", "UrbanSim income-rate lookup"),
+                ("relmap", f"relmap_{region_id}.csv", "UrbanSim relationship-mapping lookup"),
+                ("schools", "schools_2010.csv", "UrbanSim schools lookup"),
+                (
+                    "school_districts",
+                    "blocks_school_districts_2010.csv",
+                    "UrbanSim school-district lookup",
+                ),
+            ):
+                _append_local_candidate(
+                    artifacts,
+                    key=key,
+                    local_path=os.path.join(usim_dir, rel_name),
+                    reason=reason,
+                    local_run_dir=local_run_dir,
+                    archive_run_dir=archive_run_dir,
+                )
+
         current_year = getattr(state, "current_year", None)
         try:
             current_fname = get_usim_datastore_fname(

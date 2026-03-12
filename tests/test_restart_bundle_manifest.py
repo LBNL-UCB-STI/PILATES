@@ -95,6 +95,26 @@ def _settings_without_urbansim_land_use():
     )
 
 
+def _settings_with_urbansim_land_use():
+    return SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                land_use="urbansim",
+                vehicle_ownership="none",
+                activity_demand=None,
+            ),
+            region="test",
+            start_year=2017,
+            end_year=2050,
+        ),
+        urbansim=SimpleNamespace(
+            input_file_template="usim_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"test": "000"}},
+        ),
+        atlas=SimpleNamespace(scenario="baseline"),
+    )
+
+
 def test_restart_bundle_includes_atlas_static_candidates_for_atlas_vehicle_ownership(
     tmp_path,
 ):
@@ -241,6 +261,48 @@ def test_restart_bundle_includes_activitysim_zarr_candidate(tmp_path):
     assert "activitysim_config_dir_configs_extended" in keys
     assert "activitysim_config_dir_configs_mp" in keys
     assert "activitysim_config_dir_configs_sh_compile" in keys
+
+
+def test_restart_bundle_includes_urbansim_supporting_inputs(tmp_path):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    usim_base_dir = local_run_dir / "urbansim" / "data"
+    usim_base_dir.mkdir(parents=True, exist_ok=True)
+    (archive_run_dir / "run_state.yaml").parent.mkdir(parents=True, exist_ok=True)
+    (archive_run_dir / "run_state.yaml").write_text("year: 2023\n", encoding="utf-8")
+
+    for relpath in (
+        "skims_mpo_000.omx",
+        "hsize_ct_000.csv",
+        "income_rates_000.csv",
+        "relmap_000.csv",
+        "schools_2010.csv",
+        "blocks_school_districts_2010.csv",
+        "usim_000.h5",
+    ):
+        local_path = usim_base_dir / relpath
+        local_path.write_text("x", encoding="utf-8")
+        archive_path = archive_run_dir / "urbansim" / "data" / relpath
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.write_text("x", encoding="utf-8")
+
+    manifest = build_restart_bundle_manifest(
+        archive_run_dir=str(archive_run_dir),
+        local_run_dir=str(local_run_dir),
+        settings=_settings_with_urbansim_land_use(),
+        workspace=_WorkspaceStub(None, usim_base_dir=str(usim_base_dir)),
+        state=SimpleNamespace(current_year=2023),
+        local_consist_db_path=None,
+    )
+
+    keys = {item["key"] for item in manifest["artifacts"]}
+    assert "usim_datastore_base_h5" in keys
+    assert "omx_skims" in keys
+    assert "hh_size" in keys
+    assert "income_rates" in keys
+    assert "relmap" in keys
+    assert "schools" in keys
+    assert "school_districts" in keys
 
 
 def test_restart_bundle_includes_activitysim_iteration_outputs_for_traffic_assignment(

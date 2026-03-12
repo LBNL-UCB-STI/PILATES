@@ -47,6 +47,115 @@ _OPTIONAL_URBANSIM_INPUT_FILENAMES = (
 )
 
 
+def _urbansim_source_data_dir(settings: PilatesConfig) -> Path:
+    project_root = find_project_root(start_path=os.path.dirname(__file__))
+    if not project_root:
+        project_root = os.path.realpath(os.getcwd())
+        logger.warning(
+            "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
+            "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
+            project_root,
+        )
+    data_dir = (
+        settings.urbansim.local_data_input_folder
+        if os.path.isabs(settings.urbansim.local_data_input_folder)
+        else os.path.join(project_root, settings.urbansim.local_data_input_folder)
+    )
+    return Path(data_dir)
+
+
+def _archive_fallback_path(
+    *,
+    state: "WorkflowState",
+    workspace: "Workspace",
+    local_path: Path,
+) -> Optional[Path]:
+    run_info_path = getattr(state, "run_info_path", None)
+    if not run_info_path:
+        return None
+    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
+    local_root = Path(workspace.full_path).expanduser().resolve()
+    try:
+        rel = local_path.expanduser().resolve().relative_to(local_root)
+    except Exception:
+        return None
+    return archive_run_dir / rel
+
+
+def _restore_missing_mutable_urbansim_supporting_inputs(
+    settings: PilatesConfig,
+    state: "WorkflowState",
+    workspace: "Workspace",
+) -> Dict[str, Path]:
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+    source_dir = _urbansim_source_data_dir(settings)
+    beam_inputs_root = (
+        Path(settings.beam.local_input_folder)
+        if os.path.isabs(settings.beam.local_input_folder)
+        else Path(find_project_root(start_path=os.path.dirname(__file__)) or os.path.realpath(os.getcwd()))
+        / settings.beam.local_input_folder
+    )
+
+    required_files: Dict[str, Tuple[Path, Path]] = {
+        "omx_skims": (
+            mutable_dir / f"skims_mpo_{region_id}.omx",
+            beam_inputs_root / region / settings.shared.skims.fname,
+        ),
+        "hh_size": (
+            mutable_dir / f"hsize_ct_{region_id}.csv",
+            source_dir / f"hsize_ct_{region_id}.csv",
+        ),
+        "income_rates": (
+            mutable_dir / f"income_rates_{region_id}.csv",
+            source_dir / f"income_rates_{region_id}.csv",
+        ),
+        "relmap": (
+            mutable_dir / f"relmap_{region_id}.csv",
+            source_dir / f"relmap_{region_id}.csv",
+        ),
+        "schools": (
+            mutable_dir / "schools_2010.csv",
+            source_dir / "schools_2010.csv",
+        ),
+        "school_districts": (
+            mutable_dir / "blocks_school_districts_2010.csv",
+            source_dir / "blocks_school_districts_2010.csv",
+        ),
+    }
+
+    restored: Dict[str, Path] = {}
+    for key, (dest_path, source_path) in required_files.items():
+        if dest_path.exists():
+            continue
+
+        archive_path = _archive_fallback_path(
+            state=state,
+            workspace=workspace,
+            local_path=dest_path,
+        )
+        candidate = None
+        if archive_path is not None and archive_path.exists():
+            candidate = archive_path
+        elif source_path.exists():
+            candidate = source_path
+
+        if candidate is None:
+            continue
+
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(candidate, dest_path)
+        restored[key] = dest_path
+        logger.info(
+            "[UrbansimPreprocessor] Restored missing mutable input %s from %s",
+            dest_path,
+            candidate,
+        )
+
+    return restored
+
+
 def _mutable_urbansim_input_paths(
     settings: PilatesConfig,
     workspace: "Workspace",
@@ -280,19 +389,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             model_data_fname = base_template.format(region_id=region_id)
         else:
             model_data_fname = ""
-        project_root = find_project_root(start_path=os.path.dirname(__file__))
-        if not project_root:
-            project_root = os.path.realpath(os.getcwd())
-            logger.warning(
-                "[NOT IDEAL] Could not locate PILATES project root via markers; falling back to cwd='%s'. "
-                "This is error-prone in production and may affect inputs:// vs workspace:// URI labeling.",
-                project_root,
-            )
-        data_dir = (
-            settings.urbansim.local_data_input_folder
-            if os.path.isabs(settings.urbansim.local_data_input_folder)
-            else os.path.join(project_root, settings.urbansim.local_data_input_folder)
-        )
+        data_dir = str(_urbansim_source_data_dir(settings))
 
         # Validate we have a filename
         if not model_data_fname:
@@ -424,6 +521,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
         # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
         os.makedirs(usim_mutable_data_dir, exist_ok=True)
+        _restore_missing_mutable_urbansim_supporting_inputs(
+            settings,
+            self.state,
+            workspace,
+        )
 
         updated_skims_path: Optional[Path] = None
 

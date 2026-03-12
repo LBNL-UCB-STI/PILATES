@@ -1413,13 +1413,16 @@ def run_supply_demand_stage(
     """
     total_iters = settings.run.supply_demand_iters
     if settings.run.models.activity_demand is None and total_iters > 1:
+        resumed_iteration = int(getattr(state, "iteration", 0) or 0)
+        clamped_total_iters = max(1, resumed_iteration + 1)
         logger.warning(
             "BEAM-only supply_demand_iters=%d. Clamping outer supply-demand "
-            "iterations to 1 because BEAM already manages its own internal "
+            "iterations to %d because BEAM already manages its own internal "
             "iterations.",
             total_iters,
+            clamped_total_iters,
         )
-        total_iters = 1
+        total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, str]] = None
 
     for i in range(state.iteration, total_iters):
