@@ -64,6 +64,18 @@ def _urbansim_source_data_dir(settings: PilatesConfig) -> Path:
     return Path(data_dir)
 
 
+def _beam_input_root(settings: PilatesConfig) -> Path:
+    project_root = find_project_root(start_path=os.path.dirname(__file__))
+    if not project_root:
+        project_root = os.path.realpath(os.getcwd())
+    beam_input_dir = (
+        settings.beam.local_input_folder
+        if os.path.isabs(settings.beam.local_input_folder)
+        else os.path.join(project_root, settings.beam.local_input_folder)
+    )
+    return Path(beam_input_dir)
+
+
 def _archive_fallback_path(
     *,
     state: "WorkflowState",
@@ -91,12 +103,7 @@ def _restore_missing_mutable_urbansim_supporting_inputs(
     region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
     mutable_dir = Path(workspace.get_usim_mutable_data_dir())
     source_dir = _urbansim_source_data_dir(settings)
-    beam_inputs_root = (
-        Path(settings.beam.local_input_folder)
-        if os.path.isabs(settings.beam.local_input_folder)
-        else Path(find_project_root(start_path=os.path.dirname(__file__)) or os.path.realpath(os.getcwd()))
-        / settings.beam.local_input_folder
-    )
+    beam_inputs_root = _beam_input_root(settings)
 
     required_files: Dict[str, Tuple[Path, Path]] = {
         "omx_skims": (
@@ -433,11 +440,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             )
         ]
 
-        beam_inputs_root = (
-            settings.beam.local_input_folder
-            if os.path.isabs(settings.beam.local_input_folder)
-            else os.path.join(project_root, settings.beam.local_input_folder)
-        )
+        beam_inputs_root = str(_beam_input_root(settings))
         skims_src = os.path.abspath(
             os.path.join(
                 beam_inputs_root, settings.run.region, settings.shared.skims.fname

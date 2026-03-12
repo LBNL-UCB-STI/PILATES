@@ -25,6 +25,8 @@ REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hp
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
+export modules_shell="${modules_shell:-bash}"
+export MODULES_SHELL="${MODULES_SHELL:-bash}"
 
 safe_module_load() {
     set +u
