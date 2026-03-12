@@ -1041,6 +1041,62 @@ def test_run_workflow_cache_hit_beam_postprocess_replays_promoted_outputs(tmp_pa
     assert coupler.get(BEAM_PLANS_OUT) is not None
 
 
+def test_run_workflow_cache_hit_beam_postprocess_allows_beam_only_outputs(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    linkstats = Path(workspace.get_beam_output_dir()) / "linkstats.csv.gz"
+    plans = Path(workspace.get_beam_output_dir()) / "plans.csv.gz"
+    split_event = Path(workspace.get_beam_output_dir()) / "events.parquet"
+    split_links = Path(workspace.get_beam_output_dir()) / "links.parquet"
+    for path in (linkstats, plans, split_event, split_links):
+        _write_file(path)
+
+    holder.beam_run = BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()),
+        raw_outputs={
+            LINKSTATS: linkstats,
+            BEAM_PLANS_OUT: plans,
+        },
+    )
+    step_func = make_beam_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    class CacheHitScenario:
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs={
+                    "events_parquet_2018_0_type_PathTraversal": str(split_event),
+                    "path_traversal_links_2018_0": str(split_links),
+                },
+            )
+
+    run_workflow(
+        stage_name="beam_postprocess",
+        steps=[StepRef(name="beam_postprocess", step_func=step_func)],
+        scenario=CacheHitScenario(),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                models=SimpleNamespace(activity_demand=None, land_use=None)
+            ),
+            write_skims_to_omx=False,
+        ),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.beam_postprocess is not None
+    assert holder.beam_postprocess.zarr_skims is None
+    assert coupler.get(ZARR_SKIMS) is None
+    assert coupler.get(LINKSTATS) is not None
+    assert coupler.get(BEAM_PLANS_OUT) is not None
+
+
 def test_run_workflow_cache_hit_prefers_beam_step_local_recoverer(tmp_path, monkeypatch):
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()

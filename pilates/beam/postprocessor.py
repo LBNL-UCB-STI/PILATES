@@ -39,6 +39,12 @@ TNC_CONSOLIDATION_MAP = {
 }
 
 
+def _activitysim_skims_target_enabled(settings: PilatesConfig) -> bool:
+    run_cfg = getattr(settings, "run", None)
+    model_cfg = getattr(run_cfg, "models", None)
+    return getattr(model_cfg, "activity_demand", None) == "activitysim"
+
+
 def find_latest_beam_iteration(beam_output_dir):
     """
     Return (path_to_latest_iteration_dir, latest_iteration_number).
@@ -3628,7 +3634,7 @@ class BeamPostprocessor(GenericPostprocessor):
             )
             return {"final_skims_omx": final_omx_path}
 
-        if getattr(settings, "activitysim", None) is not None:
+        if _activitysim_skims_target_enabled(settings):
             zarr_path = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
@@ -3712,7 +3718,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 )
 
         all_skims_path = None
-        if getattr(settings, "activitysim", None) is not None:
+        if _activitysim_skims_target_enabled(settings):
             all_skims_path = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )

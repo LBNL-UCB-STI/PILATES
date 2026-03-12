@@ -238,6 +238,9 @@ def restart_stage_env(tmp_path, monkeypatch):
     beam_persons_path = _write_file(beam_dir / "persons.csv")
     beam_linkstats_path = _write_file(beam_dir / "linkstats.csv.gz")
     beam_full_skims_path = _write_file(beam_output_dir / "skimsODFull.csv.gz")
+    beam_final_omx_path = _write_file(
+        beam_dir / settings.run.region / settings.shared.skims.fname
+    )
     _write_file(beam_dir / settings.run.region / settings.beam.config, "beam-config")
 
     def record_builder(model_name, phase):
@@ -316,7 +319,10 @@ def restart_stage_env(tmp_path, monkeypatch):
                     },
                 )
             if model_name == "beam":
-                return BeamPostprocessOutputs(zarr_skims=zarr_path)
+                return BeamPostprocessOutputs(
+                    zarr_skims=zarr_path,
+                    final_skims_omx=beam_final_omx_path,
+                )
         return RecordStore()
 
     monkeypatch.setattr(

@@ -6,6 +6,12 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.workflows.outputs_base import (
+    OutputValidator,
+    StepOutputsBase,
+    ValidationContext,
+    ValidationResult,
+)
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
@@ -16,10 +22,63 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     ZARR_SKIMS,
 )
-from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
+
+
+def _resolve_model_name(settings: Any, model_name: str) -> Optional[str]:
+    run_cfg = getattr(settings, "run", None)
+    model_cfg = getattr(run_cfg, "models", None)
+    return getattr(model_cfg, model_name, None)
+
+
+class _BeamPostprocessExpectedOutputsValidator:
+    """
+    Require BEAM postprocess skims only when downstream consumers need them.
+    """
+
+    name = "beam_postprocess_expected_outputs"
+    level = "error"
+
+    def validate(
+        self,
+        outputs: "BeamPostprocessOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        settings = context.settings
+        if settings is None:
+            return []
+
+        activity_demand_model = _resolve_model_name(settings, "activity_demand")
+        land_use_model = _resolve_model_name(settings, "land_use")
+        write_omx = bool(getattr(settings, "write_skims_to_omx", False))
+
+        results: list[ValidationResult] = []
+        if activity_demand_model == "activitysim" and outputs.zarr_skims is None:
+            results.append(
+                ValidationResult(
+                    message=(
+                        "zarr_skims is required when ActivitySim is enabled because "
+                        "BEAM postprocess must merge into the shared skims store."
+                    ),
+                    metadata={"activity_demand_model": activity_demand_model},
+                )
+            )
+        if (write_omx or land_use_model == "urbansim") and outputs.final_skims_omx is None:
+            results.append(
+                ValidationResult(
+                    message=(
+                        "final_skims_omx is required when OMX export is enabled or "
+                        "UrbanSim is active."
+                    ),
+                    metadata={
+                        "write_skims_to_omx": write_omx,
+                        "land_use_model": land_use_model,
+                    },
+                )
+            )
+        return results
 
 
 @dataclass
@@ -313,9 +372,12 @@ class BeamPostprocessOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
     declared_outputs: ClassVar[Tuple[str, ...]] = (ZARR_SKIMS,)
-    required_path_fields: ClassVar[Tuple[str, ...]] = ("zarr_skims",)
-    optional_path_fields: ClassVar[Tuple[str, ...]] = ("final_skims_omx",)
+    required_path_fields: ClassVar[Tuple[str, ...]] = ()
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("zarr_skims", "final_skims_omx")
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("split_events", "split_event_links")
+    validators: ClassVar[Tuple[OutputValidator, ...]] = (
+        _BeamPostprocessExpectedOutputsValidator(),
+    )
 
     zarr_skims: Optional[Path] = None
     final_skims_omx: Optional[Path] = None

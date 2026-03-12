@@ -1412,6 +1412,13 @@ def run_supply_demand_stage(
       state to the next iteration.
     """
     total_iters = settings.run.supply_demand_iters
+    if settings.run.models.activity_demand is None and total_iters > 1:
+        logger.warning(
+            "BEAM-only supply_demand_iters=%d. PILATES will rerun BEAM across "
+            "outer iterations even though BEAM already manages its own internal "
+            "iterations; consider setting supply_demand_iters=1 for this mode.",
+            total_iters,
+        )
     previous_beam_outputs: Optional[Dict[str, str]] = None
 
     for i in range(state.iteration, total_iters):

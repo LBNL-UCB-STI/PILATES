@@ -216,6 +216,9 @@ def stage_env(tmp_path, monkeypatch):
     ):
         path.mkdir(parents=True, exist_ok=True)
 
+    beam_config_path = beam_dir / settings.run.region / settings.beam.config
+    _write_file(beam_config_path)
+
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
     ]
@@ -249,6 +252,7 @@ def stage_env(tmp_path, monkeypatch):
     beam_persons_path = beam_dir / "persons.csv"
     beam_linkstats_path = beam_dir / "linkstats.csv.gz"
     beam_full_skims_path = beam_out_dir / "skimsODFull.csv.gz"
+    beam_final_omx_path = beam_dir / settings.run.region / settings.shared.skims.fname
     atlas_householdv_path = atlas_output_dir / f"householdv_{state.forecast_year}.csv"
     atlas_vehicles_path = atlas_output_dir / f"vehicles_{state.forecast_year}.csv"
     atlas_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
@@ -257,6 +261,7 @@ def stage_env(tmp_path, monkeypatch):
     _write_file(beam_persons_path)
     _write_file(beam_linkstats_path)
     _write_file(beam_full_skims_path)
+    _write_file(beam_final_omx_path)
     _write_file(atlas_householdv_path)
     _write_file(atlas_vehicles_path)
     _write_file(atlas_vehicles2_path)
@@ -360,7 +365,10 @@ def stage_env(tmp_path, monkeypatch):
                     },
                 )
             if model_name == "beam":
-                return BeamPostprocessOutputs(zarr_skims=zarr_path)
+                return BeamPostprocessOutputs(
+                    zarr_skims=zarr_path,
+                    final_skims_omx=beam_final_omx_path,
+                )
             return RecordStore()
         return RecordStore()
 

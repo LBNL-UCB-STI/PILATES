@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from pilates.beam.outputs import (
 )
 from pilates.beam.runner import BeamRunner
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.outputs_base import ValidationContext
 
 
 class _Workspace:
@@ -140,3 +142,56 @@ def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
         mapping["events_parquet_2030_2_type_PathTraversal"] == str(split_event)
     )
     assert mapping["path_traversal_links_2030_2"] == str(split_links)
+
+
+def test_beam_postprocess_outputs_validate_allows_beam_only_without_skims(
+    tmp_path: Path,
+) -> None:
+    split_event = tmp_path / "events.parquet"
+    split_links = tmp_path / "links.parquet"
+    _touch(split_event)
+    _touch(split_links)
+
+    outputs = BeamPostprocessOutputs(
+        split_events={"events_parquet_2030_2_type_PathTraversal": split_event},
+        split_event_links={"path_traversal_links_2030_2": split_links},
+    )
+
+    outputs.validate(
+        context=ValidationContext(
+            settings=SimpleNamespace(
+                run=SimpleNamespace(
+                    models=SimpleNamespace(activity_demand=None, land_use=None)
+                ),
+                write_skims_to_omx=False,
+            ),
+            step_name="beam_postprocess",
+        )
+    )
+
+
+def test_beam_postprocess_outputs_validate_requires_zarr_when_activitysim_enabled(
+    tmp_path: Path,
+) -> None:
+    split_event = tmp_path / "events.parquet"
+    _touch(split_event)
+
+    outputs = BeamPostprocessOutputs(
+        split_events={"events_parquet_2030_2_type_PathTraversal": split_event},
+    )
+
+    with pytest.raises(AssertionError, match="zarr_skims is required"):
+        outputs.validate(
+            context=ValidationContext(
+                settings=SimpleNamespace(
+                    run=SimpleNamespace(
+                        models=SimpleNamespace(
+                            activity_demand="activitysim",
+                            land_use=None,
+                        )
+                    ),
+                    write_skims_to_omx=False,
+                ),
+                step_name="beam_postprocess",
+            )
+        )
