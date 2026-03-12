@@ -25,33 +25,6 @@ REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hp
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
-export modules_shell="${modules_shell:-bash}"
-export MODULES_SHELL="${MODULES_SHELL:-bash}"
-
-safe_module_load() {
-    set +u
-    module load "$@"
-    local status=$?
-    set -u
-    return "$status"
-}
-
-ensure_runtime_module() {
-    local module_name="$1"
-    local probe_cmd="${2:-}"
-
-    if safe_module_load "$module_name"; then
-        return 0
-    fi
-
-    if [ -n "$probe_cmd" ] && command -v "$probe_cmd" >/dev/null 2>&1; then
-        echo "WARNING: Module '$module_name' not available; continuing with existing '$probe_cmd' on PATH."
-        return 0
-    fi
-
-    echo "ERROR: Module '$module_name' is unavailable and no fallback executable was found${probe_cmd:+ ('$probe_cmd')}."
-    return 1
-}
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
@@ -138,9 +111,11 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 echo "Setting up HPC runtime environment..."
-ensure_runtime_module gcc/11.4.0 gcc
-ensure_runtime_module proj/9.2.1 projinfo
-ensure_runtime_module python/3.11.6 python3
+set +u
+module load gcc/11.4.0
+module load proj/9.2.1
+module load python/3.11.6
+set -u
 
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:${LD_LIBRARY_PATH:-}
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
