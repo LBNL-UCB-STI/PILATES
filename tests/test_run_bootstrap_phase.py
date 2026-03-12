@@ -1229,6 +1229,100 @@ def test_main_forces_bootstrap_when_restart_artifacts_remain_missing(
     assert len(bootstrap_calls) == 1
 
 
+def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
+    tmp_path, monkeypatch
+):
+    class StopAfterBootstrap(RuntimeError):
+        pass
+
+    class StateStub:
+        def __init__(self):
+            self.run_info_path = None
+            self.data_initialized = False
+            self.file_loc = None
+            self.mirror_file_loc = None
+
+        def set_run_info_path(self, path: str) -> None:
+            self.run_info_path = path
+
+        def set_data_initialized(self, initialized: bool) -> None:
+            self.data_initialized = initialized
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="tracker-topology-test",
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = StateStub()
+    tracker_kwargs = {}
+
+    def _capture_create_tracker(**kwargs):
+        tracker_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", _capture_create_tracker)
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(
+        run_module,
+        "build_restart_bundle_manifest",
+        lambda **_kwargs: {"artifacts": []},
+    )
+    monkeypatch.setattr(
+        run_module,
+        "write_restart_bundle_manifest",
+        lambda **_kwargs: str(tmp_path / "archive-root" / "manifest.yaml"),
+    )
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+
+    def _stop_after_bootstrap(**_kwargs):
+        raise StopAfterBootstrap("stop after tracker init")
+
+    monkeypatch.setattr(run_module, "run_bootstrap_phase", _stop_after_bootstrap)
+
+    with pytest.raises(StopAfterBootstrap, match="stop after tracker init"):
+        run_module.main()
+
+    archive_run_dir = Path(tracker_kwargs["run_dir"])
+    workspace_mount = Path(tracker_kwargs["mounts"]["workspace"])
+    assert archive_run_dir.parent == archive_root
+    assert archive_run_dir.name.startswith(settings.run.output_run_name)
+    assert workspace_mount.parent == local_root
+    assert workspace_mount.name == archive_run_dir.name
+    assert tracker_kwargs["allow_external_paths"] is True
+
+
 def test_resolve_consist_db_paths_uses_local_run_dir_by_default():
     settings = SimpleNamespace(
         run=SimpleNamespace(),

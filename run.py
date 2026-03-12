@@ -821,6 +821,9 @@ def main():
         run_dir=archive_run_dir,
         db_path=local_consist_db_path,
         cache_epoch=cache_epoch,
+        # PILATES roots the tracker at the archive run dir but rematerializes
+        # restart/bootstrap outputs into the mounted local workspace root.
+        allow_external_paths=True,
         mounts={
             "inputs": project_root_abs,  # Immutable Source
             "workspace": local_run_dir,  # Mutable Destination
