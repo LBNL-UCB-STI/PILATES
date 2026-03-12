@@ -36,6 +36,23 @@ safe_module_load() {
     return "$status"
 }
 
+ensure_runtime_module() {
+    local module_name="$1"
+    local probe_cmd="${2:-}"
+
+    if safe_module_load "$module_name"; then
+        return 0
+    fi
+
+    if [ -n "$probe_cmd" ] && command -v "$probe_cmd" >/dev/null 2>&1; then
+        echo "WARNING: Module '$module_name' not available; continuing with existing '$probe_cmd' on PATH."
+        return 0
+    fi
+
+    echo "ERROR: Module '$module_name' is unavailable and no fallback executable was found${probe_cmd:+ ('$probe_cmd')}."
+    return 1
+}
+
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
     free -h
@@ -121,9 +138,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 echo "Setting up HPC runtime environment..."
-safe_module_load gcc/11.4.0
-safe_module_load proj/9.2.1
-safe_module_load python/3.11.6
+ensure_runtime_module gcc/11.4.0 gcc
+ensure_runtime_module proj/9.2.1 projinfo
+ensure_runtime_module python/3.11.6 python3
 
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:${LD_LIBRARY_PATH:-}
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
