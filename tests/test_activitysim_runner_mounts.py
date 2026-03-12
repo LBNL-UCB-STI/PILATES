@@ -1,7 +1,11 @@
 import os
 from types import SimpleNamespace
 
-from pilates.activitysim.runner import ActivitysimCompileRunner, ActivitysimRunner
+from pilates.activitysim.runner import (
+    ActivitysimCompileRunner,
+    ActivitysimRunner,
+    _asim_container_environment,
+)
 
 
 def _settings() -> SimpleNamespace:
@@ -60,3 +64,11 @@ def test_activitysim_run_args_include_configs_mp():
     mp_idx = args.index("/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp")
 
     assert main_idx < mp_idx
+
+
+def test_activitysim_container_environment_blocks_user_site():
+    env = _asim_container_environment()
+
+    assert env["NUMBA_CACHE_DIR"] == "/app/numba_cache/numba"
+    assert env["XDG_CACHE_HOME"] == "/app/numba_cache"
+    assert env["PYTHONNOUSERSITE"] == "1"

@@ -27,6 +27,21 @@ from pilates.workflows.artifact_keys import (
 logger = logging.getLogger(__name__)
 
 
+def _asim_container_environment() -> Dict[str, str]:
+    """
+    Environment variables passed into ActivitySim containers.
+
+    ``PYTHONNOUSERSITE=1`` prevents host user-site packages from leaking into
+    the container Python environment, which can otherwise mix incompatible
+    xarray/zarr versions with the image's pinned stack.
+    """
+    return {
+        "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
+        "XDG_CACHE_HOME": "/app/numba_cache",
+        "PYTHONNOUSERSITE": "1",
+    }
+
+
 def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
     """
     Return whether ActivitySim should persist sharrow/numba compile caches.
@@ -230,10 +245,7 @@ class ActivitysimCompileRunner(GenericRunner):
             model_name="activitysim_compile",
             working_dir=asim_workdir,
             args=additional_args,
-            environment={
-                "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
-                "XDG_CACHE_HOME": "/app/numba_cache",
-            },
+            environment=_asim_container_environment(),
             output_paths=[all_skims_path],
             lineage_mode="none",
         )
@@ -625,10 +637,7 @@ class ActivitysimRunner(GenericRunner):
             model_name="activitysim",
             working_dir=asim_workdir,
             args=additional_args,
-            environment={
-                "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
-                "XDG_CACHE_HOME": "/app/numba_cache",
-            },
+            environment=_asim_container_environment(),
             output_paths=[workspace.get_asim_output_dir()],
             lineage_mode="none",
         )
