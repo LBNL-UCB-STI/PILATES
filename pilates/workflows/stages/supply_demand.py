@@ -68,6 +68,13 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 
+_TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
+    "beam_plans_asim_out",
+    "households_asim_out",
+    "persons_asim_out",
+)
+
+
 @dataclass
 class ActivityDemandPhaseInputs:
     """
@@ -851,6 +858,7 @@ def _restore_activity_demand_outputs_for_resume(
     coupler: CouplerProtocol,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
+    state: WorkflowState,
 ) -> Optional[Dict[str, str]]:
     """
     Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
@@ -861,10 +869,28 @@ def _restore_activity_demand_outputs_for_resume(
     the narrow BEAM-facing subset back into a plain mapping so BEAM preprocess
     sees the same inputs it would have received after a live ActivitySim run.
     """
+
+    def _require_complete_restore(
+        restored_outputs: Dict[str, str], source: str
+    ) -> Optional[Dict[str, str]]:
+        if not restored_outputs:
+            return None
+        missing_keys = sorted(
+            key
+            for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS
+            if key not in restored_outputs
+        )
+        if missing_keys:
+            raise RuntimeError(
+                "Restart into traffic_assignment found incomplete ActivitySim "
+                f"outputs from {source}; missing {missing_keys}"
+            )
+        return restored_outputs
+
     postprocess_outputs = outputs_holder.activitysim_postprocess
     if postprocess_outputs is not None:
         restored_outputs = step_output_mapping(postprocess_outputs)
-        return restored_outputs or None
+        return _require_complete_restore(restored_outputs, "step outputs")
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
@@ -892,7 +918,34 @@ def _restore_activity_demand_outputs_for_resume(
                 key: Path(path) for key, path in restored_outputs.items()
             },
         )
-    return restored_outputs or None
+        return _require_complete_restore(restored_outputs, "coupler artifacts")
+
+    iter_dir = Path(workspace.get_asim_output_dir()) / (
+        f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    filesystem_candidates = {
+        "beam_plans_asim_out": iter_dir / "beam_plans.parquet",
+        "households_asim_out": iter_dir / "households.parquet",
+        "persons_asim_out": iter_dir / "persons.parquet",
+    }
+    restored_outputs = {
+        key: str(path)
+        for key, path in filesystem_candidates.items()
+        if path.exists()
+    }
+    restored_outputs = _require_complete_restore(
+        restored_outputs,
+        "filesystem iteration outputs",
+    )
+    if restored_outputs:
+        outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+            usim_datastore_h5=None,
+            asim_output_dir=iter_dir,
+            processed_outputs={
+                key: Path(path) for key, path in restored_outputs.items()
+            },
+        )
+    return restored_outputs
 
 
 def _derive_beam_run_input_keys(
@@ -1404,6 +1457,7 @@ def run_supply_demand_stage(
                 coupler=coupler,
                 workspace=workspace,
                 outputs_holder=outputs_holder,
+                state=state,
             )
 
         # C2. TRAFFIC ASSIGNMENT

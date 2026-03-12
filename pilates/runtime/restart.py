@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from pilates.utils.io import get_traffic_assignment_model
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +16,41 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _activitysim_iteration_output_requirements(
+    *, asim_output_dir: str, year: Any, iteration: Any
+) -> List[Dict[str, str]]:
+    iter_dir = os.path.join(
+        asim_output_dir,
+        f"year-{year}-iteration-{iteration}",
+    )
+    return [
+        {
+            "key": "activitysim_iteration_beam_plans_parquet",
+            "path": os.path.join(iter_dir, "beam_plans.parquet"),
+            "reason": (
+                "ActivitySim beam plans required to resume BEAM from "
+                "traffic assignment"
+            ),
+        },
+        {
+            "key": "activitysim_iteration_households_parquet",
+            "path": os.path.join(iter_dir, "households.parquet"),
+            "reason": (
+                "ActivitySim households required to resume BEAM from "
+                "traffic assignment"
+            ),
+        },
+        {
+            "key": "activitysim_iteration_persons_parquet",
+            "path": os.path.join(iter_dir, "persons.parquet"),
+            "reason": (
+                "ActivitySim persons required to resume BEAM from "
+                "traffic assignment"
+            ),
+        },
+    ]
 
 
 def restart_required_local_artifacts(
@@ -146,6 +183,60 @@ def restart_required_local_artifacts(
                 "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
             }
         )
+        current_sub_stage = getattr(state, "current_sub_stage", None)
+        if current_stage == workflow_stage.supply_demand_loop and (
+            current_sub_stage == workflow_stage.traffic_assignment
+        ):
+            required.extend(
+                _activitysim_iteration_output_requirements(
+                    asim_output_dir=get_asim_output_dir(),
+                    year=getattr(state, "current_year", "unknown"),
+                    iteration=getattr(state, "current_inner_iter", 0),
+                )
+            )
+
+    requires_beam_locals = (
+        get_traffic_assignment_model(settings) == "beam"
+        and current_stage
+        in {
+            workflow_stage.supply_demand_loop,
+            workflow_stage.traffic_assignment,
+        }
+    )
+    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+    if requires_beam_locals and callable(get_beam_input_dir) and region:
+        beam_input_dir = get_beam_input_dir()
+        required.append(
+            {
+                "key": "beam_mutable_data_dir",
+                "path": beam_input_dir,
+                "reason": (
+                    "BEAM mutable data root required for restart metadata and "
+                    "resumed traffic assignment"
+                ),
+            }
+        )
+        required.append(
+            {
+                "key": "beam_region_input_dir",
+                "path": os.path.join(beam_input_dir, region),
+                "reason": (
+                    "BEAM mutable input tree required for resumed traffic assignment"
+                ),
+            }
+        )
+        beam_cfg = getattr(settings, "beam", None)
+        beam_config_name = getattr(beam_cfg, "config", None)
+        if beam_config_name:
+            required.append(
+                {
+                    "key": "beam_primary_config_file",
+                    "path": os.path.join(beam_input_dir, region, beam_config_name),
+                    "reason": (
+                        "BEAM primary config required for resumed traffic assignment"
+                    ),
+                }
+            )
 
     requires_atlas_locals = (
         getattr(model_cfg, "vehicle_ownership", None) == "atlas"

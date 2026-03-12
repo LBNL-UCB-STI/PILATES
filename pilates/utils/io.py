@@ -18,6 +18,28 @@ from pilates.config.models import load_config, PilatesConfig
 logger = logging.getLogger(__name__)
 
 
+def get_traffic_assignment_model(settings: Any) -> Optional[str]:
+    """
+    Resolve the configured traffic-assignment model across legacy/new schemas.
+    """
+    def _resolve_path(obj: Any, path: str) -> Optional[str]:
+        current = obj
+        for part in path.split("."):
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    return (
+        _resolve_path(settings, "run.models.traffic_assignment")
+        or _resolve_path(settings, "run.models.travel")
+        or getattr(settings, "travel_model", None)
+    )
+
+
 def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
     """
     Compute which models are enabled based on the provided settings configuration.
@@ -57,9 +79,7 @@ def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
         "run.models.activity_demand",
         default=get_setting(settings, "activity_demand_model"),
     )
-    travel_model = get_setting(
-        settings, "run.models.travel", default=get_setting(settings, "travel_model")
-    )
+    travel_model = get_traffic_assignment_model(settings)
 
     # Retrieve flags related to skim processing and replanning iterations.
     warm_start_skims = get_setting(settings, "warm_start_skims", False)

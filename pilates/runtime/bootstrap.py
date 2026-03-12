@@ -12,6 +12,7 @@ from pilates.generic.initialization import (
 )
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,14 @@ def archive_bootstrap_restart_artifacts(
             enqueue_archive_copy_fn(
                 key="activitysim_bootstrap_configs_root",
                 path=asim_configs_dir,
+            )
+
+    if get_traffic_assignment_model(settings) == "beam":
+        beam_data_dir = workspace.get_beam_mutable_data_dir()
+        if os.path.isdir(beam_data_dir):
+            enqueue_archive_copy_fn(
+                key="beam_mutable_data_dir",
+                path=beam_data_dir,
             )
 
     flush_archive_queue_fn(timeout=300, fail_on_timeout=True)
@@ -217,7 +226,12 @@ def assert_bootstrap_output_invariant(
     bootstrap_result: Optional[Dict[str, Any]],
 ) -> None:
     """
-    Ensure bootstrap produced a non-empty artifact summary before state mutation.
+    Ensure bootstrap produced a valid artifact summary before state mutation.
+
+    Some bootstrap modes, such as BEAM-only initialization, can legitimately
+    prepare the workspace without emitting copied ``RecordStore`` artifacts.
+    In those cases ``copied_records_total == 0`` is still a valid result as
+    long as the summary structure is present.
     """
     summary = (
         bootstrap_result.get("staged_artifact_summary")
@@ -227,7 +241,7 @@ def assert_bootstrap_output_invariant(
     copied_total = (
         summary.get("copied_records_total") if isinstance(summary, dict) else None
     )
-    if isinstance(copied_total, int) and copied_total > 0:
+    if isinstance(summary, dict) and isinstance(copied_total, int) and copied_total >= 0:
         return
 
     diagnostics = {
@@ -246,6 +260,6 @@ def assert_bootstrap_output_invariant(
     }
     raise RuntimeError(
         "Bootstrap initialization invariant failed: expected "
-        "'staged_artifact_summary.copied_records_total' > 0 before setting "
+        "a valid 'staged_artifact_summary.copied_records_total' before setting "
         f"data_initialized=True. diagnostics={diagnostics}"
     )

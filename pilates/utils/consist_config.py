@@ -365,7 +365,7 @@ def build_beam_identity_inputs(
 
     root = Path(workspace_path) / cfg.local_mutable_data_folder
     if not root.exists():
-        raise FileNotFoundError(f"BEAM mutable data dir not found: {root}")
+        return []
 
     config_name = getattr(cfg, "config", None)
     if isinstance(config_name, str) and config_name:

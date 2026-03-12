@@ -169,6 +169,7 @@ def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tm
     "key, relpath",
     [
         ("urbansim_bootstrap_data_root", "urbansim/data/hsize_ct_000.csv"),
+        ("beam_mutable_data_dir", "beam/input/test/beam.conf"),
         ("activitysim_bootstrap_data_root", "activitysim/data/households.csv"),
         ("activitysim_bootstrap_configs_root", "activitysim/configs/configs/settings.yaml"),
     ],

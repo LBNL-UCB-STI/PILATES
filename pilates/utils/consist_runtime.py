@@ -123,6 +123,8 @@ def log_input(
     enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
+    if consist is None:
+        return None
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
@@ -157,6 +159,8 @@ def log_output(
     enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
+    if consist is None:
+        return None
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)

@@ -35,6 +35,9 @@ class DummyWorkspace:
     def get_atlas_mutable_input_dir(self):
         return os.path.join(self.full_path, "atlas", "atlas_input")
 
+    def get_beam_mutable_data_dir(self):
+        return os.path.join(self.full_path, "beam", "input")
+
 
 class DummyInitialization:
     def __init__(self, *_args, **_kwargs):
@@ -229,6 +232,11 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
             os.makedirs(workspace.get_usim_mutable_data_dir(), exist_ok=True)
             os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
             os.makedirs(workspace.get_asim_mutable_configs_dir(), exist_ok=True)
+            beam_config_path = Path(
+                workspace.get_beam_mutable_data_dir(), "test", "beam.conf"
+            )
+            beam_config_path.parent.mkdir(parents=True, exist_ok=True)
+            beam_config_path.write_text("beam")
             Path(workspace.get_usim_mutable_data_dir(), "usim_000.h5").write_text("h5")
             Path(workspace.get_asim_mutable_data_dir(), "households.csv").write_text("hh")
             Path(workspace.get_asim_mutable_configs_dir(), "configs").mkdir(parents=True, exist_ok=True)
@@ -263,9 +271,10 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
         run=SimpleNamespace(
             bootstrap_cache_enabled=True,
             region="test",
-            models=SimpleNamespace(activity_demand="activitysim"),
+            models=SimpleNamespace(activity_demand="activitysim", traffic_assignment="beam"),
         ),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
             input_file_template="usim_{region_id}.h5",
@@ -286,6 +295,7 @@ def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monke
     assert ("bootstrap_usim_datastore_base_h5", os.path.join(workspace.get_usim_mutable_data_dir(), "usim_000.h5")) in enqueued
     assert ("activitysim_bootstrap_data_root", workspace.get_asim_mutable_data_dir()) in enqueued
     assert ("activitysim_bootstrap_configs_root", workspace.get_asim_mutable_configs_dir()) in enqueued
+    assert ("beam_mutable_data_dir", workspace.get_beam_mutable_data_dir()) in enqueued
     assert flushed == [(300, True)]
 
 
@@ -299,13 +309,22 @@ def test_bootstrap_output_invariant_accepts_valid_result():
     )
 
 
+def test_bootstrap_output_invariant_accepts_zero_copied_records_for_valid_summary():
+    run_module._assert_bootstrap_output_invariant(
+        {
+            "bootstrap_cache_hit": False,
+            "manifest_reference": {"probe_run_id": "bootstrap_probe"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "invalid_result",
     [
         None,
         {},
         {"staged_artifact_summary": {}},
-        {"staged_artifact_summary": {"copied_records_total": 0}},
     ],
 )
 def test_bootstrap_output_invariant_rejects_invalid_or_empty_result(invalid_result):
@@ -317,10 +336,15 @@ def _restart_settings():
     return SimpleNamespace(
         run=SimpleNamespace(
             region="test",
-            models=SimpleNamespace(activity_demand="activitysim", vehicle_ownership="atlas"),
+            models=SimpleNamespace(
+                activity_demand="activitysim",
+                vehicle_ownership="atlas",
+                traffic_assignment="beam",
+            ),
         ),
         atlas=SimpleNamespace(scenario="baseline"),
         activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
         urbansim=SimpleNamespace(
             region_mappings={"region_to_region_id": {"test": "000"}},
             input_file_template="usim_{region_id}.h5",
@@ -624,6 +648,111 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     paths = {item["path"] for item in missing}
     assert "zarr_skims" in keys
     assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
+
+
+def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        asim_compiled=False,
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    keys = {item["key"] for item in missing}
+    paths = {item["path"] for item in missing}
+    assert "beam_mutable_data_dir" in keys
+    assert "beam_region_input_dir" in keys
+    assert "beam_primary_config_file" in keys
+    assert any(path.endswith("beam/input") for path in paths)
+    assert any(path.endswith("beam/input/test") for path in paths)
+    assert any(path.endswith("beam/input/test/beam.conf") for path in paths)
+
+
+def test_repair_restart_beam_inputs_from_source_repopulates_missing_primary_config(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    settings = _restart_settings()
+    state = SimpleNamespace()
+
+    calls = []
+
+    class _BeamPreprocessor:
+        def copy_data_to_mutable_location(self, settings_arg, output_dir):
+            calls.append((settings_arg, output_dir))
+            target = (
+                Path(output_dir)
+                / settings_arg.run.region
+                / settings_arg.beam.config
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("beam", encoding="utf-8")
+
+    class _Factory:
+        def get_preprocessor(self, model_name, state_arg):
+            assert model_name == "beam"
+            assert state_arg is state
+            return _BeamPreprocessor()
+
+    monkeypatch.setattr(run_module, "ModelFactory", lambda: _Factory())
+
+    repaired = run_module._repair_restart_beam_inputs_from_source(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    assert repaired is True
+    assert calls == [(settings, workspace.get_beam_mutable_data_dir())]
+    assert (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    ).exists()
+
+
+def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_assignment(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        current_sub_stage=WorkflowState.Stage.traffic_assignment,
+        current_year=2017,
+        current_inner_iter=0,
+        asim_compiled=True,
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    keys = {item["key"] for item in missing}
+    paths = {item["path"] for item in missing}
+    assert "activitysim_iteration_beam_plans_parquet" in keys
+    assert "activitysim_iteration_households_parquet" in keys
+    assert "activitysim_iteration_persons_parquet" in keys
+    assert any(
+        path.endswith("activitysim/output/year-2017-iteration-0/beam_plans.parquet")
+        for path in paths
+    )
+    assert any(
+        path.endswith("activitysim/output/year-2017-iteration-0/households.parquet")
+        for path in paths
+    )
+    assert any(
+        path.endswith("activitysim/output/year-2017-iteration-0/persons.parquet")
+        for path in paths
+    )
 
 
 def test_restart_repair_rewinds_stale_supply_demand_state_when_atlas_outputs_incomplete(

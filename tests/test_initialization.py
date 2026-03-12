@@ -143,6 +143,38 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     assert workspace.output_data == {}
 
 
+def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatch):
+    from pilates.utils import consist_runtime as cr
+
+    monkeypatch.setattr(cr, "consist", None)
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ModelFactory", DummyModelFactory
+    )
+
+    init = Initialization("init", None)
+    workspace = DummyWorkspace()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel=None,
+                traffic_assignment="beam",
+                activity_demand=None,
+                vehicle_ownership=None,
+                land_use=None,
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            database=SimpleNamespace(use_consist=False),
+            geography=SimpleNamespace(zones=None),
+        ),
+    )
+
+    records = init.run(settings, workspace)
+
+    assert len(records.all_records()) == 2
+
+
 def test_initialization_handles_missing_models_gracefully(monkeypatch):
     """
     If a model key is missing from settings, Initialization should simply skip it

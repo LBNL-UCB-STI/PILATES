@@ -18,6 +18,7 @@ from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_db_snapshot import snapshot_latest_dir
+from pilates.utils.io import get_traffic_assignment_model
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ def _add_activitysim_candidates(
     *,
     settings: Any,
     workspace: Any,
+    state: Any,
     local_run_dir: str,
     archive_run_dir: str,
 ) -> None:
@@ -125,6 +127,26 @@ def _add_activitysim_candidates(
             local_run_dir=local_run_dir,
             archive_run_dir=archive_run_dir,
         )
+        current_stage = getattr(state, "current_major_stage", None)
+        current_sub_stage = getattr(state, "current_sub_stage", None)
+        workflow_stage = getattr(state, "Stage", None)
+        if (
+            workflow_stage is not None
+            and current_stage == workflow_stage.supply_demand_loop
+            and current_sub_stage == workflow_stage.traffic_assignment
+        ):
+            _append_local_candidate(
+                artifacts,
+                key="activitysim_iteration_output_dir",
+                local_path=os.path.join(
+                    get_output_dir(),
+                    f"year-{getattr(state, 'current_year', 'unknown')}-iteration-"
+                    f"{getattr(state, 'current_inner_iter', 0)}",
+                ),
+                reason="ActivitySim iteration outputs for resumed BEAM traffic assignment",
+                local_run_dir=local_run_dir,
+                archive_run_dir=archive_run_dir,
+            )
 
     _append_local_candidate(
         artifacts,
@@ -189,6 +211,52 @@ def _add_urbansim_candidates(
                 local_run_dir=local_run_dir,
                 archive_run_dir=archive_run_dir,
             )
+
+
+def _add_beam_candidates(
+    artifacts: List[Dict[str, Any]],
+    *,
+    settings: Any,
+    workspace: Any,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> None:
+    if get_traffic_assignment_model(settings) != "beam":
+        return
+
+    get_beam_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+    region = getattr(getattr(settings, "run", None), "region", None)
+    if not callable(get_beam_dir) or not region:
+        return
+
+    beam_root = get_beam_dir()
+    _append_local_candidate(
+        artifacts,
+        key="beam_mutable_data_dir",
+        local_path=beam_root,
+        reason="BEAM mutable data root for restart metadata and traffic assignment",
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+    _append_local_candidate(
+        artifacts,
+        key="beam_region_input_dir",
+        local_path=os.path.join(beam_root, region),
+        reason=f"BEAM mutable input directory for region {region}",
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+    beam_cfg = getattr(settings, "beam", None)
+    beam_config_name = getattr(beam_cfg, "config", None)
+    if beam_config_name:
+        _append_local_candidate(
+            artifacts,
+            key="beam_primary_config_file",
+            local_path=os.path.join(beam_root, region, beam_config_name),
+            reason=f"BEAM primary config file for region {region}",
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
 
 
 def _add_atlas_year_dir_candidates(
@@ -330,6 +398,14 @@ def build_restart_bundle_manifest(
         )
 
     _add_activitysim_candidates(
+        artifacts,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_root,
+    )
+    _add_beam_candidates(
         artifacts,
         settings=settings,
         workspace=workspace,

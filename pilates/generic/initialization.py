@@ -3,6 +3,7 @@ from typing import Optional, Iterator, Tuple, Dict, Any, TYPE_CHECKING
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.path_utils import find_project_root
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
@@ -294,7 +295,7 @@ class Initialization(Model):
 
         try:
             # BEAM model initialization
-            if settings.run.models.travel == "beam":
+            if get_traffic_assignment_model(settings) == "beam":
                 beam_preprocessor = model_factory.get_preprocessor("beam", self.state)
 
                 beam_input_dir = workspace.get_beam_mutable_data_dir()
@@ -308,7 +309,7 @@ class Initialization(Model):
                     initialization_records_out=initialization_records_out,
                 )
 
-            if settings.run.models.travel == "beam":
+            if get_traffic_assignment_model(settings) == "beam":
                 zones_config = settings.shared.geography.zones
                 if (
                     zones_config is not None
