@@ -19,7 +19,7 @@ from pilates.beam.postprocessor import (
     find_iteration_file,
 )
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
+from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, BEAM_NETWORK_FINAL
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
@@ -330,7 +330,7 @@ class BeamRunner(GenericRunner):
             "beam_households_final": ("households", ".csv.gz"),
             "beam_persons_final": ("output_persons", ".csv.gz"),
             "beam_population_final": ("population", ".csv.gz"),
-            "beam_network_final": ("network", ".csv.gz"),
+            BEAM_NETWORK_FINAL: ("network", ".csv.gz"),
             "beam_output_plans_xml": ("output_plans", ".xml.gz"),
             "beam_output_experienced_plans_xml": (
                 "output_experienced_plans",

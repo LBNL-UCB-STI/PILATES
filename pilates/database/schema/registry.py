@@ -59,6 +59,7 @@ from pilates.database.schema.urbansim_schema import (
     ActivitysimPostprocessUsimHouseholdsUpdated,
     ActivitysimPostprocessUsimPersonsUpdated,
 )
+from pilates.workflows.artifact_keys import BEAM_NETWORK_FINAL
 
 # Central mapping of artifact keys to curated schema classes.
 # Keep keys in sync with pilates/workflows/artifact_keys.py.
@@ -80,7 +81,7 @@ _SCHEMA_BY_KEY: Dict[str, Type[SQLModel]] = {
     "persons_beam_in": PersonsBeamIn,
     "plans_beam_in": PlansBeamIn,
     "beam_plans_out": BeamPlansOut,
-    "beam_network_final": BeamNetworkFinal,
+    BEAM_NETWORK_FINAL: BeamNetworkFinal,
     "linkstats": BeamLinkstats,
     "linkstats_warmstart": BeamLinkstats,
     "atlas_blocks_csv": AtlasBlocks,

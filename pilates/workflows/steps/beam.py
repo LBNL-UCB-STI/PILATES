@@ -9,6 +9,7 @@ from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
+    BEAM_NETWORK_FINAL,
     LINKSTATS,
     LINKSTATS_WARMSTART,
 )
@@ -703,7 +704,7 @@ def make_beam_run_step(
             facet_meta = _beam_log_facet_meta(short_name)
             if facet_meta:
                 meta.update(facet_meta)
-            if short_name.startswith("beam_network_final"):
+            if short_name == BEAM_NETWORK_FINAL:
                 meta.update(
                     {
                         "profile_file_schema": "if_changed",
