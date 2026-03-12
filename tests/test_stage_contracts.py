@@ -16,8 +16,9 @@ The tests use lightweight fakes (``FakeScenario`` and ``CouplerStub``) to make
 contract expectations explicit without running heavy model containers.
 """
 
-from pathlib import Path
 import shutil
+import logging
+from pathlib import Path
 
 import pytest
 import yaml
@@ -927,6 +928,68 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert BEAM_PLANS_IN in run_input_keys
     assert BEAM_HOUSEHOLDS_IN in run_input_keys
     assert BEAM_PERSONS_IN in run_input_keys
+
+
+def test_supply_demand_stage_beam_only_clamps_outer_iterations(
+    stage_env, tmp_path, caplog
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.run.supply_demand_iters = 3
+    state._settings["activity_demand_enabled"] = False
+    state._settings["supply_demand_iters"] = 3
+    state.enabled_stages.discard(state.Stage.activity_demand)
+    state.loop_substages = [state.Stage.traffic_assignment]
+
+    scenario_dir = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.scenario_folder
+    )
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(scenario_dir / "plans.parquet")
+    _write_file(scenario_dir / "households.parquet")
+    _write_file(scenario_dir / "persons.parquet")
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    caplog.set_level(logging.WARNING)
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_beam_only_clamped_{year}_{iteration}.json"
+        ),
+    )
+
+    beam_preprocess_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in call["inputs"]
+        and BEAM_HOUSEHOLDS_IN in call["inputs"]
+        and BEAM_PERSONS_IN in call["inputs"]
+    ]
+    assert len(beam_preprocess_calls) == 1
+    assert "Clamping outer supply-demand iterations to 1" in caplog.text
 
 
 def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_path):
