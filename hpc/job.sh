@@ -26,6 +26,14 @@ FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
 
+safe_module_load() {
+    set +u
+    module load "$@"
+    local status=$?
+    set -u
+    return "$status"
+}
+
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
     free -h
@@ -98,22 +106,22 @@ normalize_path() {
     fi
 }
 
-if [ "${1:-}" = "" ] || [ "${2:-}" = "" ]; then
-    echo "Usage: $0 <settings_file> <stage_file>"
+if [ "${1:-}" = "" ]; then
+    echo "Usage: $0 <settings_file> [stage_file]"
     exit 2
 fi
 
 CONFIG_FILE="$(normalize_path "$1")"
-STAGE_FILE="$(normalize_path "$2")"
+STAGE_FILE="$(normalize_path "${2:-}")"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
 fi
 
 echo "Setting up HPC runtime environment..."
-module load gcc/11.4.0
-module load proj/9.2.1
-module load python/3.11.6
+safe_module_load gcc/11.4.0
+safe_module_load proj/9.2.1
+safe_module_load python/3.11.6
 
 export LD_LIBRARY_PATH=/global/software/rocky-8.x86_64/gcc/linux-rocky8-x86_64/gcc-8.5.0/gcc-11.4.0-nfcdl6bpyabpnhhasfzu6y4ge4kfskvl/lib64:${LD_LIBRARY_PATH:-}
 echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
@@ -140,7 +148,11 @@ install_consist
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
 echo "Config: $CONFIG_FILE"
-echo "Stage: $STAGE_FILE"
+if [ -n "$STAGE_FILE" ]; then
+    echo "Stage: $STAGE_FILE"
+else
+    echo "Stage: <fresh run>"
+fi
 
 show_system_info
 
@@ -173,4 +185,8 @@ if ! is_new_format "$CONFIG_FILE"; then
     fi
 fi
 
-python3 run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"
+if [ -n "$STAGE_FILE" ]; then
+    python3 run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"
+else
+    python3 run.py -c "$CONFIG_FILE"
+fi

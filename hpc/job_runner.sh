@@ -26,7 +26,7 @@ JOB_NAME="$RANDOM_PART.$DATETIME"
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 settings_file="settings.yaml"  # May be a template with ${BEAM_MEMORY}
 generated_settings_file="settings_${JOB_NAME}.yaml"
-stage_file="current_stage_${JOB_NAME}.yaml"
+stage_file=""
 partition_arg="lr7"
 account_arg=""
 high_mem=false
@@ -115,7 +115,10 @@ resolve_path() {
 
 settings_template_path="$(resolve_path "$settings_file")"
 generated_settings_path="$PILATES_DIR/$generated_settings_file"
-stage_path="$(resolve_path "$stage_file")"
+stage_path=""
+if [ -n "$stage_file" ]; then
+    stage_path="$(resolve_path "$stage_file")"
+fi
 
 if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
@@ -132,15 +135,24 @@ fi
 
 export BEAM_MEMORY
 
-sbatch --partition="$PARTITION" \
-    --exclusive \
-    --cpus-per-task="$NUM_CPUS" \
-    --mem="${MEMORY_LIMIT_GB}G" \
-    --qos="$QOS" \
-    --account="$ACCOUNT" \
-    --job-name="$JOB_NAME" \
-    --output="$JOB_LOG_FILE_PATH" \
-    --time="$EXPECTED_EXECUTION_DURATION" \
-    "$PILATES_DIR/hpc/job.sh" "$generated_settings_path" "$stage_path"
+sbatch_args=(
+    --partition="$PARTITION"
+    --exclusive
+    --cpus-per-task="$NUM_CPUS"
+    --mem="${MEMORY_LIMIT_GB}G"
+    --qos="$QOS"
+    --account="$ACCOUNT"
+    --job-name="$JOB_NAME"
+    --output="$JOB_LOG_FILE_PATH"
+    --time="$EXPECTED_EXECUTION_DURATION"
+    --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
+    "$PILATES_DIR/hpc/job.sh"
+    "$generated_settings_path"
+)
+if [ -n "$stage_path" ]; then
+    sbatch_args+=("$stage_path")
+fi
+
+sbatch "${sbatch_args[@]}"
 
 echo "$JOB_LOG_FILE_PATH"
