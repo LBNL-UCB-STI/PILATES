@@ -95,11 +95,6 @@ class BeamPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "beam_mutable_data_dir"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (
-        BEAM_PLANS_IN,
-        BEAM_HOUSEHOLDS_IN,
-        BEAM_PERSONS_IN,
-    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     beam_mutable_data_dir: Path
