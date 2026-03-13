@@ -303,11 +303,100 @@ class TestRunContainerConsistDelegation:
         assert result is True
         assert "CONSIST_CONTAINER_DEBUG_STREAM" not in os.environ
 
+    @patch("pilates.generic.runner.get_setting")
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    def test_delegation_uses_per_run_tmpdir_for_singularity(
+        self,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_get_setting,
+        tmp_path: Path,
+    ):
+        run_tmp = tmp_path / "run-tmp"
+        run_tmp.mkdir()
 
-@patch("pilates.generic.runner.subprocess.run")
+        def get_setting_side_effect(_obj, key, default=None):
+            if key == "infrastructure.container_manager":
+                return "singularity"
+            return default
+
+        mock_get_setting.side_effect = get_setting_side_effect
+        mock_current_tracker.return_value = Mock()
+
+        def _check_env(**_kwargs):
+            expected_base = str(run_tmp / ".container_runtime")
+            assert os.environ["TMPDIR"] == expected_base
+            assert os.environ["APPTAINER_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert os.environ["APPTAINER_TMPDIR"] == expected_base + "/.apptainer/tmp"
+            assert os.environ["SINGULARITY_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert os.environ["SINGULARITY_TMPDIR"] == expected_base + "/.apptainer/tmp"
+            return True
+
+        mock_consist_run_container.side_effect = _check_env
+
+        result = GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={str(run_tmp): {"bind": "/tmp", "mode": "rw"}},
+            command="cmd",
+            model_name="model",
+        )
+
+        assert result is True
+
+    @patch("pilates.generic.runner.get_setting")
+    @patch("pilates.generic.runner.GenericRunner._run_container_direct")
+    @patch("pilates.generic.runner.cr.current_tracker")
+    def test_direct_fallback_uses_per_run_tmpdir_for_singularity(
+        self,
+        mock_current_tracker,
+        mock_run_container_direct,
+        mock_get_setting,
+        tmp_path: Path,
+    ):
+        run_tmp = tmp_path / "run-tmp"
+        run_tmp.mkdir()
+
+        class NoopLikeTracker:
+            pass
+
+        def get_setting_side_effect(_obj, key, default=None):
+            if key == "infrastructure.container_manager":
+                return "singularity"
+            return default
+
+        mock_get_setting.side_effect = get_setting_side_effect
+        mock_current_tracker.return_value = NoopLikeTracker()
+
+        def _check_direct(**_kwargs):
+            expected_base = str(run_tmp / ".container_runtime")
+            assert os.environ["TMPDIR"] == expected_base
+            assert os.environ["APPTAINER_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert os.environ["APPTAINER_TMPDIR"] == expected_base + "/.apptainer/tmp"
+            assert os.environ["SINGULARITY_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert os.environ["SINGULARITY_TMPDIR"] == expected_base + "/.apptainer/tmp"
+            return True
+
+        mock_run_container_direct.side_effect = _check_direct
+
+        result = GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={str(run_tmp): {"bind": "/tmp", "mode": "rw"}},
+            command="cmd",
+            model_name="model",
+        )
+
+        assert result is True
+
+
+@patch("pilates.generic.runner.subprocess.Popen")
 @patch("pilates.generic.runner.shutil.which")
 def test_direct_singularity_prefers_singularity_and_uses_writable_tmpfs(
-    mock_which, mock_subprocess_run, tmp_path: Path
+    mock_which, mock_popen, tmp_path: Path
 ):
     def _which(name):
         if name == "singularity":
@@ -317,6 +406,10 @@ def test_direct_singularity_prefers_singularity_and_uses_writable_tmpfs(
         return None
 
     mock_which.side_effect = _which
+    mock_process = Mock()
+    mock_process.stdout = iter(())
+    mock_process.wait.return_value = 0
+    mock_popen.return_value = mock_process
 
     host_mount = tmp_path / "mount"
     host_mount.mkdir()
@@ -330,17 +423,17 @@ def test_direct_singularity_prefers_singularity_and_uses_writable_tmpfs(
     )
 
     assert result is True
-    cmd = mock_subprocess_run.call_args.args[0]
-    env = mock_subprocess_run.call_args.kwargs["env"]
+    cmd = mock_popen.call_args.args[0]
+    env = mock_popen.call_args.kwargs["env"]
     assert cmd[:4] == ["singularity", "run", "--cleanenv", "--writable-tmpfs"]
     assert "--pwd" in cmd
     assert env["SINGULARITYENV_PYTHONNOUSERSITE"] == "1"
 
 
-@patch("pilates.generic.runner.subprocess.run")
+@patch("pilates.generic.runner.subprocess.Popen")
 @patch("pilates.generic.runner.shutil.which")
 def test_direct_singularity_falls_back_to_apptainer_when_needed(
-    mock_which, mock_subprocess_run, tmp_path: Path
+    mock_which, mock_popen, tmp_path: Path
 ):
     def _which(name):
         if name == "apptainer":
@@ -348,6 +441,10 @@ def test_direct_singularity_falls_back_to_apptainer_when_needed(
         return None
 
     mock_which.side_effect = _which
+    mock_process = Mock()
+    mock_process.stdout = iter(())
+    mock_process.wait.return_value = 0
+    mock_popen.return_value = mock_process
 
     host_mount = tmp_path / "mount"
     host_mount.mkdir()
@@ -361,7 +458,7 @@ def test_direct_singularity_falls_back_to_apptainer_when_needed(
     )
 
     assert result is True
-    cmd = mock_subprocess_run.call_args.args[0]
-    env = mock_subprocess_run.call_args.kwargs["env"]
+    cmd = mock_popen.call_args.args[0]
+    env = mock_popen.call_args.kwargs["env"]
     assert cmd[:4] == ["apptainer", "run", "--cleanenv", "--writable-tmpfs"]
     assert env["APPTAINERENV_PYTHONNOUSERSITE"] == "1"

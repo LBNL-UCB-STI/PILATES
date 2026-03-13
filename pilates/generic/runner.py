@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 from typing import Optional, List, Union, Dict, Any, Generic, TypeVar, Callable
 
 from pilates.config import PilatesConfig
@@ -158,6 +159,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
         mounts = GenericRunner._extract_mounts(volumes)
         consist_volumes = {host: container for host, container, _mode in mounts}
+        runtime_tmp_base = GenericRunner._resolve_runtime_tmp_base(mounts)
 
         # Handle command + args: Split if string, combine with args
         full_command_list = GenericRunner._build_full_command(command, args)
@@ -238,6 +240,9 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 try:
                     with GenericRunner._temporary_container_debug_stream(
                         enabled=stream_container_logs
+                    ), GenericRunner._temporary_container_runtime_env(
+                        runtime_tmp_base,
+                        backend=backend_type,
                     ):
                         return consist_run_container(
                             tracker=tracker,
@@ -271,16 +276,20 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                                 model_name,
                             )
 
-        return GenericRunner._run_container_direct(
-            image=image,
-            command=full_command_list,
-            mounts=mounts,
-            environment=environment or {},
+        with GenericRunner._temporary_container_runtime_env(
+            runtime_tmp_base,
             backend=backend_type,
-            working_dir=working_dir,
-            pull_latest=pull_latest,
-            docker_stdout=docker_stdout,
-        )
+        ):
+            return GenericRunner._run_container_direct(
+                image=image,
+                command=full_command_list,
+                mounts=mounts,
+                environment=environment or {},
+                backend=backend_type,
+                working_dir=working_dir,
+                pull_latest=pull_latest,
+                docker_stdout=docker_stdout,
+            )
 
     @staticmethod
     @contextlib.contextmanager
@@ -295,6 +304,51 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 os.environ.pop(CONSIST_CONTAINER_DEBUG_STREAM_ENV, None)
             else:
                 os.environ[CONSIST_CONTAINER_DEBUG_STREAM_ENV] = previous
+
+    @staticmethod
+    def _resolve_runtime_tmp_base(mounts: List[tuple]) -> Optional[str]:
+        for host_path, container_path, _mode in mounts:
+            if container_path == "/tmp":
+                return os.path.join(host_path, ".container_runtime")
+        return None
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _temporary_container_runtime_env(
+        runtime_tmp_base: Optional[str], *, backend: str
+    ):
+        if not runtime_tmp_base or backend != "singularity":
+            yield
+            return
+
+        os.makedirs(runtime_tmp_base, exist_ok=True)
+        overrides = {
+            "TMPDIR": runtime_tmp_base,
+            "APPTAINER_CACHEDIR": os.path.join(runtime_tmp_base, ".apptainer", "cache"),
+            "APPTAINER_TMPDIR": os.path.join(runtime_tmp_base, ".apptainer", "tmp"),
+            "SINGULARITY_CACHEDIR": os.path.join(
+                runtime_tmp_base, ".apptainer", "cache"
+            ),
+            "SINGULARITY_TMPDIR": os.path.join(runtime_tmp_base, ".apptainer", "tmp"),
+        }
+        for path in overrides.values():
+            if path != runtime_tmp_base:
+                os.makedirs(path, exist_ok=True)
+
+        previous = {key: os.environ.get(key) for key in overrides}
+        os.environ.update(overrides)
+        logger.info(
+            "Using per-run Singularity cache/tmp base: %s",
+            runtime_tmp_base,
+        )
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     @staticmethod
     def _build_full_command(command: Union[str, List[str]], args=None) -> List[str]:
@@ -467,6 +521,20 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         runtime_env_summary = {
             key: env.get(key) for key in runtime_env_keys if env.get(key) is not None
         }
+        log_name = f"{runtime}_container_{int(time.time())}_{os.getpid()}.log"
+        singularity_log_paths = []
+        local_log_dir = os.path.join(env.get("TMPDIR") or os.getcwd(), "singularity_logs")
+        os.makedirs(local_log_dir, exist_ok=True)
+        singularity_log_paths.append(os.path.join(local_log_dir, log_name))
+        archive_run_dir = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
+        if archive_run_dir:
+            archive_log_dir = os.path.join(
+                archive_run_dir, "logs", "singularity"
+            )
+            os.makedirs(archive_log_dir, exist_ok=True)
+            archive_log_path = os.path.join(archive_log_dir, log_name)
+            if archive_log_path not in singularity_log_paths:
+                singularity_log_paths.append(archive_log_path)
         logger.info(
             "Running Singularity container via runtime=%s writable_tmpfs=%s env_paths=%s",
             runtime,
@@ -474,16 +542,41 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             runtime_env_summary,
         )
         logger.info("Singularity bind mount diagnostics: %s", mount_diagnostics)
+        logger.info(
+            "Persisting Singularity stdout/stderr to: %s",
+            singularity_log_paths,
+        )
         logger.info(f"Running Singularity container: {' '.join(sing_cmd)}")
         try:
-            subprocess.run(
-                sing_cmd,
-                check=True,
-                env=env,
-            )
+            with contextlib.ExitStack() as stack:
+                log_files = [
+                    stack.enter_context(open(path, "w", encoding="utf-8"))
+                    for path in singularity_log_paths
+                ]
+                process = subprocess.Popen(
+                    sing_cmd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                assert process.stdout is not None
+                for line in process.stdout:
+                    print(line, end="")
+                    for log_file in log_files:
+                        log_file.write(line)
+                return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, sing_cmd)
             return True
         except subprocess.CalledProcessError as e:
-            logger.error(f"Singularity execution failed: {e}", exc_info=True)
+            logger.error(
+                "Singularity execution failed: %s. Raw container logs: %s",
+                e,
+                singularity_log_paths,
+                exc_info=True,
+            )
             return False
 
     @staticmethod
