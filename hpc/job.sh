@@ -131,6 +131,21 @@ export BLIS_NUM_THREADS="$THREADS"
 export VECLIB_MAXIMUM_THREADS="$THREADS"
 echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
 
+# ActivitySim Zarr write debugging. Defaults are enabled here so queued HPC runs
+# probe the skim cache write path and log the last successfully written variable
+# before any native abort. Override per job by exporting these vars beforehand.
+ASIM_DEBUG_PROBE_BASE_DEFAULT="/tmp/asim_zarr_probe"
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    ASIM_DEBUG_PROBE_BASE_DEFAULT="/local/job${SLURM_JOB_ID}/asim_zarr_probe"
+fi
+export ASIM_DEBUG_ZARR_WRITE="${ASIM_DEBUG_ZARR_WRITE:-1}"
+export ASIM_DEBUG_ZARR_PROBE="${ASIM_DEBUG_ZARR_PROBE:-1}"
+export ASIM_DEBUG_ZARR_PROBE_ONLY="${ASIM_DEBUG_ZARR_PROBE_ONLY:-1}"
+export ASIM_DEBUG_ZARR_PROBE_DIR="${ASIM_DEBUG_ZARR_PROBE_DIR:-$ASIM_DEBUG_PROBE_BASE_DEFAULT}"
+export ASIM_DEBUG_ZARR_PROBE_LIMIT="${ASIM_DEBUG_ZARR_PROBE_LIMIT:-20}"
+mkdir -p "$ASIM_DEBUG_ZARR_PROBE_DIR"
+echo "ActivitySim Zarr debug: WRITE=$ASIM_DEBUG_ZARR_WRITE PROBE=$ASIM_DEBUG_ZARR_PROBE PROBE_ONLY=$ASIM_DEBUG_ZARR_PROBE_ONLY LIMIT=$ASIM_DEBUG_ZARR_PROBE_LIMIT DIR=$ASIM_DEBUG_ZARR_PROBE_DIR"
+
 is_new_format() {
     grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
 }

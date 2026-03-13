@@ -72,3 +72,19 @@ def test_activitysim_container_environment_blocks_user_site():
     assert env["NUMBA_CACHE_DIR"] == "/app/numba_cache/numba"
     assert env["XDG_CACHE_HOME"] == "/app/numba_cache"
     assert env["PYTHONNOUSERSITE"] == "1"
+
+
+def test_activitysim_container_environment_passes_zarr_debug_flags(monkeypatch):
+    monkeypatch.setenv("ASIM_DEBUG_ZARR_WRITE", "1")
+    monkeypatch.setenv("ASIM_DEBUG_ZARR_PROBE", "1")
+    monkeypatch.setenv("ASIM_DEBUG_ZARR_PROBE_ONLY", "1")
+    monkeypatch.setenv("ASIM_DEBUG_ZARR_PROBE_DIR", "/tmp/asim-zarr-probe")
+    monkeypatch.setenv("ASIM_DEBUG_ZARR_PROBE_LIMIT", "3")
+
+    env = _asim_container_environment()
+
+    assert env["ASIM_DEBUG_ZARR_WRITE"] == "1"
+    assert env["ASIM_DEBUG_ZARR_PROBE"] == "1"
+    assert env["ASIM_DEBUG_ZARR_PROBE_ONLY"] == "1"
+    assert env["ASIM_DEBUG_ZARR_PROBE_DIR"] == "/tmp/asim-zarr-probe"
+    assert env["ASIM_DEBUG_ZARR_PROBE_LIMIT"] == "3"

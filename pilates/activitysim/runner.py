@@ -75,11 +75,22 @@ def _asim_container_environment() -> Dict[str, str]:
     the container Python environment, which can otherwise mix incompatible
     xarray/zarr versions with the image's pinned stack.
     """
-    return {
+    env = {
         "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
         "XDG_CACHE_HOME": "/app/numba_cache",
         "PYTHONNOUSERSITE": "1",
     }
+    for key in (
+        "ASIM_DEBUG_ZARR_WRITE",
+        "ASIM_DEBUG_ZARR_PROBE",
+        "ASIM_DEBUG_ZARR_PROBE_ONLY",
+        "ASIM_DEBUG_ZARR_PROBE_DIR",
+        "ASIM_DEBUG_ZARR_PROBE_LIMIT",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
 
 
 def persist_sharrow_cache_enabled(settings: PilatesConfig) -> bool:
