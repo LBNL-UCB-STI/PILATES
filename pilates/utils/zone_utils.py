@@ -79,7 +79,7 @@ def _log_zarr_store_state(label: str, skim_path: str, skims_ds: xr.Dataset) -> N
     )
 
 
-def _normalize_dimension_coords(skims_ds: xr.Dataset) -> xr.Dataset:
+def normalize_dimension_coords_for_zarr(skims_ds: xr.Dataset) -> xr.Dataset:
     """Normalize dimension coordinates to stable, plain NumPy dtypes."""
     updated_coords = {}
 
@@ -312,7 +312,7 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                 logger.info("'preprocessed' flag already present.")
 
             if needs_correction:
-                skims_ds = _normalize_dimension_coords(skims_ds)
+                skims_ds = normalize_dimension_coords_for_zarr(skims_ds)
                 # Overwrite the Zarr store with the corrected version
                 # Use a temporary path for atomic write
                 temp_path = f"{skim_path}_temp_corrected"

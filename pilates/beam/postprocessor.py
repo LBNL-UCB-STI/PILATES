@@ -39,6 +39,52 @@ TNC_CONSOLIDATION_MAP = {
 }
 
 
+def _normalize_beam_partial_time_period_coords(
+    partial_skims_ds: xr.Dataset, expected_time_periods: List[str]
+) -> xr.Dataset:
+    """Convert BEAM's index+labels time_period coord into canonical string labels."""
+    if "time_period" not in partial_skims_ds.coords:
+        return partial_skims_ds
+
+    time_coord = partial_skims_ds.coords["time_period"]
+    current_values = [str(tp) for tp in time_coord.values]
+    label_values = time_coord.attrs.get("labels")
+    if label_values is None:
+        return zone_utils.normalize_dimension_coords_for_zarr(partial_skims_ds)
+
+    label_values = [str(tp) for tp in label_values]
+    if current_values == expected_time_periods:
+        return zone_utils.normalize_dimension_coords_for_zarr(partial_skims_ds)
+
+    if label_values != expected_time_periods:
+        logger.warning(
+            "BEAM partial skims time_period labels %s do not match expected %s; "
+            "leaving coords unchanged.",
+            label_values,
+            expected_time_periods,
+        )
+        return zone_utils.normalize_dimension_coords_for_zarr(partial_skims_ds)
+
+    max_len = max(len(value) for value in label_values) if label_values else 1
+    normalized_values = np.asarray(label_values, dtype=f"<U{max(1, max_len)}")
+    normalized_attrs = {
+        key: value for key, value in time_coord.attrs.items() if key != "labels"
+    }
+    logger.info(
+        "Converting BEAM partial skims time_period coord from %s to canonical labels %s",
+        current_values,
+        label_values,
+    )
+    partial_skims_ds = partial_skims_ds.assign_coords(
+        time_period=xr.DataArray(
+            normalized_values,
+            dims=time_coord.dims,
+            attrs=normalized_attrs,
+        )
+    )
+    return zone_utils.normalize_dimension_coords_for_zarr(partial_skims_ds)
+
+
 def _activitysim_skims_target_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     model_cfg = getattr(run_cfg, "models", None)
@@ -2555,6 +2601,10 @@ def _merge_beam_skims_to_zarr(
     if current_skims_path.endswith(".zarr"):
         input_format = "zarr"
         partial_skims_ds = xr.open_zarr(current_skims_path)
+        timePeriods = get_setting(settings, "shared.skims.periods")
+        partial_skims_ds = _normalize_beam_partial_time_period_coords(
+            partial_skims_ds, timePeriods
+        )
         logger.info(
             f"DEBUG: Partial (BEAM) skims otaz coords: {partial_skims_ds.coords['otaz'].values[:5]}...{partial_skims_ds.coords['otaz'].values[-5:]}"
         )
@@ -2888,6 +2938,8 @@ def _merge_beam_skims_to_zarr(
             )
             skims_ds.coords["dtaz"].data[:] = expected_coords
             dtaz_corrected = True
+
+        skims_ds = zone_utils.normalize_dimension_coords_for_zarr(skims_ds)
 
         skims_ds.to_zarr(
             all_skims_path, mode="a", consolidated=False, zarr_format=2

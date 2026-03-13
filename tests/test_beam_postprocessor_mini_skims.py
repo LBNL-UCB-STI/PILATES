@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 import numpy as np
 import xarray as xr
@@ -120,4 +121,65 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
             )
     finally:
         expected.close()
+        actual.close()
+
+
+def test_merge_mini_skims_normalizes_beam_time_period_labels(tmp_path, monkeypatch) -> None:
+    mini_path = _copy_mini_skims(tmp_path)
+    main_path = _write_zeroed_main_from_mini(tmp_path, mini_path)
+    beam_like_path = tmp_path / "beam_like_skims.zarr"
+
+    src = xr.open_zarr(mini_path, consolidated=True)
+    try:
+        beam_like = src.assign_coords(time_period=np.arange(src.sizes["time_period"]))
+        beam_like["time_period"].attrs = {
+            "_ARRAY_DIMENSIONS": ["time_period"],
+            "labels": ["EA", "AM", "MD", "PM", "EV"],
+        }
+        for name in beam_like.variables:
+            beam_like[name].encoding = {}
+        beam_like.to_zarr(beam_like_path, mode="w", consolidated=True, zarr_format=2)
+    finally:
+        src.close()
+
+    monkeypatch.setattr(
+        pp, "verify_skim_zone_order", lambda settings, skim_file_path, workspace: list(range(5))
+    )
+    monkeypatch.setattr(
+        pp.zone_utils, "load_canonical_zones", lambda settings, workspace: pd.DataFrame(index=range(5))
+    )
+    monkeypatch.setattr(pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None)
+
+    def _get_setting(settings, key, default=None):
+        if key == "shared.skims.periods":
+            return ["EA", "AM", "MD", "PM", "EV"]
+        if key == "consolidate_tnc_fleets":
+            return True
+        if key == "beam.skim_previous_weight":
+            return 0.9
+        if key == "beam.ridehail_path_map":
+            return default
+        return default
+
+    monkeypatch.setattr(pp, "get_setting", _get_setting)
+
+    pp._merge_beam_skims_to_zarr(
+        all_skims_path=str(main_path),
+        iteration_skims_path=str(beam_like_path),
+        beam_output_dir="",
+        settings=SimpleNamespace(),
+        workspace=None,
+        override=str(beam_like_path),
+    )
+
+    actual = xr.open_zarr(main_path, consolidated=True)
+    try:
+        assert [str(v) for v in actual.coords["time_period"].values] == [
+            "EA",
+            "AM",
+            "MD",
+            "PM",
+            "EV",
+        ]
+    finally:
         actual.close()
