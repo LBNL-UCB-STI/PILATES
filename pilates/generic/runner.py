@@ -7,7 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
-from typing import Optional, List, Union, Dict, Any, Generic, TypeVar
+from typing import Optional, List, Union, Dict, Any, Generic, TypeVar, Callable
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -136,6 +136,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         input_artifacts: List[Union[str, Any]] = None,
         output_paths: List[str] = None,
         lineage_mode: str = None,
+        before_direct_fallback: Optional[Callable[[], None]] = None,
     ) -> bool:
         """
         Execute container with Consist container integration.
@@ -260,6 +261,15 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                         exc,
                         exc_info=True,
                     )
+                    if before_direct_fallback is not None:
+                        try:
+                            before_direct_fallback()
+                        except Exception:
+                            logger.exception(
+                                "[%s] Pre-fallback cleanup hook failed; "
+                                "continuing with direct container execution.",
+                                model_name,
+                            )
 
         return GenericRunner._run_container_direct(
             image=image,

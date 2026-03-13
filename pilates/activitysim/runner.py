@@ -117,6 +117,31 @@ def _dir_contains_files(path: str) -> bool:
     return False
 
 
+def _remove_path_if_present(path: str) -> None:
+    if not os.path.lexists(path):
+        return
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
+def _cleanup_activitysim_compile_artifacts(workspace: Workspace) -> None:
+    stale_paths = [
+        os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr"),
+        os.path.join(workspace.get_asim_output_dir(), "cache", "numba"),
+        asim_sharrow_cache_dir(workspace),
+    ]
+    for stale_path in stale_paths:
+        if not os.path.lexists(stale_path):
+            continue
+        logger.warning(
+            "Removing stale ActivitySim compile artifact before direct fallback: %s",
+            stale_path,
+        )
+        _remove_path_if_present(stale_path)
+
+
 def _stage_runtime_input_path(
     *,
     key: str,
@@ -296,6 +321,9 @@ class ActivitysimCompileRunner(GenericRunner):
             environment=container_environment,
             output_paths=[all_skims_path],
             lineage_mode="none",
+            before_direct_fallback=lambda: _cleanup_activitysim_compile_artifacts(
+                workspace
+            ),
         )
 
         if not success:

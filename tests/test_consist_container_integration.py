@@ -159,6 +159,41 @@ class TestRunContainerConsistDelegation:
     @patch("pilates.generic.runner.GenericRunner._run_container_direct")
     @patch("consist.integrations.containers.run_container")
     @patch("pilates.generic.runner.cr.current_tracker")
+    def test_exception_handling_runs_pre_fallback_hook(
+        self,
+        mock_current_tracker,
+        mock_consist_run_container,
+        mock_run_container_direct,
+    ):
+        call_order = []
+
+        def _cleanup():
+            call_order.append("cleanup")
+
+        def _direct(**_kwargs):
+            call_order.append("direct")
+            return True
+
+        mock_consist_run_container.side_effect = Exception("Consist failed")
+        mock_run_container_direct.side_effect = _direct
+        mock_current_tracker.return_value = Mock()
+
+        result = GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={},
+            command="cmd",
+            model_name="model",
+            before_direct_fallback=_cleanup,
+        )
+
+        assert result is True
+        assert call_order == ["cleanup", "direct"]
+
+    @patch("pilates.generic.runner.GenericRunner._run_container_direct")
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
     def test_non_capable_tracker_skips_consist_delegation(
         self,
         mock_current_tracker,

@@ -8,6 +8,7 @@ import pytest
 
 from pilates.activitysim.runner import ActivitysimCompileRunner
 from pilates.activitysim.runner import ActivitysimRunner
+from pilates.activitysim.runner import _cleanup_activitysim_compile_artifacts
 from pilates.activitysim.outputs import (
     ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
@@ -387,6 +388,28 @@ def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None
     )
     assert ASIM_SHARROW_CACHE_DIR in schema_on
     assert ASIM_SHARROW_CACHE_DIR not in schema_off
+
+
+def test_activitysim_compile_cleanup_removes_stale_retry_artifacts(tmp_path: Path) -> None:
+    asim_output_dir = tmp_path / "activitysim" / "output"
+    stale_zarr = asim_output_dir / "cache" / "skims.zarr"
+    stale_output_numba = asim_output_dir / "cache" / "numba"
+    stale_shared_numba = tmp_path / "shared_cache" / "numba"
+
+    stale_zarr.mkdir(parents=True)
+    (stale_zarr / ".zgroup").write_text("{}")
+    stale_output_numba.mkdir(parents=True)
+    (stale_output_numba / "cache.bin").write_text("stale")
+    stale_shared_numba.mkdir(parents=True)
+    (stale_shared_numba / "entry.bin").write_text("stale")
+
+    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
+
+    _cleanup_activitysim_compile_artifacts(workspace)
+
+    assert not stale_zarr.exists()
+    assert not stale_output_numba.exists()
+    assert not stale_shared_numba.exists()
 
 
 def test_activitysim_compile_logs_cache_output_when_gate_on(
