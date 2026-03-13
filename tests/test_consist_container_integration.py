@@ -7,6 +7,7 @@ fallback behavior when Consist is disabled or unavailable.
 
 import os
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
 
 from pilates.generic.runner import GenericRunner
@@ -301,3 +302,66 @@ class TestRunContainerConsistDelegation:
 
         assert result is True
         assert "CONSIST_CONTAINER_DEBUG_STREAM" not in os.environ
+
+
+@patch("pilates.generic.runner.subprocess.run")
+@patch("pilates.generic.runner.shutil.which")
+def test_direct_singularity_prefers_singularity_and_uses_writable_tmpfs(
+    mock_which, mock_subprocess_run, tmp_path: Path
+):
+    def _which(name):
+        if name == "singularity":
+            return "/usr/bin/singularity"
+        if name == "apptainer":
+            return "/usr/bin/apptainer"
+        return None
+
+    mock_which.side_effect = _which
+
+    host_mount = tmp_path / "mount"
+    host_mount.mkdir()
+
+    result = GenericRunner._run_singularity_container(
+        image="docker://example/image:tag",
+        command=["python", "script.py"],
+        mounts=[(str(host_mount), "/container/mount", "rw")],
+        environment={"PYTHONNOUSERSITE": "1"},
+        working_dir="/workdir",
+    )
+
+    assert result is True
+    cmd = mock_subprocess_run.call_args.args[0]
+    env = mock_subprocess_run.call_args.kwargs["env"]
+    assert cmd[:4] == ["singularity", "run", "--cleanenv", "--writable-tmpfs"]
+    assert "--pwd" in cmd
+    assert env["SINGULARITYENV_PYTHONNOUSERSITE"] == "1"
+
+
+@patch("pilates.generic.runner.subprocess.run")
+@patch("pilates.generic.runner.shutil.which")
+def test_direct_singularity_falls_back_to_apptainer_when_needed(
+    mock_which, mock_subprocess_run, tmp_path: Path
+):
+    def _which(name):
+        if name == "apptainer":
+            return "/usr/bin/apptainer"
+        return None
+
+    mock_which.side_effect = _which
+
+    host_mount = tmp_path / "mount"
+    host_mount.mkdir()
+
+    result = GenericRunner._run_singularity_container(
+        image="docker://example/image:tag",
+        command=["python", "script.py"],
+        mounts=[(str(host_mount), "/container/mount", "rw")],
+        environment={"PYTHONNOUSERSITE": "1"},
+        working_dir="/workdir",
+    )
+
+    assert result is True
+    cmd = mock_subprocess_run.call_args.args[0]
+    env = mock_subprocess_run.call_args.kwargs["env"]
+    assert cmd[:4] == ["apptainer", "run", "--cleanenv", "--writable-tmpfs"]
+    assert env["APPTAINERENV_PYTHONNOUSERSITE"] == "1"

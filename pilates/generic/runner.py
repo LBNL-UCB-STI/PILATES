@@ -412,13 +412,38 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         environment: Dict[str, str],
         working_dir: Optional[str],
     ) -> bool:
-        runtime = "apptainer" if shutil.which("apptainer") else "singularity"
+        runtime = (
+            "singularity"
+            if shutil.which("singularity")
+            else "apptainer" if shutil.which("apptainer") else "singularity"
+        )
 
         bind_args = []
+        mount_diagnostics = []
         for host_path, container_path, mode in mounts:
             bind_args.extend(["-B", f"{host_path}:{container_path}:{mode}"])
+            try:
+                usage = shutil.disk_usage(host_path)
+                free_gb = usage.free / (1024**3)
+                mount_diagnostics.append(
+                    {
+                        "host": host_path,
+                        "container": container_path,
+                        "mode": mode,
+                        "free_gb": round(free_gb, 2),
+                    }
+                )
+            except Exception:
+                mount_diagnostics.append(
+                    {
+                        "host": host_path,
+                        "container": container_path,
+                        "mode": mode,
+                        "free_gb": "unknown",
+                    }
+                )
 
-        sing_cmd = [runtime, "run", "--cleanenv"]
+        sing_cmd = [runtime, "run", "--cleanenv", "--writable-tmpfs"]
         if working_dir:
             sing_cmd.extend(["--pwd", working_dir])
         sing_cmd.extend(bind_args)
@@ -432,6 +457,23 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             else:
                 env[f"SINGULARITYENV_{key}"] = value
 
+        runtime_env_keys = [
+            "APPTAINER_CACHEDIR",
+            "APPTAINER_TMPDIR",
+            "SINGULARITY_CACHEDIR",
+            "SINGULARITY_TMPDIR",
+            "TMPDIR",
+        ]
+        runtime_env_summary = {
+            key: env.get(key) for key in runtime_env_keys if env.get(key) is not None
+        }
+        logger.info(
+            "Running Singularity container via runtime=%s writable_tmpfs=%s env_paths=%s",
+            runtime,
+            True,
+            runtime_env_summary,
+        )
+        logger.info("Singularity bind mount diagnostics: %s", mount_diagnostics)
         logger.info(f"Running Singularity container: {' '.join(sing_cmd)}")
         try:
             subprocess.run(
