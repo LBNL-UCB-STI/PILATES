@@ -45,19 +45,25 @@ def _log_zarr_store_state(label: str, skim_path: str, skims_ds: xr.Dataset) -> N
         store_entries = sorted(os.listdir(skim_path))[:10]
 
     coord_summaries = []
-    for coord_name in ("otaz", "dtaz"):
-        if coord_name not in skims_ds.coords:
-            continue
+    for coord_name in skims_ds.coords:
         coord = skims_ds.coords[coord_name]
-        first = coord.values[0] if len(coord) else None
-        last = coord.values[-1] if len(coord) else None
+        values = coord.values
+        first = values[0] if len(coord) else None
+        last = values[-1] if len(coord) else None
+        sample = values[: min(5, len(coord))].tolist() if len(coord) else []
         coord_summaries.append(
             {
                 "name": coord_name,
+                "dims": tuple(coord.dims),
                 "dtype": str(coord.dtype),
                 "size": int(coord.size),
                 "first": first.item() if hasattr(first, "item") else first,
                 "last": last.item() if hasattr(last, "item") else last,
+                "sample": sample,
+                "encoding": {
+                    key: str(value) if key == "dtype" else value
+                    for key, value in coord.encoding.items()
+                },
                 "attrs": dict(coord.attrs),
             }
         )
@@ -71,6 +77,48 @@ def _log_zarr_store_state(label: str, skim_path: str, skims_ds: xr.Dataset) -> N
         coord_summaries,
         dict(skims_ds.attrs),
     )
+
+
+def _normalize_dimension_coords(skims_ds: xr.Dataset) -> xr.Dataset:
+    """Normalize dimension coordinates to stable, plain NumPy dtypes."""
+    updated_coords = {}
+
+    for coord_name in skims_ds.coords:
+        coord = skims_ds.coords[coord_name]
+        if coord_name in ("otaz", "dtaz"):
+            continue
+        if coord_name not in skims_ds.dims:
+            continue
+
+        values = np.asarray(coord.values)
+        if np.issubdtype(values.dtype, np.number) or np.issubdtype(
+            values.dtype, np.datetime64
+        ):
+            continue
+
+        normalized_values = values.astype(str)
+        if normalized_values.size:
+            max_len = max(len(value) for value in normalized_values.flat)
+            dtype = f"<U{max(1, max_len)}"
+            normalized_values = normalized_values.astype(dtype)
+
+        updated_coords[coord_name] = xr.DataArray(
+            normalized_values,
+            dims=coord.dims,
+            attrs=dict(coord.attrs),
+        )
+        logger.info(
+            "Normalized dimension coord '%s' from dtype=%s to dtype=%s values=%s",
+            coord_name,
+            coord.dtype,
+            updated_coords[coord_name].dtype,
+            normalized_values[: min(5, len(normalized_values))].tolist(),
+        )
+
+    if updated_coords:
+        skims_ds = skims_ds.assign_coords(updated_coords)
+
+    return skims_ds
 
 
 def load_canonical_zones(
@@ -264,6 +312,7 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                 logger.info("'preprocessed' flag already present.")
 
             if needs_correction:
+                skims_ds = _normalize_dimension_coords(skims_ds)
                 # Overwrite the Zarr store with the corrected version
                 # Use a temporary path for atomic write
                 temp_path = f"{skim_path}_temp_corrected"
