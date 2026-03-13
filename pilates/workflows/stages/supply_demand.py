@@ -956,16 +956,26 @@ def _derive_beam_run_input_keys(
     """
     Derive BEAM run input keys from preprocess outputs and warm-start signals.
 
-    The BEAM runner always consumes plans/households/persons from the mutable
-    scenario directory, regardless of whether ActivitySim produced them in this
-    workflow. Keep these as explicit dependencies so run identity/provenance
-    captures both ActivitySim-driven and default-scenario BEAM runs.
+    plans_beam_in/households_beam_in/persons_beam_in are only included when
+    ActivitySim ran and produced them as consist artifacts via beam_preprocess.
+    When ActivitySim is disabled, plans/households/persons are static files in
+    the BEAM mutable directory and are not registered in the consist Coupler.
     """
-    run_input_keys = [
-        BEAM_PLANS_IN,
-        BEAM_HOUSEHOLDS_IN,
-        BEAM_PERSONS_IN,
-    ]
+    run_input_keys = []
+
+    # plans/households/persons are registered as consist artifacts by beam_preprocess
+    # only when ActivitySim ran (via _copy_plans_from_asim). Skip these input_keys
+    # when ActivitySim is disabled to avoid Coupler lookup failures.
+    if activity_demand_outputs is not None:
+        run_input_keys.extend([BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN])
+    else:
+        logger.debug(
+            "[BEAM] ActivitySim disabled/unavailable; omitting %s, %s, %s from "
+            "consist input_keys (static files in BEAM mutable dir)",
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        )
 
     # Only require LINKSTATS_WARMSTART at BEAM run time when that explicit key
     # is provided to preprocess. Other linkstats* artifacts may exist for
@@ -978,14 +988,6 @@ def _derive_beam_run_input_keys(
             LINKSTATS_WARMSTART,
         )
 
-    if activity_demand_outputs is None:
-        logger.debug(
-            "[BEAM] ActivitySim disabled/unavailable; using default scenario inputs "
-            "for %s, %s, %s",
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        )
     return run_input_keys
 
 
