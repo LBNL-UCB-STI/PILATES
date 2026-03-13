@@ -133,11 +133,9 @@ echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLI
 
 # ActivitySim Zarr write debugging. Defaults are enabled here so queued HPC runs
 # probe the skim cache write path and log the last successfully written variable
-# before any native abort. Override per job by exporting these vars beforehand.
+# before any native abort. The probe directory must be visible inside the
+# ActivitySim container, so keep it under the /tmp bind mount.
 ASIM_DEBUG_PROBE_BASE_DEFAULT="/tmp/asim_zarr_probe"
-if [ -n "${SLURM_JOB_ID:-}" ]; then
-    ASIM_DEBUG_PROBE_BASE_DEFAULT="/local/job${SLURM_JOB_ID}/asim_zarr_probe"
-fi
 export ASIM_DEBUG_ZARR_WRITE="${ASIM_DEBUG_ZARR_WRITE:-1}"
 export ASIM_DEBUG_ZARR_PROBE="${ASIM_DEBUG_ZARR_PROBE:-1}"
 export ASIM_DEBUG_ZARR_PROBE_ONLY="${ASIM_DEBUG_ZARR_PROBE_ONLY:-1}"
