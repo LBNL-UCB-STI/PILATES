@@ -1,8 +1,12 @@
 import logging
 import os
 import shutil
+import inspect
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Mapping
+
+import xarray as xr
+import zarr
 
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
@@ -25,6 +29,42 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _log_activitysim_launch_context(
+    *,
+    image: str,
+    environment: Mapping[str, str],
+    working_dir: str,
+    volumes: Mapping[str, Mapping[str, str]],
+    zarr_input_path: Optional[str] = None,
+) -> None:
+    logger.info(
+        "ActivitySim launch context: image=%s working_dir=%s env=%s",
+        image,
+        working_dir,
+        dict(environment),
+    )
+    logger.info(
+        "ActivitySim host Python stack: xarray=%s (%s) zarr=%s (%s)",
+        xr.__version__,
+        getattr(xr, "__file__", "unknown"),
+        getattr(zarr, "__version__", "unknown"),
+        getattr(zarr, "__file__", "unknown"),
+    )
+    logger.info(
+        "ActivitySim host to_zarr signature: %s",
+        inspect.signature(xr.Dataset.to_zarr),
+    )
+    if zarr_input_path is not None:
+        logger.info("ActivitySim zarr input path: %s", zarr_input_path)
+    logger.info(
+        "ActivitySim volume mounts: %s",
+        {
+            local: {"bind": spec.get("bind"), "mode": spec.get("mode")}
+            for local, spec in sorted(volumes.items())
+        },
+    )
 
 
 def _asim_container_environment() -> Dict[str, str]:
@@ -235,6 +275,14 @@ class ActivitysimCompileRunner(GenericRunner):
         additional_args = self.get_asim_additional_args(
             settings, asim_docker_vols, True
         )
+        container_environment = _asim_container_environment()
+        _log_activitysim_launch_context(
+            image=activity_demand_image,
+            environment=container_environment,
+            working_dir=asim_workdir,
+            volumes=asim_docker_vols,
+            zarr_input_path=all_skims_path if os.path.exists(all_skims_path) else None,
+        )
 
         success = self.run_container(
             client=None,
@@ -245,7 +293,7 @@ class ActivitysimCompileRunner(GenericRunner):
             model_name="activitysim_compile",
             working_dir=asim_workdir,
             args=additional_args,
-            environment=_asim_container_environment(),
+            environment=container_environment,
             output_paths=[all_skims_path],
             lineage_mode="none",
         )
@@ -616,6 +664,14 @@ class ActivitysimRunner(GenericRunner):
             )
 
         asim_cmd = self.get_base_asim_cmd(settings)
+        container_environment = _asim_container_environment()
+        _log_activitysim_launch_context(
+            image=activity_demand_image,
+            environment=container_environment,
+            working_dir=asim_workdir,
+            volumes=asim_docker_vols,
+            zarr_input_path=zarr_input_path,
+        )
 
         additional_args = self.get_asim_additional_args(
             settings, asim_docker_vols, False
@@ -637,7 +693,7 @@ class ActivitysimRunner(GenericRunner):
             model_name="activitysim",
             working_dir=asim_workdir,
             args=additional_args,
-            environment=_asim_container_environment(),
+            environment=container_environment,
             output_paths=[workspace.get_asim_output_dir()],
             lineage_mode="none",
         )

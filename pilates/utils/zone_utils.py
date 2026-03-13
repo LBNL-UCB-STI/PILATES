@@ -9,11 +9,13 @@ models within the PILATES framework.
 
 import logging
 import os
+import inspect
 import pandas as pd
 import geopandas as gpd
 import numpy as np
 import xarray as xr
 import shutil
+import zarr
 
 from pilates.config import PilatesConfig
 from pilates.utils.path_utils import find_project_root
@@ -21,6 +23,54 @@ from pilates.utils.path_utils import find_project_root
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
 logger = logging.getLogger(__name__)
+
+
+def _log_zarr_runtime_context() -> None:
+    logger.info(
+        "Zarr rewrite host Python stack: xarray=%s (%s) zarr=%s (%s)",
+        xr.__version__,
+        getattr(xr, "__file__", "unknown"),
+        getattr(zarr, "__version__", "unknown"),
+        getattr(zarr, "__file__", "unknown"),
+    )
+    logger.info(
+        "Zarr rewrite host to_zarr signature: %s",
+        inspect.signature(xr.Dataset.to_zarr),
+    )
+
+
+def _log_zarr_store_state(label: str, skim_path: str, skims_ds: xr.Dataset) -> None:
+    store_entries = []
+    if os.path.isdir(skim_path):
+        store_entries = sorted(os.listdir(skim_path))[:10]
+
+    coord_summaries = []
+    for coord_name in ("otaz", "dtaz"):
+        if coord_name not in skims_ds.coords:
+            continue
+        coord = skims_ds.coords[coord_name]
+        first = coord.values[0] if len(coord) else None
+        last = coord.values[-1] if len(coord) else None
+        coord_summaries.append(
+            {
+                "name": coord_name,
+                "dtype": str(coord.dtype),
+                "size": int(coord.size),
+                "first": first.item() if hasattr(first, "item") else first,
+                "last": last.item() if hasattr(last, "item") else last,
+                "attrs": dict(coord.attrs),
+            }
+        )
+
+    logger.info(
+        "%s skims store state: path=%s entries=%s dims=%s coord_summaries=%s attrs=%s",
+        label,
+        skim_path,
+        store_entries,
+        {name: int(size) for name, size in skims_ds.sizes.items()},
+        coord_summaries,
+        dict(skims_ds.attrs),
+    )
 
 
 def load_canonical_zones(
@@ -185,7 +235,9 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
 
     logger.info(f"Ensuring 0-based indexing and 'preprocessed' flag for {skim_path}")
     try:
+        _log_zarr_runtime_context()
         with xr.open_zarr(skim_path) as skims_ds:
+            _log_zarr_store_state("Pre-correction", skim_path, skims_ds)
             needs_correction = False
             if (
                 len(skims_ds.coords["otaz"]) > 0
@@ -235,10 +287,13 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
                 if os.path.exists(skim_path):
                     shutil.rmtree(skim_path)
                 os.rename(temp_path, skim_path)
+                with xr.open_zarr(skim_path) as corrected_ds:
+                    _log_zarr_store_state("Post-correction", skim_path, corrected_ds)
                 logger.info(
                     f"Successfully corrected and flagged Zarr skims at {skim_path}"
                 )
             else:
+                _log_zarr_store_state("No-op", skim_path, skims_ds)
                 logger.info(f"No correction needed for Zarr skims at {skim_path}")
 
     except Exception as e:
