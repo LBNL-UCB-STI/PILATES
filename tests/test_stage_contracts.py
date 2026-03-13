@@ -925,12 +925,9 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     beam_run_calls = [call for call in scenario.calls if call.get("model") == "beam_run"]
     assert beam_run_calls, "Expected BEAM run step call."
     run_input_keys = beam_run_calls[0].get("input_keys") or []
-    # When ActivitySim is disabled, plans/households/persons are static files in
-    # the BEAM mutable dir. beam_preprocess does not register them as consist
-    # artifacts, so they must not appear in beam_run's input_keys.
-    assert BEAM_PLANS_IN not in run_input_keys
-    assert BEAM_HOUSEHOLDS_IN not in run_input_keys
-    assert BEAM_PERSONS_IN not in run_input_keys
+    assert BEAM_PLANS_IN in run_input_keys
+    assert BEAM_HOUSEHOLDS_IN in run_input_keys
+    assert BEAM_PERSONS_IN in run_input_keys
 
 
 def test_supply_demand_stage_beam_only_clamps_outer_iterations(

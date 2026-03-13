@@ -452,9 +452,31 @@ class BeamPreprocessor(GenericPreprocessor):
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
 
-        # Copy and merge plans from ActivitySim
-        if self.settings.activitysim is not None:
+        canonical_input_keys = {
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        }
+
+        # In beam-only mode, the copied BEAM input repo already contains default
+        # plans/households/persons files. In ActivitySim mode, those canonical
+        # files must come from ActivitySim staging rather than silently falling
+        # back to stale defaults.
+        if self._activity_demand_enabled():
             store += self._copy_plans_from_asim(input_records, workspace)
+            staged_keys = {
+                record.short_name
+                for record in store.all_records()
+                if getattr(record, "short_name", "") in canonical_input_keys
+            }
+            missing_keys = canonical_input_keys - staged_keys
+            if missing_keys:
+                raise RuntimeError(
+                    "beam_preprocess expected ActivitySim to stage the canonical "
+                    f"BEAM input trio, but missing outputs were {sorted(missing_keys)}"
+                )
+        else:
+            store += self._register_existing_beam_exchange_inputs(workspace)
 
         # Add FileRecord outputs here for any additional BEAM inputs you want
         # tracked as explicit coupler keys (e.g., network files from the
@@ -466,6 +488,65 @@ class BeamPreprocessor(GenericPreprocessor):
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
+
+    def _activity_demand_enabled(self) -> bool:
+        """Return whether ActivitySim is enabled for the current run."""
+        explicit = getattr(self.settings, "activity_demand_enabled", None)
+        if explicit is not None:
+            return bool(explicit)
+        models = getattr(getattr(self.settings, "run", None), "models", None)
+        model_name = getattr(models, "activity_demand", None) if models is not None else None
+        if model_name is not None:
+            return True
+        return getattr(self.settings, "activitysim", None) is not None
+
+    def _register_existing_beam_exchange_inputs(
+        self,
+        workspace: "Workspace",
+    ) -> RecordStore:
+        """
+        Register the canonical BEAM scenario inputs already present in the exchange folder.
+
+        When ActivitySim is disabled, or when the mutable BEAM repo already contains
+        the current scenario inputs, beam_preprocess still needs to publish the
+        canonical trio as typed outputs for downstream BEAM steps.
+        """
+        required_keys = {
+            BEAM_PLANS_IN: "plans",
+            BEAM_HOUSEHOLDS_IN: "households",
+            BEAM_PERSONS_IN: "persons",
+        }
+
+        file_format = getattr(getattr(self.settings, "activitysim", None), "file_format", None)
+        if not file_format:
+            file_format = "parquet"
+
+        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
+        records: List[FileRecord] = []
+        unresolved: List[str] = []
+
+        for short_name, stem in required_keys.items():
+            path = locate_beam_file(beam_scenario_folder, stem, file_format)
+            if path and os.path.exists(path):
+                records.append(
+                    FileRecord(
+                        file_path=path,
+                        short_name=short_name,
+                        description=f"Existing BEAM scenario input: {stem}",
+                        year=self.state.current_year,
+                        iteration=self.state.current_inner_iter,
+                    )
+                )
+                continue
+            unresolved.append(f"{stem}.{file_format}")
+
+        if unresolved:
+            raise FileNotFoundError(
+                "Missing default BEAM scenario inputs in exchange folder "
+                f"{beam_scenario_folder}: {', '.join(unresolved)}"
+            )
+
+        return RecordStore(recordList=records)
 
     def preprocess(
         self,

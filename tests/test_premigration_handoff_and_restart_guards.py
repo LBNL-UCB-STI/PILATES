@@ -581,12 +581,9 @@ def test_beam_run_input_keys_only_require_exact_warmstart_alias(
         activity_demand_outputs=None,
     )
 
-    # When ActivitySim is disabled, plans/households/persons are static files in
-    # the BEAM mutable dir and are NOT registered as consist artifacts by
-    # beam_preprocess. They must be omitted from input_keys to avoid Coupler errors.
-    assert BEAM_PLANS_IN not in input_keys
-    assert BEAM_HOUSEHOLDS_IN not in input_keys
-    assert BEAM_PERSONS_IN not in input_keys
+    assert BEAM_PLANS_IN in input_keys
+    assert BEAM_HOUSEHOLDS_IN in input_keys
+    assert BEAM_PERSONS_IN in input_keys
     if expects_warmstart:
         assert LINKSTATS_WARMSTART in input_keys
     else:
