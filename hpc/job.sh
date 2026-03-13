@@ -131,18 +131,15 @@ export BLIS_NUM_THREADS="$THREADS"
 export VECLIB_MAXIMUM_THREADS="$THREADS"
 echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
 
-# ActivitySim Zarr write debugging. Defaults are enabled here so queued HPC runs
-# probe the skim cache write path and log the last successfully written variable
-# before any native abort. The probe directory must be visible inside the
-# ActivitySim container, so keep it under the /tmp bind mount.
-ASIM_DEBUG_PROBE_BASE_DEFAULT="/tmp/asim_zarr_probe"
+# ActivitySim Zarr write debugging. Keep the dataset summary logging enabled by
+# default, but leave the probe writes opt-in so the real compile cache write
+# path is exercised.
 export ASIM_DEBUG_ZARR_WRITE="${ASIM_DEBUG_ZARR_WRITE:-1}"
-export ASIM_DEBUG_ZARR_PROBE="${ASIM_DEBUG_ZARR_PROBE:-1}"
-export ASIM_DEBUG_ZARR_PROBE_ONLY="${ASIM_DEBUG_ZARR_PROBE_ONLY:-1}"
-export ASIM_DEBUG_ZARR_PROBE_DIR="${ASIM_DEBUG_ZARR_PROBE_DIR:-$ASIM_DEBUG_PROBE_BASE_DEFAULT}"
-export ASIM_DEBUG_ZARR_PROBE_LIMIT="${ASIM_DEBUG_ZARR_PROBE_LIMIT:-20}"
-mkdir -p "$ASIM_DEBUG_ZARR_PROBE_DIR"
-echo "ActivitySim Zarr debug: WRITE=$ASIM_DEBUG_ZARR_WRITE PROBE=$ASIM_DEBUG_ZARR_PROBE PROBE_ONLY=$ASIM_DEBUG_ZARR_PROBE_ONLY LIMIT=$ASIM_DEBUG_ZARR_PROBE_LIMIT DIR=$ASIM_DEBUG_ZARR_PROBE_DIR"
+unset ASIM_DEBUG_ZARR_PROBE
+unset ASIM_DEBUG_ZARR_PROBE_ONLY
+unset ASIM_DEBUG_ZARR_PROBE_DIR
+unset ASIM_DEBUG_ZARR_PROBE_LIMIT
+echo "ActivitySim Zarr debug: WRITE=$ASIM_DEBUG_ZARR_WRITE"
 
 is_new_format() {
     grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
