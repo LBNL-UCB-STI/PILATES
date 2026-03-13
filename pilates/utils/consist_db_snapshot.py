@@ -39,11 +39,14 @@ def resolve_consist_db_paths(
         ``(None, None)``.
     """
     db_cfg = getattr(getattr(settings, "shared", None), "database", None)
-    shared_db_enabled = db_cfg and getattr(db_cfg, "enabled", False)
+    shared_db_enabled = bool(db_cfg and getattr(db_cfg, "enabled", False))
     configured_path = getattr(db_cfg, "path", None) if db_cfg else None
 
+    if not shared_db_enabled:
+        return None, None
+
     if not is_local_consist_db_enabled(settings):
-        if shared_db_enabled and configured_path:
+        if configured_path:
             resolved = os.path.realpath(os.path.expandvars(str(configured_path)))
             return resolved, resolved
         return None, None

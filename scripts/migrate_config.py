@@ -86,6 +86,10 @@ class ConfigMigrator:
             "supply_demand_iters": self.legacy.get("supply_demand_iters", 6),
             "output_directory": self.legacy.get("output_directory", "./output"),
             "output_run_name": self.legacy.get("output_run_name", "pilates_run"),
+            "consist_db_local_run": self.legacy.get("consist_db_local_run", True),
+            "consist_db_filename": self.legacy.get(
+                "consist_db_filename", "provenance.duckdb"
+            ),
             "models": {
                 "land_use": self.legacy.get("land_use_model") or None,
                 "travel": self.legacy.get("travel_model") or None,
@@ -121,10 +125,11 @@ class ConfigMigrator:
 
         # Database
         database_config = self.legacy.get("database", {})
+        default_database_path = f"pilates/database/{region}_pilates_data.duckdb"
         database = {
-            "enabled": database_config.get("enabled", False),
+            "enabled": database_config.get("enabled", True),
             "type": database_config.get("type", "duckdb"),
-            "path": database_config.get("path", "pilates.duckdb"),
+            "path": database_config.get("path", default_database_path),
         }
 
         return {
