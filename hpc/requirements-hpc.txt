@@ -27,3 +27,4 @@ requests
 urllib3<2.0.0
 docker
 packaging>=21.0
+consist>=0.1.0

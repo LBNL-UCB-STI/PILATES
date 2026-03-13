@@ -23,8 +23,6 @@ PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
-CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/consist}"
-CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-consist}"
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
@@ -54,36 +52,6 @@ install_python_deps() {
     fi
 }
 
-install_consist() {
-    local marker="$VENV_PATH/.last_consist_install_spec"
-    if [ -d "$CONSIST_SRC_DIR" ]; then
-        local consist_spec="editable:$CONSIST_SRC_DIR"
-        if command -v git >/dev/null 2>&1 && [ -d "$CONSIST_SRC_DIR/.git" ]; then
-            local consist_rev
-            consist_rev="$(git -C "$CONSIST_SRC_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")"
-            consist_spec="${consist_spec}@${consist_rev}"
-        fi
-
-        if [ ! -f "$marker" ] || [ "$consist_spec" != "$(cat "$marker")" ]; then
-            echo "Installing local editable consist from $CONSIST_SRC_DIR ..."
-            if ! python3 -c "import uv" >/dev/null 2>&1; then
-                python3 -m pip install uv
-            fi
-            python3 -m pip install -e "$CONSIST_SRC_DIR"
-            printf "%s\n" "$consist_spec" > "$marker"
-        else
-            echo "Editable consist is up to date; skipping reinstall."
-        fi
-    elif ! python3 -c "from consist import create_tracker" >/dev/null 2>&1; then
-        echo "Installing consist from PyPI package '$CONSIST_PYPI_PACKAGE' ..."
-        python3 -m pip install "$CONSIST_PYPI_PACKAGE"
-    else
-        echo "consist already installed."
-    fi
-
-    python3 -c "from consist import create_tracker" >/dev/null
-    echo "consist import check passed."
-}
 
 normalize_path() {
     local path_arg="$1"
@@ -137,7 +105,6 @@ if [ ! -f "$REQUIREMENTS_FILE" ]; then
 fi
 
 install_python_deps "$REQUIREMENTS_FILE"
-install_consist
 
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
