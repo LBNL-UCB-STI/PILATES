@@ -74,6 +74,8 @@ from pilates.workflows.stages.supply_demand import (
     TrafficAssignmentPhaseInputs,
 )
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+import h5py
+
 from tests.workflow_contract_harness import (
     CouplerStub,
     DummyPostprocessor,
@@ -86,6 +88,10 @@ from workflow_state import WorkflowState
 
 def _write_file(path: Path, content: str = "x") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".h5":
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("dummy", data=[1])
+        return
     path.write_text(content)
 
 

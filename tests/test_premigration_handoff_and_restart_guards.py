@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import h5py
 import yaml
 
 if "openmatrix" not in sys.modules:
@@ -31,13 +32,14 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
-    _recover_cached_outputs,
+    _recover_step_outputs,
     run_manifested_steps,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.stages.supply_demand import _derive_beam_run_input_keys
 from pilates.workflows.stages import vehicle_ownership as vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps.activitysim import make_activitysim_postprocess_step
 
 
 class _DictCoupler:
@@ -122,6 +124,10 @@ class _ScenarioExecutesStep:
 
 def _write_file(path: Path, contents: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".h5":
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("dummy", data=[1])
+        return path
     path.write_text(contents, encoding="utf-8")
     return path
 
@@ -185,8 +191,12 @@ def test_recover_activitysim_postprocess_outputs_from_cache_hit_artifacts(tmp_pa
 
     coupler = _DictCoupler()
     holder = StepOutputsHolder()
-    outputs = _recover_cached_outputs(
+    step_func = make_activitysim_postprocess_step(
+        coupler=coupler, outputs_holder=holder
+    )
+    outputs = _recover_step_outputs(
         step_name="activitysim_postprocess",
+        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),

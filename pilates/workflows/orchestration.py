@@ -281,6 +281,9 @@ def _publish_recovered_outputs(
     replayer = getattr(step_func, "__pilates_output_replayer__", None)
     if callable(replayer):
         replayer(outputs, settings, state, workspace, outputs_holder)
+        # Ensure recovered outputs are available on the coupler even if the
+        # replayer only logs outputs (and does not set coupler values).
+        _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
         return
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
 
