@@ -57,3 +57,4 @@ openlineage-python
 attrs>=20.0
 httpx>=0.27.0
 build>=1.2.2
+pytest-cov

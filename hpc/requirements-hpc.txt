@@ -29,3 +29,4 @@ docker
 packaging>=21.0
 consist>=0.1.0
 pyhocon>=0.3.60
+pytest-cov
