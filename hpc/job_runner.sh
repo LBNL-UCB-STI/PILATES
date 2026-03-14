@@ -55,7 +55,7 @@ while [ $# -gt 0 ]; do
         ;;
     -h|--help)
         echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]"
-        echo "  -a, --account: Slurm account name (default: pc_beamcore)"
+        echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         exit 0
         ;;
@@ -95,12 +95,15 @@ case "$partition_arg" in
         ;;
 esac
 
-# Use command-line account if provided, else env var, else default
-if [ -n "$account_arg" ]; then
-    ACCOUNT="$account_arg"
-else
-    ACCOUNT="${ACCOUNT:-pc_beamcore}"
+if [ -z "$account_arg" ]; then
+    echo "ERROR: Slurm account is required." >&2
+    echo "Provide it explicitly on the command line with:" >&2
+    echo "  ./hpc/job_runner.sh -c <settings.yaml> -a <slurm_account>" >&2
+    echo "Example:" >&2
+    echo "  ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a my_account" >&2
+    exit 2
 fi
+ACCOUNT="$account_arg"
 EXPECTED_EXECUTION_DURATION="${EXPECTED_EXECUTION_DURATION:-3-00:00:00}"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 

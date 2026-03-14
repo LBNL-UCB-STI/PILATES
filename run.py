@@ -138,6 +138,7 @@ def _format_hpc_restart_command(
     command = ["./hpc/job_runner.sh"]
     if config_path:
         command.extend(["-c", str(config_path)])
+    command.extend(["-a", "<slurm_account>"])
     if archive_state_path:
         command.extend(["-s", str(archive_state_path)])
     return " ".join(shlex.quote(part) for part in command)

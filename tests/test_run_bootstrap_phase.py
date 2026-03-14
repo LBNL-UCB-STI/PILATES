@@ -491,6 +491,20 @@ def test_format_restart_command_uses_config_and_archive_state():
     )
 
 
+def test_format_hpc_restart_command_requires_account_placeholder():
+    settings = SimpleNamespace(settings_file="scenarios/settings-seattle.yaml")
+
+    command = run_module._format_hpc_restart_command(
+        settings=settings,
+        archive_state_path="/tmp/pilates run/run_state.yaml",
+    )
+
+    assert (
+        command
+        == "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>' -s '/tmp/pilates run/run_state.yaml'"
+    )
+
+
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
     class WorkspaceStub:
         def __init__(self, _settings, local_root: str, folder_name: str):
@@ -568,6 +582,10 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
 
     assert "Run failed. Restart command:" in caplog.text
     assert "python run.py -c scenarios/settings-seattle.yaml -S " in caplog.text
+    assert (
+        "./hpc/job_runner.sh -c scenarios/settings-seattle.yaml -a '<slurm_account>' -s "
+        in caplog.text
+    )
     assert "run_state.yaml" in caplog.text
 
 

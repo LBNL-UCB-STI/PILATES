@@ -26,7 +26,7 @@ Why:
 3. Submit from repo root:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 The command prints the Slurm log path.
@@ -36,7 +36,7 @@ The command prints the Slurm log path.
 Default `lr7`:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 By default this requests `240G` on `lr7`.
@@ -44,19 +44,19 @@ By default this requests `240G` on `lr7`.
 Use high-memory `lr7` mode (`480G`):
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml --high-mem
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --high-mem
 ```
 
 Use `lr8`:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -p lr8
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr8
 ```
 
 Restart from an existing stage file:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -s current_stage_restart.yaml
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -s current_stage_restart.yaml
 ```
 
 ## BEAM Memory Templating
@@ -70,7 +70,7 @@ Restart from an existing stage file:
 Override explicitly:
 
 ```bash
-BEAM_MEMORY=450g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -p lr7
+BEAM_MEMORY=450g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr7
 ```
 
 `job_runner.sh` writes a per-job generated settings file (`settings_<jobid>.yaml`) and submits that file to `job.sh`.
@@ -106,11 +106,11 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 Override examples:
 
 ```bash
-CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 ```bash
-CONSIST_PYPI_PACKAGE=consist==0.5.2 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+CONSIST_PYPI_PACKAGE=consist==0.5.2 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 ## Dependency Gates
@@ -130,11 +130,11 @@ When changing these, keep compatibility with the active Python module version an
 Examples:
 
 ```bash
-ACCOUNT=pc_beamcore EXPECTED_EXECUTION_DURATION=2-00:00:00 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml
+EXPECTED_EXECUTION_DURATION=2-00:00:00 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 ```bash
-MEMORY_LIMIT_GB=550 BEAM_MEMORY=420g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -p lr7
+MEMORY_LIMIT_GB=550 BEAM_MEMORY=420g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr7
 ```
 
 `job.sh` also sets thread caps (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, etc.) from `PILATES_THREADS` (default `8`).

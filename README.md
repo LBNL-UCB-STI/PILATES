@@ -104,6 +104,7 @@ For detailed setup and usage instructions, see [docs/database-setup.md](docs/dat
 ### HPC Execution
 
 For high-performance computing environments, specialized scripts are available in the `hpc/` directory.
+Local runs still use `python run.py ...`; the Slurm account requirement applies only when using `hpc/job_runner.sh`.
 
 - Current job-script usage and environment behavior: [hpc/README.md](hpc/README.md)
 - Legacy Lawrencium setup notes and data bootstrap steps: [lawrencium-setup.md](lawrencium-setup.md)
